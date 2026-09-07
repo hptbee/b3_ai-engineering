@@ -1,0 +1,6 @@
+id: accessibility-general-review
+artifact: skills/frontend/accessibility/SKILL.md
+intent: General PR review
+input: "Review this PR."
+expected_bucket: near-miss
+preferred_skill: code-review

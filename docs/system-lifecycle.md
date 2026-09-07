@@ -75,4 +75,4 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 
 ## Maturity
 
-Most of this lifecycle is **specified**. Research stores are empty. Domain skills, commands, agents, workflows, evals, and review-loop runtime are not implemented. Do not skip Research → Synthesis → Approval when they are later filled in.
+Research and domain synthesis are **present**. Review-loop **runtime** is still unspecified. Do not skip Research → Synthesis when adding more skills.

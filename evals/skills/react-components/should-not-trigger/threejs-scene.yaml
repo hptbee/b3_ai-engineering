@@ -1,0 +1,5 @@
+id: react-components-threejs-scene
+artifact: skills/frontend/react-components/SKILL.md
+intent: 3D scene is not DOM React components
+input: "Set up a Three.js renderer and dispose geometries."
+expected_bucket: should-not-trigger

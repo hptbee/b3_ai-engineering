@@ -1,0 +1,5 @@
+id: aspnet-core-di-captive
+artifact: skills/backend/aspnet-core/SKILL.md
+intent: Captive dependency
+input: "Singleton service takes a scoped DbContext."
+expected_bucket: should-trigger

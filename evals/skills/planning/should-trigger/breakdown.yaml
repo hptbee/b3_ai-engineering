@@ -1,0 +1,5 @@
+id: planning-breakdown
+artifact: skills/engineering/planning/SKILL.md
+intent: User asked for a task breakdown
+input: "Break this spec into implementable tasks with verification."
+expected_bucket: should-trigger

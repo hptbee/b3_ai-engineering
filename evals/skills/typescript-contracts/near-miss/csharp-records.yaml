@@ -1,0 +1,6 @@
+id: typescript-contracts-csharp-records
+artifact: skills/frontend/typescript-contracts/SKILL.md
+intent: C# types are csharp-async/aspnet
+input: "Define the C# DTO records for the same API."
+expected_bucket: near-miss
+preferred_skill: aspnet-core

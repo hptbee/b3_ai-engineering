@@ -1,0 +1,5 @@
+id: aspnet-core-task-delay
+artifact: skills/backend/aspnet-core/SKILL.md
+intent: Pure Task library
+input: "Why is async void bad in a WPF handler?"
+expected_bucket: should-not-trigger

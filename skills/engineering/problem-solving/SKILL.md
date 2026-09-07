@@ -26,6 +26,7 @@ Understand → Plan → Implement → Verify → Review → Fix → Re-verify
 ## When not to use
 
 - “Review this diff” with no implementation mandate → `code-review`
+- Failure with unknown cause, before a patch → `debugging`
 - “Research how other repos do X” → `research-engineering-patterns`
 - Pure knowledge questions with no change
 - Running the full independent review loop after work is already implemented → `docs/review-loop.md` (specified; not a substitute for this skill’s lighter review step)

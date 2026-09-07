@@ -1,0 +1,5 @@
+id: threejs-performance-dispose-only
+artifact: skills/threejs/threejs-performance/SKILL.md
+intent: Teardown only
+input: "We never call geometry.dispose on route change."
+expected_bucket: should-not-trigger

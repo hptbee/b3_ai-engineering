@@ -1,0 +1,5 @@
+id: ef-core-select-full-graph
+artifact: skills/backend/ef-core/SKILL.md
+intent: Over-fetch
+input: "We Include entire navigation graphs for a list DTO."
+expected_bucket: should-trigger

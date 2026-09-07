@@ -1,0 +1,7 @@
+id: api-security-general-pr
+artifact: skills/backend/api-security/SKILL.md
+intent: General review vs security depth
+input: "Review this PR."
+expected_bucket: near-miss
+preferred_skill: code-review
+notes: api-security when auth/API risk is explicit

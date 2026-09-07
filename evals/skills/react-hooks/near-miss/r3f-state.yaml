@@ -1,0 +1,6 @@
+id: react-hooks-r3f-state
+artifact: skills/frontend/react-hooks/SKILL.md
+intent: R3F state vs React state
+input: "Should selected mesh id be React state or a ref in R3F?"
+expected_bucket: near-miss
+preferred_skill: react-three-fiber

@@ -1,0 +1,6 @@
+id: refactoring-rename-for-review
+artifact: skills/engineering/refactoring/SKILL.md
+intent: Review of a refactor is code-review
+input: "Review my rename-only diff."
+expected_bucket: near-miss
+preferred_skill: code-review

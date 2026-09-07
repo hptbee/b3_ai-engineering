@@ -1,0 +1,5 @@
+id: typescript-contracts-tsc-passed
+artifact: skills/frontend/typescript-contracts/SKILL.md
+intent: Claiming tsc passed is verification
+input: "tsc succeeded \u2014 we can ship."
+expected_bucket: should-not-trigger

@@ -1,0 +1,6 @@
+id: csharp-async-js-promises
+artifact: skills/backend/csharp-async/SKILL.md
+intent: Node async is nodejs-runtime
+input: "Unhandled promise rejection in Express."
+expected_bucket: near-miss
+preferred_skill: nodejs-runtime

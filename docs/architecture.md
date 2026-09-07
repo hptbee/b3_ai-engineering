@@ -108,7 +108,7 @@ See [`rule-standard.md`](rule-standard.md).
 
 A skill is a focused, on-demand method. It has a `SKILL.md`, optional `references/`, `scripts/`, and `examples/`, and a description that states when it should and should not trigger.
 
-**Present (minimal).** Four engineering skills exist under `skills/engineering/`. Domain skills (React, APIs, UX, and so on) do not exist yet.
+**Present.** Foundation engineering skills plus domain skills (React, APIs, .NET, Three.js). Catalog: [`../skills/README.md`](../skills/README.md).
 
 Example:
 
@@ -122,7 +122,7 @@ See [`skill-standard.md`](skill-standard.md).
 
 A command is an explicit, user-triggered operation. It selects a workflow or skill and runs it now. Commands are not standing constraints and not long-form knowledge.
 
-**Specified, not implemented.** See [`../commands/README.md`](../commands/README.md).
+**Present (thin).** See [`../commands/README.md`](../commands/README.md).
 
 Example:
 
@@ -134,7 +134,7 @@ Example:
 
 An agent is a specialized role with a narrower mandate than the default coding agent. Roles exist so review and research can be independent of implementation.
 
-**Specified, not implemented.** See [`../agents/README.md`](../agents/README.md).
+**Present (two reviewer roles).** See [`../agents/README.md`](../agents/README.md).
 
 Example:
 
@@ -146,13 +146,13 @@ Example:
 
 A workflow orchestrates skills, commands, and agents across multiple steps. It does not replace a skill; it sequences them.
 
-**Specified, not implemented.** See [`../workflows/README.md`](../workflows/README.md).
+**Present (two sequences).** See [`../workflows/README.md`](../workflows/README.md).
 
 Example:
 
 > Workflow: feature implementation — understand, plan, implement, verify, review, fix, re-verify.
 
-Until workflow files exist, that sequence is the default operating loop.
+The default product sequence is `workflows/feature-implementation.md`.
 
 ## Review Loop
 
@@ -196,7 +196,7 @@ Example:
 
 Research is external intake and synthesis **before** knowledge, skills, or rules are created. Stores: `research/sources`, `findings`, `comparisons`, `decisions`, `rejected`.
 
-**Present (empty).** Method: [`research-methodology.md`](research-methodology.md). Layout: [`../research/README.md`](../research/README.md). No research files yet.
+**Present.** Method: [`research-methodology.md`](research-methodology.md). Layout: [`../research/README.md`](../research/README.md).
 
 ## Profile
 
@@ -230,7 +230,7 @@ Example:
 
 An eval is a test of the AI system itself: activation, capability, safety, and review-loop convergence. It is not an application test suite for a product under development.
 
-**Specified, not implemented.** See [`evaluation.md`](evaluation.md).
+**Present (fixtures).** Runner deferred. See [`evaluation.md`](evaluation.md).
 
 Example:
 

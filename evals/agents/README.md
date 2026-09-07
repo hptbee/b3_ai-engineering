@@ -1,5 +1,5 @@
 # Agent evals
 
-Wrong-role vs right-role activation when specialized agents exist.
+Independent reviewer roles exist (`agents/security-reviewer.md`, `agents/architecture-reviewer.md`).
 
-No cases yet. Agents are specified, not implemented (`agents/README.md`).
+No activation fixtures yet. Use skill evals for the methods they invoke. Add agent-role cases if misfires appear in use.

@@ -2,7 +2,7 @@
 
 A personal, portable AI-assisted software engineering system for Cursor, Codex, and Claude Code.
 
-This is an **evolving** operating layer for AI coding agents. It is not a company handbook and not a finished catalog of skills. Most specialized skills, commands, agents, workflows, evals, and the review-loop runtime are **not implemented**.
+This is an **evolving** operating layer for AI coding agents. It is not a company handbook. Domain skills exist for the first-class stack; review-loop **runtime** is still unspecified.
 
 ## Why it exists
 
@@ -60,7 +60,7 @@ Specified in [`docs/review-loop.md`](docs/review-loop.md): finding lifecycle, se
 
 ## Evaluation
 
-Framework only: activation, capability, safety, and convergence. Layout: [`docs/evaluation.md`](docs/evaluation.md). No eval cases yet.
+Activation fixtures exist under `evals/`. Automated runner deferred. Layout: [`docs/evaluation.md`](docs/evaluation.md).
 
 ## Personal profile
 
@@ -83,13 +83,11 @@ Portable Core → Cursor | Codex | Claude Code   (via adapters/)
 | Area | Status |
 | --- | --- |
 | Architecture, standards, precedence, lifecycle | Present |
-| Foundation rules (4) | Present |
-| Foundation skills (4, engineering) | Present |
-| Research stores, profile placeholders | Present (empty / placeholders) |
-| Commands, agents, workflows | Specified, not implemented |
-| Review-loop runtime, evals | Specified, not implemented |
-| Domain skills (React, APIs, UX, …) | Not started — next phase is research |
+| Foundation rules + `simplest-correct` | Present |
+| Engineering + domain skills | Present (see `skills/README.md`) |
+| Commands, agents, workflows | Present (thin) |
+| Eval fixtures | Present; runner deferred |
+| Review-loop runtime | Specified, not implemented |
+| Profile files | Placeholders |
 
-**Present skills:** `research-engineering-patterns`, `verification`, `problem-solving`, `code-review`.
-
-**Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`.
+**Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

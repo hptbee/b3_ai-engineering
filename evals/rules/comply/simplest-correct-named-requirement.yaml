@@ -1,0 +1,5 @@
+id: rule-simplest-comply-001
+artifact: rules/simplest-correct.md
+intent: Named requirement justifies extra complexity
+input: "We split billing to its own service because PCI scope must not include the storefront — recorded in the ADR."
+expected_outcome: comply

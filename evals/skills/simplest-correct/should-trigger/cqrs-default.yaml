@@ -1,0 +1,5 @@
+id: simplest-correct-cqrs-default
+artifact: skills/architecture/simplest-correct/SKILL.md
+intent: CQRS without requirement
+input: "Add MediatR and separate read/write DBs on day one."
+expected_bucket: should-trigger

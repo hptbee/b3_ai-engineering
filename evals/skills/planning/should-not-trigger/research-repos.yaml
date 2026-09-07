@@ -1,0 +1,5 @@
+id: planning-research-repos
+artifact: skills/engineering/planning/SKILL.md
+intent: External pattern research
+input: "Compare how three repos do skill evals."
+expected_bucket: should-not-trigger

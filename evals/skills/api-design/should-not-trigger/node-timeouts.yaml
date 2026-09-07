@@ -1,0 +1,5 @@
+id: api-design-node-timeouts
+artifact: skills/backend/api-design/SKILL.md
+intent: HTTP server timeouts
+input: "Configure Node requestTimeout against Slowloris."
+expected_bucket: should-not-trigger

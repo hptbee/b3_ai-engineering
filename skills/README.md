@@ -2,9 +2,7 @@
 
 Reusable methods. Standard: [`docs/skill-standard.md`](../docs/skill-standard.md).
 
-## Present
-
-Engineering foundation only:
+## Engineering (foundation + synthesis)
 
 | Skill | Problem |
 | --- | --- |
@@ -12,24 +10,41 @@ Engineering foundation only:
 | `engineering/verification` | Evidence vs assertion |
 | `engineering/problem-solving` | Understand → plan → implement → verify |
 | `engineering/code-review` | One honest review pass on a defined change |
+| `engineering/debugging` | Root cause before patching |
+| `engineering/testing-strategy` | Honest tests for the risk (not TDD iron law) |
+| `engineering/planning` | Executable multi-step plan |
+| `engineering/refactoring` | Behavior-preserving structure change |
 
-## Intended categories (not populated yet)
+## Frontend
 
-```text
-skills/
-├── engineering/     # present (minimal)
-├── frontend/        # future
-├── backend/         # future
-├── architecture/    # future
-├── ui-ux/           # future
-├── security/        # future
-├── testing/         # future
-├── ai-engineering/  # future
-└── product/         # future
-```
+| Skill | Problem |
+| --- | --- |
+| `frontend/react-components` | Hierarchy, state ownership, composition |
+| `frontend/react-hooks` | Effects, deps, derived state, async UI |
+| `frontend/typescript-contracts` | Types and boundary validation (also used from Node APIs) |
+| `frontend/react-performance` | Waterfalls, bundle, re-renders |
+| `frontend/accessibility` | WCAG-backed UI a11y |
 
-Empty category directories are omitted until they contain a real skill. Do not add placeholder `SKILL.md` files.
+## Backend
 
-## Future scope (incremental research)
+| Skill | Problem |
+| --- | --- |
+| `backend/nodejs-runtime` | Event loop, shutdown, Node process safety |
+| `backend/api-design` | Contracts, errors, pagination, compatibility |
+| `backend/api-security` | OWASP API Top 10 + authn/z |
+| `backend/csharp-async` | Task, cancellation, dispose, NRT |
+| `backend/aspnet-core` | DI, middleware, hosting, ProblemDetails |
+| `backend/ef-core` | Tracking, projections, N+1, migrations |
 
-Frontend, backend, architecture, engineering specialties, AI engineering, and product/UI topics listed in the root README will be added one skill at a time after the research phase (`docs/research-methodology.md`, `research/`).
+## Architecture / Three.js
+
+| Skill | Problem |
+| --- | --- |
+| `architecture/simplest-correct` | Complexity needs a named requirement |
+| `threejs/threejs-resources` | Dispose / GPU resource lifecycle |
+| `threejs/threejs-performance` | Draw calls, loop allocations, GPU cost |
+| `threejs/react-three-fiber` | R3F integration boundary |
+
+Empty category directories are omitted. Do not add placeholder skills.
+
+Provenance: `research/decisions/decision-008-skill-synthesis.md`.

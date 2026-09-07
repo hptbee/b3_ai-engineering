@@ -1,0 +1,5 @@
+id: api-security-session-cookies
+artifact: skills/backend/api-security/SKILL.md
+intent: Session cookie flags
+input: "Review cookie auth for HttpOnly Secure SameSite."
+expected_bucket: should-trigger

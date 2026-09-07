@@ -1,38 +1,16 @@
 # Skill evals
 
-Activation cases per skill:
+Each skill:
 
 ```text
 <skill>/
-├── should-trigger/
-├── should-not-trigger/
-└── near-miss/
+├── should-trigger/     (min 2)
+├── should-not-trigger/ (min 2)
+└── near-miss/          (min 2)
 ```
 
-## Foundation skills (implemented)
+Foundation skills: 7 cases each (Track C). Synthesized domain skills: 6 cases each (decision-008).
 
-| Skill | Path |
-| --- | --- |
-| verification | `verification/` — 7 cases |
-| code-review | `code-review/` — 7 cases |
-| problem-solving | `problem-solving/` — 7 cases |
-| research-engineering-patterns | `research-engineering-patterns/` — 7 cases |
+Manual judge: read `description` + case `input`. Automated runner: **not implemented**.
 
-Each case is a YAML file with: `id`, `artifact`, `intent`, `input`, `expected_bucket` (and optional `preferred_skill`, `notes`).
-
-## Running
-
-Manual: read skill description + case `input`; judge whether the skill should activate.
-
-Automated runner: **not implemented** (decision-005 E3 deferred).
-
-Validate schema: `./scripts/validate-evals.sh`
-
-## Adding cases
-
-Add when:
-- a new skill ships (minimum 2 per bucket before catalog growth)
-- a near-miss misfire is observed in real use
-- description text changes (re-run all buckets)
-
-Capability (quality) fixtures can sit beside activation buckets when stable skills exist.
+Validate: `./scripts/validate-evals.sh`

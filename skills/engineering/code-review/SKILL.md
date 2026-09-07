@@ -61,7 +61,7 @@ Near miss: “write tests for this PR” → implementation, then verification. 
 - Evidence rule: `rules/evidence-and-provenance.md`
 - Verification rule: `rules/verification.md`
 
-Specialist reviewer agents are specified in `agents/README.md` and are not implemented yet.
+Specialist reviewer agents: `agents/security-reviewer.md`, `agents/architecture-reviewer.md`. Host runtime for subagents is adapter-specific.
 
 ## Verification
 

@@ -1,0 +1,5 @@
+id: csharp-async-ef-include
+artifact: skills/backend/csharp-async/SKILL.md
+intent: EF Include/N+1
+input: "List endpoint runs a query per row."
+expected_bucket: should-not-trigger
