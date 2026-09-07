@@ -12,6 +12,8 @@
 | `commands/` | Claude commands when command layer exists |
 | `agents/` | `.claude/agents/` subagents when roles exist |
 
+Portable review-loop roles: `reviewer` (no edits), `fixer` (no PASS). Map to `.claude/agents/` with optional `model:` in the host overlay only (`review-loop/models.md`). Orchestrator remains the parent conversation.
+
 ## CLAUDE.md bridge
 
 Claude Code often expects root `CLAUDE.md`. **Do not fork** the handbook — generate a pointer file:

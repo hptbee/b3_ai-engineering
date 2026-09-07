@@ -2,7 +2,7 @@
 
 A personal, portable AI-assisted software engineering system for Cursor, Codex, and Claude Code.
 
-This is an **evolving** operating layer for AI coding agents. It is not a company handbook. Domain skills exist for the first-class stack; review-loop **runtime** is still unspecified.
+This is an **evolving** operating layer for AI coding agents. It is not a company handbook. Domain skills exist for the first-class stack. Review-loop **orchestration** lives under `review-loop/` (agent procedure, not a host plugin).
 
 ## Why it exists
 
@@ -56,7 +56,7 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Review loop
 
-Specified in [`docs/review-loop.md`](docs/review-loop.md): finding lifecycle, severity ≠ confidence, no fake PASS on empty diffs, tool failure, stagnation, or iteration limits. Runtime under `review-loop/` is **not implemented**.
+Specified in [`docs/review-loop.md`](docs/review-loop.md): finding lifecycle, severity ≠ confidence, no fake PASS on empty diffs, tool failure, stagnation, or iteration limits. One-shot orchestration: [`commands/review-loop.md`](commands/review-loop.md) → [`review-loop/strategy.md`](review-loop/strategy.md). Adaptive sizing and unit loops for large PRs. Host model mapping is in `review-loop/models.md` + `adapters/`.
 
 ## Evaluation
 
@@ -87,7 +87,7 @@ Portable Core → Cursor | Codex | Claude Code   (via adapters/)
 | Engineering + domain skills | Present (see `skills/README.md`) |
 | Commands, agents, workflows | Present (thin) |
 | Eval fixtures | Present; runner deferred |
-| Review-loop runtime | Specified, not implemented |
+| Review-loop orchestration | Present (agent procedure; not a host plugin) |
 | Profile files | Placeholders |
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

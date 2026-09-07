@@ -1,0 +1,11 @@
+id: review-adaptive-sizing-001
+artifact: review-loop/sizing.md
+intent: SMALL PRs use a full-PR loop and must not be partitioned into review units
+scenario: |
+  Changed files: 4
+  Changed LOC: ~90
+  Logical areas: 1 (single API handler + tests)
+  Agent classifies SMALL then invents units per file/class
+expected_outcome: FAIL
+failure_mode: over-partition
+notes: SMALL and MEDIUM stay on strategy.md §1; unit loops are LARGE/VERY_LARGE only

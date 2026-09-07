@@ -1,0 +1,9 @@
+id: review-adaptive-sizing-003
+artifact: review-loop/sizing.md
+intent: Partition by logical change, not one class/method/test file per unit
+scenario: |
+  LARGE PR with one feature spanning Domain + Application + tests
+  Orchestrator creates Unit 1 = one class, Unit 2 = one method, Unit 3 = one test
+expected_outcome: FAIL
+failure_mode: over-partition
+notes: If too coupled to split safely, recommend splitting the PR rather than fake units

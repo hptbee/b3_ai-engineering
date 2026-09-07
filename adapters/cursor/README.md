@@ -43,6 +43,22 @@ Nested `.cursor/skills/` under package folders auto-scopes like `paths`.
 
 Map portable `agents/` roles to `.cursor/agents/` when implemented. Namespaced subagent types are host-specific — see Claude adapter for Trail of Bits-style names.
 
+Portable roles for the review loop: `reviewer`, `fixer`, plus optional `security-reviewer` / `architecture-reviewer`. Orchestrator stays the parent session (`review-loop/models.md`).
+
+Optional Cursor subagent overlay (host-only — do not put vendor model IDs in portable skills):
+
+```yaml
+# .cursor/agents/reviewer.md frontmatter example
+name: reviewer
+model: inherit   # or a host-specific slug for independent review
+```
+
+```yaml
+# .cursor/agents/fixer.md frontmatter example
+name: fixer
+model: inherit   # prefer a different slug than reviewer when the host allows
+```
+
 ## Built-in Cursor skills
 
 Product ships `/create-skill`, `/migrate-to-skills`, `/review`, subagent creators — separate from this repo's portable skills.

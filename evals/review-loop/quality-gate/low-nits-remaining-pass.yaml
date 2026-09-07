@@ -1,0 +1,11 @@
+id: review-quality-gate-001
+artifact: docs/review-loop.md
+intent: Quality gate can PASS with leftover LOW/NIT if critical/high/medium are 0 and build/tests PASS
+scenario: |
+  Blocking OPEN: 0
+  LOW nits listed: 2 (naming, comment)
+  Build: PASS
+  Relevant tests: PASS
+expected_outcome: PASS
+failure_mode: false-strictness
+notes: Do not claim perfection; list remaining LOW items

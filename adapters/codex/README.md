@@ -10,7 +10,9 @@
 | `rules/*.md` | Include or link from `AGENTS.md` — do not duplicate prose |
 | `skills/<name>/SKILL.md` | Symlink `skills/` → `.agents/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
 | `commands/` | Slash or prompt-style invocations when defined |
-| `agents/` | Role prompts when agent layer exists |
+| `agents/` | Role prompts when agent layer exists (`reviewer`, `fixer`; optional specialists) |
+
+Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in portable files.
 
 Codex discovers `.agents/skills/` at repo root (and user-level config outside repo). Same layout as agentskills.io standard.
 

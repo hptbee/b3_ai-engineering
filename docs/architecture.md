@@ -134,7 +134,7 @@ Example:
 
 An agent is a specialized role with a narrower mandate than the default coding agent. Roles exist so review and research can be independent of implementation.
 
-**Present (two reviewer roles).** See [`../agents/README.md`](../agents/README.md).
+**Present (reviewer, fixer, security, architecture).** See [`../agents/README.md`](../agents/README.md).
 
 Example:
 
@@ -160,11 +160,11 @@ The default product sequence is `workflows/feature-implementation.md`.
 
 The review loop is independent checking plus iterative correction. It is stricter than a single code-review skill: it has scope, iteration limits, stagnation detection, a finding lifecycle, and a ban on treating tool failure as success.
 
-**Specified.** See [`review-loop.md`](review-loop.md). Runtime pieces will live under `review-loop/`.
+**Present (orchestration).** Spec: [`review-loop.md`](review-loop.md). Procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md). Trigger: `commands/review-loop.md`. This is agent procedure, not a host plugin or eval runner.
 
 Example:
 
-> Review → fix → verify → re-review affected areas, then stop when clean or when a termination condition is hit.
+> Size the PR → review → validate → fix → verify → fresh review until the quality gate, non-convergence, or iteration limit.
 
 ## Knowledge
 
