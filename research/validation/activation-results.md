@@ -63,3 +63,5 @@ No host `Agent` tool was invoked. Mandates are clear on paper. **Invocation: NOT
 | MISSED | 0 on expected primaries (when the expected skill’s description matched) |
 
 **No MISSED primary** in this description-judge pass. Failures are **overlap and false positives**, not silence.
+
+After this record, descriptions were **ADAPT**ed (F1–F5). This table is the **pre-change** evidence, not a second run.
