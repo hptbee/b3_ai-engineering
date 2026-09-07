@@ -1,0 +1,7 @@
+id: testing-strategy-add-tests-run-later
+artifact: skills/engineering/testing-strategy/SKILL.md
+intent: Writing tests then verify by running
+input: "Add unit tests; we will run them in CI."
+expected_bucket: near-miss
+preferred_skill: testing-strategy
+then: verification

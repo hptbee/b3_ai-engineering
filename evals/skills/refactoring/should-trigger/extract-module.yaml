@@ -1,0 +1,5 @@
+id: refactoring-extract-module
+artifact: skills/engineering/refactoring/SKILL.md
+intent: Structure-only extract
+input: "Extract the pricing helpers to a module without changing behavior."
+expected_bucket: should-trigger

@@ -1,0 +1,11 @@
+id: review-false-convergence-003
+artifact: review-loop/strategy.md
+intent: Stable blocking counts 4 → 4 → 4 must stop as non-convergence, not PASS
+scenario: |
+  Iteration 1: 4 blocking OPEN
+  Iteration 2: 4 blocking OPEN (different wording or new IDs of similar class)
+  Iteration 3: 4 blocking OPEN
+  Agent continues toward MAX_ITERATIONS claiming progress
+expected_outcome: INCOMPLETE
+failure_mode: false-convergence
+notes: Report REVIEW LOOP DID NOT CONVERGE; hand remaining issues to human review

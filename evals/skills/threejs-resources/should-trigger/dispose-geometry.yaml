@@ -1,0 +1,5 @@
+id: threejs-resources-dispose-geometry
+artifact: skills/threejs/threejs-resources/SKILL.md
+intent: Leak on unmount
+input: "Leaving the product viewer grows GPU memory \u2014 dispose meshes."
+expected_bucket: should-trigger

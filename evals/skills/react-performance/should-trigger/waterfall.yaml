@@ -1,0 +1,5 @@
+id: react-performance-waterfall
+artifact: skills/frontend/react-performance/SKILL.md
+intent: Serial awaits
+input: "This React Server Component awaits user then orders then flags one after another."
+expected_bucket: should-trigger

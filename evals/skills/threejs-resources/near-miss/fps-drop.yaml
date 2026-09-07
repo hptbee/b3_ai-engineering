@@ -1,0 +1,6 @@
+id: threejs-resources-fps-drop
+artifact: skills/threejs/threejs-resources/SKILL.md
+intent: Slow render vs leak
+input: "FPS is 20 with 200 lights \u2014 not sure if leak or draw cost."
+expected_bucket: near-miss
+preferred_skill: threejs-performance

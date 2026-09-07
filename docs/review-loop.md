@@ -2,9 +2,9 @@
 
 The review loop is independent verification plus iterative correction. It answers: **is the implementation actually correct?**
 
-This document is the specification. Runtime reviewers, orchestration, and termination machinery are **not implemented yet**. Future files will live under `review-loop/`.
+This document is the specification. Orchestration v1 lives under [`../review-loop/`](../review-loop/README.md). A single pass of the `code-review` skill is not the loop.
 
-A single pass of the `code-review` skill is not the loop. The loop repeats review, fix, and verify until the change is clean or a termination condition is hit.
+A single invocation of `commands/review-loop.md` runs **review → validate → fix → verify → fresh review** until a quality gate, non-convergence, or iteration limit. Do not require the user to re-trigger after each fix.
 
 ## Default sequence
 
@@ -18,13 +18,15 @@ A single pass of the `code-review` skill is not the loop. The loop repeats revie
 7.  Review tests
 8.  Review maintainability
 9.  Consolidate findings
-10. Fix actionable findings
-11. Verify
-12. Re-review affected areas
-13. Stop when clean or a termination condition is reached
+10. Validate findings; fix only valid CONFIRMED items
+11. Verify (build / relevant tests)
+12. Fresh independent review of the current implementation
+13. Stop when the quality gate holds or a termination condition is reached
 ```
 
 Skip a review dimension only when it is out of scope **and** that skip is recorded. “Not relevant” without a reason is not a skip.
+
+Adaptive path: SMALL/MEDIUM = this loop on the full PR. LARGE/VERY_LARGE = logical review **units**, then a **cross-cutting** review. [`../review-loop/sizing.md`](../review-loop/sizing.md).
 
 ## Outcomes
 
@@ -176,7 +178,9 @@ Any of these → stop, escalate, or mark **INCOMPLETE** — not success.
 
 ### Iteration limit
 
-The loop must have a **maximum iteration** count (runtime will set a default). When that maximum is reached:
+Default **`MAX_ITERATIONS = 5`** for a full-PR (SMALL/MEDIUM) scope. LARGE unit loops use **3** per unit, **2** for cross-cutting, and a **12** cap on total reviewer passes (`review-loop/strategy.md`).
+
+When the maximum is reached:
 
 ```text
 INCOMPLETE
@@ -194,9 +198,15 @@ Every `CONFIRMED` finding should have evidence whenever reasonably possible. No 
 
 When consolidating, drop stale items, merge duplicates, and carry evidence and `id`s forward. Fixes must map to findings. Unrelated cleanup is out of loop scope unless the human expanded scope.
 
+## Quality gate
+
+A scope passes when **critical = 0**, **high = 0**, **medium = 0**, and required build/tests are **PASS**. LOW/NIT may remain and must be listed. Missing tool evidence → `UNKNOWN / INCOMPLETE`, never PASS.
+
+Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/REOPENED aliases: [`../review-loop/findings.md`](../review-loop/findings.md).
+
 ## Independence
 
-Implementation and review should not be the same unchecked voice. When specialized agents exist, architecture, security, performance, test, and UX review should be able to run as separate roles. Until then, the loop still requires a distinct review pass after implementation, not a self-congratulation paragraph.
+Implementation and review should not be the same unchecked voice. Roles: `agents/reviewer.md` (no edits), `agents/fixer.md` (no PASS), optional `security-reviewer` / `architecture-reviewer`. Hosts may use different models (`review-loop/models.md`).
 
 ## Verification inside the loop
 
@@ -205,13 +215,13 @@ Verification uses the verification skill and the verification rule:
 - run the relevant tests, builds, or probes
 - record what ran and what did not
 - re-verify after fixes (`FIXED` → `VERIFIED` or back to `CONFIRMED`)
-- re-review only the affected areas plus any contract the fix could have broken
+- then a **fresh** review of the current implementation (not “confirm the old ID list”)
 
 ## Termination
 
 Stop when:
 
-- no in-scope `CONFIRMED` findings remain open **and** required verification is PASS, or
+- no in-scope blocking CONFIRMED findings remain (`critical`/`high`/`medium` = 0) **and** required verification is PASS, or
 - a termination condition fires (iteration limit, stagnation, escalation, human stop)
 
 Record the stop reason. Do not imply completeness when the stop was a limit. Exhausting the iteration limit is **INCOMPLETE**, not PASS.

@@ -1,0 +1,5 @@
+id: react-performance-keyboard-nav
+artifact: skills/frontend/react-performance/SKILL.md
+intent: A11y not perf
+input: "The modal is not keyboard accessible."
+expected_bucket: should-not-trigger

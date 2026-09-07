@@ -1,0 +1,5 @@
+id: nodejs-runtime-react-hooks
+artifact: skills/backend/nodejs-runtime/SKILL.md
+intent: Frontend hooks
+input: "Fix this useEffect dependency array."
+expected_bucket: should-not-trigger

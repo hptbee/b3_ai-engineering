@@ -1,17 +1,16 @@
 # Review loop (runtime)
 
-Specification: [`docs/review-loop.md`](../docs/review-loop.md) (sequence, finding lifecycle, schema, false-convergence).
+Specification: [`docs/review-loop.md`](../docs/review-loop.md).
 
-**Status:** directories reserved; no runtime strategy, reviewers, termination logic, or finding store yet.
+**Status:** orchestration v1. The agent that receives `commands/review-loop.md` **runs until** a quality gate, non-convergence, or iteration limit. It does not stop after the first findings list for the user to re-trigger.
 
-Intended layout:
+| File | Role |
+| --- | --- |
+| [`strategy.md`](strategy.md) | Orchestrator procedure |
+| [`sizing.md`](sizing.md) | SMALL / MEDIUM / LARGE / VERY_LARGE |
+| [`findings.md`](findings.md) | IDs, lifecycle aliases, iteration log |
+| [`models.md`](models.md) | Reviewer / fixer / orchestrator model slots (not hard-coded) |
 
-```text
-review-loop/
-├── strategy/       # how to scope, iterate, and consolidate
-├── reviewers/      # dimension-specific review artifacts (later)
-├── verification/   # how the loop invokes verification
-└── termination/    # iteration limits, stagnation, escalation
-```
+Review method stays in `skills/engineering/code-review`. Fix method stays in `agents/fixer.md` (minimal change + `verification`). Do not duplicate those bodies here.
 
-Do not add placeholder reviewers. When implementation starts, keep this folder operational and keep the spec in `docs/review-loop.md` so adapters do not fork the meaning.
+Working state may be kept in-session or written under `state/` (gitignored except the template).

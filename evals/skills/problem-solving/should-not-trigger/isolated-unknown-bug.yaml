@@ -1,0 +1,6 @@
+id: problem-solving-not-trigger-isolated-debug
+artifact: skills/engineering/problem-solving/SKILL.md
+intent: Unknown CI failure is debugging, not the implement loop
+input: "CI fails with TypeError on orderService.ts after yesterday's merge. Cause unknown."
+expected_bucket: should-not-trigger
+notes: observed F1 from validation v1

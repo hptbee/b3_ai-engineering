@@ -1,0 +1,5 @@
+id: debugging-greenfield-feature
+artifact: skills/engineering/debugging/SKILL.md
+intent: New feature is not debugging
+input: "Implement the settings page from the spec."
+expected_bucket: should-not-trigger

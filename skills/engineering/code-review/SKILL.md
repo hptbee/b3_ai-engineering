@@ -11,7 +11,7 @@ description: >
 
 # Code review
 
-Produce an honest review of a defined change. This skill is one review pass. The iterative loop (fix → verify → re-review, limits, stagnation) is specified in `docs/review-loop.md` and is not fully implemented yet.
+Produce an honest review of a defined change. This skill is **one review pass**. The iterative loop is `docs/review-loop.md`, run by `review-loop/strategy.md`.
 
 ## When to use
 
@@ -61,7 +61,7 @@ Near miss: “write tests for this PR” → implementation, then verification. 
 - Evidence rule: `rules/evidence-and-provenance.md`
 - Verification rule: `rules/verification.md`
 
-Specialist reviewer agents are specified in `agents/README.md` and are not implemented yet.
+Specialist reviewer agents: `agents/reviewer.md`, `agents/security-reviewer.md`, `agents/architecture-reviewer.md`. Loop fixer: `agents/fixer.md`. Host runtime: `adapters/`.
 
 ## Verification
 

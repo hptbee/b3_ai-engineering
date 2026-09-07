@@ -1,0 +1,5 @@
+id: threejs-performance-draw-calls
+artifact: skills/threejs/threejs-performance/SKILL.md
+intent: Too many draws
+input: "renderer.info.render.calls is 2000 in a warehouse scene."
+expected_bucket: should-trigger

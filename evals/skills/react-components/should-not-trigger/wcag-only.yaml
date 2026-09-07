@@ -1,0 +1,5 @@
+id: react-components-wcag-only
+artifact: skills/frontend/react-components/SKILL.md
+intent: A11y-only review
+input: "Audit this form against WCAG 2.4.7 focus visible."
+expected_bucket: should-not-trigger

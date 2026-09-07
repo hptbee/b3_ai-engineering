@@ -1,0 +1,5 @@
+id: ef-core-nplus1
+artifact: skills/backend/ef-core/SKILL.md
+intent: N+1 list endpoint
+input: "For each order we query lines separately in EF."
+expected_bucket: should-trigger

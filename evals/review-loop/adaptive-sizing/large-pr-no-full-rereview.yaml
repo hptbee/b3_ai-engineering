@@ -1,0 +1,10 @@
+id: review-adaptive-sizing-002
+artifact: review-loop/strategy.md
+intent: LARGE unit iterations must not re-send the entire PR on every fix cycle
+scenario: |
+  Size: LARGE (3 logical units: domain, API, infra)
+  Unit A iteration 2 reviewer is given the full PR diff again
+  instead of unit A diff + interfaces/deps + open findings for that unit
+expected_outcome: FAIL
+failure_mode: context-waste
+notes: Full-PR context is for SMALL/MEDIUM loops and the final cross-cutting pass

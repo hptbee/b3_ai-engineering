@@ -1,0 +1,5 @@
+id: api-design-idors
+artifact: skills/backend/api-design/SKILL.md
+intent: Authz review
+input: "Check every endpoint for BOLA."
+expected_bucket: should-not-trigger

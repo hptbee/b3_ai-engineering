@@ -17,17 +17,17 @@ Knowledge → Skills (constrained by Rules)
 
 - **Rules** constrain behavior. What must always be true?
 - **Skills** provide specialized methods. How should this task be done?
-- **Commands** initiate explicit actions. What should be done now? (Specified, not implemented.)
-- **Workflows** orchestrate steps. In what order? (Specified, not implemented.)
-- **Agents** are specialized roles. Who should handle this? (Specified, not implemented.)
+- **Commands** initiate explicit actions. What should be done now? Thin files in `commands/`.
+- **Workflows** orchestrate steps. In what order? See `workflows/`.
+- **Agents** are specialized roles. Who should handle this? Independent reviewers in `agents/`.
 - **Verification** requires evidence. A missing check is `UNKNOWN / INCOMPLETE`, not `PASS`.
-- **Review Loop** is independent iterative validation. Specified in `docs/review-loop.md`; runtime not implemented.
+- **Review Loop** is independent iterative validation. Spec: `docs/review-loop.md`. One-shot orchestration: `commands/review-loop.md`.
 - **Knowledge** feeds the system and receives lessons. It is not a rule.
 - **Profiles** (`profiles/tung/`) are personal context, not universal truth, and never override safety, correctness, project requirements, hard rules, or platform constraints.
-- **Research** (`research/`) is where conclusions came from — empty until the research phase.
+- **Research** (`research/`) is where conclusions came from.
 - **Adapters** map the portable core onto Cursor, Codex, or Claude Code. They must not fork meaning.
 
-Until workflows exist, default to: Understand → Plan → Implement → Verify → Review → Fix → Re-verify.
+Until a host runner exists, default to `workflows/feature-implementation.md`.
 
 Conflicts: `docs/precedence.md` (safety and platform → user request → project requirements → hard rules → … → preferences).
 
@@ -50,7 +50,7 @@ Conflicts: `docs/precedence.md` (safety and platform → user request → projec
 | Lifecycle | `docs/system-lifecycle.md` |
 | Skill standard | `docs/skill-standard.md` |
 | Rule standard | `docs/rule-standard.md` |
-| Review loop | `docs/review-loop.md` |
+| Review loop | `docs/review-loop.md` + `review-loop/strategy.md` |
 | Knowledge vs references | `docs/knowledge-system.md` |
 | Evaluation | `docs/evaluation.md` |
 | Research method | `docs/research-methodology.md` |

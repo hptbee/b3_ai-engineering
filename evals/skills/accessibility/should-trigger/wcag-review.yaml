@@ -1,0 +1,5 @@
+id: accessibility-wcag-review
+artifact: skills/frontend/accessibility/SKILL.md
+intent: WCAG review request
+input: "Review this dialog against WCAG AA keyboard and names."
+expected_bucket: should-trigger

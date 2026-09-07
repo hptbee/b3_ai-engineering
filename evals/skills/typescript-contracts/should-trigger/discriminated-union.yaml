@@ -1,0 +1,5 @@
+id: typescript-contracts-discriminated-union
+artifact: skills/frontend/typescript-contracts/SKILL.md
+intent: Model variants as unions
+input: "Status is a string plus optional fields that don't belong together \u2014 fix the types."
+expected_bucket: should-trigger

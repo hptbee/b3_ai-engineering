@@ -1,0 +1,6 @@
+id: react-components-useeffect-fetch
+artifact: skills/frontend/react-components/SKILL.md
+intent: Effects belong to react-hooks
+input: "My useEffect fetch loop keeps running \u2014 fix the deps."
+expected_bucket: near-miss
+preferred_skill: react-hooks

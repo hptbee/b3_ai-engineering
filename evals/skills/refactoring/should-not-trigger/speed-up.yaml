@@ -1,0 +1,5 @@
+id: refactoring-speed-up
+artifact: skills/engineering/refactoring/SKILL.md
+intent: Perf work is not this skill
+input: "The list view is slow \u2014 reduce re-renders."
+expected_bucket: should-not-trigger

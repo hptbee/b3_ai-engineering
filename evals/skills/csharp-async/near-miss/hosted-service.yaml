@@ -1,0 +1,6 @@
+id: csharp-async-hosted-service
+artifact: skills/backend/csharp-async/SKILL.md
+intent: BackgroundService is aspnet-core
+input: "IHostedService loop ignores StoppingToken."
+expected_bucket: near-miss
+preferred_skill: aspnet-core

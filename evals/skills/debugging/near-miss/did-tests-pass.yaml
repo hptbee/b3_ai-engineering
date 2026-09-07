@@ -1,0 +1,6 @@
+id: debugging-did-tests-pass
+artifact: skills/engineering/debugging/SKILL.md
+intent: Claim tests passed is verification
+input: "Did the tests pass after your last commit?"
+expected_bucket: near-miss
+preferred_skill: verification

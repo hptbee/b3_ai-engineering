@@ -1,0 +1,6 @@
+id: problem-solving-not-trigger-plan-only
+artifact: skills/engineering/problem-solving/SKILL.md
+intent: Plan-only request must not start implement loop
+input: "Plan order CSV export across API, worker, and React admin. Do not write code yet."
+expected_bucket: should-not-trigger
+notes: observed F1 from validation v1

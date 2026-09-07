@@ -1,0 +1,6 @@
+id: react-three-fiber-react-list-perf
+artifact: skills/threejs/react-three-fiber/SKILL.md
+intent: DOM list virtualization
+input: "The HUD item list re-renders \u2014 not the WebGL scene."
+expected_bucket: near-miss
+preferred_skill: react-performance

@@ -2,26 +2,17 @@
 
 Agents are specialized roles. They answer: **who should handle this?**
 
-**Status:** specified, not implemented. There are no role prompts or subagent configs in this folder yet.
+**Status:** present (reviewer / fixer plus two specialist reviewers). Not a host plugin. Orchestration is `review-loop/strategy.md`. Host subagent files belong in `adapters/`.
 
-## Planned roles
+| Agent | Mandate | Why not a skill only |
+| --- | --- | --- |
+| [`reviewer.md`](reviewer.md) | One independent review pass; no edits | Isolation from the fixer |
+| [`fixer.md`](fixer.md) | Validate then minimal fix + verification; no PASS | Isolation from the reviewer |
+| [`security-reviewer.md`](security-reviewer.md) | Authn/z, trust boundaries | Isolation from implementer (decision-004) |
+| [`architecture-reviewer.md`](architecture-reviewer.md) | Boundaries, unjustified complexity | Isolation from the author of the design |
 
-| Agent | Mandate |
-| --- | --- |
-| `architect` | Boundaries, data flow, coupling, change impact |
-| `backend-reviewer` | APIs, data, services, contracts |
-| `frontend-reviewer` | UI structure, state, rendering, client architecture |
-| `security-reviewer` | Trust boundaries, authn/z, secrets, injection |
-| `performance-reviewer` | Hot paths, capacity, obvious algorithmic cost |
-| `test-reviewer` | Whether tests could catch the risk |
-| `ux-reviewer` | Usability, clarity, accessibility at a product level |
-| `researcher` | Pattern research with provenance (pairs with the research skill) |
+Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`). Model slots: `review-loop/models.md`.
 
-Roles are a backlog. Do not treat this list as a running multi-agent system.
+Backlog (not created): frontend/performance/test/UX reviewers — use `code-review` dimensions until isolation is needed in real use.
 
-## Design notes
-
-- Independence matters most for review: implementer and reviewer should not be the same unchecked pass.
-- An agent is a mandate plus constraints, not a copy of a skill. Skills stay shared.
-- Host-specific subagent files belong in `adapters/`.
-- Personal review taste lives in `knowledge/personal/`, not in a fake “universal reviewer”.
+Do not treat this folder as a swarm.

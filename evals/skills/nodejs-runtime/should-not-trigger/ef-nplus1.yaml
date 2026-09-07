@@ -1,0 +1,5 @@
+id: nodejs-runtime-ef-nplus1
+artifact: skills/backend/nodejs-runtime/SKILL.md
+intent: EF Core
+input: "This ASP.NET list endpoint has N+1 queries."
+expected_bucket: should-not-trigger

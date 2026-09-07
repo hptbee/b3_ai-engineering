@@ -1,0 +1,5 @@
+id: rule-simplest-violate-001
+artifact: rules/simplest-correct.md
+intent: Fashionable layers without a requirement skip the strong guideline
+input: "Add Clean Architecture + MediatR + three microservices so it looks enterprise. No scale or team-boundary need."
+expected_outcome: violate
