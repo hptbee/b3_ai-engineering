@@ -1,0 +1,5 @@
+id: rule-evidence-violate-001
+artifact: rules/evidence-and-provenance.md
+intent: Copying third-party skill verbatim into skills/ without adaptation violates provenance rule
+input: "Copied vercel-react-best-practices SKILL.md into skills/ unchanged."
+expected_outcome: violate

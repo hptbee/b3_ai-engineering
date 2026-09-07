@@ -1,0 +1,5 @@
+id: rule-evidence-comply-001
+artifact: rules/evidence-and-provenance.md
+intent: External pattern recorded with source link in research/ — complies
+input: "Recorded in research/sources/ with URL and tier — not pasted into skills/ verbatim."
+expected_outcome: comply

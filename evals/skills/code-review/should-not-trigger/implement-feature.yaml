@@ -1,0 +1,5 @@
+id: code-review-not-trigger-001
+artifact: skills/engineering/code-review/SKILL.md
+intent: Greenfield feature implementation is problem-solving, not review
+input: "Implement user registration from scratch following the spec."
+expected_bucket: should-not-trigger

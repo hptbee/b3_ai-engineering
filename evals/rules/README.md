@@ -1,5 +1,12 @@
 # Rule evals
 
-Comply / violate cases for foundation rules (verification honesty, portability, evidence classes).
+Comply / violate cases for foundation rules.
 
-No cases yet.
+| Bucket | Cases | Rules covered |
+| --- | ---: | --- |
+| `comply/` | 2 | verification, evidence-and-provenance |
+| `violate/` | 2 | verification, evidence-and-provenance |
+
+Add cases for `rules/portability.md` and `rules/engineering-principles.md` when those behaviors need protection.
+
+Validate: `./scripts/validate-evals.sh`

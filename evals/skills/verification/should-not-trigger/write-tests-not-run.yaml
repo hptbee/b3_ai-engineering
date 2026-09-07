@@ -1,0 +1,5 @@
+id: verification-not-trigger-002
+artifact: skills/engineering/verification/SKILL.md
+intent: Writing tests without running them is implementation, not verification skill
+input: "Add unit tests for the payment module — we will run them in CI later."
+expected_bucket: should-not-trigger

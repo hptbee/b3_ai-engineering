@@ -1,0 +1,9 @@
+id: review-tool-failure-002
+artifact: docs/review-loop.md
+intent: Cannot read diff / git failure leaves review INCOMPLETE
+scenario: |
+  git diff fails or returns empty wrongly
+  Agent produces full security review anyway
+expected_outcome: INCOMPLETE
+failure_mode: tool-failure
+notes: no fabricated findings without diff evidence

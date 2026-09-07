@@ -1,0 +1,5 @@
+id: code-review-trigger-002
+artifact: skills/engineering/code-review/SKILL.md
+intent: Post-implementation review of recent edits should activate code-review
+input: "I just implemented the auth middleware — review the diff for issues."
+expected_bucket: should-trigger

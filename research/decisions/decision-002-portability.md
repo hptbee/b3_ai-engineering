@@ -29,7 +29,7 @@ Evidence shows shared content, divergent loaders — adapters are the correct se
 ## Consequences
 
 - Do not copy skills into `.cursor/skills/` in this repo during synthesis without generator
-- Adapter READMEs stay mapping-only until implementation phase
+- Adapter READMEs + sync script implement path matrix (Track C); rule `.mdc` generation still deferred
 - Hook-based enforcement (optional) lives in adapters, not portable rules
 
 ## Confidence

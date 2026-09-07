@@ -1,0 +1,7 @@
+id: research-patterns-near-miss-001
+artifact: skills/engineering/research-engineering-patterns/SKILL.md
+intent: Should we adopt vs read React docs to build component
+input: "Should we adopt this public React skill pack or just use react.dev for the component work?"
+expected_bucket: near-miss
+preferred_skill: research-engineering-patterns
+notes: not ordinary product read of react.dev for one component

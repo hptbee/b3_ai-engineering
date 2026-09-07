@@ -1,0 +1,5 @@
+id: problem-solving-trigger-003
+artifact: skills/engineering/problem-solving/SKILL.md
+intent: Unclear failure needing investigation + change
+input: "The API returns 500 intermittently — find the cause and patch it."
+expected_bucket: should-trigger

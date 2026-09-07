@@ -36,7 +36,7 @@ Description is the skill API — breaking changes need tests first. Capability e
 
 ## Consequences
 
-- Next synthesis phase creates fixture **files** under `evals/` (not this research phase — research only documents intent)
+- Track C created fixture **files** under `evals/` (28 skill activation, 8 review-loop, 4 rule samples); automated runner still deferred
 - Near-miss cases required for each new skill before catalog growth
 - Trigger threshold: start with spec 0.5 / 3 runs; tighten after baseline
 

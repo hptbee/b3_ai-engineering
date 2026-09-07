@@ -1,0 +1,9 @@
+id: review-false-positive-001
+artifact: docs/review-loop.md
+intent: Speculative noise must not flood as confirmed defects
+scenario: |
+  Reviewer lists 15 issues, all confidence low, no evidence
+  All marked CONFIRMED to force fixes
+expected_outcome: FAIL_review_quality
+failure_mode: false-positive
+notes: findings should stay SPECULATIVE until validated
