@@ -1,9 +1,13 @@
 # Research decisions
 
-What we decided to **adopt**, **modify**, or **reject**, and why.
+Recommendations from Phase 1 evidence. **Not implemented** in portable core until a dedicated synthesis phase.
 
-Each important pattern should record: source, pattern, why it is useful, what problem it solves, what we changed, why we changed it, adopted/rejected.
+Each record: ADOPT / ADAPT / REJECT / DEFER with rationale and consequences.
 
-Adopted work is then rewritten into `knowledge/`, `skills/`, `rules/`, or `workflows/`. Do not leave the decision as the only copy of a skill.
+Phase 1 set:
 
-No decisions yet.
+- `decision-001-skill-core.md`
+- `decision-002-portability.md`
+- `decision-003-progressive-disclosure.md`
+- `decision-004-review-loop.md`
+- `decision-005-evaluation.md`

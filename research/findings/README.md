@@ -1,7 +1,7 @@
 # Research findings
 
-Patterns extracted from sources — named independently of the original file layout.
+Synthesized patterns organized by **architectural concern**, not by source repository.
 
-A finding is not yet adopted. Adoption, modification, or rejection happens in `decisions/` after `comparisons/` when more than one approach exists.
+Phase 1 index: [../README.md](../README.md).
 
-No findings yet.
+Do not treat findings as rules or skills until promoted through `research/decisions/` and the synthesis phase.

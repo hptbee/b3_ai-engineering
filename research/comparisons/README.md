@@ -1,7 +1,11 @@
 # Research comparisons
 
-Evaluation of multiple approaches to the same problem.
+Side-by-side evaluation of approaches across sources. See [../README.md](../README.md).
 
-Compare authority class, portability, token cost, and fit for a personal (not company) system. A single official specification usually does not need a comparison file.
+Files:
 
-No comparisons yet.
+- `skill-systems-comparison.md`
+- `agent-systems-comparison.md`
+- `review-loop-comparison.md`
+- `evaluation-systems-comparison.md`
+- `portability.md`
