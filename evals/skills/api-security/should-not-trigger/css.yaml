@@ -1,0 +1,5 @@
+id: api-security-css
+artifact: skills/backend/api-security/SKILL.md
+intent: Not API security
+input: "The button hover color is wrong."
+expected_bucket: should-not-trigger

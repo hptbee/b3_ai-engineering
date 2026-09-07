@@ -1,0 +1,5 @@
+id: react-components-mockup-to-components
+artifact: skills/frontend/react-components/SKILL.md
+intent: Break mockup into components
+input: "Turn this dashboard mockup into a React component tree and state plan."
+expected_bucket: should-trigger

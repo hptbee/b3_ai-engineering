@@ -1,0 +1,5 @@
+id: testing-strategy-claim-pass
+artifact: skills/engineering/testing-strategy/SKILL.md
+intent: Running tests as evidence is verification
+input: "Confirm npm test passed and we can ship."
+expected_bucket: should-not-trigger

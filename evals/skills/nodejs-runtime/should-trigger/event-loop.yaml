@@ -1,0 +1,5 @@
+id: nodejs-runtime-event-loop
+artifact: skills/backend/nodejs-runtime/SKILL.md
+intent: Blocking the event loop
+input: "JSON.parse of huge payloads on each request stalls Node."
+expected_bucket: should-trigger

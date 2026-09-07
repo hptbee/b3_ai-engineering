@@ -1,0 +1,5 @@
+id: testing-strategy-what-to-test
+artifact: skills/engineering/testing-strategy/SKILL.md
+intent: Choosing tests for a feature
+input: "What tests should we add for the refund flow?"
+expected_bucket: should-trigger

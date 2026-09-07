@@ -1,0 +1,6 @@
+id: refactoring-refactor-and-validate
+artifact: skills/engineering/refactoring/SKILL.md
+intent: Mixed behavior change
+input: "Refactor the parser and add validation for empty input."
+expected_bucket: near-miss
+notes: split refactoring vs behavior change

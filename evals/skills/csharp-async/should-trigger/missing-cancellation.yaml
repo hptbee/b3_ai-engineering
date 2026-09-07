@@ -1,0 +1,5 @@
+id: csharp-async-missing-cancellation
+artifact: skills/backend/csharp-async/SKILL.md
+intent: Cancellation not passed
+input: "The HTTP client call ignores CancellationToken."
+expected_bucket: should-trigger

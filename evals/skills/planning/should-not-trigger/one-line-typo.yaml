@@ -1,0 +1,5 @@
+id: planning-one-line-typo
+artifact: skills/engineering/planning/SKILL.md
+intent: Tiny fix should not require planning skill
+input: "Fix the typo in the README title."
+expected_bucket: should-not-trigger

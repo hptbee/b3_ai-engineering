@@ -1,0 +1,5 @@
+id: nodejs-runtime-graceful-shutdown
+artifact: skills/backend/nodejs-runtime/SKILL.md
+intent: Shutdown leaks connections
+input: "SIGTERM doesn't close the Postgres pool."
+expected_bucket: should-trigger

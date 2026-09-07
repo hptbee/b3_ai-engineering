@@ -1,0 +1,6 @@
+id: threejs-resources-r3f-unmount
+artifact: skills/threejs/threejs-resources/SKILL.md
+intent: R3F owns some dispose
+input: "Canvas unmount in R3F \u2014 what should we dispose manually?"
+expected_bucket: near-miss
+preferred_skill: react-three-fiber

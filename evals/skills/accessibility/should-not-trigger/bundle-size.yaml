@@ -1,0 +1,5 @@
+id: accessibility-bundle-size
+artifact: skills/frontend/accessibility/SKILL.md
+intent: Not a11y
+input: "Cut the JS bundle of the marketing page."
+expected_bucket: should-not-trigger

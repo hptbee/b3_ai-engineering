@@ -1,0 +1,6 @@
+id: react-performance-first-structure
+artifact: skills/frontend/react-performance/SKILL.md
+intent: First component design
+input: "Build the product table UI from this JSON."
+expected_bucket: near-miss
+preferred_skill: react-components

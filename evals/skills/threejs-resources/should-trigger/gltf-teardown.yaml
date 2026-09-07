@@ -1,0 +1,5 @@
+id: threejs-resources-gltf-teardown
+artifact: skills/threejs/threejs-resources/SKILL.md
+intent: GLTF leftover
+input: "How should we dispose a loaded GLTF scene?"
+expected_bucket: should-trigger

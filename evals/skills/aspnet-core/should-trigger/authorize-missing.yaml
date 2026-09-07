@@ -1,0 +1,5 @@
+id: aspnet-core-authorize-missing
+artifact: skills/backend/aspnet-core/SKILL.md
+intent: Missing authz on endpoint
+input: "This minimal API mutates orders with no Authorize."
+expected_bucket: should-trigger

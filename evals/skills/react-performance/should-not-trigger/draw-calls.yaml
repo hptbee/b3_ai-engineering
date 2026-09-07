@@ -1,0 +1,5 @@
+id: react-performance-draw-calls
+artifact: skills/frontend/react-performance/SKILL.md
+intent: GPU draw calls
+input: "Too many Three.js draw calls in the warehouse scene."
+expected_bucket: should-not-trigger

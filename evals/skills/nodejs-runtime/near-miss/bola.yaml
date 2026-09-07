@@ -1,0 +1,6 @@
+id: nodejs-runtime-bola
+artifact: skills/backend/nodejs-runtime/SKILL.md
+intent: Authz is api-security
+input: "This Express route returns any user's document by id."
+expected_bucket: near-miss
+preferred_skill: api-security

@@ -1,0 +1,7 @@
+id: react-hooks-memo-everywhere
+artifact: skills/frontend/react-hooks/SKILL.md
+intent: Premature memo is still hooks-adjacent vs perf skill
+input: "Wrap every callback in useCallback for performance."
+expected_bucket: near-miss
+preferred_skill: react-hooks
+notes: skill should discourage unnecessary memo; deep bundle work is react-performance

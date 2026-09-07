@@ -1,0 +1,5 @@
+id: csharp-async-block-on-result
+artifact: skills/backend/csharp-async/SKILL.md
+intent: Sync-over-async deadlock
+input: ".Result on an async EF call in ASP.NET deadlocks."
+expected_bucket: should-trigger

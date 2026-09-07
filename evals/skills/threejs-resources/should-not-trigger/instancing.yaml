@@ -1,0 +1,5 @@
+id: threejs-resources-instancing
+artifact: skills/threejs/threejs-resources/SKILL.md
+intent: Draw-call strategy
+input: "Render 5000 identical crates without 5000 draw calls."
+expected_bucket: should-not-trigger

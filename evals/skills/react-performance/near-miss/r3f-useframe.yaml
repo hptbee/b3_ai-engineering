@@ -1,0 +1,6 @@
+id: react-performance-r3f-useframe
+artifact: skills/frontend/react-performance/SKILL.md
+intent: R3F loop cost
+input: "useFrame setState every frame drops FPS."
+expected_bucket: near-miss
+preferred_skill: react-three-fiber

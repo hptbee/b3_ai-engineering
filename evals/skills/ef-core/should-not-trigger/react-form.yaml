@@ -1,0 +1,5 @@
+id: ef-core-react-form
+artifact: skills/backend/ef-core/SKILL.md
+intent: Frontend
+input: "Controlled input for order quantity."
+expected_bucket: should-not-trigger

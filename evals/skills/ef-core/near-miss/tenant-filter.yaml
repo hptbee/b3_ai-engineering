@@ -1,0 +1,7 @@
+id: ef-core-tenant-filter
+artifact: skills/backend/ef-core/SKILL.md
+intent: Tenancy is also api-security
+input: "Global query filter by tenant plus BOLA on ids."
+expected_bucket: near-miss
+preferred_skill: ef-core
+then: api-security

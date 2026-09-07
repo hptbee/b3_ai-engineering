@@ -1,0 +1,6 @@
+id: accessibility-linter-pass
+artifact: skills/frontend/accessibility/SKILL.md
+intent: Linter-only is not PASS
+input: "eslint-plugin-jsx-a11y is green so this is accessible."
+expected_bucket: near-miss
+notes: skill forbids PASS from linter alone

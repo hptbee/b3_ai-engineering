@@ -4,7 +4,7 @@ This repository will evaluate **itself**: whether the right artifact activates, 
 
 Application test suites for product work live in those products. Evals here live under `evals/` when they exist.
 
-**Status:** E1 trigger fixtures + E2 review-loop scenarios **implemented** (Track C). Automated runner, CI, and capability benchmarks **deferred** (decision-005). See [`evals/README.md`](../evals/README.md).
+**Status:** trigger fixtures for foundation and synthesized domain skills; review-loop scenarios. Automated runner, CI, and capability benchmarks **deferred** (decision-005). See [`evals/README.md`](../evals/README.md).
 
 ## Intended layout
 

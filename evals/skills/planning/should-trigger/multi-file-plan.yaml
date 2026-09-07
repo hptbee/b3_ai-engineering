@@ -1,0 +1,5 @@
+id: planning-multi-file-plan
+artifact: skills/engineering/planning/SKILL.md
+intent: Multi-step feature needs a plan
+input: "Plan the checkout API across API, DB, and UI before coding."
+expected_bucket: should-trigger

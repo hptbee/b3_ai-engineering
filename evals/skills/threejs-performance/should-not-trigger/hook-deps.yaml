@@ -1,0 +1,5 @@
+id: threejs-performance-hook-deps
+artifact: skills/threejs/threejs-performance/SKILL.md
+intent: React hooks
+input: "useEffect missing cleanup for a DOM listener."
+expected_bucket: should-not-trigger
