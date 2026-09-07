@@ -1,0 +1,7 @@
+id: aspnet-core-near-miss-bola
+artifact: skills/backend/aspnet-core/SKILL.md
+intent: Per-id BOLA is api-security even on an ASP.NET app
+input: "GET /orders/{id} has [Authorize] but returns any user's order by UUID."
+expected_bucket: near-miss
+preferred_skill: api-security
+notes: observed F4 from validation v1

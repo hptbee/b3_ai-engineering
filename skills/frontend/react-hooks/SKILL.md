@@ -1,10 +1,10 @@
 ---
 name: react-hooks
 description: >
-  Use when writing or fixing React hooks: useState, useEffect, useMemo,
-  useCallback, effect dependencies, derived state, and async in UI. Do
-  not use for component tree design, performance memo catalogs, or
-  R3F useFrame.
+  Use when writing or fixing React hooks: useEffect, effect dependencies,
+  derived state vs copied props, stale closures, and async in UI. Do not
+  use for where state lives in the component tree (react-components),
+  performance catalogs, or R3F useFrame.
 ---
 
 # React hooks
@@ -16,7 +16,7 @@ Effects are for synchronizing with the outside world. Derived data belongs in re
 - Effect runs too often / not enough
 - Stale closures, missing deps
 - Fetching in effects vs better data APIs
-- “Should I memo this?”
+- “Should I memo this callback/value?” (only if the issue is hook identity, not bundle/waterfalls)
 
 ## When not to use
 

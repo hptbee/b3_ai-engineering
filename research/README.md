@@ -11,6 +11,7 @@ Phase 1 (foundations) and **Phase 2 Tracks A/B** (domain research) are complete 
 | Track B | Backend: Node, API, auth, security | ✓ research only |
 | Track C | Adapters + eval fixtures | ✓ `adapters/`, `evals/`, `scripts/` |
 | Synthesis | Mine/adapt skills into B3 | ✓ decision-008 + `skills/` |
+| Validation v1 | Real-task matrix, activation, composition | ✓ `research/validation/` |
 
 ## Lifecycle (this repo)
 

@@ -1,11 +1,11 @@
 ---
 name: problem-solving
 description: >
-  Use when tackling a software problem end to end: a bug, a feature, an
-  architecture question that will lead to change, or an unclear failure.
-  Use when the work needs understand → plan → implement → verify, not a
-  single specialized review. Do not use for isolated code review of an
-  existing diff, for research-only pattern mining, or for host-tool setup.
+  Use when executing a product change end to end (understand → plan →
+  implement → verify) and no more specific skill covers the whole task.
+  Do not use for root-cause investigation before a patch (debugging),
+  plan-only requests, structure-only refactors, isolated code review,
+  choosing tests, claiming tests passed, or research-only pattern mining.
 ---
 
 # Problem solving
@@ -18,9 +18,8 @@ Understand → Plan → Implement → Verify → Review → Fix → Re-verify
 
 ## When to use
 
-- Feature work or bug work in a product repo
-- Production failures, regressions, or “it doesn’t work”
-- Tasks that mix investigation and change
+- Feature or bug **implementation** after the cause is known or the spec is clear
+- Tasks that mix investigation and change **once debugging has a cause**
 - When the agent is about to jump to coding without a problem statement
 
 ## When not to use
