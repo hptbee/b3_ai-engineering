@@ -14,7 +14,9 @@ confidence: medium
 
 This file is **personal context** (background domains). It is not a rule, not a company architecture, and not a mandate for every project.
 
-Operational profile (style, preferences, strengths, weaknesses, decision principles): [`../../profiles/tung/`](../../profiles/tung/engineering-style.md). That profile also must not override security, correctness, project requirements, hard rules, or platform constraints.
+Personal profile content is deferred until Tùng records it. Any future profile also
+must not override security, correctness, project requirements, hard rules, or
+platform constraints.
 
 ## Background (indicative)
 

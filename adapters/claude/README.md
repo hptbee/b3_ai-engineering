@@ -1,6 +1,7 @@
 # Claude Code adapter
 
-**Status:** path matrix + CLAUDE.md bridge pattern documented. No `.claude/` tree committed yet.
+**Status:** intended mapping only. No `.claude/` tree is committed and this mapping
+has not been verified in this repository.
 
 ## Portable core → Claude Code
 

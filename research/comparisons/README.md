@@ -9,3 +9,5 @@ Files:
 - `review-loop-comparison.md`
 - `evaluation-systems-comparison.md`
 - `portability.md`
+- `frontend-skills-comparison.md`
+- `backend-skills-comparison.md`

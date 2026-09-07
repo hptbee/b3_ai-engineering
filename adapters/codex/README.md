@@ -1,6 +1,7 @@
 # Codex adapter
 
-**Status:** path matrix + sync script documented. No Codex-specific overlays generated yet.
+**Status:** intended mapping only. No Codex-specific overlay is generated and this
+mapping has not been verified in this repository.
 
 ## Portable core → Codex
 

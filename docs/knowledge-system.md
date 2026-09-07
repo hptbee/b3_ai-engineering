@@ -10,7 +10,8 @@ research   = where conclusions came from
 
 These are not interchangeable. Do not file a GitHub README in `knowledge/` and call it learned. Do not file a skill checklist in `knowledge/` because it is convenient.
 
-Stores live under `knowledge/`. Most entries do not exist yet. Do not fill these stores by scraping the internet during unrelated work.
+Create stores under `knowledge/` when their first real entry exists. Do not fill
+them by scraping the internet during unrelated work.
 
 ## Categories
 
@@ -67,14 +68,17 @@ Examples:
 
 Personal knowledge must **not** automatically become a rule. Promotion follows [`system-lifecycle.md`](system-lifecycle.md) and [`rule-standard.md`](rule-standard.md).
 
-**Profile vs personal knowledge:** `profiles/` is who the owner is and how they prefer to work (placeholders under `profiles/tung/`). `knowledge/personal/` is reusable content with provenance. Background stack notes: `knowledge/personal/engineering-context.md`. Preferences that are only taste stay in the profile.
+**Profile vs personal knowledge:** a future `profiles/` entry is who the owner is
+and how they prefer to work. `knowledge/personal/` is reusable content with
+provenance. Background stack notes: `knowledge/personal/engineering-context.md`.
+Preferences that are only taste stay in a profile rather than becoming a rule.
 
 ## Knowledge vs references vs Research
 
 | Store | Role | Example |
 | --- | --- | --- |
 | `knowledge/` | Canonical facts and lessons the system may cite later | “React effects: official pattern, last verified …” |
-| Skill `references/` or `references/` | Material **used while performing a task** | `skills/react-performance/references/memoization.md` |
+| Skill `references/` | Material **used while performing a task** | `skills/react-performance/references/memoization.md` |
 | `research/` | Intake: sources, findings, comparisons, decisions, rejected | A comparison of two public review-loop designs |
 
 Skill-local layout (when that skill exists):
@@ -87,7 +91,9 @@ skills/react-performance/
     └── memoization.md
 ```
 
-Shared task aids that are not canonical knowledge may live under `references/`. Provenance of *why* we believe something lives in `research/`, then a distilled entry may be promoted into `knowledge/`.
+Create a shared task-aid location only when a real aid serves multiple skills.
+Provenance of *why* we believe something lives in `research/`, then a distilled
+entry may be promoted into `knowledge/`.
 
 ## Metadata
 

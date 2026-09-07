@@ -2,7 +2,9 @@
 
 External repositories, blogs, papers, and tool docs are **research inputs**. They are not the system. Do not grow this repository by aggregating other people’s skill packs.
 
-This document is the **method**. Artifacts belong under [`../research/`](../research/README.md). A dedicated research phase comes after this foundation; do not populate `research/` with fake files in the meantime.
+This document is the **method**. Artifacts belong under
+[`../research/`](../research/README.md). Add research only for a bounded question;
+do not create empty or speculative intake files.
 
 ## Process
 

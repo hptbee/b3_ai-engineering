@@ -1,10 +1,12 @@
 # Adapters
 
-**Status:** Track C — path matrix and sync helper implemented. Hooks, generated manifests, and CI sync are **partial**.
+**Status:** documentation and a symlink helper exist. The mappings are **intended**;
+they have not been exercised against every host in this repository. Nothing here is a
+platform-specific implementation of B3.
 
 Portable core lives at repo root (`AGENTS.md`, `rules/`, `skills/`, `docs/`). Adapters map that core to host discovery paths without forking content.
 
-## Host path matrix
+## Intended host path matrix — not verified in this repository
 
 | Host | Skills discovery | Rules / standing instructions | Project context | Subagents / roles |
 | --- | --- | --- | --- | --- |
@@ -12,7 +14,8 @@ Portable core lives at repo root (`AGENTS.md`, `rules/`, `skills/`, `docs/`). Ad
 | **Codex** | `.agents/skills/` (repo + user config) | Linked from `AGENTS.md`; byte cap ~32 KiB chain | `AGENTS.md` primary | Role prompts when defined |
 | **Claude Code** | `.claude/skills/` | Claude rules / `CLAUDE.md` instructions | `CLAUDE.md` → bridge to `AGENTS.md` | `.claude/agents/` |
 
-**Portable symlink target:** repo-root `skills/` → host skill folder (see `sync-skills.sh`).
+**Portable symlink target:** repo-root `skills/` → host skill folder (see
+`sync-skills.sh`). The helper is not a compatibility guarantee.
 
 Do **not** commit duplicate skill trees under multiple host folders unless generated from one source.
 

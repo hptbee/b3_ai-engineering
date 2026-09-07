@@ -1,6 +1,7 @@
 # Cursor adapter
 
-**Status:** path matrix + sync script documented. No `.cursor/` tree committed yet.
+**Status:** intended mapping only. No `.cursor/` tree is committed and this mapping
+has not been verified in this repository.
 
 ## Portable core → Cursor
 
