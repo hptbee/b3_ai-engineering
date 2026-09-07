@@ -132,7 +132,7 @@ Organized by architectural concern (not by repository):
 
 ---
 
-## Decisions (research recommendations — not implemented)
+## Decisions (research recommendations)
 
 | Decision | Outcome |
 | --- | --- |

@@ -31,62 +31,27 @@ Near miss: “read the React docs to implement this component” → use officia
 
 ## Procedure
 
-Follow `docs/research-methodology.md`. Summary:
+Follow `docs/research-methodology.md` end to end:
 
-```text
-Discover → Collect → Classify → Compare → Extract
-→ Evaluate → Adapt → Personalize → Verify → Record provenance
-```
+1. Bound the question.
+2. Collect and classify sources honestly.
+3. Compare, extract, evaluate fit for a portable personal system.
+4. Adapt or reject — rewrite; never paste third-party skill packs.
+5. Verify against official docs or a real task, or mark `UNKNOWN / INCOMPLETE`.
+6. Record provenance under `research/` using the methodology template.
 
-1. **Name the question** so discovery stays bounded.
-2. **Collect** links, dates, and short notes — not whole trees.
-3. **Classify authority** (official, established practice, community, personal).
-4. **Compare** at least two sources unless the claim is a primary specification.
-5. **Extract** the pattern and the problem it solves, independent of the source’s file layout.
-6. **Evaluate** fit for a personal, portable system. Discard host lock-in and company process.
-7. **Adapt** into this taxonomy (rule vs skill vs knowledge vs adapter). Rewrite; do not paste.
-8. **Personalize** with `authority: personal` when the change is taste or local experience.
-9. **Verify** against official docs or a real task. README quality is not evidence.
-10. **Record provenance** using the block below, in `research/` — not in `knowledge/` or skill `references/` until a decision promotes it.
-
-## Provenance block
-
-```text
-Source:
-Pattern:
-Why it is useful:
-What problem it solves:
-What we changed:
-Why we changed it:
-Adopted / rejected:
-```
-
-| Kind | Store |
-| --- | --- |
-| What externals say | `research/sources/` |
-| Extracted patterns | `research/findings/` |
-| Multiple approaches | `research/comparisons/` |
-| Adopt / modify | `research/decisions/` |
-| Intentionally not adopted | `research/rejected/` |
-
-Do not paste the source skill. After a decision, rewrite into `knowledge/` then skills/rules/workflows (`docs/system-lifecycle.md`).
+Do not promote into `knowledge/`, skills, or rules until a decision is recorded (`docs/system-lifecycle.md`).
 
 ## Progressive disclosure
 
-- Stores: `research/README.md`
-- Method: `docs/research-methodology.md`
+- Method, store map, and provenance template: `docs/research-methodology.md`
+- Stores index: `research/README.md`
 - Knowledge vs reference vs research: `docs/knowledge-system.md`
 - Constraint: `rules/evidence-and-provenance.md`
 
-Open those only if this file is not enough for the current question.
-
 ## Verification
 
-Research is verified when:
-
-- the pattern is classified honestly
-- adapt/reject is explicit
-- a check against an official spec or a real task was done **or** the gap is marked `UNKNOWN / INCOMPLETE`
+Research is verified when adapt/reject is explicit and a check against an official spec or a real task was done **or** the gap is marked `UNKNOWN / INCOMPLETE`.
 
 Not verified: “stars are high”, “the repo looks complete”, “we copied it”.
 

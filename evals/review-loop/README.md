@@ -5,7 +5,7 @@ Scenarios for **`docs/review-loop.md`** and **`review-loop/strategy.md`**. Manua
 | Folder | Cases | Question |
 | --- | ---: | --- |
 | `false-positive/` | 1 | Is speculative noise treated as confirmed? |
-| `false-convergence/` | 3 | Does the loop fake a PASS? |
+| `false-convergence/` | 2 | Does the loop fake a PASS? |
 | `tool-failure/` | 2 | Failed tools → INCOMPLETE? |
 | `iteration-limit/` | 1 | Exhausted budget → INCOMPLETE? |
 | `finding-lifecycle/` | 2 | Do status and severity≠confidence hold? |

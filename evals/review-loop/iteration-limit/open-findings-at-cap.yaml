@@ -4,6 +4,7 @@ intent: Max iterations reached with open CONFIRMED findings → INCOMPLETE
 scenario: |
   max_iterations: 3
   After iteration 3, findings F1 and F2 remain CONFIRMED
+  Summary says "good enough to ship"
 expected_outcome: INCOMPLETE
 failure_mode: iteration-limit
-notes: report remaining issues and stop — not PASS
+notes: budget exhaustion with open blockers is not PASS

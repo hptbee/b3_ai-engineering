@@ -30,38 +30,18 @@ Near miss: “write tests for this PR” → implementation, then verification. 
 
 ## Procedure
 
-1. **Scope**  
-   What is in the change, what is out, which dimensions apply. If there is no meaningful target (empty diff, wrong branch), stop: INCOMPLETE.
-
-2. **Understand**  
-   Read the change and surrounding code. Restate intent. If intent is unclear, say so; do not invent requirements.
-
-3. **Review dimensions** (skip only with a recorded reason):
-   - Architecture (boundaries, coupling, data flow)
-   - Correctness (logic, edge cases, contracts)
-   - Security (trust boundaries, authz, injection, secrets)
-   - Performance (obvious hot paths, N+1, unbounded work)
-   - Tests (meaningful coverage of the risk, not only presence of files)
-   - Maintainability (naming, complexity, dead code, API clarity)
-
-4. **Record findings** using the schema in `docs/review-loop.md` (id, severity, confidence, status, category, location, description, evidence, suggested_fix, verification).
-   - **Severity** = harm if real (`critical` / `high` / `medium` / `low`). **Confidence** = certainty it exists (`high` / `medium` / `low`). `critical` + `low` confidence is not a confirmed critical defect.
-   - Status starts `NEW` / `INVESTIGATING`. Promote to `CONFIRMED` only with evidence. Park thin items as `SPECULATIVE`; do not flood the review.
-   - Categories include correctness, security, performance, architecture, maintainability, testing, reliability, ux.
-
-5. **Consolidate**  
-   Merge duplicates. Drop stale items. Separate blockers from nits. Do not present nits as blockers. Speculative ≠ confirmed.
-
-6. **Tie to verification**  
-   If a finding requires a test or probe, say which. Do not claim tests passed unless they were run (`verification` skill).
+1. **Scope** — what is in/out; empty or wrong target → INCOMPLETE.
+2. **Understand** — read the change; restate intent; do not invent requirements.
+3. **Review** — examine the scoped dimensions in `docs/review-loop.md`; skip only with a recorded reason.
+4. **Record findings** — use the schema and lifecycle in `docs/review-loop.md`; promote to `CONFIRMED` only with evidence.
+5. **Consolidate** — merge duplicates; separate blockers from nits; speculative ≠ confirmed.
+6. **Tie to verification** — name probes/tests; do not claim they passed unless run (`verification` skill).
 
 ## Progressive disclosure
 
-- Loop, finding lifecycle, false convergence, iteration limits: `docs/review-loop.md`
-- Evidence rule: `rules/evidence-and-provenance.md`
-- Verification rule: `rules/verification.md`
-
-Specialist reviewer agents: `agents/reviewer.md`, `agents/security-reviewer.md`, `agents/architecture-reviewer.md`. Loop fixer: `agents/fixer.md`. Host runtime: `adapters/`.
+- Finding schema, lifecycle, dimensions, false convergence: `docs/review-loop.md`
+- Specialist roles when isolation matters: `agents/reviewer.md`, `agents/security-reviewer.md`, `agents/architecture-reviewer.md`, `agents/fixer.md`
+- Evidence and verification rules: `rules/evidence-and-provenance.md`, `rules/verification.md`
 
 ## Verification
 
