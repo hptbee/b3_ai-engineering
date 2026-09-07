@@ -1,9 +1,10 @@
 ---
 name: ef-core
 description: >
-  Use when writing or reviewing EF Core: tracking, projections, N+1,
-  transactions, concurrency tokens, migrations. Do not use for Dapper-only
-  SQL, ASP.NET middleware, or generic API authz.
+  Use when writing or reviewing EF Core LINQ-to-Entities: tracking,
+  projections, Include/N+1, transactions, concurrency tokens, migrations.
+  Do not use for Dapper or ADO.NET SQL, DI lifetimes of DbContext
+  (aspnet-core), blocking .Result on tasks (csharp-async), or API authz.
 ---
 
 # EF Core
@@ -13,7 +14,7 @@ Query what you need. Tracking is a cost. N+1 is a defect on list endpoints.
 ## When to use
 
 - LINQ to Entities, SaveChanges, migrations
-- Slow SQL, cartesian explosions, identity resolution surprises
+- Slow **EF** SQL, cartesian explosions, identity resolution surprises
 
 ## When not to use
 

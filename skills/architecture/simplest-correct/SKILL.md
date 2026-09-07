@@ -1,10 +1,11 @@
 ---
 name: simplest-correct
 description: >
-  Use when choosing architecture: layers, Clean/Hexagonal/DDD/CQRS,
-  microservices vs modular monolith. Use when someone proposes more
-  abstraction than the requirements justify. Do not use for a localized
-  bugfix or for implementing a framework tutorial.
+  Use when choosing system architecture: layers, Clean/Hexagonal/DDD/CQRS,
+  microservices vs modular monolith, extra buses or frameworks. Complexity
+  is allowed when a named requirement justifies it. Do not use for local
+  “write the shortest code”, one-line bugfixes, or coding-style simplicity
+  (that is smallest-change, not this skill).
 ---
 
 # Simplest correct architecture
@@ -15,7 +16,9 @@ simplest solution that meets real requirements
 unnecessary abstraction
 ```
 
-Complexity needs a named requirement (scale, team boundary, consistency, compliance).
+This skill is **not** “always choose the simplest implementation.”
+Local smallest-change is `rules/engineering-principles.md`.
+This skill is **system shape**: extra services, layers, and patterns need a **named requirement** (scale, team boundary, consistency, compliance). Justified complexity is in bounds.
 
 ## When to use
 
