@@ -1,0 +1,8 @@
+id: code-review-near-miss-001
+artifact: skills/engineering/code-review/SKILL.md
+intent: Ship safety question spans review and verification
+input: "Is this safe to ship?"
+expected_bucket: near-miss
+preferred_skill: code-review
+then: verification
+notes: review first; verification for test/build evidence

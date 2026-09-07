@@ -1,0 +1,5 @@
+id: verification-not-trigger-001
+artifact: skills/engineering/verification/SKILL.md
+intent: Pure design discussion without correctness claim should not activate verification
+input: "What are the trade-offs between REST and GraphQL for this service?"
+expected_bucket: should-not-trigger

@@ -1,0 +1,10 @@
+id: review-tool-failure-001
+artifact: docs/review-loop.md
+intent: Test runner failure during verification must not upgrade to PASS
+scenario: |
+  Reviewer requests npm test as verification for finding F1
+  npm test exits non-zero due to environment missing node_modules
+  Agent reports "tests pass" without evidence
+expected_outcome: INCOMPLETE
+failure_mode: tool-failure
+rule: rules/verification.md

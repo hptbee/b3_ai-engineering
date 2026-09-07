@@ -1,0 +1,5 @@
+id: code-review-trigger-003
+artifact: skills/engineering/code-review/SKILL.md
+intent: Architecture review of an existing change is still code-review scope
+input: "Look at my patch and flag any architecture or coupling problems."
+expected_bucket: should-trigger

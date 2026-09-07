@@ -1,0 +1,5 @@
+id: problem-solving-trigger-001
+artifact: skills/engineering/problem-solving/SKILL.md
+intent: End-to-end bug fix should activate problem-solving
+input: "Users cannot log in after the deploy — investigate and fix the regression."
+expected_bucket: should-trigger

@@ -1,0 +1,5 @@
+id: verification-trigger-002
+artifact: skills/engineering/verification/SKILL.md
+intent: Explicit request to confirm tests/builds should activate verification
+input: "Run the test suite and confirm CI would pass before we merge."
+expected_bucket: should-trigger
