@@ -1,0 +1,5 @@
+id: research-patterns-trigger-001
+artifact: skills/engineering/research-engineering-patterns/SKILL.md
+intent: Adopt/reject decision for external pattern
+input: "Should we adopt the Vercel react-best-practices skill structure into our system?"
+expected_bucket: should-trigger

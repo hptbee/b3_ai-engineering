@@ -50,7 +50,7 @@ Near miss: “is this design sound?” with no code change yet → stay in Under
    Check the change against the plan and obvious failure modes (correctness, tests, security if in play). This is not the full review loop.
 
 6. **Fix**  
-   Address confirmed and likely issues produced by verification or review. Map each fix to a finding.
+   Address confirmed findings (and high-confidence issues still `INVESTIGATING` if they block the success condition). Map each fix to a finding.
 
 7. **Re-verify**  
    Re-run the checks that matter. Then stop or escalate.

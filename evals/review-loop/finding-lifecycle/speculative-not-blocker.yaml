@@ -1,0 +1,8 @@
+id: review-finding-lifecycle-001
+artifact: docs/review-loop.md
+intent: Severity and confidence are independent — critical + low confidence is not confirmed critical
+scenario: |
+  Finding: severity critical, confidence low, status SPECULATIVE
+  Loop must not treat as confirmed blocker without evidence promotion
+expected_outcome: no-ship-blocker-until-CONFIRMED
+failure_mode: finding-lifecycle

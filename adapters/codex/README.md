@@ -1,17 +1,51 @@
 # Codex adapter
 
-**Status:** intended mapping only. No Codex-specific overlays are generated yet.
+**Status:** path matrix + sync script documented. No Codex-specific overlays generated yet.
 
 ## Portable core → Codex
 
-| Core | Codex-oriented mapping (planned) |
+| Core | Codex mapping |
 | --- | --- |
-| `AGENTS.md` | Primary operating file for Codex-style agents |
-| `rules/` | Linked or included from `AGENTS.md`; do not duplicate text |
-| `skills/*/SKILL.md` | Discoverable skills via `SKILL.md` frontmatter |
-| `commands/` | Optional slash-style or prompt-style invocations when defined |
-| `agents/` | Role prompts only when the agent layer exists |
+| `AGENTS.md` | Primary operating file; merged chain subject to ~32 KiB default cap |
+| `rules/*.md` | Include or link from `AGENTS.md` — do not duplicate prose |
+| `skills/<name>/SKILL.md` | Symlink `skills/` → `.agents/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
+| `commands/` | Slash or prompt-style invocations when defined |
+| `agents/` | Role prompts when agent layer exists |
+
+Codex discovers `.agents/skills/` at repo root (and user-level config outside repo). Same layout as agentskills.io standard.
+
+## AGENTS.md merge chain
+
+Codex merges multiple AGENTS files up the directory tree. Keep root `AGENTS.md` concise; defer procedures to skills (progressive disclosure).
+
+If byte cap truncates context:
+1. Shorten `AGENTS.md` to pointers
+2. Rely on skill descriptions for activation
+3. Split rarely-used docs to `docs/` + skill references
+
+## Skills doc depth note
+
+OpenAI/codex repo skills documentation may pointer to developers.openai.com — treat official web docs as authoritative when repo stub is thin (`research/README.md` deferred unknown).
+
+## Symlink recommendation
+
+```bash
+./adapters/sync-skills.sh codex
+# creates .agents/skills → ../skills
+```
+
+For Cursor + Codex on same repo:
+
+```bash
+./adapters/sync-skills.sh all
+```
 
 ## Thin by design
 
-Codex-only instructions (CLI flags, local tool conventions) stay in this folder. They must not become core rules.
+CLI flags, local tool conventions, and Codex-only config stay here. Core rules and skills remain host-agnostic.
+
+## References
+
+- [`../README.md`](../README.md)
+- `research/sources/openai-codex-customization.md`
+- `research/sources/agentskills-open-standard.md`

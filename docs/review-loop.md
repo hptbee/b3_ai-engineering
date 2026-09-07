@@ -38,57 +38,161 @@ Every check and the loop as a whole must end in one of:
 
 PASS is never inferred from silence.
 
-## Safeguard: never declare success because a tool failed
+## Finding lifecycle
 
-A failed test, unavailable tool, timeout, missing credential, skipped suite, or incomplete review is:
+Findings are stateful. They are not a flat bullet list that resets every iteration.
+
+```text
+NEW
+ ↓
+INVESTIGATING
+ ├── CONFIRMED
+ │      ↓
+ │    FIXED
+ │      ↓
+ │   VERIFIED
+ │      ↓
+ │    CLOSED
+ │
+ ├── FALSE_POSITIVE
+ │
+ └── SPECULATIVE
+```
+
+| Status | Meaning |
+| --- | --- |
+| `NEW` | Reported, not yet examined |
+| `INVESTIGATING` | Evidence is being gathered |
+| `CONFIRMED` | Evidence supports that the issue exists |
+| `FIXED` | A change was made that is intended to address it |
+| `VERIFIED` | The verification that would catch it was run and passed |
+| `CLOSED` | Done (verified fix, or accepted false positive / out of scope with a reason) |
+| `FALSE_POSITIVE` | Investigation showed it is not a real issue |
+| `SPECULATIVE` | Too thin to confirm; parked, not blocking |
+
+`FIXED` without `VERIFIED` is not closed. `SPECULATIVE` must not be presented as `CONFIRMED`.
+
+## Finding schema (conceptual)
+
+Runtime may store this as YAML, JSON, or a table. Fields are conceptual; do not require a database.
+
+```yaml
+id:
+severity:
+confidence:
+status:
+category:
+location:
+description:
+evidence:
+suggested_fix:
+verification:
+```
+
+| Field | Role |
+| --- | --- |
+| `id` | Stable across iterations |
+| `severity` | How harmful **if the issue is real** |
+| `confidence` | How sure the reviewer is that it **exists** |
+| `status` | Lifecycle value above |
+| `category` | See below |
+| `location` | File / symbol / surface |
+| `description` | What is wrong |
+| `evidence` | Why we believe it (required for `CONFIRMED` whenever reasonably possible) |
+| `suggested_fix` | Optional, not a mandate to over-scope |
+| `verification` | What check would prove the fix |
+
+### Categories
+
+```text
+correctness
+security
+performance
+architecture
+maintainability
+testing
+reliability
+ux
+```
+
+### Severity vs confidence
+
+**Severity** is harm. **Confidence** is certainty that the defect is real.
+
+Suggested severity: `critical`, `high`, `medium`, `low`. Suggested confidence: `high`, `medium`, `low`. Keep these short; do not invent a ten-point scale.
+
+```text
+critical + low confidence
+```
+
+must **not** automatically be treated as a confirmed critical defect. Investigate or leave `SPECULATIVE` / `INVESTIGATING`. Do not block the world on an ungounded scare, and do not ignore a high-confidence critical with evidence.
+
+Avoid noisy speculative findings. A long list of guesses is a failed review, not a thorough one.
+
+## False-convergence protection
+
+The loop is not done because the latest write-up looks tidy.
+
+### No review target
+
+If the change/diff is empty, the branch is wrong, or the review target cannot be established:
 
 ```text
 UNKNOWN / INCOMPLETE
 ```
 
-It is not PASS. It is also not automatically FAIL unless the failure *is* the evidence (for example a test that ran and asserted incorrectly). Distinguish:
+not PASS.
+
+### Tool failure
+
+If a required test, build, lint, reviewer, or verification tool fails to **run** (unavailable, timeout, missing credential, skipped suite):
+
+```text
+UNKNOWN / INCOMPLETE
+```
+
+not PASS.
+
+Distinguish:
 
 - **The product failed a real check** → FAIL
 - **The check did not run** → UNKNOWN / INCOMPLETE
 
-## Safeguard: avoid false convergence
+Never declare success because a tool failed.
 
-The loop is not done merely because the latest write-up looks tidy. Detect at least:
+### Stagnation
+
+Detect and refuse a fake green:
 
 - the same finding repeating without a material change
+- the same fix repeatedly failing verification
+- no meaningful code change across an iteration that claimed to fix issues
+- identical review result across iterations
+- reviewer disagreement without resolution
 - stale findings that refer to code no longer present
-- no meaningful review target (empty diff, wrong branch, unrelated files)
-- implementation unchanged across an iteration that claimed to fix issues
-- reviewer disagreement that was papered over rather than resolved
 - repeated tool failures
 
-Any of these is a signal to stop, escalate, or mark INCOMPLETE — not to declare success.
+Any of these → stop, escalate, or mark **INCOMPLETE** — not success.
 
-## Iteration limits
+### Iteration limit
 
-The loop must have:
+The loop must have a **maximum iteration** count (runtime will set a default). When that maximum is reached:
 
-- a **maximum iteration** count (implementation will set a default; exhausting it is not success)
-- **stagnation detection** (no progress on findings or on evidence)
-- **critical-issue escalation** (security, data loss, auth bypass — do not grind forever)
-- **human decision points** (scope too large, values conflict, irreversible change)
+```text
+INCOMPLETE
+```
 
-Exhausting the iteration limit = **UNKNOWN / INCOMPLETE** (or FAIL if confirmed issues remain). It is not PASS.
+not PASS.
 
-## Evidence-based findings
+If confirmed issues still remain, the overall outcome may be FAIL **and** incomplete — never PASS because the budget ran out.
 
-Reviewers must grade confidence:
+Also required: **critical-issue escalation** (do not grind forever on security/data-loss) and **human decision points** (scope too large, values conflict, irreversible change).
 
-| Grade | Use when |
-| --- | --- |
-| **Confirmed issue** | Reproduced, traced to code, or contradicted by spec/tests with evidence |
-| **Likely issue** | Strong reasoning plus partial evidence |
-| **Potential concern** | Plausible and in scope, but not demonstrated |
-| **Speculative concern** | Thin; usually omit or park, do not block on it |
+### Evidence
 
-Avoid noisy speculative findings. A long list of guesses is a failed review, not a thorough one.
+Every `CONFIRMED` finding should have evidence whenever reasonably possible. No evidence → do not confirm. Speculative items stay `SPECULATIVE` or are dropped.
 
-When consolidating, drop stale items, merge duplicates, and carry evidence forward. Fixes must map to findings. Unrelated cleanup is out of loop scope unless the human expanded scope.
+When consolidating, drop stale items, merge duplicates, and carry evidence and `id`s forward. Fixes must map to findings. Unrelated cleanup is out of loop scope unless the human expanded scope.
 
 ## Independence
 
@@ -100,14 +204,14 @@ Verification uses the verification skill and the verification rule:
 
 - run the relevant tests, builds, or probes
 - record what ran and what did not
-- re-verify after fixes
+- re-verify after fixes (`FIXED` → `VERIFIED` or back to `CONFIRMED`)
 - re-review only the affected areas plus any contract the fix could have broken
 
 ## Termination
 
 Stop when:
 
-- no confirmed or likely in-scope issues remain **and** required verification is PASS, or
+- no in-scope `CONFIRMED` findings remain open **and** required verification is PASS, or
 - a termination condition fires (iteration limit, stagnation, escalation, human stop)
 
-Record the stop reason. Do not imply completeness when the stop was a limit.
+Record the stop reason. Do not imply completeness when the stop was a limit. Exhausting the iteration limit is **INCOMPLETE**, not PASS.

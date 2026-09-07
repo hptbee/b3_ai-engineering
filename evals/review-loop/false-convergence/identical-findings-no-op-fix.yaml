@@ -1,0 +1,10 @@
+id: review-false-convergence-001
+artifact: docs/review-loop.md
+intent: Repeated identical findings with no meaningful diff must not yield PASS
+scenario: |
+  Iteration 1: finding F1 "missing auth check" CONFIRMED
+  Iteration 2: same code, reviewer repeats F1 unchanged
+  Implementer claims fixed; diff is comment-only
+expected_outcome: INCOMPLETE
+failure_mode: false-convergence
+notes: stagnation detection; no PASS on no-op fix

@@ -1,0 +1,5 @@
+id: rule-verification-violate-001
+artifact: rules/verification.md
+intent: Claiming PASS without executed evidence violates hard rule
+input: "Looks good — tests probably pass. Marking PASS."
+expected_outcome: violate

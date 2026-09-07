@@ -8,7 +8,7 @@ Commands are explicit, user-triggered operations. They answer: **what action sho
 
 | Command | Intent |
 | --- | --- |
-| `research` | Investigate a question with evidence classes and sources |
+| `research` | Investigate a question; write intake under `research/` when synthesizing into this system |
 | `plan` | Produce an implementation plan without coding |
 | `implement` | Execute a plan using the problem-solving skill |
 | `review` | One code-review pass on the current change |

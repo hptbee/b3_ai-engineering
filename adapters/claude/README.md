@@ -1,19 +1,61 @@
 # Claude Code adapter
 
-**Status:** intended mapping only. No `.claude/` tree is generated yet.
+**Status:** path matrix + CLAUDE.md bridge pattern documented. No `.claude/` tree committed yet.
 
 ## Portable core → Claude Code
 
-| Core | Claude-oriented mapping (planned) |
+| Core | Claude mapping |
 | --- | --- |
-| `AGENTS.md` | May be mirrored or pointed to from `CLAUDE.md` without forking policy |
-| `rules/` | Map to Claude rules / instructions; same meaning |
-| `skills/*/SKILL.md` | Map to Claude Code skills (`SKILL.md` layout is already aligned) |
-| `commands/` | Map to Claude commands when the command layer exists |
-| `agents/` | Map to Claude subagents when roles exist |
+| `AGENTS.md` | Source of truth; bridge from `CLAUDE.md` via `@AGENTS.md` import |
+| `rules/*.md` | Claude rules / project instructions — same meaning |
+| `skills/<name>/SKILL.md` | Symlink `skills/` → `.claude/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
+| `commands/` | Claude commands when command layer exists |
+| `agents/` | `.claude/agents/` subagents when roles exist |
 
-If Claude requires `CLAUDE.md` at a repo root, generate or copy **pointers** from this adapter, not a second full handbook.
+## CLAUDE.md bridge
+
+Claude Code often expects root `CLAUDE.md`. **Do not fork** the handbook — generate a pointer file:
+
+```markdown
+# Project instructions
+
+Follow @AGENTS.md for operating context, precedence, and review standards.
+
+Skills: `.claude/skills/` (symlinked from portable `skills/`).
+Rules: see portable `rules/` — map to Claude rules without rewriting policy.
+```
+
+Optional: commit `CLAUDE.md` in repo after user approval, or document generation in this adapter only.
+
+## Plugin / marketplace namespacing
+
+Third-party plugins may use namespaced skill and subagent names (e.g. `plugin:skill-name`). Portable core skills use simple `name:` fields — adapter docs map host dispatch strings when integrating OSS plugins (e.g. Trail of Bits differential-review).
+
+Do **not** copy namespaced subagent names into portable `skills/`.
+
+## allowed-tools frontmatter
+
+Some Claude/OSS skills declare `allowed-tools`. Portable foundation skills omit this — optional generated overlay in `.claude/skills/<name>/` if user wants tool restrictions.
+
+## Hooks (optional layer)
+
+Claude plugins support SessionStart/hook enforcement (see Superpowers, dev-loop in research). Hooks are **not** portable — document optional hook wrappers here that invoke review or verification procedures.
+
+Portable core must remain usable without hooks.
+
+## Symlink
+
+```bash
+./adapters/sync-skills.sh claude
+# creates .claude/skills → ../skills
+```
 
 ## Thin by design
 
-Claude hooks, permission prompts, and MCP server lists belong here. Engineering method stays portable.
+Permission prompts, MCP server lists, and Claude hook JSON belong here. Engineering method stays in portable core.
+
+## References
+
+- [`../README.md`](../README.md)
+- `research/sources/claude-code-skills-plugins.md`
+- `research/decisions/decision-002-portability.md`

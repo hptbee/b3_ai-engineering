@@ -1,0 +1,5 @@
+id: verification-trigger-001
+artifact: skills/engineering/verification/SKILL.md
+intent: Claiming work passes without running checks should activate verification
+input: "The login fix works — ship it. No need to run tests."
+expected_bucket: should-trigger

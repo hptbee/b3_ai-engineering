@@ -12,7 +12,9 @@ confidence: medium
 
 # Personal engineering context
 
-This file is **personal context** for future skill and knowledge design. It is not a rule, not a company architecture, and not a mandate for every project.
+This file is **personal context** (background domains). It is not a rule, not a company architecture, and not a mandate for every project.
+
+Operational profile (style, preferences, strengths, weaknesses, decision principles): [`../../profiles/tung/`](../../profiles/tung/engineering-style.md). That profile also must not override security, correctness, project requirements, hard rules, or platform constraints.
 
 ## Background (indicative)
 
@@ -34,4 +36,4 @@ Experience includes, among other work:
 - Do not assume a .NET or Azure default in portable skills.
 - When a recommendation comes from this background, label it personal.
 
-Future personal notes (recurring mistakes, preferred review style, productivity patterns) belong in this store with the same metadata discipline.
+Reusable lessons from real projects belong in this store with the same metadata. Taste belongs in `profiles/`. Promotion to a rule requires evaluation and human approval (`docs/system-lifecycle.md`).

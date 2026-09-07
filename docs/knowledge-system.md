@@ -1,10 +1,25 @@
 # Knowledge system
 
-Knowledge is reusable material the agent may cite. It is not a rule, skill, or command. It answers: **what have we learned?**
+Knowledge is the **canonical reusable knowledge** of this personal AI system. It is not a rule, skill, command, research log, or task aid. It answers: **what does the system know?**
+
+```text
+knowledge  = what the system knows
+reference  = material used to perform a task
+research   = where conclusions came from
+```
+
+These are not interchangeable. Do not file a GitHub README in `knowledge/` and call it learned. Do not file a skill checklist in `knowledge/` because it is convenient.
 
 Stores live under `knowledge/`. Most entries do not exist yet. Do not fill these stores by scraping the internet during unrelated work.
 
 ## Categories
+
+```text
+knowledge/
+├── stable/
+├── volatile/
+└── personal/
+```
 
 ### Stable
 
@@ -42,19 +57,37 @@ If `last_verified` is old relative to the technology’s release cadence, treat 
 
 ### Personal
 
-The owner’s engineering experience and preferences. Useful, local, and **not universal**.
+The owner’s engineering experience and **reusable lessons** — still not universal.
 
 Examples:
 
-- preferred architecture patterns
-- recurring mistakes
-- preferred review style
-- lessons from real projects
-- personal productivity patterns
+- recurring mistakes (as lessons, not rules)
+- preferred review style that survived real projects
+- lessons from real work that are not yet (and may never be) rules
 
-Personal knowledge must **not** automatically become a rule. Promotion follows [`rule-standard.md`](rule-standard.md).
+Personal knowledge must **not** automatically become a rule. Promotion follows [`system-lifecycle.md`](system-lifecycle.md) and [`rule-standard.md`](rule-standard.md).
 
-A starting context file lives at `knowledge/personal/engineering-context.md`. It records background; it does not prescribe architecture for every project.
+**Profile vs personal knowledge:** `profiles/` is who the owner is and how they prefer to work (placeholders under `profiles/tung/`). `knowledge/personal/` is reusable content with provenance. Background stack notes: `knowledge/personal/engineering-context.md`. Preferences that are only taste stay in the profile.
+
+## Knowledge vs references vs Research
+
+| Store | Role | Example |
+| --- | --- | --- |
+| `knowledge/` | Canonical facts and lessons the system may cite later | “React effects: official pattern, last verified …” |
+| Skill `references/` or `references/` | Material **used while performing a task** | `skills/react-performance/references/memoization.md` |
+| `research/` | Intake: sources, findings, comparisons, decisions, rejected | A comparison of two public review-loop designs |
+
+Skill-local layout (when that skill exists):
+
+```text
+skills/react-performance/
+├── SKILL.md
+└── references/
+    ├── rendering.md
+    └── memoization.md
+```
+
+Shared task aids that are not canonical knowledge may live under `references/`. Provenance of *why* we believe something lives in `research/`, then a distilled entry may be promoted into `knowledge/`.
 
 ## Metadata
 
@@ -118,9 +151,10 @@ For personal experience, `source: personal-experience` and `authority: personal`
 1. Prefer a relevant skill for *how*; use knowledge for *facts and lessons*.
 2. State the authority class when the knowledge affects a design choice.
 3. If volatile knowledge is stale or unverified, re-check official docs.
-4. If only personal knowledge applies, label the recommendation as personal.
+4. If only personal knowledge or profile applies, label the recommendation as personal.
 5. Do not copy product or employer architecture into this repository.
+6. Do not let knowledge outrank [`precedence.md`](precedence.md).
 
 ## Provenance
 
-When an entry is adapted from research, record source, what changed, and whether it was adopted. The research method is in [`research-methodology.md`](research-methodology.md).
+When an entry is adapted from research, the trail lives in `research/` (source → finding → decision). The knowledge page should point at that decision, not paste the external skill. Method: [`research-methodology.md`](research-methodology.md).

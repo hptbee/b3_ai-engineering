@@ -4,6 +4,62 @@ This document defines the building blocks of the system. It is definitional. Ope
 
 The system is evolving. Layers marked **specified** exist as documentation and directories. Layers marked **present** have usable files.
 
+## Feedback-loop model
+
+The system is **not** a strict execution pipeline. The diagram is conceptual: it shows how constraints, methods, action, and learning relate. A given task may enter at a command, a skill, or a review — it does not walk every box.
+
+```text
+                         ┌──────────────┐
+                         │  Knowledge   │
+                         └──────┬───────┘
+                                │
+                                ↓
+┌──────────┐              ┌──────────────┐
+│  Rules   │─────────────→│   Skills     │
+└──────────┘              └──────┬───────┘
+                                 │
+                                 ↓
+                       ┌──────────────────┐
+                       │ Commands /       │
+                       │ Workflows        │
+                       └────────┬─────────┘
+                                │
+                                ↓
+                          ┌───────────┐
+                          │  Agents   │
+                          └─────┬─────┘
+                                │
+                                ↓
+                    ┌─────────────────────┐
+                    │ Verification /      │
+                    │ Review Loop         │
+                    └────────┬──────────┘
+                               │
+                               ↓
+                       Lessons Learned
+                               │
+                               └────────────→ Knowledge
+```
+
+Around that loop:
+
+| Piece | Role |
+| --- | --- |
+| **Rules** | Constrain behavior. What must always be true. |
+| **Skills** | Specialized knowledge and methods. How this task should be done. |
+| **Commands** | Initiate explicit actions. What to do now. |
+| **Workflows** | Orchestrate multiple steps. In what order. |
+| **Agents** | Specialized roles. Who should handle this. |
+| **Verification** | Evidence that a claim is true, false, or unproven. |
+| **Review Loop** | Independent iterative validation. Is the implementation actually correct? |
+| **Knowledge** | Feeds the system and receives lessons learned. What we know. |
+| **Profiles** | Personal engineering context. Not universal truth and not a rule. |
+| **Research** | External intake before knowledge or skills are created. Where conclusions came from. |
+| **Adapters** | Expose the portable core to Cursor, Codex, or Claude Code. |
+| **Evals** | Test whether the system behaves as designed. |
+
+Lessons learned do **not** automatically become rules. Promotion is in [`system-lifecycle.md`](system-lifecycle.md). Conflict resolution is in [`precedence.md`](precedence.md).
+
 ## Layer map
 
 ```text
@@ -13,9 +69,21 @@ Command       explicit user-triggered action
 Agent         specialized role
 Workflow      ordered multi-step orchestration
 Review Loop   independent verification and iterative correction
-Knowledge     reusable lessons, facts, and context
+Knowledge     canonical reusable knowledge of this system
+Reference     material used to perform a task (usually skill-local)
+Research      external intake, findings, comparisons, decisions
+Profile       personal engineering context (not a rule)
 Adapter       thin host-tool integration
 Eval          test of whether the system behaves as designed
+```
+
+These types are not interchangeable. In particular:
+
+```text
+knowledge  = what the system knows
+reference  = material used to perform a task
+research   = where conclusions came from
+profile    = who the owner is and how they prefer to work
 ```
 
 ## Rule
@@ -30,7 +98,7 @@ Example:
 
 > Never claim a test passed unless it was actually executed.
 
-A rule is not a preference, not a tutorial, and not a skill. If the content is a method (“how to review a PR”), it belongs in a skill. If it is optional taste, it belongs in personal knowledge.
+A rule is not a preference, not a tutorial, and not a skill. If the content is a method (“how to review a PR”), it belongs in a skill. If it is optional taste, it belongs in a profile or `knowledge/personal/`.
 
 See [`rule-standard.md`](rule-standard.md).
 
@@ -90,7 +158,7 @@ Until workflow files exist, that sequence is the default operating loop.
 
 **Question:** Is the implementation actually correct?
 
-The review loop is independent checking plus iterative correction. It is stricter than a single code-review skill: it has scope, iteration limits, stagnation detection, and a ban on treating tool failure as success.
+The review loop is independent checking plus iterative correction. It is stricter than a single code-review skill: it has scope, iteration limits, stagnation detection, a finding lifecycle, and a ban on treating tool failure as success.
 
 **Specified.** See [`review-loop.md`](review-loop.md). Runtime pieces will live under `review-loop/`.
 
@@ -102,7 +170,7 @@ Example:
 
 **Question:** What have we learned?
 
-Knowledge is stored, cited material — not an instruction to execute. It is split into stable, volatile, and personal stores.
+Knowledge is the canonical reusable store of this system — not an instruction to execute. It is split into stable, volatile, and personal stores.
 
 **Present (minimal).** The stores exist. Content is mostly empty except for personal engineering context.
 
@@ -111,6 +179,38 @@ Example:
 > Known React rendering performance pattern, recorded with source and last-verified date.
 
 See [`knowledge-system.md`](knowledge-system.md).
+
+## Reference
+
+**Question:** What material does this task need right now?
+
+A reference is supporting material consumed by a skill or workflow. Skill-local references live next to `SKILL.md`. Shared task aids may live under `references/`. References are not canonical system knowledge and not research provenance.
+
+Example:
+
+> `skills/react-performance/references/memoization.md` — opened while applying that skill.
+
+## Research
+
+**Question:** Where did this conclusion come from?
+
+Research is external intake and synthesis **before** knowledge, skills, or rules are created. Stores: `research/sources`, `findings`, `comparisons`, `decisions`, `rejected`.
+
+**Present (empty).** Method: [`research-methodology.md`](research-methodology.md). Layout: [`../research/README.md`](../research/README.md). No research files yet.
+
+## Profile
+
+**Question:** What is the owner’s engineering context?
+
+A profile is personal context (style, preferences, strengths, weaknesses, decision principles). It is not universal engineering truth.
+
+```text
+Personal preference  ≠  Engineering rule
+```
+
+A profile must never override safety, correctness, explicit project requirements, hard rules, or platform constraints. See [`precedence.md`](precedence.md) and [`../profiles/README.md`](../profiles/README.md).
+
+**Present (placeholders).** `profiles/tung/`.
 
 ## Adapter
 
@@ -128,7 +228,7 @@ Example:
 
 **Question:** Does this part of the system actually work?
 
-An eval is a test of the AI system itself: triggering, quality, and review-loop behavior. It is not an application test suite for a product under development.
+An eval is a test of the AI system itself: activation, capability, safety, and review-loop convergence. It is not an application test suite for a product under development.
 
 **Specified, not implemented.** See [`evaluation.md`](evaluation.md).
 
@@ -142,16 +242,11 @@ Example:
 | --- | --- |
 | Prompt snippet | Part of a skill, command, or agent — not a top-level type |
 | Checklist | Usually a skill reference, sometimes a review-loop reviewer |
-| Preference | Personal knowledge, not a rule |
-| Copied GitHub skill pack | Research input, not a first-class object |
+| Preference | Profile or `knowledge/personal/` — never a hard rule by default |
+| Copied GitHub skill pack | `research/sources/` input, not a first-class object |
+| Lesson learned | Candidate only until evaluated and approved |
 
-## Precedence
+## Related docs
 
-When artifacts conflict:
-
-1. **Hard rules** win over everything else.
-2. **Strong guidelines** yield only with a stated reason.
-3. **The active skill** directs method for the current task.
-4. **Commands / workflows** select and sequence work; they do not override hard rules.
-5. **Personal knowledge** informs choices; it does not silently become a rule.
-6. **Adapters** may change location and invocation, not meaning.
+- Precedence: [`precedence.md`](precedence.md)
+- Evolution: [`system-lifecycle.md`](system-lifecycle.md)
