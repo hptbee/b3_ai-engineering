@@ -39,6 +39,14 @@ Do **not** commit duplicate skill trees under multiple host folders unless gener
 
 Symlinks keep a single source of truth. Run from repo root. Existing non-symlink directories are skipped with a warning.
 
+**Windows (this repo, 2026-09-07):** `sync-skills.sh` needs bash. If `/bin/bash` is missing, a directory junction is the local equivalent:
+
+```text
+cmd /c mklink /J .cursor\skills skills
+```
+
+Do **not** commit `.cursor/skills` (gitignored). Cursor will not attach project skills until a discovery root exists **and** a new Agent session starts. Evidence: `research/validation/cursor-host-v2.md`.
+
 ## Host-specific extensions (adapter-only)
 
 These must **not** appear in portable `skills/` frontmatter as required fields:

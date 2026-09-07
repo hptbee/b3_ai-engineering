@@ -4,14 +4,16 @@
 **Branch:** `cursor/real-world-validation-v1-a097`  
 **Method:** description-driven activation (this agent, B3 loaded) + tabletop application of skills to realistic snippets + manual review-loop walkthroughs.
 
-This is **not** a live Cursor/Codex/Claude skill-loader experiment. Host discovery is `NOT VERIFIED` (`portability-results.md`).
+v1 was **not** a live host-loader experiment. v2: Cursor **discovers** the 23 project skills in Customize → Skills after a local `.cursor/skills` junction (`cursor-host-v2.md`). Auto-activation and Codex/Claude remain `NOT VERIFIED`.
 
 Do not treat this folder as historical Phase 1 research. It is evidence for the current catalog.
 
 | File | Contents |
 | --- | --- |
 | [validation-matrix.md](validation-matrix.md) | Tasks V1–V25 |
-| [activation-results.md](activation-results.md) | CORRECT / MISSED / FALSE_POSITIVE / REDUNDANT / AMBIGUOUS |
+| [activation-results.md](activation-results.md) | v1 pre-retune description judge |
+| [activation-results-v2.md](activation-results-v2.md) | v2 post-retune description judge (not host loader) |
+| [cursor-host-v2.md](cursor-host-v2.md) | Cursor discovery: baseline FAIL; project Skills UI **PASS** (23) after `.cursor/skills` junction |
 | [composition-results.md](composition-results.md) | Multi-skill stacks |
 | [review-loop-results.md](review-loop-results.md) | Four manual loops + two agents |
 | [portability-results.md](portability-results.md) | Cursor / Codex / Claude |

@@ -1,7 +1,6 @@
 # Cursor adapter
 
-**Status:** intended mapping only. No `.cursor/` tree is committed and this mapping
-has not been verified in this repository.
+**Status:** Cursor **discovers** project skills when `.cursor/skills` points at portable `skills/` (23 shown in Customize → Skills, 2026-09-07). The link is local/gitignored. This Agent session started before discovery; auto-activation still **NOT VERIFIED**. See `research/validation/cursor-host-v2.md`.
 
 ## Portable core → Cursor
 

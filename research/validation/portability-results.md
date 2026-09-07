@@ -6,8 +6,8 @@ This environment: Cursor cloud agent with B3 on disk. **Codex CLI and Claude Cod
 
 | Capability | Cursor | Codex | Claude |
 | --- | --- | --- | --- |
-| skill discovery | NOT VERIFIED (no `.cursor/skills` symlink committed; this run used repo-root `skills/` via AGENTS.md, not host loader) | NOT VERIFIED | NOT VERIFIED |
-| skill activation | PARTIAL: this agent read `SKILL.md` descriptions because the task loaded the repo — **not** proof of Cursor metadata triggering | NOT VERIFIED | NOT VERIFIED |
+| skill discovery | **PASS (v2 UI):** Customize → Skills shows **b3_ai-engineering 23** matching repo `SKILL.md` names/descriptions after `.cursor/skills` junction. Baseline this Agent session still had no B3 skills in `available_skills` (started before the link). See `cursor-host-v2.md`. | NOT VERIFIED | NOT VERIFIED |
+| skill activation | **NOT VERIFIED** on the host. Description-only re-score is `activation-results-v2.md` (not loader proof). | NOT VERIFIED | NOT VERIFIED |
 | command invocation | NOT VERIFIED (no slash/command palette test) | NOT VERIFIED | NOT VERIFIED |
 | agent invocation | NOT VERIFIED (no subagent dispatch) | NOT VERIFIED | NOT VERIFIED |
 | workflow usage | PARTIAL: files followed manually | NOT VERIFIED | NOT VERIFIED |

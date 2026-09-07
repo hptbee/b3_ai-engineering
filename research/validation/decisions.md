@@ -17,7 +17,8 @@ Evidence: `activation-results.md`, `composition-results.md`, `failures.md`.
 | Two agents | **ADOPT** keep; invocation **DEFER** | Mandates useful on paper; host not tested |
 | Workflows | **ADOPT** | Did not replace review-loop spec |
 | Eval runner | **DEFER** | Explicit |
-| Three-host portability | **DEFER** | NOT VERIFIED |
+| Three-host portability | **DEFER** Codex/Claude | Cursor baseline discovery **FAIL** without `.cursor/skills`; re-check after new chat |
+| Description retunes F1–F5 | **ADOPT** on paper | v2 description judge: 24/25 CORRECT; V24 still AMBIGUOUS. Host activation still unproven. |
 | Profile fill | **DEFER** | No explicit user confirmation; placeholders stay |
 | Remove any skill | **REJECT** removal | NOT_ENOUGH_EVIDENCE to delete |
 | New skills | **REJECT** this phase | Including Dapper |

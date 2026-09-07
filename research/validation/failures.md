@@ -33,11 +33,11 @@ Only items seen in the matrix or composition read. Not manufactured.
 **Class:** latent FALSE_POSITIVE if someone says “simplest implementation” for a one-liner  
 **Fix:** Description: architecture/system shape only; not local coding style; complexity **allowed** when a requirement is named.
 
-## F6 — Host activation unknown
+## F6 — Host activation unknown → Cursor discovery FAIL at baseline
 
-**Evidence:** portability table.  
-**Class:** NOT VERIFIED  
-**Fix:** none in core this phase.
+**Evidence:** this Agent session’s `available_skills` contained Cursor built-ins and user Cloudflare skills, not B3 `skills/`. Official docs do not load repo-root `skills/`.  
+**Class:** FAIL (discovery in this workspace before adapter link); post-junction discovery **NOT VERIFIED** until a new chat (`cursor-host-v2.md`).  
+**Fix:** local `.cursor/skills` → `skills` link (gitignored). Confirm in Customize → Skills. Do not treat file reads as discovery.
 
 ## Not failures
 
