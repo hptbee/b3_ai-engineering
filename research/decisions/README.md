@@ -14,3 +14,4 @@ Each record: ADOPT / ADAPT / REJECT / DEFER with rationale and consequences.
 | [decision-006-frontend-skills.md](decision-006-frontend-skills.md) | Frontend domain skills |
 | [decision-007-backend-skills.md](decision-007-backend-skills.md) | Backend domain skills |
 | [decision-008-skill-synthesis.md](decision-008-skill-synthesis.md) | Skill mining synthesis |
+| [decision-009-cursor-native-layout.md](decision-009-cursor-native-layout.md) | Cursor-native layout (amends 002 location) |

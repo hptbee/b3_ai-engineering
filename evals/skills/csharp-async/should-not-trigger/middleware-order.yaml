@@ -1,5 +1,5 @@
 id: csharp-async-middleware-order
-artifact: skills/backend/csharp-async/SKILL.md
+artifact: .cursor/skills/backend/csharp-async/SKILL.md
 intent: ASP.NET pipeline
 input: "Where should UseAuthentication sit vs UseAuthorization?"
 expected_bucket: should-not-trigger

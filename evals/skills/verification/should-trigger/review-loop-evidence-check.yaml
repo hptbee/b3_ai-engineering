@@ -1,5 +1,5 @@
 id: verification-trigger-003
-artifact: skills/engineering/verification/SKILL.md
+artifact: .cursor/skills/engineering/verification/SKILL.md
 intent: Review loop completion requires evidence — verification applies
 input: "We fixed all review findings. Did we actually verify the fixes?"
 expected_bucket: should-trigger

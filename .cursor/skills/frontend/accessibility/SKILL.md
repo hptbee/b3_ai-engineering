@@ -28,7 +28,7 @@ Findings cite WCAG success criteria when claiming defects. Automation is incompl
 1. Scope the UI surface.
 2. Automated scan if available (axe, eslint-plugin-jsx-a11y) — record command.
 3. Manual: keyboard order, visible focus, labels (`<label>` / `aria-labelledby`), button vs div, alt text, contrast for text.
-4. Record findings with **WCAG SC id**, evidence, severity ≠ confidence (`docs/review-loop.md`).
+4. Record findings with **WCAG SC id**, evidence, severity ≠ confidence (`review-loop/spec.md`).
 5. Do not mark PASS on “looks fine”.
 
 Hotspots: 1.1.1, 1.3.1, 1.4.3, 2.1.1, 2.4.7, 4.1.2.

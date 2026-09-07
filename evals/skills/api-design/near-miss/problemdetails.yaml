@@ -1,5 +1,5 @@
 id: api-design-problemdetails
-artifact: skills/backend/api-design/SKILL.md
+artifact: .cursor/skills/backend/api-design/SKILL.md
 intent: ASP.NET ProblemDetails still api-design
 input: "Use ProblemDetails for validation errors in ASP.NET."
 expected_bucket: near-miss

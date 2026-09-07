@@ -1,5 +1,5 @@
 id: debugging-repro-unknown
-artifact: skills/engineering/debugging/SKILL.md
+artifact: .cursor/skills/engineering/debugging/SKILL.md
 intent: Unknown production failure needs root cause
 input: "Users get 500 after deploy \u2014 find why before changing code."
 expected_bucket: should-trigger

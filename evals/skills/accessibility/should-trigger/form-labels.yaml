@@ -1,5 +1,5 @@
 id: accessibility-form-labels
-artifact: skills/frontend/accessibility/SKILL.md
+artifact: .cursor/skills/frontend/accessibility/SKILL.md
 intent: Form a11y
 input: "This login form has placeholder-only fields \u2014 make it accessible."
 expected_bucket: should-trigger

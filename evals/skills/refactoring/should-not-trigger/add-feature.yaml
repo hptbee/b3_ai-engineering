@@ -1,5 +1,5 @@
 id: refactoring-add-feature
-artifact: skills/engineering/refactoring/SKILL.md
+artifact: .cursor/skills/engineering/refactoring/SKILL.md
 intent: New behavior is not refactoring
 input: "Add coupon support to checkout."
 expected_bucket: should-not-trigger

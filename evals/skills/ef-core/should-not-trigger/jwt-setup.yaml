@@ -1,5 +1,5 @@
 id: ef-core-jwt-setup
-artifact: skills/backend/ef-core/SKILL.md
+artifact: .cursor/skills/backend/ef-core/SKILL.md
 intent: JWT is aspnet-core
 input: "Configure JwtBearer in Program.cs."
 expected_bucket: should-not-trigger

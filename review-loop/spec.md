@@ -2,9 +2,9 @@
 
 The review loop is independent verification plus iterative correction. It answers: **is the implementation actually correct?**
 
-This document is the specification. Orchestration v1 lives under [`../review-loop/`](../review-loop/README.md). A single pass of the `code-review` skill is not the loop.
+This document is the specification. Orchestration: [`strategy.md`](strategy.md). A single pass of the `code-review` skill is not the loop.
 
-A single invocation of `commands/review-loop.md` runs **review → validate → fix → verify → fresh review** until a quality gate, non-convergence, or iteration limit. Do not require the user to re-trigger after each fix.
+A single invocation of `.cursor/commands/review-loop.md` runs **review → validate → fix → verify → fresh review** until a quality gate, non-convergence, or iteration limit. Do not require the user to re-trigger after each fix.
 
 ## Default sequence
 
@@ -26,7 +26,7 @@ A single invocation of `commands/review-loop.md` runs **review → validate → 
 
 Skip a review dimension only when it is out of scope **and** that skip is recorded. “Not relevant” without a reason is not a skip.
 
-Adaptive path: SMALL/MEDIUM = this loop on the full PR. LARGE/VERY_LARGE = logical review **units**, then a **cross-cutting** review. [`../review-loop/sizing.md`](../review-loop/sizing.md).
+Adaptive path: SMALL/MEDIUM = this loop on the full PR. LARGE/VERY_LARGE = logical review **units**, then a **cross-cutting** review. [`sizing.md`](sizing.md).
 
 ## Outcomes
 
@@ -202,11 +202,11 @@ When consolidating, drop stale items, merge duplicates, and carry evidence and `
 
 A scope passes when **critical = 0**, **high = 0**, **medium = 0**, and required build/tests are **PASS**. LOW/NIT may remain and must be listed. Missing tool evidence → `UNKNOWN / INCOMPLETE`, never PASS.
 
-Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/REOPENED aliases: [`../review-loop/findings.md`](../review-loop/findings.md).
+Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/REOPENED aliases: [`findings.md`](findings.md).
 
 ## Independence
 
-Implementation and review should not be the same unchecked voice. Roles: `agents/reviewer.md` (no edits), `agents/fixer.md` (no PASS), optional `security-reviewer` / `architecture-reviewer`. Hosts may use different models (`review-loop/models.md`).
+Implementation and review should not be the same unchecked voice. Roles: `.cursor/agents/reviewer.md` (no edits), `.cursor/agents/fixer.md` (no PASS), optional `security-reviewer` / `architecture-reviewer`. Hosts may use different models (`models.md`).
 
 ## Verification inside the loop
 

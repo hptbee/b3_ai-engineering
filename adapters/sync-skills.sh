@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Symlink portable skills/ to host-specific discovery paths.
-# Usage: ./adapters/sync-skills.sh [--dry-run] cursor|codex|claude|all
+# Symlink canonical .cursor/skills to other-host discovery paths.
+# Cursor does not need this — skills already live in .cursor/skills.
+# Usage: ./adapters/sync-skills.sh [--dry-run] codex|claude|all
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SKILLS_SRC="${ROOT}/skills"
+SKILLS_SRC="${ROOT}/.cursor/skills"
 DRY_RUN=false
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -18,6 +19,7 @@ TARGET="${1:-}"
 link_skills() {
   local host="$1"
   local dest="$2"
+  local rel="$3"
 
   if [[ ! -d "$SKILLS_SRC" ]]; then
     echo "error: skills source not found: $SKILLS_SRC" >&2
@@ -34,7 +36,7 @@ link_skills() {
   if [[ -L "$dest" ]]; then
     local current
     current="$(readlink "$dest")"
-    if [[ "$current" == "../skills" || "$current" == "skills" ]]; then
+    if [[ "$current" == "$rel" ]]; then
       echo "ok: $dest already linked for $host"
       return 0
     fi
@@ -43,30 +45,30 @@ link_skills() {
   fi
 
   if $DRY_RUN; then
-    echo "dry-run: ln -s ../skills $dest"
+    echo "dry-run: ln -s $rel $dest"
   else
-    ln -s ../skills "$dest"
-    echo "linked: $dest → ../skills ($host)"
+    ln -s "$rel" "$dest"
+    echo "linked: $dest → $rel ($host)"
   fi
 }
 
 case "$TARGET" in
   cursor)
-    link_skills cursor "${ROOT}/.cursor/skills"
+    echo "error: Cursor skills are canonical at .cursor/skills — nothing to sync" >&2
+    exit 1
     ;;
   codex)
-    link_skills codex "${ROOT}/.agents/skills"
+    link_skills codex "${ROOT}/.agents/skills" "../.cursor/skills"
     ;;
   claude)
-    link_skills claude "${ROOT}/.claude/skills"
+    link_skills claude "${ROOT}/.claude/skills" "../.cursor/skills"
     ;;
   all)
-    link_skills cursor "${ROOT}/.cursor/skills"
-    link_skills codex "${ROOT}/.agents/skills"
-    link_skills claude "${ROOT}/.claude/skills"
+    link_skills codex "${ROOT}/.agents/skills" "../.cursor/skills"
+    link_skills claude "${ROOT}/.claude/skills" "../.cursor/skills"
     ;;
   "")
-    echo "usage: $0 [--dry-run] cursor|codex|claude|all" >&2
+    echo "usage: $0 [--dry-run] codex|claude|all" >&2
     exit 1
     ;;
   *)

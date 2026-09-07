@@ -1,5 +1,5 @@
 id: ef-core-dapper
-artifact: skills/backend/ef-core/SKILL.md
+artifact: .cursor/skills/backend/ef-core/SKILL.md
 intent: Dapper SQL in this repo
 input: "This report uses Dapper not EF \u2014 tune the SQL."
 expected_bucket: near-miss

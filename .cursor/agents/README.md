@@ -2,7 +2,7 @@
 
 Agents are specialized roles. They answer: **who should handle this?**
 
-**Status:** present (reviewer / fixer plus two specialist reviewers). Not a host plugin. Orchestration is `review-loop/strategy.md`. Host subagent files belong in `adapters/`.
+In Cursor these files are custom subagents (`.cursor/agents/`). Orchestration is `review-loop/strategy.md`. Skills stay shared; agents exist for **isolation**.
 
 | Agent | Mandate | Why not a skill only |
 | --- | --- | --- |
@@ -15,4 +15,4 @@ Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verifica
 
 Backlog (not created): frontend/performance/test/UX reviewers — use `code-review` dimensions until isolation is needed in real use.
 
-Do not treat this folder as a swarm.
+Do not treat this folder as a swarm. Independent review actually working in Cursor (auto-delegation) is **NOT VERIFIED** in this change; files are on the documented discovery path.

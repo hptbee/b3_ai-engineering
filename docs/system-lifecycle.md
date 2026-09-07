@@ -29,10 +29,10 @@ Knowledge
 | Research | What externals say | `research/sources/` |
 | Synthesis | Findings, comparisons, adopt/reject | `research/findings/`, `comparisons/`, `decisions/`, `rejected/` |
 | Knowledge | Canonical reusable knowledge | `knowledge/` |
-| Skill / Rule / Workflow | Executable method or constraint | `skills/`, `rules/`, `workflows/` |
+| Skill / Rule / Workflow | Executable method or constraint | `.cursor/skills/`, `rules/`, `workflows/` |
 | Implementation | Change in a product (or in this system) | the target repo |
 | Verification | Evidence | verification skill / rule |
-| Review | Independent check; loop when implemented | `docs/review-loop.md` |
+| Review | Independent check; loop when implemented | `review-loop/spec.md` |
 | Lessons learned | Candidates only | notes → then the promotion path below |
 
 Research intake in more detail: [`../research/README.md`](../research/README.md) and [`research-methodology.md`](research-methodology.md).

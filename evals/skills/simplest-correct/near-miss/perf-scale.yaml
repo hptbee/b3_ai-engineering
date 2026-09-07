@@ -1,5 +1,5 @@
 id: simplest-correct-perf-scale
-artifact: skills/architecture/simplest-correct/SKILL.md
+artifact: .cursor/skills/architecture/simplest-correct/SKILL.md
 intent: Measured scale may justify split
 input: "p95 is 8s and we have a measurement that the catalog service saturates CPU."
 expected_bucket: near-miss

@@ -1,72 +1,54 @@
 # b3-ai-engineering
 
-A personal, portable AI-assisted software engineering system for Cursor, Codex, and Claude Code.
+A personal AI-assisted software engineering system. **Cursor is the first host.** The conceptual core (Agent Skills, rules, review-loop, evals, research) stays portable; Codex and Claude adapters map from this repo later.
 
-This is an **evolving** operating layer for AI coding agents. It is not a company handbook. Domain skills exist for the first-class stack. Review-loop **orchestration** lives under `review-loop/` (agent procedure, not a host plugin).
+This is an **evolving** operating layer for AI coding agents. It is not a company handbook.
 
 ## Repository layout
 
 ```text
 b3-ai-engineering/
-├── AGENTS.md                 Agent-facing entry point
-├── README.md                 Human-facing entry point
-├── rules/                    Always-on constraints
-├── skills/                   On-demand methods (engineering, frontend, backend, architecture, threejs)
-├── commands/                 User-facing task entry points
-├── agents/                   Isolated reviewer / fixer roles
-├── workflows/                Multi-step sequences
-├── review-loop/              Operational loop procedure
+├── AGENTS.md                 Always-on map (Cursor reads this)
+├── README.md                 Human-facing entry
+├── .cursor/
+│   ├── rules/                Cursor rule activation (.mdc → portable rules/)
+│   ├── skills/               Canonical skills (Agent Skills SKILL.md)
+│   ├── commands/             User-facing / actions
+│   └── agents/               Reviewer / fixer subagents
+├── rules/                    Portable rule bodies (source of meaning)
+├── workflows/                Default product sequence
+├── review-loop/              Spec + orchestration procedure
 ├── knowledge/                Reusable internal knowledge
-├── research/                 Provenance (sources, findings, comparisons, decisions, rejected, validation)
-├── evals/                    Fixtures (skills, rules, agents, review-loop)
-├── adapters/                 Host mapping (cursor, codex, claude) + sync helper
+├── research/                 Provenance
+├── evals/                    Fixtures (not a runner)
+├── adapters/                 Other-host mapping + export helper
 ├── scripts/                  Repository tooling
 └── docs/                     Architecture, standards, contracts
 ```
 
-Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md).
+Catalogs: [`.cursor/skills/README.md`](.cursor/skills/README.md), [`docs/architecture.md`](docs/architecture.md). What Cursor loads: [`AGENTS.md`](AGENTS.md).
 
 ## Why it exists
 
-Agents are useful when they have durable constraints, reusable methods, verification instead of assertion, a way to learn without turning preference into dogma, and a core that is not locked to one product.
+Agents are useful when they have durable constraints, reusable methods, verification instead of assertion, a way to learn without turning preference into dogma, and a core whose **meaning** is not rewritten per product.
 
-## Portable first
+## Cursor first, portable meaning
 
-The core is Markdown, `SKILL.md`, `AGENTS.md`, YAML frontmatter, and occasional scripts. Cursor, Codex, and Claude Code integrations live under `adapters/` and must stay thin.
+Skills are Agent Skills (`SKILL.md`) stored where Cursor discovers them. Rule **bodies** stay in `rules/*.md` so other hosts can read them without parsing `.mdc`. Cursor activation is `.cursor/rules/*.mdc` (`@`-includes the bodies). Commands and agents are Cursor-native so `/review` and independent subagents work without a setup script.
 
 Evidence over opinion. Progressive disclosure. Small composable skills. Research, then adapt — do not copy skill packs.
 
 ## Architecture
 
-Conceptual feedback loop, not a strict pipeline. Definitions: [`docs/architecture.md`](docs/architecture.md). Operating notes: [`AGENTS.md`](AGENTS.md). Conflicts: [`docs/precedence.md`](docs/precedence.md).
+Definitions: [`docs/architecture.md`](docs/architecture.md). Operating notes: [`AGENTS.md`](AGENTS.md). Conflicts: [`docs/precedence.md`](docs/precedence.md).
 
 ```text
-                         ┌──────────────┐
-                         │  Knowledge   │
-                         └──────┬───────┘
-                                ↓
-┌──────────┐              ┌──────────────┐
-│  Rules   │─────────────→│   Skills     │
-└──────────┘              └──────┬───────┘
-                                 ↓
-                       ┌──────────────────┐
-                       │ Commands /       │
-                       │ Workflows        │
-                       └────────┬─────────┘
-                                ↓
-                          ┌───────────┐
-                          │  Agents   │
-                          └─────┬─────┘
-                                ↓
-                    ┌─────────────────────┐
-                    │ Verification /      │
-                    │ Review Loop         │
-                    └────────┬──────────┘
-                               ↓
-                       Lessons Learned  →  Knowledge
+Rules constrain → Skills provide methods → Commands start work
+ → Agents isolate roles → Verification / review-loop check
+ → Lessons → Knowledge
 ```
 
-Rules constrain. Skills provide methods. Commands start work. Workflows sequence it. Agents specialize roles. Verification supplies evidence. The review loop independently re-checks. Knowledge feeds the loop and receives lessons. **Profiles** add personal context. **Adapters** expose the core to a host tool.
+**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** export to Codex/Claude; they must not fork meaning.
 
 ## Research → knowledge → skills
 
@@ -74,30 +56,29 @@ Rules constrain. Skills provide methods. Commands start work. Workflows sequence
 External sources → research/ → knowledge/ → skills / rules / workflows
 ```
 
-`research/` is intake (`sources/`, `findings/`, `comparisons/`, `decisions/`, `rejected/`) plus `validation/` evidence for the current catalog. `knowledge/` is what the system knows. Skill `references/` are task aids. Method: [`docs/research-methodology.md`](docs/research-methodology.md). Evolution and promotion: [`docs/system-lifecycle.md`](docs/system-lifecycle.md). Lessons do **not** automatically become rules.
+`research/` is intake plus `validation/` evidence. `knowledge/` is what the system knows. Skill `references/` are task aids. Method: [`docs/research-methodology.md`](docs/research-methodology.md). Evolution: [`docs/system-lifecycle.md`](docs/system-lifecycle.md). Lessons do **not** automatically become rules.
 
 ## Review loop
 
-Specified in [`docs/review-loop.md`](docs/review-loop.md): finding lifecycle, severity ≠ confidence, no fake PASS on empty diffs, tool failure, stagnation, or iteration limits. One-shot orchestration: [`commands/review-loop.md`](commands/review-loop.md) → [`review-loop/strategy.md`](review-loop/strategy.md). Adaptive sizing and unit loops for large PRs. Host model mapping is in `review-loop/models.md` + `adapters/`.
+Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`review-loop/strategy.md`](review-loop/strategy.md). Invoke: [`.cursor/commands/review-loop.md`](.cursor/commands/review-loop.md). Host model slots: `review-loop/models.md`.
 
 ## Evaluation
 
-Activation fixtures exist under `evals/`. Automated runner deferred. Layout: [`docs/evaluation.md`](docs/evaluation.md).
+Activation fixtures live under `evals/`. Automated runner deferred. Layout: [`docs/evaluation.md`](docs/evaluation.md).
 
 ## Personal profile
 
-Personal background: [`knowledge/personal/engineering-context.md`](knowledge/personal/engineering-context.md). A `profiles/` directory is specified in the architecture and is **not created** until Tùng records it.
+Background: [`knowledge/personal/engineering-context.md`](knowledge/personal/engineering-context.md). A `profiles/` directory is **not created** until Tùng records it.
 
 ```text
 Personal preference  ≠  Engineering rule
 ```
 
-The profile never overrides security, correctness, project requirements, hard rules, or platform constraints.
-
 ## Platforms
 
 ```text
-Portable Core → Cursor | Codex | Claude Code   (via adapters/)
+Portable meaning  →  .cursor/ (this repo)  →  Cursor
+                  →  adapters/ (Codex, Claude) when those hosts are used
 ```
 
 ## Current maturity
@@ -105,11 +86,12 @@ Portable Core → Cursor | Codex | Claude Code   (via adapters/)
 | Area | Status |
 | --- | --- |
 | Architecture, standards, precedence, lifecycle | Present |
-| Foundation rules + `simplest-correct` | Present |
-| Engineering + domain skills | Present (see `skills/README.md`) |
-| Commands, agents, workflows | Present (thin) |
+| Foundation rules + Cursor `.mdc` activation | Present |
+| Engineering + domain skills | Present (see `.cursor/skills/README.md`) |
+| Commands, agents | Present (Cursor-native, thin) |
 | Eval fixtures | Present; runner deferred |
 | Review-loop orchestration | Present (agent procedure; not a host plugin) |
-| Profile files | Not created (`knowledge/personal/` holds background context) |
+| Profile files | Not created (`knowledge/personal/` holds background) |
+| Codex / Claude trees | Not committed; export helper only |
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

@@ -1,5 +1,5 @@
 id: research-patterns-trigger-002
-artifact: skills/engineering/research-engineering-patterns/SKILL.md
+artifact: .cursor/skills/engineering/research-engineering-patterns/SKILL.md
 intent: Compare external engineering systems
 input: "Research how SWE-Review and calimero structure their review loops and compare them."
 expected_bucket: should-trigger

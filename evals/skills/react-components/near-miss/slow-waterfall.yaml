@@ -1,5 +1,5 @@
 id: react-components-slow-waterfall
-artifact: skills/frontend/react-components/SKILL.md
+artifact: .cursor/skills/frontend/react-components/SKILL.md
 intent: Perf waterfalls
 input: "The Next page awaits three APIs in series \u2014 speed it up."
 expected_bucket: near-miss

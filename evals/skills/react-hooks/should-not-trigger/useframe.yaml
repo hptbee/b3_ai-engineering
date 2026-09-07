@@ -1,5 +1,5 @@
 id: react-hooks-useframe
-artifact: skills/frontend/react-hooks/SKILL.md
+artifact: .cursor/skills/frontend/react-hooks/SKILL.md
 intent: R3F frame loop
 input: "useFrame is allocating vectors every tick."
 expected_bucket: should-not-trigger

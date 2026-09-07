@@ -1,5 +1,5 @@
 id: api-security-bola
-artifact: skills/backend/api-security/SKILL.md
+artifact: .cursor/skills/backend/api-security/SKILL.md
 intent: Object-level authz
 input: "GET /api/orders/:id returns other tenants' orders."
 expected_bucket: should-trigger

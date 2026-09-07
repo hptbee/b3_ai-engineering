@@ -1,5 +1,5 @@
 id: research-patterns-not-trigger-002
-artifact: skills/engineering/research-engineering-patterns/SKILL.md
+artifact: .cursor/skills/engineering/research-engineering-patterns/SKILL.md
 intent: Local debugging is problem-solving
 input: "Debug why this Express route returns 404 locally."
 expected_bucket: should-not-trigger

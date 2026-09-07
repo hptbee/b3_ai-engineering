@@ -1,5 +1,5 @@
 id: accessibility-api-bola
-artifact: skills/frontend/accessibility/SKILL.md
+artifact: .cursor/skills/frontend/accessibility/SKILL.md
 intent: API authz
 input: "Users can GET /orders/other-user-id."
 expected_bucket: should-not-trigger

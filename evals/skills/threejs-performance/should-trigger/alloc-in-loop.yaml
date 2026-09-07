@@ -1,5 +1,5 @@
 id: threejs-performance-alloc-in-loop
-artifact: skills/threejs/threejs-performance/SKILL.md
+artifact: .cursor/skills/threejs/threejs-performance/SKILL.md
 intent: Per-frame allocation
 input: "The animate loop new THREE.Vector3 every frame."
 expected_bucket: should-trigger

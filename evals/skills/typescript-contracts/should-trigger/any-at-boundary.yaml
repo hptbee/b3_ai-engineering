@@ -1,5 +1,5 @@
 id: typescript-contracts-any-at-boundary
-artifact: skills/frontend/typescript-contracts/SKILL.md
+artifact: .cursor/skills/frontend/typescript-contracts/SKILL.md
 intent: Replace any on JSON boundary
 input: "This fetch handler uses any for the API body \u2014 type it safely."
 expected_bucket: should-trigger

@@ -1,23 +1,18 @@
 # Adapters
 
-**Status:** documentation and a symlink helper exist. The mappings are **intended**;
-they have not been exercised against every host in this repository. Nothing here is a
-platform-specific implementation of B3.
+Cursor is the first host. This repository’s `.cursor/` tree **is** the Cursor integration (committed, not generated).
 
-Portable core lives at repo root (`AGENTS.md`, `rules/`, `skills/`, `docs/`). Adapters map that core to host discovery paths without forking content.
+`adapters/` documents other hosts and provides an export helper. Mappings for Codex and Claude are **intended**; they have not been exercised in this repository.
 
-## Intended host path matrix — not verified in this repository
+Do **not** commit duplicate skill trees under `.agents/`, `.claude/`, or `.codex/` in this Cursor-first repo (Cursor would triple-discover the same skills).
 
-| Host | Skills discovery | Rules / standing instructions | Project context | Subagents / roles |
+## Host path matrix
+
+| Host | Skills | Rules | Project context | Subagents |
 | --- | --- | --- | --- | --- |
-| **Cursor** | `.cursor/skills/`, `.agents/skills/`, also loads `.claude/skills/`, `.codex/skills/` | `.cursor/rules/*.mdc` or user rules | `AGENTS.md` (nested supported) | `.cursor/agents/` |
-| **Codex** | `.agents/skills/` (repo + user config) | Linked from `AGENTS.md`; byte cap ~32 KiB chain | `AGENTS.md` primary | Role prompts when defined |
-| **Claude Code** | `.claude/skills/` | Claude rules / `CLAUDE.md` instructions | `CLAUDE.md` → bridge to `AGENTS.md` | `.claude/agents/` |
-
-**Portable symlink target:** repo-root `skills/` → host skill folder (see
-`sync-skills.sh`). The helper is not a compatibility guarantee.
-
-Do **not** commit duplicate skill trees under multiple host folders unless generated from one source.
+| **Cursor** | `.cursor/skills/` (canonical, committed) | `.cursor/rules/*.mdc` `@`-includes `rules/*.md` | `AGENTS.md` | `.cursor/agents/` |
+| **Codex** | symlink `.agents/skills` → `.cursor/skills` | Link from `AGENTS.md` | `AGENTS.md` | Map from `.cursor/agents/` |
+| **Claude Code** | symlink `.claude/skills` → `.cursor/skills` | Claude rules / `CLAUDE.md` bridge | `CLAUDE.md` → `@AGENTS.md` | `.claude/agents/` mapped from `.cursor/agents/` |
 
 ## Per-host docs
 
@@ -27,56 +22,27 @@ Do **not** commit duplicate skill trees under multiple host folders unless gener
 | Codex | [`codex/README.md`](codex/README.md) |
 | Claude Code | [`claude/README.md`](claude/README.md) |
 
-## Sync helper
+## Export helper (other hosts only)
 
 ```bash
-./adapters/sync-skills.sh cursor    # symlink skills/ → .cursor/skills
-./adapters/sync-skills.sh codex     # symlink skills/ → .agents/skills
-./adapters/sync-skills.sh claude      # symlink skills/ → .claude/skills
-./adapters/sync-skills.sh all       # all of the above
+./adapters/sync-skills.sh codex     # .agents/skills → ../.cursor/skills
+./adapters/sync-skills.sh claude    # .claude/skills → ../.cursor/skills
 ./adapters/sync-skills.sh --dry-run all
 ```
 
-Symlinks keep a single source of truth. Run from repo root. Existing non-symlink directories are skipped with a warning.
+There is no `cursor` target. Cursor already has the files.
 
-**Windows (this repo, 2026-09-07):** `sync-skills.sh` needs bash. If `/bin/bash` is missing, a directory junction is the local equivalent:
+On Windows, junctions are the local equivalent of `ln -s` if bash is missing:
 
 ```text
-cmd /c mklink /J .cursor\skills skills
+cmd /c mklink /J .agents\skills .cursor\skills
 ```
-
-Do **not** commit `.cursor/skills` (gitignored). Cursor will not attach project skills until a discovery root exists **and** a new Agent session starts. Evidence: `research/validation/cursor-host-v2.md`.
-
-## Host-specific extensions (adapter-only)
-
-These must **not** appear in portable `skills/` frontmatter as required fields:
-
-| Extension | Host | Notes |
-| --- | --- | --- |
-| `paths` / `globs` | Cursor | Auto-scope skills to subtrees |
-| `disable-model-invocation` | Cursor | Human-only slash invocation |
-| `icon`, `color` | Cursor | UI metadata |
-| `allowed-tools` | Claude plugins / some OSS skills | Tool allowlists — document in adapter, optional in generated overlays |
-| Hooks / SessionStart | Claude plugins, some Cursor setups | Enforcement layer; optional |
-| `CLAUDE.md` | Claude Code | Generate pointer, not duplicate handbook |
-
-## CLAUDE.md bridge (recommended)
-
-When Claude Code requires root `CLAUDE.md`, generate:
-
-```markdown
-# Project instructions
-
-Follow @AGENTS.md for operating context. Skills and rules live in the portable core; do not fork policy here.
-```
-
-Keep engineering method in `AGENTS.md` + `rules/` + `skills/`.
 
 ## Deferred
 
-- Automated adapter CI (verify symlinks, diff check)
-- Rule `.mdc` generation from `rules/*.md`
+- Automated adapter CI
 - Hook wrappers for review-loop gates
-- Marketplace / team publishing paths
+- Marketplace / team publishing
+- Committing Codex/Claude trees
 
-See `research/decisions/decision-002-portability.md` and `research/comparisons/portability.md`.
+See `research/decisions/decision-009-cursor-native-layout.md` (amends decision-002 location, not meaning).

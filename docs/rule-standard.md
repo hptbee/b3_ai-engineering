@@ -87,7 +87,7 @@ Good candidates:
 - Do not claim verification that did not happen
 - Do not treat tool failure as PASS
 - Do not present personal preference as specification
-- Keep the core portable; put host wiring in adapters
+- Keep meaning portable; Cursor activation is `.cursor/rules/*.mdc`; other-host wiring stays in `adapters/`
 - Record provenance for adapted external patterns
 
 Poor candidates:

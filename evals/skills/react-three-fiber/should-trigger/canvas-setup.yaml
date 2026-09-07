@@ -1,5 +1,5 @@
 id: react-three-fiber-canvas-setup
-artifact: skills/threejs/react-three-fiber/SKILL.md
+artifact: .cursor/skills/threejs/react-three-fiber/SKILL.md
 intent: Declarative Canvas
 input: "Add a React Three Fiber Canvas with a GLTF model and Suspense."
 expected_bucket: should-trigger

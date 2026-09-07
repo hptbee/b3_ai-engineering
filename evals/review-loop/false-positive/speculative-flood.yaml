@@ -1,5 +1,5 @@
 id: review-false-positive-001
-artifact: docs/review-loop.md
+artifact: review-loop/spec.md
 intent: Speculative noise must not flood as confirmed defects
 scenario: |
   Reviewer lists 15 issues, all confidence low, no evidence

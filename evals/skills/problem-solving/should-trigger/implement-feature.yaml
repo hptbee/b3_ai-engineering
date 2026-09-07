@@ -1,5 +1,5 @@
 id: problem-solving-trigger-002
-artifact: skills/engineering/problem-solving/SKILL.md
+artifact: .cursor/skills/engineering/problem-solving/SKILL.md
 intent: Feature work from spec is full engineering loop
 input: "Implement the password reset flow described in the ticket."
 expected_bucket: should-trigger

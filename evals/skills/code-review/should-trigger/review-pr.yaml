@@ -1,5 +1,5 @@
 id: code-review-trigger-001
-artifact: skills/engineering/code-review/SKILL.md
+artifact: .cursor/skills/engineering/code-review/SKILL.md
 intent: Explicit PR/diff or post-implementation review should activate code-review
 input: "Review this pull request for correctness and security before merge. I just implemented the auth middleware — review the diff for issues."
 expected_bucket: should-trigger

@@ -1,5 +1,5 @@
 id: review-finding-lifecycle-002
-artifact: docs/review-loop.md
+artifact: review-loop/spec.md
 intent: Fixed finding must reach VERIFIED with evidence before loop PASS
 scenario: |
   F1 status FIXED after code change
@@ -7,4 +7,4 @@ scenario: |
   Reviewer marks loop PASS
 expected_outcome: INCOMPLETE
 failure_mode: finding-lifecycle
-skill: skills/engineering/verification/SKILL.md
+skill: .cursor/skills/engineering/verification/SKILL.md

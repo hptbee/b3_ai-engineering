@@ -1,5 +1,5 @@
 id: review-finding-lifecycle-001
-artifact: docs/review-loop.md
+artifact: review-loop/spec.md
 intent: Severity and confidence are independent — critical + low confidence is not confirmed critical
 scenario: |
   Finding: severity critical, confidence low, status SPECULATIVE

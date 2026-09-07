@@ -1,5 +1,5 @@
 id: react-three-fiber-gpu-instancing
-artifact: skills/threejs/react-three-fiber/SKILL.md
+artifact: .cursor/skills/threejs/react-three-fiber/SKILL.md
 intent: Instancing is threejs-performance
 input: "Need InstancedMesh for trees; may still use R3F."
 expected_bucket: near-miss

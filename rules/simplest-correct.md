@@ -18,6 +18,6 @@ Do not use this rule to demand the shortest possible function body; that is smal
 
 Skip this guideline only with a **named requirement** (scale, team boundary, consistency, compliance) recorded in the working notes.
 
-Method: `skills/architecture/simplest-correct/SKILL.md`.
+Method: `.cursor/skills/architecture/simplest-correct/SKILL.md`.
 
 Hard rules (verification honesty, safety) still win (`docs/precedence.md`).

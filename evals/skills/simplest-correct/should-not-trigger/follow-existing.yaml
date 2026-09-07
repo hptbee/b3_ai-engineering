@@ -1,5 +1,5 @@
 id: simplest-correct-follow-existing
-artifact: skills/architecture/simplest-correct/SKILL.md
+artifact: .cursor/skills/architecture/simplest-correct/SKILL.md
 intent: Repo already has architecture
 input: "This solution already uses the company Clean Architecture template \u2014 implement the endpoint inside it."
 expected_bucket: should-not-trigger

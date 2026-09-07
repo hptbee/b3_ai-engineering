@@ -1,74 +1,48 @@
 # Cursor adapter
 
-**Status:** Cursor **discovers** project skills when `.cursor/skills` points at portable `skills/` (23 shown in Customize → Skills, 2026-09-07). The link is local/gitignored. This Agent session started before discovery; auto-activation still **NOT VERIFIED**. See `research/validation/cursor-host-v2.md`.
+Cursor consumes this repository **directly**. `.cursor/skills`, `.cursor/commands`, `.cursor/agents`, and `.cursor/rules` are committed source, not a generated copy.
 
-## Portable core → Cursor
+Discovery of skills after placing them on the native path is **VERIFIED** by Cursor docs ([cursor.com/docs/skills](https://cursor.com/docs/skills)). Auto-activation in a new Agent session is **NOT VERIFIED** in this change. Slash commands and subagent auto-delegation are **INTENDED**.
 
-| Core | Cursor mapping |
-| --- | --- |
-| `AGENTS.md` | Read as-is (including nested monorepo roots) |
-| `rules/*.md` | Map to `.cursor/rules/*.mdc` or user rules — same meaning, add activation metadata in adapter layer |
-| `skills/<name>/SKILL.md` | Symlink `skills/` → `.cursor/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
-| `commands/` | Cursor commands or skills with `disable-model-invocation: true` when command layer exists |
-| `agents/` | `.cursor/agents/` when roles exist |
+## What Cursor reads
 
-Cursor also loads `.agents/skills/`, `.claude/skills/`, and `.codex/skills/` for cross-tool repos — prefer **one** symlinked tree to avoid drift.
+| Artifact | Path | Status |
+| --- | --- | --- |
+| Always-on map | `AGENTS.md` | **VERIFIED** docs: root AGENTS.md is loaded |
+| Hard rules | `.cursor/rules/*.mdc` → `@rules/*.md` | **VERIFIED** docs: `.mdc` + `@file`; runtime injection **NOT VERIFIED** here |
+| Skills | `.cursor/skills/**/SKILL.md` | **VERIFIED** docs: native discovery root |
+| Commands | `.cursor/commands/*.md` | **INTENDED** (product still has `/` commands) |
+| Subagents | `.cursor/agents/*.md` | **VERIFIED** docs: `.cursor/agents/`; isolation working **NOT VERIFIED** |
 
-## Discovery paths (priority order)
+Do **not** also symlink `.agents/skills` or `.claude/skills` in this repo — Cursor cross-loads those roots and would duplicate skills.
 
-1. `.cursor/skills/` — Cursor-native
-2. `.agents/skills/` — shared alias (Codex-compatible)
-3. `.claude/skills/`, `.codex/skills/` — cross-loader
+## Rules
 
-**Recommendation:** symlink portable `skills/` to `.cursor/skills/` only; let Cursor cross-load if configured, or add `.agents/skills` symlink for Codex parity.
+Portable meaning stays in `rules/*.md`. Cursor activation is thin `.mdc` files:
 
-## Cursor-specific frontmatter (optional overlays)
-
-Generate small overlay stubs if needed — do not edit portable SKILL.md:
-
-```yaml
-# .cursor/skills/<name>/SKILL.md overlay — example only
-paths: "src/frontend/**"   # scope to subtree
-disable-model-invocation: false
-```
-
-Nested `.cursor/skills/` under package folders auto-scopes like `paths`.
+- hard / global → `alwaysApply: true`
+- `simplest-correct` → `alwaysApply: false` + description (architecture tasks)
 
 ## Subagents vs skills
 
 | Use subagent when | Use skill when |
 | --- | --- |
-| Isolated context, parallel exploration | Repeatable procedure, on-demand method |
-| Long autonomous search | Single-purpose engineering workflow |
+| Isolated context, independent review | Repeatable procedure, on-demand method |
+| Reviewer must not edit (`readonly: true`) | Single-purpose engineering workflow |
 
-Map portable `agents/` roles to `.cursor/agents/` when implemented. Namespaced subagent types are host-specific — see Claude adapter for Trail of Bits-style names.
-
-Portable roles for the review loop: `reviewer`, `fixer`, plus optional `security-reviewer` / `architecture-reviewer`. Orchestrator stays the parent session (`review-loop/models.md`).
-
-Optional Cursor subagent overlay (host-only — do not put vendor model IDs in portable skills):
-
-```yaml
-# .cursor/agents/reviewer.md frontmatter example
-name: reviewer
-model: inherit   # or a host-specific slug for independent review
-```
-
-```yaml
-# .cursor/agents/fixer.md frontmatter example
-name: fixer
-model: inherit   # prefer a different slug than reviewer when the host allows
-```
+Orchestrator stays the parent session (`review-loop/models.md`).
 
 ## Built-in Cursor skills
 
-Product ships `/create-skill`, `/migrate-to-skills`, `/review`, subagent creators — separate from this repo's portable skills.
+Product ships `/create-skill`, `/migrate-to-skills`, `/review`, subagent creators — separate from this repo’s skills.
 
 ## Thin by design
 
-Cursor UI, MCP wiring, team marketplace, and hooks stay here. Verification, review method, and engineering skills stay in portable core.
+MCP, hooks, and marketplace stay out of the portable meaning. Verification and engineering methods stay in skills and `rules/`.
 
 ## References
 
-- [`../README.md`](../README.md) — full matrix
-- `research/sources/cursor-agent-skills.md`
-- `research/sources/cursor-subagents.md`
+- [`../README.md`](../README.md)
+- `research/sources/cursor-docs-2026-09.md`
+- `research/decisions/decision-009-cursor-native-layout.md`
+- `research/validation/cursor-host-v2.md` (pre-restructure evidence)

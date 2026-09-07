@@ -1,5 +1,5 @@
 id: simplest-correct-not-trigger-shortest-code
-artifact: skills/architecture/simplest-correct/SKILL.md
+artifact: .cursor/skills/architecture/simplest-correct/SKILL.md
 intent: Local shortest implementation is not architecture skill
 input: "Use the simplest one-liner to fix the null check in formatDate."
 expected_bucket: should-not-trigger

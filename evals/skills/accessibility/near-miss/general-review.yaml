@@ -1,5 +1,5 @@
 id: accessibility-general-review
-artifact: skills/frontend/accessibility/SKILL.md
+artifact: .cursor/skills/frontend/accessibility/SKILL.md
 intent: General PR review
 input: "Review this PR."
 expected_bucket: near-miss

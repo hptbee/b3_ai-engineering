@@ -1,5 +1,5 @@
 id: testing-strategy-bug-regression-test
-artifact: skills/engineering/testing-strategy/SKILL.md
+artifact: .cursor/skills/engineering/testing-strategy/SKILL.md
 intent: Bugfix needs a regression test
 input: "Write a test that would have caught this off-by-one."
 expected_bucket: should-trigger

@@ -1,5 +1,5 @@
 id: testing-strategy-tdd-always
-artifact: skills/engineering/testing-strategy/SKILL.md
+artifact: .cursor/skills/engineering/testing-strategy/SKILL.md
 intent: Mandatory TDD rewrite is rejected default
 input: "Delete the implementation and redo it TDD-only."
 expected_bucket: near-miss

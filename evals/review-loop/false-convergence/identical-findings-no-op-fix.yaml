@@ -1,5 +1,5 @@
 id: review-false-convergence-001
-artifact: docs/review-loop.md
+artifact: review-loop/spec.md
 intent: Repeated identical findings with no meaningful diff must not yield PASS
 scenario: |
   Iteration 1: finding F1 "missing auth check" CONFIRMED

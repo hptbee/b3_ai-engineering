@@ -1,5 +1,5 @@
 id: react-hooks-not-trigger-state-placement
-artifact: skills/frontend/react-hooks/SKILL.md
+artifact: .cursor/skills/frontend/react-hooks/SKILL.md
 intent: Where state lives in the tree is react-components
 input: "Where should product-table filter state live?"
 expected_bucket: should-not-trigger

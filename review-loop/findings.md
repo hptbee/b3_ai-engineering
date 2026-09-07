@@ -1,6 +1,6 @@
 # Finding log
 
-Use the schema in [`docs/review-loop.md`](../docs/review-loop.md). Runtime IDs are stable across iterations:
+Use the schema in [`spec.md`](spec.md). Runtime IDs are stable across iterations:
 
 ```text
 R001, R002, R003, …
@@ -22,7 +22,7 @@ Orchestrator logs may use short names. Map onto the spec lifecycle:
 
 `SPECULATIVE` stays speculative — not OPEN for the quality gate.
 
-`FIXED` without verification evidence stays non-CLOSED (`docs/review-loop.md`).
+`FIXED` without verification evidence stays non-CLOSED (`spec.md`).
 
 ## Iteration log (required)
 

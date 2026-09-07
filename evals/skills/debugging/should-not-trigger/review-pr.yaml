@@ -1,5 +1,5 @@
 id: debugging-review-pr
-artifact: skills/engineering/debugging/SKILL.md
+artifact: .cursor/skills/engineering/debugging/SKILL.md
 intent: PR review is code-review
 input: "Review this pull request for maintainability."
 expected_bucket: should-not-trigger

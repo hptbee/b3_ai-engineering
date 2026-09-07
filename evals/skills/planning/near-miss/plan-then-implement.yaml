@@ -1,5 +1,5 @@
 id: planning-plan-then-implement
-artifact: skills/engineering/planning/SKILL.md
+artifact: .cursor/skills/engineering/planning/SKILL.md
 intent: Plan first then problem-solving
 input: "Plan then implement the notifications feature."
 expected_bucket: near-miss

@@ -1,5 +1,5 @@
 id: threejs-performance-useframe-setstate
-artifact: skills/threejs/threejs-performance/SKILL.md
+artifact: .cursor/skills/threejs/threejs-performance/SKILL.md
 intent: R3F React state in frame
 input: "useFrame calls setState 60 times a second."
 expected_bucket: near-miss

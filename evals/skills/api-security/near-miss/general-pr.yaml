@@ -1,5 +1,5 @@
 id: api-security-general-pr
-artifact: skills/backend/api-security/SKILL.md
+artifact: .cursor/skills/backend/api-security/SKILL.md
 intent: General review vs security depth
 input: "Review this PR."
 expected_bucket: near-miss

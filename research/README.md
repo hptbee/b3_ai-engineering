@@ -10,7 +10,7 @@ Phase 1 (foundations) and **Phase 2 Tracks A/B** (domain research) are complete 
 | Track A | Frontend: React, TS, Next.js, UI/a11y | ✓ research only |
 | Track B | Backend: Node, API, auth, security | ✓ research only |
 | Track C | Adapters + eval fixtures | ✓ `adapters/`, `evals/`, `scripts/` |
-| Synthesis | Mine/adapt skills into B3 | ✓ decision-008 + `skills/` |
+| Synthesis | Mine/adapt skills into B3 | ✓ decision-008 + `.cursor/skills/` |
 | Validation v1 | Real-task matrix, activation, composition | ✓ `research/validation/` |
 
 ## Lifecycle (this repo)
@@ -31,7 +31,7 @@ Rejected ideas: `research/rejected/`
 
 ---
 
-## Sources (28)
+## Sources (29)
 
 ### Phase 1 — Tier 1 official (8)
 
@@ -45,6 +45,12 @@ Rejected ideas: `research/rejected/`
 | [sources/agentskills-open-standard.md](sources/agentskills-open-standard.md) | agentskills.io spec + trigger evals |
 | [sources/agents-md-open-format.md](sources/agents-md-open-format.md) | AGENTS.md open format |
 | [sources/anthropic-building-effective-agents.md](sources/anthropic-building-effective-agents.md) | Workflow/agent patterns |
+
+### Layout amendment — 2026-09 (1)
+
+| Source file | Topic |
+| --- | --- |
+| [sources/cursor-docs-2026-09.md](sources/cursor-docs-2026-09.md) | Current Cursor skills, rules, subagents (decision-009) |
 
 ### Phase 1 — Tier 2 implementations (8)
 
@@ -144,6 +150,7 @@ Organized by architectural concern (not by repository):
 | [decision-006-frontend-skills.md](decisions/decision-006-frontend-skills.md) | **ADAPT** split frontend skills; reject Vercel bulk copy |
 | [decision-007-backend-skills.md](decisions/decision-007-backend-skills.md) | **ADAPT** layered backend security skills |
 | [decision-008-skill-synthesis.md](decisions/decision-008-skill-synthesis.md) | **ADAPT** mined skills into B3; reject catalogs |
+| [decision-009-cursor-native-layout.md](decisions/decision-009-cursor-native-layout.md) | **ADAPT** Cursor-native discovery paths; portable meaning (amends 002 location) |
 
 ## Rejected
 

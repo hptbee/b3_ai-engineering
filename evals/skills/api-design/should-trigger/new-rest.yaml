@@ -1,5 +1,5 @@
 id: api-design-new-rest
-artifact: skills/backend/api-design/SKILL.md
+artifact: .cursor/skills/backend/api-design/SKILL.md
 intent: Design new REST resource
 input: "Design the /invoices API: types, pagination, errors."
 expected_bucket: should-trigger

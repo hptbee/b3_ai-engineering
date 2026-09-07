@@ -1,5 +1,5 @@
 id: api-design-ts-dto
-artifact: skills/backend/api-design/SKILL.md
+artifact: .cursor/skills/backend/api-design/SKILL.md
 intent: TS DTO modeling
 input: "Define TypeScript types for the invoice DTO."
 expected_bucket: near-miss

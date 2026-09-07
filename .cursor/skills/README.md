@@ -1,6 +1,6 @@
 # Skills
 
-Reusable methods. Standard: [`docs/skill-standard.md`](../docs/skill-standard.md).
+Reusable methods. Standard: [`docs/skill-standard.md`](../../docs/skill-standard.md).
 
 ## Engineering (foundation + synthesis)
 

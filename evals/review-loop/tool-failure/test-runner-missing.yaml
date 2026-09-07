@@ -1,5 +1,5 @@
 id: review-tool-failure-001
-artifact: docs/review-loop.md
+artifact: review-loop/spec.md
 intent: Test runner failure during verification must not upgrade to PASS
 scenario: |
   Reviewer requests npm test as verification for finding F1

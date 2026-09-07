@@ -1,5 +1,5 @@
 id: typescript-contracts-css-layout
-artifact: skills/frontend/typescript-contracts/SKILL.md
+artifact: .cursor/skills/frontend/typescript-contracts/SKILL.md
 intent: Not a type design task
 input: "Center this React card with flexbox."
 expected_bucket: should-not-trigger

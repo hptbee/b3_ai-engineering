@@ -11,7 +11,7 @@ description: >
 
 # Code review
 
-Produce an honest review of a defined change. This skill is **one review pass**. The iterative loop is `docs/review-loop.md`, run by `review-loop/strategy.md`.
+Produce an honest review of a defined change. This skill is **one review pass**. The iterative loop is `review-loop/spec.md`, run by `review-loop/strategy.md`.
 
 ## When to use
 
@@ -32,15 +32,15 @@ Near miss: “write tests for this PR” → implementation, then verification. 
 
 1. **Scope** — what is in/out; empty or wrong target → INCOMPLETE.
 2. **Understand** — read the change; restate intent; do not invent requirements.
-3. **Review** — examine the scoped dimensions in `docs/review-loop.md`; skip only with a recorded reason.
-4. **Record findings** — use the schema and lifecycle in `docs/review-loop.md`; promote to `CONFIRMED` only with evidence.
+3. **Review** — examine the scoped dimensions in `review-loop/spec.md`; skip only with a recorded reason.
+4. **Record findings** — use the schema and lifecycle in `review-loop/spec.md`; promote to `CONFIRMED` only with evidence.
 5. **Consolidate** — merge duplicates; separate blockers from nits; speculative ≠ confirmed.
 6. **Tie to verification** — name probes/tests; do not claim they passed unless run (`verification` skill).
 
 ## Progressive disclosure
 
-- Finding schema, lifecycle, dimensions, false convergence: `docs/review-loop.md`
-- Specialist roles when isolation matters: `agents/reviewer.md`, `agents/security-reviewer.md`, `agents/architecture-reviewer.md`, `agents/fixer.md`
+- Finding schema, lifecycle, dimensions, false convergence: `review-loop/spec.md`
+- Specialist roles when isolation matters: `.cursor/agents/reviewer.md`, `.cursor/agents/security-reviewer.md`, `.cursor/agents/architecture-reviewer.md`, `.cursor/agents/fixer.md`
 - Evidence and verification rules: `rules/evidence-and-provenance.md`, `rules/verification.md`
 
 ## Verification

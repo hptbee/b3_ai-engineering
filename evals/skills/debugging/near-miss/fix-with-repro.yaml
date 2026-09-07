@@ -1,5 +1,5 @@
 id: debugging-fix-with-repro
-artifact: skills/engineering/debugging/SKILL.md
+artifact: .cursor/skills/engineering/debugging/SKILL.md
 intent: Has repro but still starts at debugging then implement
 input: "Here's the stack trace \u2014 fix the null ref."
 expected_bucket: near-miss

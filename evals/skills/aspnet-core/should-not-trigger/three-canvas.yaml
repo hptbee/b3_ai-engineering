@@ -1,5 +1,5 @@
 id: aspnet-core-three-canvas
-artifact: skills/backend/aspnet-core/SKILL.md
+artifact: .cursor/skills/backend/aspnet-core/SKILL.md
 intent: R3F
 input: "Canvas unmount should dispose the GLTF."
 expected_bucket: should-not-trigger

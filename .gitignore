@@ -22,9 +22,9 @@ venv/
 .claude/cache/
 .codex/cache/
 
-# Generated host skill discovery links (adapters/sync-skills.sh). Do not commit
-# a duplicate skill tree; keep a local symlink/junction only.
-.cursor/skills
+# Cursor-native skills/commands/agents/rules are committed under .cursor/.
+# Optional other-host discovery links (adapters/sync-skills.sh). Do not commit
+# a duplicate skill tree.
 .agents/skills
 .claude/skills
 .codex/skills

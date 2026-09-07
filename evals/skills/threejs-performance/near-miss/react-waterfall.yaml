@@ -1,5 +1,5 @@
 id: threejs-performance-react-waterfall
-artifact: skills/threejs/threejs-performance/SKILL.md
+artifact: .cursor/skills/threejs/threejs-performance/SKILL.md
 intent: DOM waterfalls
 input: "The Next.js page waterfalls three fetches around the canvas."
 expected_bucket: near-miss

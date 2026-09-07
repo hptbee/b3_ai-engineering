@@ -1,5 +1,5 @@
 id: problem-solving-not-trigger-001
-artifact: skills/engineering/problem-solving/SKILL.md
+artifact: .cursor/skills/engineering/problem-solving/SKILL.md
 intent: Review-only request without implementation mandate
 input: "Review this diff and list findings — do not change code."
 expected_bucket: should-not-trigger

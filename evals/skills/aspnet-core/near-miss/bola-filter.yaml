@@ -1,5 +1,5 @@
 id: aspnet-core-bola-filter
-artifact: skills/backend/aspnet-core/SKILL.md
+artifact: .cursor/skills/backend/aspnet-core/SKILL.md
 intent: [Authorize] is not BOLA
 input: "Users with a valid token can still open other users' documents by id."
 expected_bucket: near-miss

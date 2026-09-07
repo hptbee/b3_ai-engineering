@@ -1,5 +1,5 @@
 id: verification-near-miss-002
-artifact: skills/engineering/verification/SKILL.md
+artifact: .cursor/skills/engineering/verification/SKILL.md
 intent: Code review pass is different from verification evidence
 input: "Review this PR and tell me if it is safe to ship."
 expected_bucket: near-miss

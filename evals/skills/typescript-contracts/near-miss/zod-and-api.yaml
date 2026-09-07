@@ -1,5 +1,5 @@
 id: typescript-contracts-zod-and-api
-artifact: skills/frontend/typescript-contracts/SKILL.md
+artifact: .cursor/skills/frontend/typescript-contracts/SKILL.md
 intent: Runtime schema is types + api-design
 input: "Add Zod for the POST /orders body."
 expected_bucket: near-miss

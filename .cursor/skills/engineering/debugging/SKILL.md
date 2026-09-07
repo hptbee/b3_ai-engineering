@@ -41,8 +41,8 @@ Stop after three failed fix attempts: re-investigate; consider architecture. Do 
 
 ## Progressive disclosure
 
-- Verification outcomes: `skills/engineering/verification/SKILL.md`
-- Full loop: `docs/review-loop.md` (not this skill)
+- Verification outcomes: `.cursor/skills/engineering/verification/SKILL.md`
+- Full loop: `review-loop/spec.md` (not this skill)
 
 ## Verification
 

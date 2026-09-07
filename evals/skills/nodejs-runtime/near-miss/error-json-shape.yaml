@@ -1,5 +1,5 @@
 id: nodejs-runtime-error-json-shape
-artifact: skills/backend/nodejs-runtime/SKILL.md
+artifact: .cursor/skills/backend/nodejs-runtime/SKILL.md
 intent: Error contract is api-design
 input: "Standardize REST error JSON across routes."
 expected_bucket: near-miss

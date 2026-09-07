@@ -1,5 +1,5 @@
 id: research-patterns-near-miss-002
-artifact: skills/engineering/research-engineering-patterns/SKILL.md
+artifact: .cursor/skills/engineering/research-engineering-patterns/SKILL.md
 intent: Copy verbatim request must refuse — still triggers research skill to adapt
 input: "Copy the Trail of Bits differential-review skill into our skills folder."
 expected_bucket: near-miss

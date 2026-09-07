@@ -1,5 +1,5 @@
 id: react-hooks-effect-loop
-artifact: skills/frontend/react-hooks/SKILL.md
+artifact: .cursor/skills/frontend/react-hooks/SKILL.md
 intent: Effect dependency loop
 input: "useEffect retriggers forever \u2014 fix dependencies without lying to the linter."
 expected_bucket: should-trigger

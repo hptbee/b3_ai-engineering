@@ -1,5 +1,5 @@
 id: problem-solving-near-miss-001
-artifact: skills/engineering/problem-solving/SKILL.md
+artifact: .cursor/skills/engineering/problem-solving/SKILL.md
 intent: Design soundness without code change stays in Understand/Plan
 input: "Is this database schema design sound before we build it?"
 expected_bucket: near-miss

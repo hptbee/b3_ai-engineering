@@ -1,5 +1,5 @@
 id: react-three-fiber-useframe-setstate
-artifact: skills/threejs/react-three-fiber/SKILL.md
+artifact: .cursor/skills/threejs/react-three-fiber/SKILL.md
 intent: setState in useFrame
 input: "R3F animation uses setState every frame."
 expected_bucket: should-trigger

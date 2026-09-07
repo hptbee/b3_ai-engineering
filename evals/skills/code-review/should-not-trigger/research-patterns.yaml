@@ -1,5 +1,5 @@
 id: code-review-not-trigger-002
-artifact: skills/engineering/code-review/SKILL.md
+artifact: .cursor/skills/engineering/code-review/SKILL.md
 intent: External pattern research is research-engineering-patterns
 input: "Research how other repos structure their agent skills and summarize patterns."
 expected_bucket: should-not-trigger

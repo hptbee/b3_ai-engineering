@@ -1,5 +1,5 @@
 id: testing-strategy-debug-hang
-artifact: skills/engineering/testing-strategy/SKILL.md
+artifact: .cursor/skills/engineering/testing-strategy/SKILL.md
 intent: Hang investigation is debugging
 input: "The Node process hangs on shutdown \u2014 find the cause."
 expected_bucket: should-not-trigger

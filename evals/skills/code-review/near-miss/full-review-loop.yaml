@@ -1,7 +1,7 @@
 id: code-review-near-miss-002
-artifact: skills/engineering/code-review/SKILL.md
+artifact: .cursor/skills/engineering/code-review/SKILL.md
 intent: Full review loop is documented separately from single-pass code-review
 input: "Run the full independent review loop with fix iterations until PASS."
 expected_bucket: near-miss
-preferred_artifact: docs/review-loop.md
+preferred_artifact: review-loop/spec.md
 notes: code-review is one pass; loop is separate layer

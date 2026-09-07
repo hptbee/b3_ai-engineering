@@ -1,5 +1,5 @@
 id: simplest-correct-microservices-prestige
-artifact: skills/architecture/simplest-correct/SKILL.md
+artifact: .cursor/skills/architecture/simplest-correct/SKILL.md
 intent: Unjustified split
 input: "Should we extract five microservices for this internal tool used by 8 people?"
 expected_bucket: should-trigger

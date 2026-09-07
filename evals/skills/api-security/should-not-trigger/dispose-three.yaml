@@ -1,5 +1,5 @@
 id: api-security-dispose-three
-artifact: skills/backend/api-security/SKILL.md
+artifact: .cursor/skills/backend/api-security/SKILL.md
 intent: Three.js dispose
 input: "Geometries leak when leaving the canvas."
 expected_bucket: should-not-trigger

@@ -1,5 +1,5 @@
 id: refactoring-dedupe
-artifact: skills/engineering/refactoring/SKILL.md
+artifact: .cursor/skills/engineering/refactoring/SKILL.md
 intent: Remove duplication preserving behavior
 input: "These two mappers are copies \u2014 refactor without changing output."
 expected_bucket: should-trigger

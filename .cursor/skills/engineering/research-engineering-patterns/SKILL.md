@@ -6,7 +6,7 @@ description: >
   personal system. Use when asked to research a repo, extract a pattern,
   decide whether to adopt a method, or record provenance. Do not use for
   ordinary product implementation, local debugging, or copying third-party
-  skills verbatim into skills/.
+  skills verbatim into `.cursor/skills/`.
 ---
 
 # Research engineering patterns

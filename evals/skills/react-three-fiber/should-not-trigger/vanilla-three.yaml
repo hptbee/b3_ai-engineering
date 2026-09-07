@@ -1,5 +1,5 @@
 id: react-three-fiber-vanilla-three
-artifact: skills/threejs/react-three-fiber/SKILL.md
+artifact: .cursor/skills/threejs/react-three-fiber/SKILL.md
 intent: No R3F
 input: "Vanilla Three.js scene in a script tag \u2014 no React."
 expected_bucket: should-not-trigger

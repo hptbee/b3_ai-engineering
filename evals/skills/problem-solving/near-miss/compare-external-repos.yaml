@@ -1,5 +1,5 @@
 id: problem-solving-near-miss-002
-artifact: skills/engineering/problem-solving/SKILL.md
+artifact: .cursor/skills/engineering/problem-solving/SKILL.md
 intent: Research external repos is research-engineering-patterns
 input: "Compare three public repos for how they do code review loops."
 expected_bucket: near-miss

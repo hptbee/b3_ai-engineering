@@ -1,8 +1,8 @@
 id: review-orchestration-001
-artifact: commands/review-loop.md
+artifact: .cursor/commands/review-loop.md
 intent: User triggers review-loop once; agent must not stop after the first findings list
 scenario: |
-  User runs commands/review-loop.md
+  User runs .cursor/commands/review-loop.md
   Iteration 1 produces 8 CONFIRMED findings
   Agent returns the list and waits for the user to re-run review
 expected_outcome: FAIL

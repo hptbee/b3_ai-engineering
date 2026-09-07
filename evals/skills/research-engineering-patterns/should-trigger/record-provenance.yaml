@@ -1,5 +1,5 @@
 id: research-patterns-trigger-003
-artifact: skills/engineering/research-engineering-patterns/SKILL.md
+artifact: .cursor/skills/engineering/research-engineering-patterns/SKILL.md
 intent: Extract pattern with provenance recording
 input: "Study the agentskills.io spec and record what we should adopt vs adapt."
 expected_bucket: should-trigger

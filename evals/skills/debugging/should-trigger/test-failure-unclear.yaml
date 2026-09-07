@@ -1,5 +1,5 @@
 id: debugging-test-failure-unclear
-artifact: skills/engineering/debugging/SKILL.md
+artifact: .cursor/skills/engineering/debugging/SKILL.md
 intent: Failing test with unclear cause
 input: "This unit test started failing on CI and I don't know why."
 expected_bucket: should-trigger

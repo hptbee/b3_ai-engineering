@@ -1,5 +1,5 @@
 id: react-components-where-state
-artifact: skills/frontend/react-components/SKILL.md
+artifact: .cursor/skills/frontend/react-components/SKILL.md
 intent: State ownership
 input: "Where should selectedTab state live in this React tree?"
 expected_bucket: should-trigger

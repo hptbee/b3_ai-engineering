@@ -1,5 +1,5 @@
 id: research-patterns-not-trigger-001
-artifact: skills/engineering/research-engineering-patterns/SKILL.md
+artifact: .cursor/skills/engineering/research-engineering-patterns/SKILL.md
 intent: Product implementation using official docs only
 input: "Read the Next.js routing docs and add a /settings page to the app."
 expected_bucket: should-not-trigger

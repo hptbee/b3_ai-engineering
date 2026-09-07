@@ -78,13 +78,13 @@ Preferences that are only taste stay in a profile rather than becoming a rule.
 | Store | Role | Example |
 | --- | --- | --- |
 | `knowledge/` | Canonical facts and lessons the system may cite later | “React effects: official pattern, last verified …” |
-| Skill `references/` | Material **used while performing a task** | `skills/frontend/react-performance/references/checklist.md` |
+| Skill `references/` | Material **used while performing a task** | `.cursor/skills/frontend/react-performance/references/checklist.md` |
 | `research/` | Intake: sources, findings, comparisons, decisions, rejected, validation | A comparison of two public review-loop designs |
 
 Skill-local layout (when that skill exists):
 
 ```text
-skills/frontend/react-performance/
+.cursor/skills/frontend/react-performance/
 ├── SKILL.md
 └── references/
     └── checklist.md

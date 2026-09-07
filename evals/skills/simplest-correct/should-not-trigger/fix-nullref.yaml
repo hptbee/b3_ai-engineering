@@ -1,5 +1,5 @@
 id: simplest-correct-fix-nullref
-artifact: skills/architecture/simplest-correct/SKILL.md
+artifact: .cursor/skills/architecture/simplest-correct/SKILL.md
 intent: Localized bug
 input: "NullReferenceException in the mapper \u2014 fix it."
 expected_bucket: should-not-trigger

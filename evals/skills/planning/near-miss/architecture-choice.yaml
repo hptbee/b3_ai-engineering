@@ -1,5 +1,5 @@
 id: planning-architecture-choice
-artifact: skills/engineering/planning/SKILL.md
+artifact: .cursor/skills/engineering/planning/SKILL.md
 intent: System shape uses simplest-correct too
 input: "Should we split this into microservices before we plan modules?"
 expected_bucket: near-miss

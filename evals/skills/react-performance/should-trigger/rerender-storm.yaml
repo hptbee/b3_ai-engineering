@@ -1,5 +1,5 @@
 id: react-performance-rerender-storm
-artifact: skills/frontend/react-performance/SKILL.md
+artifact: .cursor/skills/frontend/react-performance/SKILL.md
 intent: Context re-renders
 input: "Typing in search re-renders the whole dashboard."
 expected_bucket: should-trigger

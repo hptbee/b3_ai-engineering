@@ -17,4 +17,4 @@ Schema check only — not semantic scoring. Capability evals **not implemented**
 | `review-loop/` | Spec + orchestration v1 scenarios |
 | `agents/` | no activation cases yet — roles are thin mandates |
 
-See [`skills/README.md`](skills/README.md).
+See [`../.cursor/skills/README.md`](../.cursor/skills/README.md).

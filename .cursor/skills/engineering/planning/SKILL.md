@@ -39,7 +39,7 @@ Near miss: “is this architecture sound?” with no implementation yet → this
 
 ## Progressive disclosure
 
-- Execution: `skills/engineering/problem-solving/SKILL.md`
+- Execution: `.cursor/skills/engineering/problem-solving/SKILL.md`
 - Workflow: `workflows/feature-implementation.md`
 
 ## Verification

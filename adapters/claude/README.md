@@ -1,19 +1,18 @@
 # Claude Code adapter
 
-**Status:** intended mapping only. No `.claude/` tree is committed and this mapping
-has not been verified in this repository.
+**Status:** intended mapping only. No `.claude/` tree is committed and this mapping has not been verified in this repository.
 
-## Portable core → Claude Code
+## This repo → Claude Code
 
 | Core | Claude mapping |
 | --- | --- |
-| `AGENTS.md` | Source of truth; bridge from `CLAUDE.md` via `@AGENTS.md` import |
+| `AGENTS.md` | Source of truth; bridge from `CLAUDE.md` via `@AGENTS.md` |
 | `rules/*.md` | Claude rules / project instructions — same meaning |
-| `skills/<name>/SKILL.md` | Symlink `skills/` → `.claude/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
-| `commands/` | Claude commands when command layer exists |
-| `agents/` | `.claude/agents/` subagents when roles exist |
+| `.cursor/skills/` | Symlink → `.claude/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
+| `.cursor/commands/` | Claude commands when command layer exists |
+| `.cursor/agents/` | Map to `.claude/agents/` when roles exist |
 
-Portable review-loop roles: `reviewer` (no edits), `fixer` (no PASS). Map to `.claude/agents/` with optional `model:` in the host overlay only (`review-loop/models.md`). Orchestrator remains the parent conversation.
+Review-loop roles: `reviewer` (no edits), `fixer` (no PASS). Optional `model:` only in the host overlay (`review-loop/models.md`). Orchestrator remains the parent conversation.
 
 ## CLAUDE.md bridge
 
@@ -24,41 +23,33 @@ Claude Code often expects root `CLAUDE.md`. **Do not fork** the handbook — gen
 
 Follow @AGENTS.md for operating context, precedence, and review standards.
 
-Skills: `.claude/skills/` (symlinked from portable `skills/`).
+Skills: `.claude/skills/` (symlinked from `.cursor/skills`).
 Rules: see portable `rules/` — map to Claude rules without rewriting policy.
 ```
 
-Optional: commit `CLAUDE.md` in repo after user approval, or document generation in this adapter only.
+Optional: commit `CLAUDE.md` after user approval. Do not add it in this Cursor-first repo until Claude is actually used.
 
 ## Plugin / marketplace namespacing
 
-Third-party plugins may use namespaced skill and subagent names (e.g. `plugin:skill-name`). Portable core skills use simple `name:` fields — adapter docs map host dispatch strings when integrating OSS plugins (e.g. Trail of Bits differential-review).
-
-Do **not** copy namespaced subagent names into portable `skills/`.
+Portable core skills use simple `name:` fields. Do **not** copy namespaced plugin subagent names into `.cursor/skills/`.
 
 ## allowed-tools frontmatter
 
-Some Claude/OSS skills declare `allowed-tools`. Portable foundation skills omit this — optional generated overlay in `.claude/skills/<name>/` if user wants tool restrictions.
+Foundation skills omit `allowed-tools`. Optional overlay in `.claude/skills/<name>/` if tool restrictions are wanted.
 
-## Hooks (optional layer)
+## Hooks (optional)
 
-Claude plugins support SessionStart/hook enforcement (see Superpowers, dev-loop in research). Hooks are **not** portable — document optional hook wrappers here that invoke review or verification procedures.
-
-Portable core must remain usable without hooks.
+Hooks are **not** portable. Optional Claude hook wrappers may invoke review or verification procedures. The core must remain usable without hooks.
 
 ## Symlink
 
 ```bash
 ./adapters/sync-skills.sh claude
-# creates .claude/skills → ../skills
+# creates .claude/skills → ../.cursor/skills
 ```
-
-## Thin by design
-
-Permission prompts, MCP server lists, and Claude hook JSON belong here. Engineering method stays in portable core.
 
 ## References
 
 - [`../README.md`](../README.md)
 - `research/sources/claude-code-skills-plugins.md`
-- `research/decisions/decision-002-portability.md`
+- `research/decisions/decision-009-cursor-native-layout.md`

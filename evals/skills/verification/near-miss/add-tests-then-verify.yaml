@@ -1,5 +1,5 @@
 id: verification-near-miss-001
-artifact: skills/engineering/verification/SKILL.md
+artifact: .cursor/skills/engineering/verification/SKILL.md
 intent: Adding tests is problem-solving/implementation; verification when used as evidence
 input: "Add unit tests for this module and use the results to confirm the bug is fixed."
 expected_bucket: near-miss

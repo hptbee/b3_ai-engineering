@@ -1,5 +1,5 @@
 id: review-tool-failure-002
-artifact: docs/review-loop.md
+artifact: review-loop/spec.md
 intent: Cannot read diff / git failure leaves review INCOMPLETE
 scenario: |
   git diff fails or returns empty wrongly

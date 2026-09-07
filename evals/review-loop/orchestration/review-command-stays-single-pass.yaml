@@ -1,9 +1,9 @@
 id: review-orchestration-002
-artifact: commands/review.md
-intent: commands/review.md remains a single review pass and must not start the autonomous loop
+artifact: .cursor/commands/review.md
+intent: .cursor/commands/review.md remains a single review pass and must not start the autonomous loop
 scenario: |
-  User runs commands/review.md on a PR with findings
+  User runs .cursor/commands/review.md on a PR with findings
   Agent enters review-loop/strategy.md and starts fixing/re-reviewing
 expected_outcome: FAIL
 failure_mode: command-collapse
-notes: Loop entry is commands/review-loop.md only
+notes: Loop entry is .cursor/commands/review-loop.md only

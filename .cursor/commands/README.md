@@ -2,7 +2,7 @@
 
 Commands are explicit, user-triggered operations. They answer: **what action should the agent perform now?**
 
-**Status:** present (thin). Each file selects skills; it does not duplicate skill text. Host slash mapping is in `adapters/`.
+In Cursor these files are slash-invocable. Each file selects skills; it does not duplicate skill text.
 
 | Command | Intent |
 | --- | --- |
@@ -13,7 +13,7 @@ Commands are explicit, user-triggered operations. They answer: **what action sho
 | [`verify.md`](verify.md) | Evidence for a named claim |
 | [`review-loop.md`](review-loop.md) | One-shot independent loop to gate/stuck/limit |
 
-Not implemented as host plugins. Backlog dropped: `create-skill` / `improve-skill` remain research-skill work until needed twice.
+Slash discovery in Cursor is **INTENDED** (files live at `.cursor/commands/`). Runtime `/` UX is **NOT VERIFIED** in this change.
 
 ## Design notes
 

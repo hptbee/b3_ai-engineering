@@ -1,51 +1,42 @@
 # Codex adapter
 
-**Status:** intended mapping only. No Codex-specific overlay is generated and this
-mapping has not been verified in this repository.
+**Status:** intended mapping only. No Codex-specific overlay is generated and this mapping has not been verified in this repository.
 
-## Portable core → Codex
+## This repo → Codex
 
 | Core | Codex mapping |
 | --- | --- |
 | `AGENTS.md` | Primary operating file; merged chain subject to ~32 KiB default cap |
 | `rules/*.md` | Include or link from `AGENTS.md` — do not duplicate prose |
-| `skills/<name>/SKILL.md` | Symlink `skills/` → `.agents/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
-| `commands/` | Slash or prompt-style invocations when defined |
-| `agents/` | Role prompts when agent layer exists (`reviewer`, `fixer`; optional specialists) |
+| `.cursor/skills/` | Symlink → `.agents/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
+| `.cursor/commands/` | Slash or prompt-style invocations when defined |
+| `.cursor/agents/` | Role prompts (`reviewer`, `fixer`; optional specialists) |
 
-Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in portable files.
+Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in skill bodies.
 
-Codex discovers `.agents/skills/` at repo root (and user-level config outside repo). Same layout as agentskills.io standard.
+Codex discovers `.agents/skills/` at repo root. Same layout as agentskills.io.
 
 ## AGENTS.md merge chain
 
-Codex merges multiple AGENTS files up the directory tree. Keep root `AGENTS.md` concise; defer procedures to skills (progressive disclosure).
+Keep root `AGENTS.md` concise; defer procedures to skills.
 
 If byte cap truncates context:
 1. Shorten `AGENTS.md` to pointers
 2. Rely on skill descriptions for activation
 3. Split rarely-used docs to `docs/` + skill references
 
-## Skills doc depth note
-
-OpenAI/codex repo skills documentation may pointer to developers.openai.com — treat official web docs as authoritative when repo stub is thin (`research/README.md` deferred unknown).
-
-## Symlink recommendation
+## Symlink
 
 ```bash
 ./adapters/sync-skills.sh codex
-# creates .agents/skills → ../skills
+# creates .agents/skills → ../.cursor/skills
 ```
 
-For Cursor + Codex on same repo:
-
-```bash
-./adapters/sync-skills.sh all
-```
+Do **not** run `all` while using Cursor in this repo if that would also create `.claude/skills` — Cursor cross-loads compatibility dirs.
 
 ## Thin by design
 
-CLI flags, local tool conventions, and Codex-only config stay here. Core rules and skills remain host-agnostic.
+CLI flags and Codex-only config stay here. Core rules and skill procedures remain host-agnostic.
 
 ## References
 

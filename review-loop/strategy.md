@@ -1,6 +1,6 @@
 # Orchestrator procedure
 
-**Trigger once:** `commands/review-loop.md`. Do not yield after the first review for a human “run review again” unless a termination condition fires.
+**Trigger once:** `.cursor/commands/review-loop.md`. Do not yield after the first review for a human “run review again” unless a termination condition fires.
 
 You are the **orchestrator**. You do not replace the reviewer or the fixer.
 
@@ -15,12 +15,12 @@ Reuse:
 
 | Role | Artifact |
 | --- | --- |
-| Review (one pass) | `agents/reviewer.md` → `skills/engineering/code-review` |
-| Security depth | `agents/security-reviewer.md` when auth/API trust is in scope |
-| Architecture depth | `agents/architecture-reviewer.md` when shape/layering is in scope |
-| Fix | `agents/fixer.md` |
-| Evidence | `skills/engineering/verification` + `rules/verification.md` |
-| Spec | `docs/review-loop.md` |
+| Review (one pass) | `.cursor/agents/reviewer.md` → `.cursor/skills/engineering/code-review` |
+| Security depth | `.cursor/agents/security-reviewer.md` when auth/API trust is in scope |
+| Architecture depth | `.cursor/agents/architecture-reviewer.md` when shape/layering is in scope |
+| Fix | `.cursor/agents/fixer.md` |
+| Evidence | `.cursor/skills/engineering/verification` + `rules/verification.md` |
+| Spec | `spec.md` |
 
 If the host can isolate subagents, dispatch **reviewer** and **fixer** as separate roles (different context). If not, still **change hats**: reviewer pass must not edit code; fixer pass must not declare PASS.
 
@@ -114,7 +114,7 @@ REVIEW LOOP DID NOT CONVERGE
 
 Hand remaining OPEN items to the human. Outcome: `INCOMPLETE` (and FAIL if CONFIRMED blockers remain). **Not PASS.**
 
-Defaults: [`docs/review-loop.md`](../docs/review-loop.md) (`MAX_ITERATIONS = 5` for full-PR scope).
+Defaults: [`spec.md`](spec.md) (`MAX_ITERATIONS = 5` for full-PR scope).
 
 ## 7. Stop and report
 

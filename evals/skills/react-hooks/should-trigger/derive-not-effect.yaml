@@ -1,5 +1,5 @@
 id: react-hooks-derive-not-effect
-artifact: skills/frontend/react-hooks/SKILL.md
+artifact: .cursor/skills/frontend/react-hooks/SKILL.md
 intent: Derived state in effect
 input: "We're copying props into state via useEffect \u2014 is that wrong?"
 expected_bucket: should-trigger

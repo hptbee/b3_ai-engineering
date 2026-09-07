@@ -1,5 +1,5 @@
 id: problem-solving-not-trigger-002
-artifact: skills/engineering/problem-solving/SKILL.md
+artifact: .cursor/skills/engineering/problem-solving/SKILL.md
 intent: Pure knowledge question with no change
 input: "Explain how React Server Components differ from client components."
 expected_bucket: should-not-trigger

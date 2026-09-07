@@ -32,7 +32,7 @@ Map onto stores:
 | Evaluate / Adapt / Personalize / Verify | Fit for a personal, portable system; rewrite; label taste as personal | working notes → decision |
 | Record provenance | Adopt, modify, or reject with why | `research/decisions/` or `research/rejected/` |
 
-Only after a decision should distilled content enter `knowledge/`, then `skills/`, `rules/`, or `workflows/`. See [`system-lifecycle.md`](system-lifecycle.md).
+Only after a decision should distilled content enter `knowledge/`, then `.cursor/skills/`, `rules/`, or `workflows/`. See [`system-lifecycle.md`](system-lifecycle.md).
 
 ## Provenance record
 
@@ -50,7 +50,7 @@ Whether it was adopted / rejected
 
 Rejected patterns are valuable. Put them in `research/rejected/` so the next pass does not re-import noise.
 
-Do not paste third-party `SKILL.md` files into `skills/`. Do not use `references/` or `knowledge/` as a dumping ground for unprocessed sources.
+Do not paste third-party `SKILL.md` files into `.cursor/skills/`. Do not use `references/` or `knowledge/` as a dumping ground for unprocessed sources.
 
 ## Classification of authority
 

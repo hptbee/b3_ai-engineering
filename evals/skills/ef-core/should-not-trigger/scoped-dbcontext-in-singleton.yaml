@@ -1,5 +1,5 @@
 id: ef-core-not-trigger-di-lifetime
-artifact: skills/backend/ef-core/SKILL.md
+artifact: .cursor/skills/backend/ef-core/SKILL.md
 intent: Scoped DbContext in singleton is aspnet-core DI
 input: "Singleton CacheService takes scoped AppDbContext."
 expected_bucket: should-not-trigger

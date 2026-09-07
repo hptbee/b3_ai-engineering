@@ -1,5 +1,5 @@
 id: aspnet-core-ef-tracking
-artifact: skills/backend/aspnet-core/SKILL.md
+artifact: .cursor/skills/backend/aspnet-core/SKILL.md
 intent: Query tracking is ef-core
 input: "SaveChanges is slow because everything is tracked on a read."
 expected_bucket: near-miss

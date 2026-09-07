@@ -1,5 +1,5 @@
 id: api-security-pagination-only
-artifact: skills/backend/api-security/SKILL.md
+artifact: .cursor/skills/backend/api-security/SKILL.md
 intent: Pagination without authz
 input: "Add pagination to GET /users."
 expected_bucket: near-miss

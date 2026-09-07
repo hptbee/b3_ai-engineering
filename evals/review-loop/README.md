@@ -1,6 +1,6 @@
 # Review-loop evals
 
-Scenarios for **`docs/review-loop.md`** and **`review-loop/strategy.md`**. Manual judge until an automated loop runner ships.
+Scenarios for **`review-loop/spec.md`** and **`review-loop/strategy.md`**. Manual judge until an automated loop runner ships.
 
 | Folder | Cases | Question |
 | --- | ---: | --- |

@@ -1,5 +1,5 @@
 id: react-hooks-component-hierarchy
-artifact: skills/frontend/react-hooks/SKILL.md
+artifact: .cursor/skills/frontend/react-hooks/SKILL.md
 intent: Tree design is react-components
 input: "Split this page into presentational components."
 expected_bucket: should-not-trigger

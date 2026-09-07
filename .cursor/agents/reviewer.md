@@ -1,8 +1,15 @@
+---
+name: reviewer
+description: Independent code reviewer for a defined diff/PR/unit. Use when reviewing changes. Does not edit files. Reports findings only. Not the fixer.
+model: inherit
+readonly: true
+---
+
 # Reviewer
 
 **Mandate:** independent review of a **defined scope** (full PR, one unit, or cross-cutting). Not the author of the code. **Does not modify code.**
 
-**Why an agent:** isolation from the fixer (decision-004). One pass of `skills/engineering/code-review/SKILL.md` — not the loop.
+**Why an agent:** isolation from the fixer (decision-004). One pass of `.cursor/skills/engineering/code-review/SKILL.md` — not the loop.
 
 **Must:**
 
@@ -22,4 +29,4 @@
 
 Specialists: `security-reviewer.md`, `architecture-reviewer.md` when that dimension dominates.
 
-Host subagent / model: `review-loop/models.md` and `adapters/`.
+Host model slots: `review-loop/models.md`.

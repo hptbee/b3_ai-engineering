@@ -1,5 +1,5 @@
 id: ef-core-not-trigger-dapper-loop
-artifact: skills/backend/ef-core/SKILL.md
+artifact: .cursor/skills/backend/ef-core/SKILL.md
 intent: Dapper SQL loop is not EF Core
 input: "This report uses Dapper QueryAsync; SELECT * runs inside a loop."
 expected_bucket: should-not-trigger

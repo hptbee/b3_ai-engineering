@@ -1,5 +1,5 @@
 id: api-design-breaking-change
-artifact: skills/backend/api-design/SKILL.md
+artifact: .cursor/skills/backend/api-design/SKILL.md
 intent: Compatibility
 input: "We want to rename created_at \u2014 how do we avoid breaking clients?"
 expected_bucket: should-trigger

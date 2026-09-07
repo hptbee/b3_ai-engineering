@@ -2,7 +2,7 @@
 
 Skills are the reusable methods of this system. Each skill solves one focused problem and is loaded only when that problem is present.
 
-This standard applies to every skill. Catalog: [`../skills/README.md`](../skills/README.md).
+This standard applies to every skill. Catalog: [`../.cursor/skills/README.md`](../.cursor/skills/README.md).
 
 ## Layout
 
@@ -86,7 +86,7 @@ research   = where conclusions came from     → research/
 Skill-local example (when such a skill exists):
 
 ```text
-skills/frontend/react-performance/
+.cursor/skills/frontend/react-performance/
 ├── SKILL.md
 └── references/
     └── checklist.md

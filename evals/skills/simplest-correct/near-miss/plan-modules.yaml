@@ -1,5 +1,5 @@
 id: simplest-correct-plan-modules
-artifact: skills/architecture/simplest-correct/SKILL.md
+artifact: .cursor/skills/architecture/simplest-correct/SKILL.md
 intent: Planning after shape chosen
 input: "We agreed on a modular monolith \u2014 plan the modules."
 expected_bucket: near-miss

@@ -42,7 +42,7 @@ Near miss: “add unit tests for this module” → testing/implementation work,
 ## Progressive disclosure
 
 - Hard constraints: `rules/verification.md`
-- Review-loop use of outcomes: `docs/review-loop.md`
+- Review-loop use of outcomes: `review-loop/spec.md`
 
 ## Verification of this skill
 

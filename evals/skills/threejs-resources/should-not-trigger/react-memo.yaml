@@ -1,5 +1,5 @@
 id: threejs-resources-react-memo
-artifact: skills/threejs/threejs-resources/SKILL.md
+artifact: .cursor/skills/threejs/threejs-resources/SKILL.md
 intent: DOM React perf
 input: "Memo this list row component."
 expected_bucket: should-not-trigger
