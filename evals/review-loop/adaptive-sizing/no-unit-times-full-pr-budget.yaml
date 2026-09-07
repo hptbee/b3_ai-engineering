@@ -1,0 +1,10 @@
+id: review-adaptive-sizing-004
+artifact: review-loop/strategy.md
+intent: Pathological 10 units × 5 iterations × full-PR review is forbidden
+scenario: |
+  VERY_LARGE PR
+  Orchestrator creates 10 units, 5 iterations each, each iteration a full-PR review
+  Total reviewer passes far above 12
+expected_outcome: FAIL
+failure_mode: budget-explosion
+notes: Max 4 units, 3 iter/unit, 2 cross-cut, total reviewer passes ≤ 12

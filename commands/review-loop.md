@@ -1,9 +1,17 @@
 # review-loop
 
-**Action now:** run the independent review loop (review → fix → verify → re-review) per `docs/review-loop.md`.
+**Action now:** run the autonomous review loop **to completion** (gate, stuck, or limit). Do not stop after the first findings list for the user to re-invoke this command.
 
-**Not** a single `code-review` pass. Iteration limits and false-convergence rules apply.
+**Orchestrator:** [`review-loop/strategy.md`](../review-loop/strategy.md)
 
-When host subagents exist, dispatch `agents/security-reviewer.md` and `agents/architecture-reviewer.md` as **separate** passes from the implementer.
+**Spec:** [`docs/review-loop.md`](../docs/review-loop.md)
 
-Runtime orchestration under `review-loop/` is still unspecified; follow the doc manually.
+```text
+Review → validate findings → fix valid ones → build/test → fresh review → …
+```
+
+- Size the PR first (`review-loop/sizing.md`). Small/medium = full-PR loop. Large = unit loops, then cross-cutting review.
+- Reviewer does not edit. Fixer does not declare PASS.
+- One `review` command remains a **single** pass (`commands/review.md`).
+
+If the host supports subagents, dispatch `agents/reviewer.md` and `agents/fixer.md` separately (`review-loop/models.md`).

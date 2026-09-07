@@ -1,18 +1,19 @@
 # Independent review
 
-Orchestrates `docs/review-loop.md`. Does **not** replace that spec.
+Orchestrates [`docs/review-loop.md`](../docs/review-loop.md) via [`review-loop/strategy.md`](../review-loop/strategy.md). Does **not** replace the spec.
+
+Triggered by `commands/review-loop.md` **once**. Continues until quality gate, non-convergence, or iteration limit.
 
 ```text
-Define scope → Review (distinct from implementer) → Consolidate
-→ Fix CONFIRMED → Verify → Re-review affected → Stop on clean or limit
+Size PR → full-PR loop  |  partition → unit loops → cross-cutting
 ```
 
 | Role | Artifact |
 | --- | --- |
-| Reviewer (general) | `skills/engineering/code-review` |
+| Orchestrator | `review-loop/strategy.md` |
+| Reviewer | `agents/reviewer.md` → `code-review` |
+| Fixer | `agents/fixer.md` |
 | Security (optional) | `agents/security-reviewer.md` |
 | Architecture (optional) | `agents/architecture-reviewer.md` |
 
-Termination, finding lifecycle, false convergence: `docs/review-loop.md` only.
-
-Evals: `evals/review-loop/`.
+Single-pass review without the loop: `commands/review.md`.

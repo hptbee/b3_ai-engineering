@@ -14,7 +14,7 @@ Schema check only — not semantic scoring. Capability evals **not implemented**
 | --- | --- |
 | `skills/` | 2/2/2 minimum per new skill; foundation skills from Track C |
 | `rules/` | comply/violate samples |
-| `review-loop/` | Track C scenarios |
+| `review-loop/` | Spec + orchestration v1 scenarios |
 | `agents/` | no activation cases yet — roles are thin mandates |
 
 See [`skills/README.md`](skills/README.md).

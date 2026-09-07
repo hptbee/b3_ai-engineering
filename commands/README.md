@@ -11,7 +11,7 @@ Commands are explicit, user-triggered operations. They answer: **what action sho
 | [`debug.md`](debug.md) | Root-cause investigation |
 | [`review.md`](review.md) | One code-review pass |
 | [`verify.md`](verify.md) | Evidence for a named claim |
-| [`review-loop.md`](review-loop.md) | Independent iterative loop |
+| [`review-loop.md`](review-loop.md) | One-shot independent loop to gate/stuck/limit |
 
 Not implemented as host plugins. Backlog dropped: `create-skill` / `improve-skill` remain research-skill work until needed twice.
 

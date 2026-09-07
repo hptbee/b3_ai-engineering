@@ -25,7 +25,10 @@ evals/
     ├── false-convergence/
     ├── tool-failure/
     ├── iteration-limit/
-    └── finding-lifecycle/
+    ├── finding-lifecycle/
+    ├── adaptive-sizing/
+    ├── quality-gate/
+    └── orchestration/
 ```
 
 Empty case directories are omitted until a real case exists. See [`../evals/README.md`](../evals/README.md).

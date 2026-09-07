@@ -7,6 +7,6 @@ Workflows are multi-step orchestration. They answer: **in what order should thin
 | Workflow | Sequence |
 | --- | --- |
 | [`feature-implementation.md`](feature-implementation.md) | Understand → Plan → Implement → Verify → Review → Fix → Re-verify |
-| [`independent-review.md`](independent-review.md) | Review-loop spec + optional independent agents |
+| [`independent-review.md`](independent-review.md) | One-shot adaptive loop: size → review/fix → (units + cross-cut) |
 
-Until a host runner exists, follow these files manually.
+Follow `commands/review-loop.md` once; the agent continues until gate, stuck, or limit. Single-pass review remains `commands/review.md`.

@@ -21,3 +21,6 @@ venv/
 .cursor/cache/
 .claude/cache/
 .codex/cache/
+
+# Optional review-loop working log (keep TEMPLATE.md)
+review-loop/state/current.yaml
