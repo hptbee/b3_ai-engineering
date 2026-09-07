@@ -47,7 +47,7 @@ Discover → Collect → Classify → Compare → Extract
 7. **Adapt** into this taxonomy (rule vs skill vs knowledge vs adapter). Rewrite; do not paste.
 8. **Personalize** with `authority: personal` when the change is taste or local experience.
 9. **Verify** against official docs or a real task. README quality is not evidence.
-10. **Record provenance** using the block below.
+10. **Record provenance** using the block below, in `research/` — not in `knowledge/` or skill `references/` until a decision promotes it.
 
 ## Provenance block
 
@@ -61,12 +61,21 @@ Why we changed it:
 Adopted / rejected:
 ```
 
-Store the record with the resulting artifact or under `knowledge/` / `references/` — not as a duplicate of the source skill.
+| Kind | Store |
+| --- | --- |
+| What externals say | `research/sources/` |
+| Extracted patterns | `research/findings/` |
+| Multiple approaches | `research/comparisons/` |
+| Adopt / modify | `research/decisions/` |
+| Intentionally not adopted | `research/rejected/` |
+
+Do not paste the source skill. After a decision, rewrite into `knowledge/` then skills/rules/workflows (`docs/system-lifecycle.md`).
 
 ## Progressive disclosure
 
-- Method detail: `docs/research-methodology.md`
-- Knowledge metadata: `docs/knowledge-system.md`
+- Stores: `research/README.md`
+- Method: `docs/research-methodology.md`
+- Knowledge vs reference vs research: `docs/knowledge-system.md`
 - Constraint: `rules/evidence-and-provenance.md`
 
 Open those only if this file is not enough for the current question.

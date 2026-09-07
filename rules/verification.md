@@ -1,3 +1,11 @@
+---
+type: rule
+strength: hard
+scope: global
+source: synthesized
+authority: high
+---
+
 # Verification
 
 Hard rule: never claim a check passed unless that check was actually executed and produced supporting evidence.

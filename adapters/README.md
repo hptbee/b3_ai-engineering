@@ -10,7 +10,7 @@ Portable Core
      └── Claude adapter
 ```
 
-An adapter maps names, discovery paths, and invocation onto Cursor, Codex, or Claude Code. It does not fork rules, skills, or taxonomy.
+An adapter maps names, discovery paths, and invocation onto Cursor, Codex, or Claude Code. It does not fork rules, skills, knowledge, research, profiles, or taxonomy.
 
 **Status:** mapping notes only. No generated host manifests, hooks, or synced copies yet.
 

@@ -1,8 +1,8 @@
 # Review loop (runtime)
 
-Specification: [`docs/review-loop.md`](../docs/review-loop.md).
+Specification: [`docs/review-loop.md`](../docs/review-loop.md) (sequence, finding lifecycle, schema, false-convergence).
 
-**Status:** directories reserved; no runtime strategy, reviewers, or termination logic yet.
+**Status:** directories reserved; no runtime strategy, reviewers, termination logic, or finding store yet.
 
 Intended layout:
 

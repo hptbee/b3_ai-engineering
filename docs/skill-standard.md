@@ -69,15 +69,31 @@ The main file is the procedure, not the encyclopedia. If a section is growing pa
 
 `SKILL.md` tells the agent **when and how** to use supporting material. It does not inline all of it.
 
-- `references/` — specs, checklists, decision tables, longer rationale
+- skill `references/` — task aids: checklists, decision tables, longer how-to
 - `scripts/` — deterministic helpers (lint parsers, eval runners, report formatters)
 - `examples/` — worked cases, including failure cases
 
 The agent should open supporting files only when the current step needs them.
 
-### References
+### References (not knowledge, not research)
 
-References are evidence-bearing. Prefer pointing at official docs or recorded knowledge entries over restating them. Each substantial reference should make its authority class obvious (official, established practice, community, personal).
+```text
+knowledge  = what the system knows          → knowledge/
+reference  = material used to perform a task → this skill’s references/ (or shared references/)
+research   = where conclusions came from     → research/
+```
+
+Skill-local example (when such a skill exists):
+
+```text
+skills/react-performance/
+├── SKILL.md
+└── references/
+    ├── rendering.md
+    └── memoization.md
+```
+
+Prefer pointing at official docs or `knowledge/` entries over restating them. Each substantial reference should make its authority class obvious. Do not park unprocessed GitHub clones in `references/`.
 
 ### Scripts
 
@@ -110,7 +126,8 @@ Skills are portable core. Do not depend on Cursor rules, Claude hooks, or Codex-
 - Not a catch-all “engineering everything” pack
 - Not a rule (no standing constraint without a method)
 - Not a workflow (no multi-role orchestration)
-- Not personal taste presented as industry law
+- Not personal taste presented as industry law (that is a profile or `knowledge/personal/`)
+- Not a research source dump (that is `research/sources/`)
 
 ## Authoring checklist
 
@@ -122,5 +139,5 @@ Before adding a skill:
 - [ ] Verification and failure handling are explicit
 - [ ] No host-specific coupling
 - [ ] No company-specific or project-specific lock-in
-- [ ] Provenance recorded if the method was adapted from research
+- [ ] Provenance recorded in `research/` if the method was adapted from research
 - [ ] At least a sketch of `should-trigger` / `should-not-trigger` / `near-miss` cases for later evals

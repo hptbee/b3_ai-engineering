@@ -1,8 +1,8 @@
 # Research methodology
 
-External repositories, blogs, papers, and tool docs are **research inputs**. They are not the system. Do not initialize or grow this repository by aggregating other people’s skill packs.
+External repositories, blogs, papers, and tool docs are **research inputs**. They are not the system. Do not grow this repository by aggregating other people’s skill packs.
 
-This document is the method. A dedicated research phase comes after initialization; this file exists so later research has a standard.
+This document is the **method**. Artifacts belong under [`../research/`](../research/README.md). A dedicated research phase comes after this foundation; do not populate `research/` with fake files in the meantime.
 
 ## Process
 
@@ -19,18 +19,18 @@ Discover
 → Record provenance
 ```
 
-| Step | Do |
-| --- | --- |
-| Discover | Find candidate sources for a specific question, not “all AI skills on GitHub” |
-| Collect | Keep links, dates, and short notes — not entire trees |
-| Classify | Official spec, established practice, community, vendor blog, personal repo |
-| Compare | At least two sources when the claim is not a primary specification |
-| Extract patterns | Name the pattern and the problem it solves, independent of the original file layout |
-| Evaluate | Fit for a *personal, portable* system; discard host lock-in and company process |
-| Adapt | Rewrite into this repo’s taxonomy (rule vs skill vs knowledge) |
-| Personalize | Adjust to the owner’s context without pretending it is universal |
-| Verify | Check against official docs or a real task; do not trust README claims |
-| Record provenance | Write the record below so a later agent can see what was borrowed |
+Map onto stores:
+
+| Step | Do | Store |
+| --- | --- | --- |
+| Discover / Collect | Bounded question; links, dates, short notes — not whole trees | `research/sources/` |
+| Classify | Official spec, established practice, community, vendor blog, personal repo | on the source note |
+| Compare | At least two sources when the claim is not a primary specification | `research/comparisons/` |
+| Extract patterns | Name the pattern and the problem, independent of original layout | `research/findings/` |
+| Evaluate / Adapt / Personalize / Verify | Fit for a personal, portable system; rewrite; label taste as personal | working notes → decision |
+| Record provenance | Adopt, modify, or reject with why | `research/decisions/` or `research/rejected/` |
+
+Only after a decision should distilled content enter `knowledge/`, then `skills/`, `rules/`, or `workflows/`. See [`system-lifecycle.md`](system-lifecycle.md).
 
 ## Provenance record
 
@@ -46,9 +46,9 @@ Why we changed it
 Whether it was adopted / rejected
 ```
 
-Rejected patterns are valuable. Record them so the next research pass does not re-import noise.
+Rejected patterns are valuable. Put them in `research/rejected/` so the next pass does not re-import noise.
 
-Suggested home for provenance notes (when they exist): `knowledge/` or a research log under `references/`. Do not paste third-party `SKILL.md` files into `skills/`.
+Do not paste third-party `SKILL.md` files into `skills/`. Do not use `references/` or `knowledge/` as a dumping ground for unprocessed sources.
 
 ## Classification of authority
 
@@ -76,4 +76,4 @@ If a GitHub skill says “always do X” with no source, it is community materia
 
 Research is in scope when adding a domain skill, changing a standard, or resolving a conflict between sources.
 
-Research is out of scope when implementing an already-specified initialization or a well-bounded product change that only needs official docs for the stack in use.
+Research is out of scope when implementing an already-specified foundation change or a well-bounded product change that only needs official docs for the stack in use.

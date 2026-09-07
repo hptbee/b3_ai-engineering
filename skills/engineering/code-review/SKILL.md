@@ -17,7 +17,7 @@ Produce an honest review of a defined change. This skill is one review pass. The
 
 - User asks to review a PR, diff, or recent edits
 - After implementation, before claiming the work is ready
-- When consolidating findings into confirmed / likely / potential / speculative
+- When producing findings with separate severity and confidence, and a lifecycle status
 
 ## When not to use
 
@@ -44,21 +44,20 @@ Near miss: “write tests for this PR” → implementation, then verification. 
    - Tests (meaningful coverage of the risk, not only presence of files)
    - Maintainability (naming, complexity, dead code, API clarity)
 
-4. **Grade each finding**
-   - Confirmed issue — evidence in code, spec, or reproduced behavior
-   - Likely issue — strong reasoning, partial evidence
-   - Potential concern — plausible, in scope, not demonstrated
-   - Speculative concern — omit or park; do not flood the review
+4. **Record findings** using the schema in `docs/review-loop.md` (id, severity, confidence, status, category, location, description, evidence, suggested_fix, verification).
+   - **Severity** = harm if real (`critical` / `high` / `medium` / `low`). **Confidence** = certainty it exists (`high` / `medium` / `low`). `critical` + `low` confidence is not a confirmed critical defect.
+   - Status starts `NEW` / `INVESTIGATING`. Promote to `CONFIRMED` only with evidence. Park thin items as `SPECULATIVE`; do not flood the review.
+   - Categories include correctness, security, performance, architecture, maintainability, testing, reliability, ux.
 
 5. **Consolidate**  
-   Merge duplicates. Drop stale items. Separate blockers from nits. Do not present nits as blockers.
+   Merge duplicates. Drop stale items. Separate blockers from nits. Do not present nits as blockers. Speculative ≠ confirmed.
 
 6. **Tie to verification**  
    If a finding requires a test or probe, say which. Do not claim tests passed unless they were run (`verification` skill).
 
 ## Progressive disclosure
 
-- Loop, false convergence, iteration limits: `docs/review-loop.md`
+- Loop, finding lifecycle, false convergence, iteration limits: `docs/review-loop.md`
 - Evidence rule: `rules/evidence-and-provenance.md`
 - Verification rule: `rules/verification.md`
 

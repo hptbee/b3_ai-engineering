@@ -32,4 +32,4 @@ Empty category directories are omitted until they contain a real skill. Do not a
 
 ## Future scope (incremental research)
 
-Frontend, backend, architecture, engineering specialties, AI engineering, and product/UI topics listed in the root README will be added one skill at a time using `docs/research-methodology.md`.
+Frontend, backend, architecture, engineering specialties, AI engineering, and product/UI topics listed in the root README will be added one skill at a time after the research phase (`docs/research-methodology.md`, `research/`).

@@ -1,7 +1,15 @@
 # Shared references
 
-Cross-cutting reference material that does not belong to a single skill.
+**Reference** = material used to perform a task. Not canonical knowledge, not research provenance.
 
-**Status:** empty by design. Skill-local references live in that skill’s `references/` folder.
+```text
+knowledge  = what the system knows
+reference  = material used to perform a task
+research   = where conclusions came from
+```
 
-Provenance logs and adopted/rejected pattern notes may land here during the research phase.
+**Status:** empty by design.
+
+- Skill-local task aids live in that skill’s `references/` folder (preferred).
+- This directory is for shared task aids that do not belong to a single skill.
+- Unprocessed sources, findings, and adopt/reject records belong in `research/`, not here.

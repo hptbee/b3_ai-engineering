@@ -1,14 +1,48 @@
 # Evaluation
 
-This repository will evaluate **itself**: whether skills trigger correctly, whether their guidance is sound, and whether the review loop behaves honestly.
+This repository will evaluate **itself**: whether the right artifact activates, whether the result is good, whether failure is honest, and whether the review loop actually improves the work.
 
 Application test suites for product work live in those products. Evals here live under `evals/` when they exist.
 
-**Status:** philosophy and intended case types are specified. Eval fixtures, runners, and scored cases are **not implemented yet**.
+**Status:** framework specified. Fixtures, runners, and scored cases are **not implemented yet**. Do not add a large synthetic suite now.
 
-## Skill triggering
+## Intended layout
 
-For each skill, maintain cases in three buckets:
+```text
+evals/
+├── skills/
+│   └── <skill>/
+│       ├── should-trigger/
+│       ├── should-not-trigger/
+│       └── near-miss/
+│
+├── rules/
+│
+├── agents/
+│
+└── review-loop/
+    ├── false-positive/
+    ├── false-convergence/
+    ├── tool-failure/
+    ├── iteration-limit/
+    └── finding-lifecycle/
+```
+
+Empty case directories are omitted until a real case exists. See [`../evals/README.md`](../evals/README.md).
+
+## What to test
+
+Evaluation covers four questions. A green “it wrote something” is not enough.
+
+### Capability
+
+Does the system produce a **good result** when the right skill/rule/agent is used? Correctness, clarity, portability, token efficiency, progressive disclosure, verification, failure handling.
+
+### Activation
+
+Did the **correct** skill, rule, or agent activate?
+
+For skills, cases in three buckets:
 
 ```text
 should-trigger
@@ -22,11 +56,21 @@ near-miss
 | Should not trigger | A request outside the skill, including unrelated work |
 | Near miss | Related wording that should activate a *different* skill or no skill |
 
-A skill fails triggering evals if it is silent on should-trigger cases, greedy on should-not-trigger cases, or consistently wins near-misses that belong elsewhere.
+A skill fails activation evals if it is silent on should-trigger cases, greedy on should-not-trigger cases, or consistently wins near-misses that belong elsewhere.
 
 Trigger evals read the skill `description` and `SKILL.md` “when not to use” text. If those texts cannot separate the buckets, the skill is not ready.
 
-## Skill quality
+Rules and agents get analogous comply / violate / wrong-role cases when those layers exist.
+
+### Safety
+
+Does the system **fail safely**? Tool failure, missing diff, incomplete evidence → `UNKNOWN / INCOMPLETE` (or FAIL with remaining confirmed issues) — never a fake PASS. Preferences must not override security or hard rules ([`precedence.md`](precedence.md)).
+
+### Convergence
+
+Does the review loop **actually improve** the implementation? Fixes map to findings; verification runs; lifecycle moves `CONFIRMED` → `FIXED` → `VERIFIED`; the loop does not declare PASS on stagnation, identical reviews, or iteration exhaustion.
+
+## Skill quality (capability detail)
 
 When a skill is applied to a fixture (or a recorded real task), score at least:
 
@@ -42,23 +86,19 @@ When a skill is applied to a fixture (or a recorded real task), score at least:
 
 Quality evals need fixtures with a known good outcome, not only prompt sniff tests.
 
-## Review-loop quality
+## Review-loop eval folders
 
-When the loop is implemented, evals must check that it:
-
-- catches **real bugs** in fixtures
-- avoids **speculative noise**
-- **fixes** findings correctly (or records why not)
-- **verifies** fixes with evidence
-- does **not falsely converge** (repeat findings, no-op diffs, ignored tool failures)
-- **handles tool failures** as UNKNOWN / INCOMPLETE
-- **respects iteration limits** and does not treat limit exhaustion as PASS
+| Folder | Protects |
+| --- | --- |
+| `false-positive/` | Speculative noise not treated as confirmed defects |
+| `false-convergence/` | No-op diffs, repeated findings, papered-over disagreement |
+| `tool-failure/` | Failed/missing tools → INCOMPLETE, not PASS |
+| `iteration-limit/` | Budget exhaustion → INCOMPLETE, not PASS |
+| `finding-lifecycle/` | Status transitions and severity ≠ confidence |
 
 A loop that always reports success is a failed loop. A loop that always reports dozens of speculative issues is also a failed loop.
 
 ## Honesty metrics
-
-These apply across evals:
 
 - False PASS rate (claimed success without evidence)
 - False FAIL rate (noise presented as confirmed issues)
@@ -67,16 +107,7 @@ These apply across evals:
 
 ## Adding evals later
 
-Suggested layout (empty until real cases exist):
-
-```text
-evals/
-├── skills/
-├── rules/
-└── review-loop/
-```
-
-Each case should record: intent, input, expected bucket or outcome, and the artifact under test. Do not generate hundreds of synthetic cases before the first skills are stable.
+Each case should record: intent, input, expected bucket or outcome, and the artifact under test. Add a case when the behavior is worth protecting — after the research phase and first domain skills, not before.
 
 ## What evaluation is not
 

@@ -1,6 +1,14 @@
+---
+type: rule
+strength: hard
+scope: global
+source: synthesized
+authority: high
+---
+
 # Portability
 
-Hard rule: the portable core (`AGENTS.md`, `rules/`, `skills/`, `docs/`, `knowledge/`) must not depend on Cursor, Codex, or Claude Code.
+Hard rule: the portable core (`AGENTS.md`, `docs/`, `rules/`, `skills/`, `knowledge/`, `research/`, `profiles/`) must not depend on Cursor, Codex, or Claude Code.
 
 Hard rule: host-specific paths, manifests, hooks, and command IDs belong under `adapters/`. Adapters may map or generate; they may not fork meaning.
 
