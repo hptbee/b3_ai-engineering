@@ -10,3 +10,5 @@ Current records:
 - `reject-skill-aggregator-import.md`
 - `reject-monolithic-engineering-skill.md`
 - `reject-auto-lesson-to-rule.md`
+- `reject-tdd-iron-law-default.md`
+- `reject-microsoft-azure-sdk-catalog.md`

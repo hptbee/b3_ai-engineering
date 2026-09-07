@@ -78,17 +78,16 @@ Preferences that are only taste stay in a profile rather than becoming a rule.
 | Store | Role | Example |
 | --- | --- | --- |
 | `knowledge/` | Canonical facts and lessons the system may cite later | “React effects: official pattern, last verified …” |
-| Skill `references/` | Material **used while performing a task** | `skills/react-performance/references/memoization.md` |
-| `research/` | Intake: sources, findings, comparisons, decisions, rejected | A comparison of two public review-loop designs |
+| Skill `references/` | Material **used while performing a task** | `skills/frontend/react-performance/references/checklist.md` |
+| `research/` | Intake: sources, findings, comparisons, decisions, rejected, validation | A comparison of two public review-loop designs |
 
 Skill-local layout (when that skill exists):
 
 ```text
-skills/react-performance/
+skills/frontend/react-performance/
 ├── SKILL.md
 └── references/
-    ├── rendering.md
-    └── memoization.md
+    └── checklist.md
 ```
 
 Create a shared task-aid location only when a real aid serves multiple skills.

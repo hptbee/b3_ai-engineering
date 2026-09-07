@@ -4,6 +4,28 @@ A personal, portable AI-assisted software engineering system for Cursor, Codex, 
 
 This is an **evolving** operating layer for AI coding agents. It is not a company handbook. Domain skills exist for the first-class stack. Review-loop **orchestration** lives under `review-loop/` (agent procedure, not a host plugin).
 
+## Repository layout
+
+```text
+b3-ai-engineering/
+├── AGENTS.md                 Agent-facing entry point
+├── README.md                 Human-facing entry point
+├── rules/                    Always-on constraints
+├── skills/                   On-demand methods (engineering, frontend, backend, architecture, threejs)
+├── commands/                 User-facing task entry points
+├── agents/                   Isolated reviewer / fixer roles
+├── workflows/                Multi-step sequences
+├── review-loop/              Operational loop procedure
+├── knowledge/                Reusable internal knowledge
+├── research/                 Provenance (sources, findings, comparisons, decisions, rejected, validation)
+├── evals/                    Fixtures (skills, rules, agents, review-loop)
+├── adapters/                 Host mapping (cursor, codex, claude) + sync helper
+├── scripts/                  Repository tooling
+└── docs/                     Architecture, standards, contracts
+```
+
+Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md).
+
 ## Why it exists
 
 Agents are useful when they have durable constraints, reusable methods, verification instead of assertion, a way to learn without turning preference into dogma, and a core that is not locked to one product.
@@ -52,7 +74,7 @@ Rules constrain. Skills provide methods. Commands start work. Workflows sequence
 External sources → research/ → knowledge/ → skills / rules / workflows
 ```
 
-`research/` is intake (sources, findings, comparisons, decisions, rejected). `knowledge/` is what the system knows. Skill `references/` are task aids. Method: [`docs/research-methodology.md`](docs/research-methodology.md). Evolution and promotion: [`docs/system-lifecycle.md`](docs/system-lifecycle.md). Lessons do **not** automatically become rules.
+`research/` is intake (`sources/`, `findings/`, `comparisons/`, `decisions/`, `rejected/`) plus `validation/` evidence for the current catalog. `knowledge/` is what the system knows. Skill `references/` are task aids. Method: [`docs/research-methodology.md`](docs/research-methodology.md). Evolution and promotion: [`docs/system-lifecycle.md`](docs/system-lifecycle.md). Lessons do **not** automatically become rules.
 
 ## Review loop
 
@@ -64,7 +86,7 @@ Activation fixtures exist under `evals/`. Automated runner deferred. Layout: [`d
 
 ## Personal profile
 
-[`profiles/tung/`](profiles/tung/engineering-style.md) is personal engineering context.
+Personal background: [`knowledge/personal/engineering-context.md`](knowledge/personal/engineering-context.md). A `profiles/` directory is specified in the architecture and is **not created** until Tùng records it.
 
 ```text
 Personal preference  ≠  Engineering rule
@@ -88,6 +110,6 @@ Portable Core → Cursor | Codex | Claude Code   (via adapters/)
 | Commands, agents, workflows | Present (thin) |
 | Eval fixtures | Present; runner deferred |
 | Review-loop orchestration | Present (agent procedure; not a host plugin) |
-| Profile files | Placeholders |
+| Profile files | Not created (`knowledge/personal/` holds background context) |
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

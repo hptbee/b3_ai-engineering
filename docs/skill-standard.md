@@ -2,7 +2,7 @@
 
 Skills are the reusable methods of this system. Each skill solves one focused problem and is loaded only when that problem is present.
 
-This standard applies to every future skill. The four skills under `skills/engineering/` are the current examples, not a complete catalog.
+This standard applies to every skill. Catalog: [`../skills/README.md`](../skills/README.md).
 
 ## Layout
 
@@ -86,11 +86,10 @@ research   = where conclusions came from     → research/
 Skill-local example (when such a skill exists):
 
 ```text
-skills/react-performance/
+skills/frontend/react-performance/
 ├── SKILL.md
 └── references/
-    ├── rendering.md
-    └── memoization.md
+    └── checklist.md
 ```
 
 Prefer pointing at official docs or `knowledge/` entries over restating them. Each substantial reference should make its authority class obvious. Do not park unprocessed GitHub clones in `references/`.

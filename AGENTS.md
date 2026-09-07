@@ -2,7 +2,7 @@
 
 This is a **personal AI Engineering System**: a portable operating layer for AI coding agents. It is not a company repository, not a project-specific rule set, and not a dump of copied skills.
 
-Use this file as the entry point. Load `docs/`, `rules/`, `skills/`, `profiles/`, and `knowledge/` only when the current task needs them.
+Use this file as the entry point. Load `docs/`, `rules/`, `skills/`, and `knowledge/` only when the current task needs them. Do not assume a `profiles/` directory exists.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ Knowledge → Skills (constrained by Rules)
 - **Verification** requires evidence. A missing check is `UNKNOWN / INCOMPLETE`, not `PASS`.
 - **Review Loop** is independent iterative validation. Spec: `docs/review-loop.md`. One-shot orchestration: `commands/review-loop.md`.
 - **Knowledge** feeds the system and receives lessons. It is not a rule.
-- **Profiles** (`profiles/tung/`) are personal context, not universal truth, and never override safety, correctness, project requirements, hard rules, or platform constraints.
+- **Profiles** are personal context, not universal truth, and never override safety, correctness, project requirements, hard rules, or platform constraints. The `profiles/` directory is not created; background context is `knowledge/personal/`.
 - **Research** (`research/`) is where conclusions came from.
 - **Adapters** map the portable core onto Cursor, Codex, or Claude Code. They must not fork meaning.
 
@@ -54,4 +54,10 @@ Conflicts: `docs/precedence.md` (safety and platform → user request → projec
 | Knowledge vs references | `docs/knowledge-system.md` |
 | Evaluation | `docs/evaluation.md` |
 | Research method | `docs/research-methodology.md` |
-| Profile | `profiles/tung/` |
+| Skills catalog | `skills/README.md` |
+| Commands | `commands/` |
+| Agents | `agents/` |
+| Workflows | `workflows/` |
+| Evals | `evals/` |
+| Adapters | `adapters/` |
+| Personal context | `knowledge/personal/` (`profiles/` not created) |

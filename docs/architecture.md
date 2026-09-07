@@ -172,7 +172,7 @@ Example:
 
 Knowledge is the canonical reusable store of this system — not an instruction to execute. It is split into stable, volatile, and personal stores.
 
-**Present (minimal).** The stores exist. Content is mostly empty except for personal engineering context.
+**Present (minimal).** Create `stable/` or `volatile/` only when the first real entry exists. Currently: [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md).
 
 Example:
 
@@ -188,13 +188,13 @@ A reference is supporting material consumed by a skill or workflow. Skill-local 
 
 Example:
 
-> `skills/react-performance/references/memoization.md` — opened while applying that skill.
+> `skills/frontend/react-performance/references/checklist.md` — opened while applying that skill.
 
 ## Research
 
 **Question:** Where did this conclusion come from?
 
-Research is external intake and synthesis **before** knowledge, skills, or rules are created. Stores: `research/sources`, `findings`, `comparisons`, `decisions`, `rejected`.
+Research is external intake and synthesis **before** knowledge, skills, or rules are created. Stores: `research/sources`, `findings`, `comparisons`, `decisions`, `rejected`, `validation`.
 
 **Present.** Method: [`research-methodology.md`](research-methodology.md). Layout: [`../research/README.md`](../research/README.md).
 
@@ -208,9 +208,9 @@ A profile is personal context (style, preferences, strengths, weaknesses, decisi
 Personal preference  ≠  Engineering rule
 ```
 
-A profile must never override safety, correctness, explicit project requirements, hard rules, or platform constraints. See [`precedence.md`](precedence.md) and [`../profiles/README.md`](../profiles/README.md).
+A profile must never override safety, correctness, explicit project requirements, hard rules, or platform constraints. See [`precedence.md`](precedence.md). Profile vs personal knowledge: [`knowledge-system.md`](knowledge-system.md).
 
-**Present (placeholders).** `profiles/tung/`.
+**Specified (not created).** Do not invent `profiles/` for symmetry. Existing background: [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md).
 
 ## Adapter
 

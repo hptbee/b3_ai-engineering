@@ -238,5 +238,6 @@ See [findings/recurring-patterns.md](findings/recurring-patterns.md).
 - [comparisons/README.md](comparisons/README.md)
 - [decisions/README.md](decisions/README.md)
 - [rejected/README.md](rejected/README.md)
+- [validation/README.md](validation/README.md)
 
 Research date: **2026-09-07**. External docs and repositories inspected via official URLs and GitHub raw/API where noted in each source file.
