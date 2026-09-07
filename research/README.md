@@ -10,8 +10,7 @@ Phase 1 (foundations) and **Phase 2 Tracks A/B** (domain research) are complete 
 | Track A | Frontend: React, TS, Next.js, UI/a11y | ✓ research only |
 | Track B | Backend: Node, API, auth, security | ✓ research only |
 | Track C | Adapters + eval fixtures | ✓ `adapters/`, `evals/`, `scripts/` |
-
-Synthesis into domain `skills/frontend/` and `skills/backend/` is the **next phase** — not done here.
+| Synthesis | Mine/adapt skills into B3 | ✓ decision-008 + `skills/` |
 
 ## Lifecycle (this repo)
 
@@ -143,6 +142,7 @@ Organized by architectural concern (not by repository):
 | [decision-005-evaluation.md](decisions/decision-005-evaluation.md) | **ADAPT** trigger evals first; defer CI runner |
 | [decision-006-frontend-skills.md](decisions/decision-006-frontend-skills.md) | **ADAPT** split frontend skills; reject Vercel bulk copy |
 | [decision-007-backend-skills.md](decisions/decision-007-backend-skills.md) | **ADAPT** layered backend security skills |
+| [decision-008-skill-synthesis.md](decisions/decision-008-skill-synthesis.md) | **ADAPT** mined skills into B3; reject catalogs |
 
 ## Rejected
 
@@ -150,6 +150,8 @@ Organized by architectural concern (not by repository):
 - [rejected/reject-skill-aggregator-import.md](rejected/reject-skill-aggregator-import.md)
 - [rejected/reject-monolithic-engineering-skill.md](rejected/reject-monolithic-engineering-skill.md)
 - [rejected/reject-auto-lesson-to-rule.md](rejected/reject-auto-lesson-to-rule.md)
+- [rejected/reject-tdd-iron-law-default.md](rejected/reject-tdd-iron-law-default.md)
+- [rejected/reject-microsoft-azure-sdk-catalog.md](rejected/reject-microsoft-azure-sdk-catalog.md)
 
 ---
 
