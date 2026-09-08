@@ -1,8 +1,12 @@
 # Review-loop results v1
 
-Runtime under `review-loop/` **does not exist**. Walkthroughs are manual against `docs/review-loop.md`. Outcomes are tabletop, not measured on a product repo.
+**Date:** 2026-09-07. **Method:** tabletop walkthroughs, not a product-repo run.
 
-Ambiguity: **who stores finding YAML** and **default max iterations** still unspecified.
+This file is a **historical** tabletop record (R1–R4 below). It is not current layout status.
+
+**Current** spec and orchestrator: [`../../review-loop/spec.md`](../../review-loop/spec.md), [`../../review-loop/strategy.md`](../../review-loop/strategy.md), trigger `.cursor/commands/review-loop.md`. Finding log: [`../../review-loop/findings.md`](../../review-loop/findings.md) (session table or gitignored `review-loop/state/current.yaml`). Default SMALL/MEDIUM inner-loop cap: **5** (`strategy.md`). Host subagent isolation and real-PR exercise remain **NOT VERIFIED**. At v1 the walkthrough cited an older `docs/review-loop.md` path.
+
+Outcomes below are tabletop, not measured on a product repo.
 
 ## R1 — Normal feature (invoice list pagination)
 
@@ -68,11 +72,11 @@ Independent review after fix: check effect removed, no new effect. Verification:
 
 All four walks hit **INCOMPLETE** because checks could not run here. That is honest. A fake PASS would have been a failed loop.
 
-**Ambiguous in spec when used manually:**
+**Ambiguous in the v1 walkthrough (since specified in `review-loop/`):**
 
-- Default `max_iterations` still “runtime will set”
-- No finding file convention (YAML vs PR comment)
-- When to summon security-reviewer vs only code-review security dimension
+- Default `max_iterations` — now 5 for SMALL/MEDIUM (`strategy.md`); still tunable after real PRs
+- Finding file convention — `findings.md` (session or `state/current.yaml`)
+- When to summon security-reviewer vs only the code-review security dimension — still a judgment call (`strategy.md` specialists)
 
 ## Commands vs loop
 

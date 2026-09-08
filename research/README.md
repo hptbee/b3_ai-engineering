@@ -24,7 +24,7 @@ External Sources  →  research/sources/
         ↓
    Decisions       →  research/decisions/
         ↓
- (Next phase) Knowledge / Skills / Rules / Adapters
+ Knowledge / Skills / Rules / Adapters  (present; see repo catalogs)
 ```
 
 Rejected ideas: `research/rejected/`
@@ -191,38 +191,43 @@ See [findings/recurring-patterns.md](findings/recurring-patterns.md).
 
 ## Recommended direction for b3-ai-engineering
 
-1. **Keep** current portable core layout — research validates it.
-2. **Do not** import skill aggregators or duplicate per-host skill trees.
-3. **Synthesis phase:** implement decisions 006–007 domain skills (frontend/backend) with trigger evals before catalog growth.
-4. **Eval work:** E1+E2 fixtures shipped (Track C); E3 automated runner still deferred.
-5. **Review-loop runtime v1:** independence + finding validation + cap + stagnation — not full OCR pipeline.
-6. **Adapters:** path matrix + `sync-skills.sh` (Track C); rule `.mdc` generation still deferred.
+Status as of the catalog after decision-008/009 (do not re-run synthesis as if it never happened):
+
+1. **Keep** the portable core and Cursor-native discovery paths — research validates them.
+2. **Do not** import skill aggregators or commit duplicate Codex/Claude skill trees here.
+3. **Domain skills** from decisions 006–007 are **present** (see `.cursor/skills/README.md`) with trigger fixtures. Do not grow the catalog until real-task lessons or capability evals exist.
+4. **Eval work:** E1+E2 fixtures shipped; schema check `scripts/validate-evals.sh`. E3 automated runner and E4 capability benchmarks remain **deferred** (decision-005).
+5. **Review-loop orchestration v1 is present** (`review-loop/strategy.md`): independence, finding validation, cap, stagnation. Not a host plugin and not a full OCR pipeline. Product-repo runs and subagent isolation remain **NOT VERIFIED**.
+6. **Adapters:** path matrix + `sync-skills.sh`. Cursor `.mdc` activation files are **present** (five files under `.cursor/rules/`). Codex/Claude export and adapter CI remain deferred.
 
 ---
 
 ## Deferred decisions / unknowns
 
-| Item | Why deferred |
+| Item | Status |
 | --- | --- |
-| Default max review-loop iterations | Field uses 3–4; needs tuning on real tasks |
-| Independent reconstruction always-on | High cost; optional for critical changes only |
-| Consensus scoring (calimero-style) | Useful for PR bots; may be overkill for personal loop |
-| Automated eval runner / CI | Methodology clear; E1 fixtures exist; runner deferred (decision-005 E3) |
-| Hook-based mandatory gates | Portable core cannot depend on hooks; adapter optional layer |
-| AAIF AGENTS.md schema evolution | Site mentions Linux Foundation stewardship; no strict schema yet |
-| Codex skills doc depth | Pointer-only in openai/codex repo at time of research |
-| Frontend/backend domain skills | Researched (006–007); synthesis not started |
-| OAuth/OIDC implementation depth | Auth cheat sheet covered; spec deep-dive deferred |
+| Default max review-loop iterations | **Specified** as 5 for SMALL/MEDIUM (`review-loop/strategy.md`); still tunable after real product PRs |
+| Independent reconstruction always-on | Deferred — high cost; optional for critical changes only |
+| Consensus scoring (calimero-style) | Deferred — useful for PR bots; may be overkill for a personal loop |
+| Automated eval runner / CI | Deferred (decision-005 E3) |
+| Hook-based mandatory gates | Deferred — portable core cannot depend on hooks; adapter optional layer |
+| AAIF AGENTS.md schema evolution | Unchanged — no strict schema at research time |
+| Codex skills doc depth | Unchanged — pointer-only in openai/codex at research time |
+| Frontend/backend domain skills | **Done** — synthesized (decision-008); do not treat as unstarted |
+| Cursor `.mdc` rule activation | **Done** — `.cursor/rules/*.mdc` `@`-include `rules/*.md` (decision-009) |
+| OAuth/OIDC implementation depth | Deferred — cheat sheet covered; spec deep-dive not a skill yet |
+| Knowledge promotion / `profiles/` | Deferred until real lessons and owner-recorded taste exist |
 
 ---
 
-## Next phase (Phase 3 suggestion)
+## Next (after synthesis and layout)
 
-1. **Synthesize domain skills** from decisions 006–007 (3–4 frontend, 3–4 backend) with near-miss evals
-2. **Testing & TDD:** Superpowers TDD skill vs minimal portable testing-strategy skill
-3. **Review-loop runtime:** implement v1 + run review-loop fixtures manually
-4. **Adapter automation:** rule `.mdc` generation, CI symlink check
-5. **Capability evals:** quality fixtures once domain skills stabilize
+1. **Use the system on a real product change**; promote 1–3 lessons into `knowledge/` (do not scrape `stable/`).
+2. **Exercise `/review-loop` on a product PR**; record host isolation (reviewer vs fixer) under `research/validation/`.
+3. **Cursor UX check** (slash commands, rule injection, subagent dispatch) — still **NOT VERIFIED** in-repo (`cursor-host-v3.md`).
+4. **Eval hygiene:** remaining rule fixtures (`engineering-principles`, `portability`); optional description-judge. E3 runner still deferred.
+5. **Capability evals** and extra reviewer agents — only after repeated real-task evidence.
+6. **Owner profile** when Tùng records it (`profiles/` is not invented for symmetry).
 
 ## Track C deliverables (outside research/)
 
@@ -231,9 +236,9 @@ See [findings/recurring-patterns.md](findings/recurring-patterns.md).
 | Host path matrix | `adapters/README.md` |
 | Per-host mapping | `adapters/{cursor,codex,claude}/README.md` |
 | Skill symlink script | `adapters/sync-skills.sh` |
-| Skill trigger fixtures | `evals/skills/**` (28 cases) |
-| Review-loop scenarios | `evals/review-loop/**` (8 cases) |
-| Rule samples | `evals/rules/**` (4 cases) |
+| Skill trigger fixtures | `evals/skills/**` (148 YAML cases as of this status pass) |
+| Review-loop scenarios | `evals/review-loop/**` (15 YAML cases) |
+| Rule samples | `evals/rules/**` (6 YAML cases) |
 | Fixture validator | `scripts/validate-evals.sh` |
 
 ---
@@ -247,4 +252,4 @@ See [findings/recurring-patterns.md](findings/recurring-patterns.md).
 - [rejected/README.md](rejected/README.md)
 - [validation/README.md](validation/README.md)
 
-Research date: **2026-09-07**. External docs and repositories inspected via official URLs and GitHub raw/API where noted in each source file.
+Research date: **2026-09-07**. External docs and repositories inspected via official URLs and GitHub raw/API where noted in each source file. Status retarget vs the current tree: **2026-09-08** (does not re-date source intake).

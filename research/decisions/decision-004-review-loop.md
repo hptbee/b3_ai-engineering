@@ -37,8 +37,10 @@ b3 spec already strong; field adds validation + independence emphasis; avoid ove
 ## Consequences
 
 - `code-review` skill remains one pass; loop stays separate layer
-- Runtime implementation deferred; research does not modify `review-loop/` code yet
+- Runtime implementation deferred at decision time; this research file did not modify `review-loop/` yet
 - Future agent roles: reviewer/security/performance as independent mandates
+
+**Later:** orchestrator procedure is `review-loop/strategy.md` (default SMALL/MEDIUM cap 5); roles live in `.cursor/agents/` (reviewer, fixer, security-reviewer, architecture-reviewer). Still not a host plugin. Product-repo runs and subagent isolation remain NOT VERIFIED (`research/validation/review-loop-results.md`).
 
 ## Confidence
 

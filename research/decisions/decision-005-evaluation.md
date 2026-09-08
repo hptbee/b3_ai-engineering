@@ -36,9 +36,11 @@ Description is the skill API — breaking changes need tests first. Capability e
 
 ## Consequences
 
-- Track C created fixture **files** under `evals/` (28 skill activation, 8 review-loop, 4 rule samples); automated runner still deferred
+- Track C created fixture **files** under `evals/` (28 skill activation, 8 review-loop, 4 rule samples at Track C); automated runner still deferred
 - Near-miss cases required for each new skill before catalog growth
 - Trigger threshold: start with spec 0.5 / 3 runs; tighten after baseline
+
+**Later:** domain synthesis added more fixtures. Counts as of the 2026-09 status pass: 148 skill YAML cases, 15 review-loop, 6 rule. Schema validator only (`scripts/validate-evals.sh`). E3/E4 still deferred.
 
 ## Confidence
 

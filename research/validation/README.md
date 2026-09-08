@@ -16,7 +16,7 @@ Do not treat this folder as historical Phase 1 research. It is evidence for the 
 | [cursor-host-v2.md](cursor-host-v2.md) | Cursor discovery: baseline FAIL; project Skills UI **PASS** (23) after `.cursor/skills` junction |
 | [cursor-host-v3.md](cursor-host-v3.md) | Layout after decision-009: committed `.cursor/` discovery paths; UI auto-activation **NOT VERIFIED** |
 | [composition-results.md](composition-results.md) | Multi-skill stacks |
-| [review-loop-results.md](review-loop-results.md) | Four manual loops + two agents |
+| [review-loop-results.md](review-loop-results.md) | Four manual loops + two agents (**tabletop v1**; current procedure is `review-loop/strategy.md`) |
 | [portability-results.md](portability-results.md) | Cursor / Codex / Claude |
 | [failures.md](failures.md) | Observed production-like failures |
 | [decisions.md](decisions.md) | ADOPT / ADAPT / REJECT / DEFER |
@@ -26,6 +26,7 @@ Do not treat this folder as historical Phase 1 research. It is evidence for the 
 ## What was not done
 
 - Eval runner (still deferred)
-- New domain skills (no Dapper skill)
+- New domain skills beyond the synthesized catalog (no Dapper skill)
 - Architecture redesign
 - Inferring Tùng’s preferences into `profiles/tung/`
+- Product-repo `/review-loop` run and host subagent isolation (still NOT VERIFIED)
