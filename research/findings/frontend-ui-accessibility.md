@@ -22,7 +22,7 @@ Review pass:
 
 ## Why it matters
 
-Agents frequently claim accessibility fixed without keyboard testing or semantic HTML verification. WCAG gives shared vocabulary aligned with `docs/review-loop.md` finding schema.
+Agents frequently claim accessibility fixed without keyboard testing or semantic HTML verification. WCAG gives shared vocabulary aligned with the `review-loop/spec.md` finding schema.
 
 ## Trade-offs
 

@@ -29,8 +29,10 @@ Evidence shows shared content, divergent loaders — adapters are the correct se
 ## Consequences
 
 - Do not copy skills into `.cursor/skills/` in this repo during synthesis without generator
-- Adapter READMEs + sync script implement path matrix (Track C); rule `.mdc` generation still deferred
+- Adapter READMEs + sync script implement path matrix (Track C); rule `.mdc` generation was deferred at decision time
 - Hook-based enforcement (optional) lives in adapters, not portable rules
+
+**Later:** decision-009 placed canonical skills on `.cursor/skills/` and committed `.cursor/rules/*.mdc` `@`-includes of `rules/*.md`. Do not re-apply the “do not copy skills into `.cursor/skills/`” consequence as current layout policy.
 
 ## Confidence
 

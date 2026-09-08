@@ -75,4 +75,11 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 
 ## Maturity
 
-Research and domain synthesis are **present**. Review-loop **runtime** is still unspecified. Do not skip Research → Synthesis when adding more skills.
+| Layer | Status |
+| --- | --- |
+| Research and domain synthesis | **Present** |
+| Review-loop spec and orchestrator procedure | **Present** — [`../review-loop/spec.md`](../review-loop/spec.md), [`../review-loop/strategy.md`](../review-loop/strategy.md), [`.cursor/commands/review-loop.md`](../.cursor/commands/review-loop.md). Agent procedure, not a host plugin. Default inner-loop cap is 5 (`strategy.md`). |
+| Review-loop on a real product PR / host subagent isolation | **NOT VERIFIED** — tabletop only: [`../research/validation/review-loop-results.md`](../research/validation/review-loop-results.md) |
+| Knowledge after lessons | **Minimal** — [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md); no `stable/` or `volatile/` yet |
+
+Do not skip Research → Synthesis when adding more skills. Do not tell agents the review loop is unspecified: the procedure exists; product-repo exercise and host isolation are unverified.

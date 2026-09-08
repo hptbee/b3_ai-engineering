@@ -1,5 +1,7 @@
 # Activation results v1
 
+**Date:** 2026-09-07. **Pre-retune** description judge. Current post-retune table: [`activation-results-v2.md`](activation-results-v2.md). Do not treat F1–F5 greedy-description notes below as the live `SKILL.md` text.
+
 **Judge:** this agent, matching each prompt to skill `description` + when-not-to-use (trigger surface).  
 **Not:** Cursor/Codex/Claude metadata loaders (`NOT VERIFIED`).
 
@@ -46,7 +48,7 @@ Read as selectors only. **None** duplicate skill procedures. **CORRECT** as thin
 | debug | debugging then verification | No |
 | review | code-review | No |
 | verify | verification + rule | No |
-| review-loop | docs/review-loop + agents | No (runtime still unspecified) |
+| review-loop | docs/review-loop + agents (v1 path) | No (v1: procedure not yet on `review-loop/strategy.md`) |
 
 ## Agent activation (conceptual)
 

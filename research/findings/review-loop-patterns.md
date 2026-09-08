@@ -32,7 +32,7 @@ Independent reconstruction (SWE-Review) is token-expensive but reduces anchoring
 
 ## Potential application
 
-b3 `docs/review-loop.md` already aligns well. Add runtime later: stagnation detection + validated findings from dev-loop; reconstruction optional for critical paths.
+b3 review-loop spec already aligned well at research time (then cited as `docs/review-loop.md`; **current** files: `review-loop/spec.md`, `review-loop/strategy.md`). Orchestration later added: stagnation detection, validated findings, iteration cap. Reconstruction remains optional for critical paths. Host plugin and product-repo verification remain out of band.
 
 ## Confidence
 

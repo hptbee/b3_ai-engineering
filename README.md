@@ -90,7 +90,8 @@ Portable meaning  →  .cursor/ (this repo)  →  Cursor
 | Engineering + domain skills | Present (see `.cursor/skills/README.md`) |
 | Commands, agents | Present (Cursor-native, thin) |
 | Eval fixtures | Present; runner deferred |
-| Review-loop orchestration | Present (agent procedure; not a host plugin) |
+| Review-loop orchestration | Present (agent procedure; not a host plugin). Product-PR run and subagent isolation **NOT VERIFIED** |
+| Knowledge after lessons | Minimal (`knowledge/personal/` only) |
 | Profile files | Not created (`knowledge/personal/` holds background) |
 | Codex / Claude trees | Not committed; export helper only |
 
