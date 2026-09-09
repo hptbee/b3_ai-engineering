@@ -11,7 +11,7 @@ In Cursor these files are custom subagents (`.cursor/agents/`). Orchestration is
 | [`security-reviewer.md`](security-reviewer.md) | Authn/z, trust boundaries | Isolation from implementer (decision-004) |
 | [`architecture-reviewer.md`](architecture-reviewer.md) | Boundaries, unjustified complexity | Isolation from the author of the design |
 
-Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`). Model slots: `review-loop/models.md`.
+Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`). Model slots: `review-loop/models.md`. Committed default is `model: inherit` on these files. Two-model Cursor setup: `adapters/cursor/review-loop-models.md`.
 
 Backlog (not created): frontend/performance/test/UX reviewers — use `code-review` dimensions until isolation is needed in real use.
 

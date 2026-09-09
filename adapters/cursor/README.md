@@ -30,7 +30,7 @@ Portable meaning stays in `rules/*.md`. Cursor activation is thin `.mdc` files:
 | Isolated context, independent review | Repeatable procedure, on-demand method |
 | Reviewer must not edit (`readonly: true`) | Single-purpose engineering workflow |
 
-Orchestrator stays the parent session (`review-loop/models.md`).
+Orchestrator stays the parent session (`review-loop/models.md`). Two-model `model:` on Reviewer/Fixer: [`review-loop-models.md`](review-loop-models.md).
 
 ## Built-in Cursor skills
 

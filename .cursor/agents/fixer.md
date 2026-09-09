@@ -24,8 +24,8 @@ readonly: false
 
 **Must not:**
 
-- Claim PASS / ship / “review complete”
+- Claim PASS / INCOMPLETE / STOP / ship / “review complete” (orchestrator only)
 - “Fix” SPECULATIVE or LOW nits unless the user expanded scope
 - Re-review the whole PR (that is the reviewer)
 
-Host model slots: `review-loop/models.md`.
+`model: inherit` is the committed default. Two-model setup is host config: `adapters/cursor/review-loop-models.md`. Slots: `review-loop/models.md`.

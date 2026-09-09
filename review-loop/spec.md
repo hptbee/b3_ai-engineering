@@ -206,7 +206,7 @@ Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/REOPENED aliases: [`fin
 
 ## Independence
 
-Implementation and review should not be the same unchecked voice. Roles: `.cursor/agents/reviewer.md` (no edits), `.cursor/agents/fixer.md` (no PASS), optional `security-reviewer` / `architecture-reviewer`. Hosts may use different models (`models.md`).
+Implementation and review should not be the same unchecked voice. Three slots: orchestrator (stop/PASS only), reviewer (no edits), fixer (edits + verify, no loop outcome). Optional `security-reviewer` / `architecture-reviewer`. Hosts may assign different models in **host agent config** only (`models.md`) — not in this spec.
 
 ## Verification inside the loop
 
