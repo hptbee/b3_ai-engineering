@@ -2,7 +2,7 @@
 
 **Trigger once:** `.cursor/commands/review-loop.md`. Do not yield after the first review for a human “run review again” unless a termination condition fires.
 
-You are the **orchestrator**. You do not replace the reviewer or the fixer.
+You are the **orchestrator**. You do not review and you do not fix in the same pass. You dispatch roles, merge the finding log, and **alone** declare `PASS` / `INCOMPLETE` / `STUCK` / STOP.
 
 ```text
 Analyze size → choose SMALL loop or LARGE units
@@ -21,10 +21,16 @@ Reuse:
 | Fix | `.cursor/agents/fixer.md` |
 | Evidence | `.cursor/skills/engineering/verification` + `rules/verification.md` |
 | Spec | `spec.md` |
+| Slots | [`models.md`](models.md) |
 
-If the host can isolate subagents, dispatch **reviewer** and **fixer** as separate roles (different context). If not, still **change hats**: reviewer pass must not edit code; fixer pass must not declare PASS.
+### Dispatch
 
-Model slots: [`models.md`](models.md).
+1. If the host can run subagents: **each review pass** → Reviewer; **each fix pass** → Fixer. Different context (and different `model:` when the user set them).
+2. If subagents are unavailable: **hat-change** in this session — same three slots, same prohibitions.
+3. After every Fixer pass: dispatch Reviewer again on the **current** implementation. Forbidden as the whole review: “did we fix R001?”
+4. Do not mix review and fix in one agent turn when isolation is possible.
+
+Reviewer and Fixer must not declare loop PASS / INCOMPLETE / STOP.
 
 ## 0. Establish the target
 

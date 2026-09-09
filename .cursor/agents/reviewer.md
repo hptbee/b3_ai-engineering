@@ -23,10 +23,10 @@ readonly: true
 **Must not:**
 
 - Edit files
-- Declare the review **loop** PASS
+- Declare the review **loop** PASS / INCOMPLETE / STOP (orchestrator only)
 - Reopen CLOSED findings without new evidence
 - Flood SPECULATIVE items as blockers
 
 Specialists: `security-reviewer.md`, `architecture-reviewer.md` when that dimension dominates.
 
-Host model slots: `review-loop/models.md`.
+`model: inherit` is the committed default. Two-model setup is host config: `adapters/cursor/review-loop-models.md`. Slots: `review-loop/models.md`.

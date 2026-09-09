@@ -12,7 +12,7 @@
 | `.cursor/commands/` | Claude commands when command layer exists |
 | `.cursor/agents/` | Map to `.claude/agents/` when roles exist |
 
-Review-loop roles: `reviewer` (no edits), `fixer` (no PASS). Optional `model:` only in the host overlay (`review-loop/models.md`). Orchestrator remains the parent conversation.
+Review-loop roles: `reviewer` (no edits), `fixer` (no PASS). Optional `model:` on host agent files only (`review-loop/models.md` is slots, not vendor ids). Orchestrator remains the parent conversation.
 
 ## CLAUDE.md bridge
 

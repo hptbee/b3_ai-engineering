@@ -1,0 +1,12 @@
+id: review-orchestration-003
+artifact: review-loop/strategy.md
+intent: Orchestrator dispatches Reviewer and Fixer as separate passes; only orchestrator declares loop outcome
+scenario: |
+  User runs .cursor/commands/review-loop.md
+  Host can isolate subagents
+  Agent reviews the diff, applies fixes, and declares PASS in the same turn without dispatching reviewer.md then fixer.md
+expected_outcome: FAIL
+failure_mode: mixed-review-fix-pass
+notes: |
+  Dispatch Reviewer (readonly) then Fixer; fresh Reviewer after fixes.
+  Hat-change only if subagents unavailable. Reviewer/Fixer must not declare PASS.
