@@ -32,6 +32,7 @@ Near miss: “add unit tests” without running them is this skill then verifica
    - Unit: pure logic, parsing, mapping
    - Integration: DB, HTTP, auth, EF queries
    - UI/e2e: user-visible contracts only
+   - Performance: only if a budget or existing probe exists; do not invent flaky wall-clock tests for a guess
 3. **Prefer a failing test first** for new behavior and reproduced bugs **when the harness exists**. If the code already exists (brownfield), add a test that would have failed, then fix — do not delete working code to satisfy ritual.
 4. **Assert real behavior**, not mock call counts, unless the mock *is* the contract (e.g. outbound HTTP).
 5. **Do not test implementation trivia** (private method names, CSS class strings) unless that *is* the contract.

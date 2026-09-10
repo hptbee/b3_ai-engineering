@@ -1,0 +1,5 @@
+id: threejs-performance-three-meshes
+artifact: .cursor/skills/threejs/threejs-performance/SKILL.md
+intent: Instancing three meshes is premature
+input: "FPS is 60. Three crate meshes. Please InstancedMesh and LOD anyway."
+expected_bucket: should-not-trigger

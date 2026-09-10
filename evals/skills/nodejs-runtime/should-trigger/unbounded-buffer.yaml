@@ -1,0 +1,5 @@
+id: nodejs-runtime-unbounded-buffer
+artifact: .cursor/skills/backend/nodejs-runtime/SKILL.md
+intent: Memory growth from unbounded buffering
+input: "The upload handler concatenates the whole file into a string; RSS climbs until OOM."
+expected_bucket: should-trigger

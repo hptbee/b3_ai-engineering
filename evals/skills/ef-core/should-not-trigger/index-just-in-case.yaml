@@ -1,0 +1,5 @@
+id: ef-core-index-just-in-case
+artifact: .cursor/skills/backend/ef-core/SKILL.md
+intent: Indexes without slow-query evidence
+input: "Add covering indexes on every Orders column in case it gets slow someday. No query log."
+expected_bucket: should-not-trigger

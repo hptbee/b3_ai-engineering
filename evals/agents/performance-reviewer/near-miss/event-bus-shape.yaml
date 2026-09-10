@@ -1,0 +1,7 @@
+id: agent-performance-reviewer-cqrs
+artifact: .cursor/agents/performance-reviewer.md
+intent: Extra layers without a named requirement is architecture-reviewer
+input: "This two-module app added an event bus and CQRS on day one. Review the architecture."
+expected_bucket: near-miss
+preferred_skill: architecture-reviewer
+notes: simplest-correct / architecture-reviewer; not performance-reviewer

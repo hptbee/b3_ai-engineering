@@ -1,0 +1,5 @@
+id: csharp-async-hot-path-tolist
+artifact: .cursor/skills/backend/csharp-async/SKILL.md
+intent: Per-request ToList on a hot path
+input: "The tick handler ToLists and boxes on every quote update at 10k/sec. Allocations show in counters."
+expected_bucket: should-trigger

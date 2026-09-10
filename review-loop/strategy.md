@@ -18,6 +18,7 @@ Reuse:
 | Review (one pass) | `.cursor/agents/reviewer.md` → `.cursor/skills/engineering/code-review` |
 | Security depth | `.cursor/agents/security-reviewer.md` when auth/API trust is in scope |
 | Architecture depth | `.cursor/agents/architecture-reviewer.md` when shape/layering is in scope |
+| Performance depth | `.cursor/agents/performance-reviewer.md` **only** when § Performance routing matches |
 | Fix | `.cursor/agents/fixer.md` |
 | Evidence | `.cursor/skills/engineering/verification` + `rules/verification.md` |
 | Spec | `spec.md` |
@@ -31,6 +32,20 @@ Reuse:
 4. Do not mix review and fix in one agent turn when isolation is possible.
 
 Reviewer and Fixer must not declare loop PASS / INCOMPLETE / STOP.
+
+### Performance routing
+
+Dispatch `performance-reviewer` when the **diff** (not the ticket title alone) hits at least one:
+
+- render / animation loop, `useFrame`, Three.js scene, GPU resources
+- large lists/collections, hot-path serialization
+- EF/SQL query shape, N+1, list pagination, extra round trips
+- caching, batching, concurrency, thread-pool / event-loop blocking
+- known latency-sensitive service (p95, request path)
+
+Do **not** dispatch for copy, docs, labels, CSS-only, or typical single-field CRUD. Record the skip. The general reviewer still covers the performance *dimension* lightly: SPECULATIVE must not block (`spec.md`).
+
+One extra specialist pass counts toward the reviewer-pass budget.
 
 ## 0. Establish the target
 

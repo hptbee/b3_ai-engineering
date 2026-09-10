@@ -27,6 +27,6 @@ readonly: true
 - Reopen CLOSED findings without new evidence
 - Flood SPECULATIVE items as blockers
 
-Specialists: `security-reviewer.md`, `architecture-reviewer.md` when that dimension dominates.
+Specialists: `security-reviewer.md`, `architecture-reviewer.md`, `performance-reviewer.md` when strategy routing says that dimension dominates.
 
 `model: inherit` is the committed default. Two-model setup is host config: `adapters/cursor/review-loop-models.md`. Slots: `review-loop/models.md`.

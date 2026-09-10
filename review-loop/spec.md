@@ -26,6 +26,8 @@ A single invocation of `.cursor/commands/review-loop.md` runs **review → valid
 
 Skip a review dimension only when it is out of scope **and** that skip is recorded. “Not relevant” without a reason is not a skip.
 
+The **performance** dimension is always in the general review (light). An extra `performance-reviewer` pass is **risk-based** — [`strategy.md`](strategy.md) routing — not every PR. SPECULATIVE performance items are not quality-gate blockers.
+
 Adaptive path: SMALL/MEDIUM = this loop on the full PR. LARGE/VERY_LARGE = logical review **units**, then a **cross-cutting** review. [`sizing.md`](sizing.md).
 
 ## Outcomes

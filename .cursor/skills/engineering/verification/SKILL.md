@@ -37,7 +37,7 @@ Near miss: “add unit tests for this module” → testing/implementation work,
    - evidence produced and contradicts the claim → `FAIL`
    - evidence missing, tool failed, skipped, timed out, or environment cannot run it → `UNKNOWN / INCOMPLETE`
 5. **After a fix**, re-run the evidence that would have caught the issue. State what was re-run.
-6. **Do not upgrade** incomplete checks to PASS because the code “looks right”.
+6. **Do not upgrade** incomplete checks to PASS because the code “looks right”. A “it’s faster” claim without before/after measurement is INCOMPLETE, not PASS.
 
 ## Progressive disclosure
 
