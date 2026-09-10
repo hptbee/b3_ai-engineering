@@ -18,4 +18,4 @@
 
 Review method stays in `.cursor/skills/engineering/code-review`. Fix method stays in `.cursor/agents/fixer.md`. Do not duplicate those bodies here.
 
-This is agent procedure, not a host plugin or eval runner.
+**Performance specialist:** `performance-reviewer.md` only when `strategy.md` routing matches a hot-path diff. Not every PR.

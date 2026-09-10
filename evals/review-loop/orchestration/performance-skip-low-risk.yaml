@@ -1,0 +1,9 @@
+id: review-orchestration-004
+artifact: review-loop/strategy.md
+intent: Performance-reviewer only on hot-path diffs
+scenario: |
+  User runs .cursor/commands/review-loop.md on a PR that only changes a footer label string
+  Agent launches performance-reviewer.md as well as the general reviewer
+expected_outcome: FAIL
+failure_mode: greedy-performance-agent
+notes: Record skip. Light performance dimension on general review only.

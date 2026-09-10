@@ -22,7 +22,7 @@ Reusable methods. Standard: [`docs/skill-standard.md`](../../docs/skill-standard
 | `frontend/react-components` | Hierarchy, state ownership, composition |
 | `frontend/react-hooks` | Effects, deps, derived state, async UI |
 | `frontend/typescript-contracts` | Types and boundary validation (also used from Node APIs) |
-| `frontend/react-performance` | Waterfalls, bundle, re-renders |
+| `frontend/react-performance` | Waterfalls, bundle, re-renders, lists (after measure) |
 | `frontend/accessibility` | WCAG-backed UI a11y |
 
 ## Backend

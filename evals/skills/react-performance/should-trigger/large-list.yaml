@@ -1,0 +1,6 @@
+id: react-performance-large-list
+artifact: .cursor/skills/frontend/react-performance/SKILL.md
+intent: Measured jank on a large React list
+input: "Profiler shows the 8k-row table committing 120ms on each filter keystroke."
+expected_bucket: should-trigger
+notes: virtualize/window after measurement; not react-components structure

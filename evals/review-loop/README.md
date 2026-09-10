@@ -11,7 +11,7 @@ Scenarios for **`review-loop/spec.md`** and **`review-loop/strategy.md`**. Manua
 | `finding-lifecycle/` | 2 | Do status and severity≠confidence hold? |
 | `adaptive-sizing/` | 4 | Small stays full-PR; large does not full-rereview every fix; no tiny units; no 10×5×full-PR |
 | `quality-gate/` | 1 | LOW remaining + blockers gone + tests PASS → PASS? |
-| `orchestration/` | 3 | One trigger vs stop-after-first-review; `review` stays single-pass; Reviewer/Fixer dispatched separately |
+| `orchestration/` | 5 | One trigger vs stop-after-first-review; `review` stays single-pass; Reviewer/Fixer dispatched separately; performance-reviewer skip vs hot-path |
 
 Each YAML file includes `scenario`, `expected_outcome`, and `failure_mode`.
 

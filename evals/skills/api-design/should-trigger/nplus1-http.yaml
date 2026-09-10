@@ -1,0 +1,6 @@
+id: api-design-nplus1-http
+artifact: .cursor/skills/backend/api-design/SKILL.md
+intent: Chatty list+detail HTTP
+input: "The invoice list UI calls GET /invoices then GET /invoices/{id} once per row. Design a bounded list contract."
+expected_bucket: should-trigger
+notes: contract/chatty I/O; SQL N+1 stays ef-core

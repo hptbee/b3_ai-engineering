@@ -1,5 +1,11 @@
 # Agent evals
 
-Independent reviewer roles exist (`.cursor/agents/security-reviewer.md`, `.cursor/agents/architecture-reviewer.md`).
+Independent reviewer roles: `.cursor/agents/security-reviewer.md`, `.cursor/agents/architecture-reviewer.md`, `.cursor/agents/performance-reviewer.md`.
 
-No activation fixtures yet. Use skill evals for the methods they invoke. Add agent-role cases if misfires appear in use.
+| Agent | Fixtures |
+| --- | --- |
+| `performance-reviewer` | should-trigger / should-not-trigger / near-miss (hot-path vs copy vs architecture) |
+
+Security/architecture: still no activation cases unless misfires appear. Methods they invoke stay in skill evals.
+
+Manual judge: `description` vs `input`. Automated runner: **not implemented**.

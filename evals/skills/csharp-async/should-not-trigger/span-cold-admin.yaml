@@ -1,0 +1,5 @@
+id: csharp-async-span-cold-admin
+artifact: .cursor/skills/backend/csharp-async/SKILL.md
+intent: Span rewrite on cold code without measurement
+input: "Rewrite the monthly CSV export admin page to Span and ArrayPool. No benchmark. It runs once a week."
+expected_bucket: should-not-trigger

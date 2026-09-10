@@ -1,0 +1,5 @@
+id: api-design-redis-tiny-list
+artifact: .cursor/skills/backend/api-design/SKILL.md
+intent: Cache is not a default for a tiny admin list
+input: "Add Redis in front of GET /admin/countries. Twenty rows. No latency SLO."
+expected_bucket: should-not-trigger

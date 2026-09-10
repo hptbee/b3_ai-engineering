@@ -1,0 +1,6 @@
+id: react-performance-premature-memo
+artifact: .cursor/skills/frontend/react-performance/SKILL.md
+intent: Memo everywhere with no measured cost is not this catalog
+input: "Wrap every callback in useCallback for performance. No profiler. The form has four fields."
+expected_bucket: should-not-trigger
+notes: description excludes add-memo-everywhere; react-hooks near-miss for identity
