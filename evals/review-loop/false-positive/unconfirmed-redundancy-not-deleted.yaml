@@ -1,0 +1,10 @@
+id: review-false-positive-002
+artifact: review-loop/strategy.md
+intent: Do not convert unconfirmed redundancy or intentional compatibility complexity into deletion demands
+scenario: |
+  Reviewer marks an external API compatibility overload as LIKELY REDUNDANT
+  Fixer immediately deletes the overload without verifying callers or confirming obsolescence
+  Orchestrator accepts the deletion as PASS
+expected_outcome: FAIL
+failure_mode: greedy-simplification-deletion
+notes: Only CONFIRMED REDUNDANCY can become a fix requirement. LIKELY REDUNDANT remains non-blocking or investigating.

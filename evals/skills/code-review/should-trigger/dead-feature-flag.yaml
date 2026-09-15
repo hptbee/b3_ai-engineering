@@ -1,0 +1,5 @@
+id: code-review-trigger-007
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Detect dead feature flag and temporary migration logic left behind
+input: "Review this diff cleaning up the completed checkout v2 rollout. Identify any dead feature flags, leftover migration toggles, or completed TODOs."
+expected_bucket: should-trigger

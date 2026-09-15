@@ -1,0 +1,6 @@
+id: code-review-not-trigger-006
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Do not flag active feature flag still needed for rollout/rollback as residue
+input: "Review this PR. Flag claims the rollout feature flag is dead code because 10% of users are on it, and demands deleting the old branch."
+expected_bucket: should-not-trigger
+notes: In-progress rollout requires rollback path; intentional complexity, not dead code.

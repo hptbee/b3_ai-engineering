@@ -89,7 +89,15 @@ Forbidden as the whole review: “Are R001–R003 fixed?”
 
 Allowed: previous IDs in the log so the reviewer does not reopen CLOSED items without **new evidence**.
 
-Look for: bugs from fixes, wrong fixes, regressions, new edge cases, missing tests.
+Look for:
+- bugs from fixes, wrong fixes, regressions, new edge cases, missing tests
+- **fix cycle residue:** repeated fix cycles create high residue risk. Review whether previous fixes introduced:
+  - duplicated logic or duplicate conditions across fixed files
+  - obsolete intermediate paths or abandoned branches
+  - unnecessary defensive guards for states already handled upstream
+  - redundant state or redundant derived state
+  - temporary adapters or compatibility wrappers left behind
+  - stale workarounds or comments describing removed behavior
 
 ## 4. Finding validation (before fix)
 
@@ -103,8 +111,12 @@ Fixer/orchestrator classifies each OPEN item:
 | Out of scope / intentional | ACCEPTED + reason |
 | Stylistic / nit | leave LOW; do not block gate |
 | Hypothetical, no impact | SPECULATIVE; do not fix |
+| Simplification: CONFIRMED REDUNDANCY | Fix (understand responsibility → prove redundancy → remove/simplify smallest scope → verify) |
+| Simplification: LIKELY REDUNDANT / UNKNOWN | Keep INVESTIGATING / SPECULATIVE; do not delete without proof |
+| Simplification: INTENTIONAL COMPLEXITY | ACCEPTED + reason (named responsibility holds) |
 
 Vague “this could be optimized” without a mechanism is not CONFIRMED.
+Code that “looks redundant” without repository evidence is not CONFIRMED REDUNDANCY.
 
 ## 5. Quality gate
 

@@ -1,0 +1,5 @@
+id: code-review-trigger-008
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Detect duplicate validation logic across service and handler layers
+input: "Review this API change. We suspect duplicate payload validation was added in the handler even though the domain entity already enforces the identical constraints."
+expected_bucket: should-trigger

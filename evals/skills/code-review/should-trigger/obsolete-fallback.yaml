@@ -1,0 +1,5 @@
+id: code-review-trigger-006
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Detect obsolete fallback logic after canonical replacement
+input: "Review this PR migrating legacy S3 client calls to the new storage abstraction. Flag any old fallback paths or stale wrappers retained after the new path became canonical."
+expected_bucket: should-trigger

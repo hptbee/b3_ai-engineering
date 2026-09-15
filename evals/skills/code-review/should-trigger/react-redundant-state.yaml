@@ -1,0 +1,5 @@
+id: code-review-trigger-005
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Detect redundant state and unnecessary effects in React component
+input: "Review this updated user profile component. It feels like some state was made redundant after the server-state migration and an extra useEffect is syncing derived props."
+expected_bucket: should-trigger

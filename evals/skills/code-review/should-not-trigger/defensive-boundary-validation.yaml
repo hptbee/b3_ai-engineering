@@ -1,0 +1,6 @@
+id: code-review-not-trigger-005
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Do not flag defensive boundary validation as redundant
+input: "Review this webhook controller. Reviewer says validating the signature and payload structure is redundant because internal services send it."
+expected_bucket: should-not-trigger
+notes: Trust boundary requires defensive validation; intentional complexity, not residue.
