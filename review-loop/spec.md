@@ -15,18 +15,21 @@ A single invocation of `.cursor/commands/review-loop.md` runs **review → valid
 4.  Review correctness
 5.  Review security
 6.  Review performance
-7.  Review tests
-8.  Review maintainability
-9.  Consolidate findings
-10. Validate findings; fix only valid CONFIRMED items
-11. Verify (build / relevant tests)
-12. Fresh independent review of the current implementation
-13. Stop when the quality gate holds or a termination condition is reached
+7.  Review simplification / implementation residue
+8.  Review tests
+9.  Review maintainability
+10. Consolidate findings
+11. Validate findings; fix only valid CONFIRMED items
+12. Verify (build / relevant tests)
+13. Fresh independent review of the current implementation
+14. Stop when the quality gate holds or a termination condition is reached
 ```
 
 Skip a review dimension only when it is out of scope **and** that skip is recorded. “Not relevant” without a reason is not a skip.
 
 The **performance** dimension is always in the general review (light). An extra `performance-reviewer` pass is **risk-based** — [`strategy.md`](strategy.md) routing — not every PR. SPECULATIVE performance items are not quality-gate blockers.
+
+The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. This is not aesthetic cleanup or line-count reduction; only CONFIRMED redundancy becomes a fix requirement. Later loop passes pay special attention to residue introduced by earlier fix passes.
 
 Adaptive path: SMALL/MEDIUM = this loop on the full PR. LARGE/VERY_LARGE = logical review **units**, then a **cross-cutting** review. [`sizing.md`](sizing.md).
 
@@ -113,6 +116,7 @@ correctness
 security
 performance
 architecture
+simplification
 maintainability
 testing
 reliability

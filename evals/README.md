@@ -12,9 +12,9 @@ Schema check only — not semantic scoring. Capability evals **not implemented**
 
 | Area | Notes |
 | --- | --- |
-| `skills/` | 2/2/2 minimum per new skill; foundation skills from Track C |
+| `skills/` | 2/2/2 minimum per new skill; foundation skills from Track C (incl. simplification/residue detection) |
 | `rules/` | comply/violate samples |
 | `agents/` | `performance-reviewer` activation samples; other roles still thin |
-| `review-loop/` | Spec + orchestration v1 scenarios (incl. performance routing) |
+| `review-loop/` | Spec + orchestration v1 scenarios (incl. performance routing & fix-cycle residue) |
 
 See [`../.cursor/skills/README.md`](../.cursor/skills/README.md).

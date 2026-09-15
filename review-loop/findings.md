@@ -17,10 +17,11 @@ Orchestrator logs may use short names. Map onto the spec lifecycle:
 | `OPEN` | `CONFIRMED` (blocking) or `NEW`/`INVESTIGATING` while validating |
 | `FIXED` | `FIXED` (not closed until verified) |
 | `REJECTED` | `FALSE_POSITIVE` |
-| `ACCEPTED` | `CLOSED` with reason (out of scope / intentional) |
+| `ACCEPTED` | `CLOSED` with reason (out of scope / intentional / `INTENTIONAL COMPLEXITY`) |
 | `REOPENED` | back to `CONFIRMED` **only with new evidence** the fix failed or was undone |
 
 `SPECULATIVE` stays speculative — not OPEN for the quality gate.
+For simplification findings: only `CONFIRMED REDUNDANCY` becomes an `OPEN` blocking requirement. `LIKELY REDUNDANT` and `UNKNOWN` remain `SPECULATIVE` or `INVESTIGATING` until proven. `INTENTIONAL COMPLEXITY` maps to `ACCEPTED`.
 
 `FIXED` without verification evidence stays non-CLOSED (`spec.md`).
 

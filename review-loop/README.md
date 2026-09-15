@@ -19,3 +19,5 @@
 Review method stays in `.cursor/skills/engineering/code-review`. Fix method stays in `.cursor/agents/fixer.md`. Do not duplicate those bodies here.
 
 **Performance specialist:** `performance-reviewer.md` only when `strategy.md` routing matches a hot-path diff. Not every PR.
+
+**Simplification dimension:** general review covers simplification and implementation residue in every pass (`spec.md` dimension 7). Fixer addresses only CONFIRMED REDUNDANCY; later passes check for fix-cycle residue. No extra standalone agent or command is added.

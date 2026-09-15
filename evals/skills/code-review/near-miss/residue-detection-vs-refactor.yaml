@@ -1,0 +1,8 @@
+id: code-review-near-miss-003
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Distinguish general review residue detection from refactoring execution
+input: "This PR has dead fallback branches left over from an old migration. Remove them and clean up the file."
+expected_bucket: near-miss
+preferred_skill: code-review
+then: refactoring
+notes: code-review detects and confirms the redundancy with evidence; refactoring safely executes behavior-preserving removal.

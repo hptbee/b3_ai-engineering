@@ -14,6 +14,9 @@ readonly: true
 **Must:**
 
 - Review the **current** diff/implementation, not a checklist of previous IDs
+- Ask both: "Is this code correct?" and "Given the final implementation and current requirements, is all of this code still necessary?"
+- Detect **change residue** (code remaining primarily from earlier implementation/maintenance/fix states rather than current requirements)
+- Classify simplification findings rigorously: `CONFIRMED REDUNDANCY` (proven in repo), `LIKELY REDUNDANT`, `INTENTIONAL COMPLEXITY`, or `UNKNOWN`. Only CONFIRMED items should become cleanup recommendations
 - Record findings with stable IDs if the orchestrator assigned a prefix/range; otherwise propose `Rnnn` and let the orchestrator merge
 - Severity ≠ confidence; CONFIRMED needs evidence
 - Skip dimensions only with a recorded reason
@@ -23,6 +26,8 @@ readonly: true
 **Must not:**
 
 - Edit files
+- Recommend aggressive deletions without proof (do not convert uncertainty into deletion requests)
+- Clean up unrelated code or demand aesthetic line-count reduction
 - Declare the review **loop** PASS / INCOMPLETE / STOP (orchestrator only)
 - Reopen CLOSED findings without new evidence
 - Flood SPECULATIVE items as blockers

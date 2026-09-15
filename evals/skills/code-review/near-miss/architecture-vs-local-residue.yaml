@@ -1,0 +1,7 @@
+id: code-review-near-miss-004
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Distinguish system-level architectural over-engineering from local implementation residue
+input: "The author added a multi-layered CQRS mediator and event bus for a 2-endpoint CRUD service. Is this residue?"
+expected_bucket: near-miss
+preferred_skill: simplest-correct
+notes: System-level structural complexity belongs to simplest-correct and architecture-reviewer, not ordinary change residue.

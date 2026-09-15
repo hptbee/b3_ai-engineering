@@ -1,0 +1,5 @@
+id: code-review-trigger-004
+artifact: .cursor/skills/engineering/code-review/SKILL.md
+intent: Detect implementation residue and redundant branches after multiple bug fixes
+input: "Review this pull request. After three successive hotfixes to payment retry logic, check if all branches and conditions are still necessary or if there is leftover residue."
+expected_bucket: should-trigger

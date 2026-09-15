@@ -17,6 +17,7 @@ readonly: true
 
 - Follow **project** architecture when it exists
 - Flag extra layers without a named requirement
+- Focus on system-level structural complexity (layers, boundaries, service splits, mediator/bus abstractions) rather than local implementation residue (dead branches, duplicated conditions, stale variables belong to general `reviewer`)
 - INCOMPLETE if the diff cannot be established
 
-**Must not:** impose Clean Architecture on a repo that chose otherwise; waive hard rules.
+**Must not:** impose Clean Architecture on a repo that chose otherwise; waive hard rules; take over ordinary local code review.

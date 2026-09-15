@@ -1,0 +1,11 @@
+id: review-orchestration-006
+artifact: review-loop/strategy.md
+intent: Later review-loop passes inspect for residue introduced by earlier fix iterations
+scenario: |
+  User runs .cursor/commands/review-loop.md
+  Iteration 1 fixes a bug by adding a new guard clause
+  Iteration 2 fixes a related edge case by adding another guard that makes the Iteration 1 guard redundant
+  Reviewer in Iteration 3 reviews only for previous IDs ("is R001 fixed?") without checking for fix-cycle residue or redundant guards
+expected_outcome: FAIL
+failure_mode: missed-fix-residue
+notes: Reviewer must ask if all code is still necessary and flag the redundant guard as CONFIRMED REDUNDANCY.

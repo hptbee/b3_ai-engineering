@@ -47,10 +47,10 @@ Near miss: “is this design sound?” with no code change yet → stay in Under
    Use the `verification` skill. No evidence → `UNKNOWN / INCOMPLETE`.
 
 5. **Review**  
-   Check the change against the plan and obvious failure modes (correctness, tests, security if in play). This is not the full review loop.
+   Check the change against the plan, obvious failure modes (correctness, tests, security if in play), and **simplification / implementation residue** (did earlier attempts, intermediate fixes, or scaffolding leave behind dead branches, redundant state, or temporary workarounds?). This is not the full review loop.
 
 6. **Fix**  
-   Address confirmed findings (and high-confidence issues still `INVESTIGATING` if they block the success condition). Map each fix to a finding.
+   Address confirmed findings (and high-confidence issues still `INVESTIGATING` if they block the success condition). For simplification findings, remove only CONFIRMED redundancy; preserve intentional complexity. Map each fix to a finding.
 
 7. **Re-verify**  
    Re-run the checks that matter. Then stop or escalate.
