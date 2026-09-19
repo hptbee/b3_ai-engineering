@@ -90,6 +90,7 @@ confidence:
 status:
 category:
 location:
+snippet:
 description:
 evidence:
 suggested_fix:
@@ -104,6 +105,7 @@ verification:
 | `status` | Lifecycle value above |
 | `category` | See below |
 | `location` | File / symbol / surface |
+| `snippet` | Exact code snippet (`existing_code`) anchored to the defect. Preferred over brittle line numbers to prevent off-by-line drift |
 | `description` | What is wrong |
 | `evidence` | Why we believe it (required for `CONFIRMED` whenever reasonably possible) |
 | `suggested_fix` | Optional, not a mandate to over-scope |
