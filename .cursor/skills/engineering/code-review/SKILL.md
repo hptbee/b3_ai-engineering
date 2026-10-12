@@ -32,6 +32,7 @@ Near miss: “write tests for this PR” → implementation, then verification. 
 
 1. **Scope** — what is in/out; empty or wrong target → INCOMPLETE.
 2. **Understand** — read the change; restate intent; do not invent requirements.
+   **Review tool discipline:** use dedicated read-only exploration tools (file reading, search, diff inspection) to inspect context and call sites. Do not run mutating commands during review.
 3. **Review** — examine the scoped dimensions in `review-loop/spec.md`; skip only with a recorded reason.
    **Performance dimension (every pass, light):** do not skip silently. Classify findings:
    - **CONFIRMED** — measured stall/regression or a reproduction (N+1 SQL log, blocked event loop, profiler).
@@ -62,7 +63,9 @@ Near miss: “write tests for this PR” → implementation, then verification. 
    - **INTENTIONAL COMPLEXITY** — named current responsibility holds (compatibility, correctness, performance, security, external consumer, trust boundary). Accept, do not delete.
    - **UNKNOWN** — evidence cannot determine safety. Do not convert uncertainty into a deletion request.
    This is not aesthetic cleanup or “make code shorter”. Never refactor unrelated code.
-4. **Record findings** — use the schema and lifecycle in `review-loop/spec.md`; promote to `CONFIRMED` only with evidence. Map EVIDENCED RISK onto `CONFIRMED` + medium confidence **or** keep `SPECULATIVE` if the path is not shown to be hot. Map CONFIRMED REDUNDANCY onto category `simplification` + `CONFIRMED`.
+4. **Record findings** — use the schema and lifecycle in `review-loop/spec.md`; promote to `CONFIRMED` only with evidence.
+   **Exact-snippet anchoring:** Always quote the exact `snippet` (`existing_code`) from the repository alongside the `location` (file/symbol). Never rely solely on fragile line numbers, which shift during refactors and reviews.
+   Map EVIDENCED RISK onto `CONFIRMED` + medium confidence **or** keep `SPECULATIVE` if the path is not shown to be hot. Map CONFIRMED REDUNDANCY onto category `simplification` + `CONFIRMED`.
 5. **Consolidate** — merge duplicates; separate blockers from nits; speculative ≠ confirmed.
 6. **Tie to verification** — name probes/tests; do not claim they passed unless run (`verification` skill).
 

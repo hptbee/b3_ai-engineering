@@ -71,13 +71,14 @@ loop iteration 1..MAX_ITERATIONS (default 5):
 ## 2. LARGE / VERY_LARGE — unit loops then cross-cut
 
 1. Partition into **logical review units** (feature / architectural boundary), not one-class crumbs. If the change is too coupled to split safely → do **not** fake units; report “split the PR” and run MEDIUM full-PR loop with the same iteration cap, or stop INCOMPLETE.
-2. **Max units:** 4. If more coherent units exist, recommend splitting the PR; review the four highest-risk units plus cross-cut.
-3. **Per unit:** same inner loop as SMALL, but:
+2. **Dependency mapping (two-stage plan):** before dispatching unit reviewers, map the dependency graph between units (which units define shared interfaces, schemas, or models, and which units consume them). Review units in dependency order (foundational contracts first, consumers next) to avoid contradictory findings across units.
+3. **Max units:** 4. If more coherent units exist, recommend splitting the PR; review the four highest-risk units plus cross-cut.
+4. **Per unit:** same inner loop as SMALL, but:
    - Reviewer sees **unit diff + required interfaces/deps + applicable rules + open findings for that unit**
    - Do **not** re-send the entire PR on every unit iteration
    - **Max 3 iterations per unit** (not 5 × units)
-4. Only advance to the next unit when the current unit hits the quality gate **or** is STUCK (then continue other units; overall cannot PASS).
-5. **Cross-cutting review** (after units): interactions only — contracts, data flow, shared types, transactions, error propagation, integration tests. Max **2** iterations. Not a replay of every unit finding.
+5. Only advance to the next unit when the current unit hits the quality gate **or** is STUCK (then continue other units; overall cannot PASS).
+6. **Cross-cutting review** (after units): interactions only — contracts, data flow, shared types, transactions, error propagation, integration tests. Max **2** iterations. Not a replay of every unit finding.
 
 **Budget cap:** total reviewer passes for one invocation ≤ **12**. Exceeding that → STUCK / INCOMPLETE.
 

@@ -31,7 +31,7 @@ Rejected ideas: `research/rejected/`
 
 ---
 
-## Sources (29)
+## Sources (30)
 
 ### Phase 1 — Tier 1 official (8)
 
@@ -52,13 +52,14 @@ Rejected ideas: `research/rejected/`
 | --- | --- |
 | [sources/cursor-docs-2026-09.md](sources/cursor-docs-2026-09.md) | Current Cursor skills, rules, subagents (decision-009) |
 
-### Phase 1 — Tier 2 implementations (8)
+### Phase 1 — Tier 2 implementations (9)
 
 | Source file | Topic |
 | --- | --- |
 | [sources/anthropics-skills.md](sources/anthropics-skills.md) | Reference skills + skill-creator evals |
 | [sources/swe-lego-cc-swe-review.md](sources/swe-lego-cc-swe-review.md) | Independent reconstruction review loop |
 | [sources/spencermarx-open-code-review.md](sources/spencermarx-open-code-review.md) | Multi-agent phased PR review |
+| [sources/alibaba-open-code-review.md](sources/alibaba-open-code-review.md) | Deterministic engineering × LLM agent hybrid review |
 | [sources/mintmcp-dev-loop.md](sources/mintmcp-dev-loop.md) | Dual-model validated dev loop |
 | [sources/hamelsmu-claude-review-loop.md](sources/hamelsmu-claude-review-loop.md) | Stop-hook review gate |
 | [sources/calimero-ai-code-reviewer.md](sources/calimero-ai-code-reviewer.md) | Consensus + delta convergence |
