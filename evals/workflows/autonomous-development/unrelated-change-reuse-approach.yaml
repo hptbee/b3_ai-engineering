@@ -2,10 +2,10 @@ id: autodev-jit-fresh-unrelated-001
 artifact: workflows/autonomous-development.md
 intent: Unrelated file changes do not invalidate a fresh approach
 scenario: |
-  T002 approach files are src/greet.js only, contracts none, plan_version matches
+  T002 watched_paths are src/greet.js only, contracts none, plan_version and task_spec_fingerprint match
   approach_at_sha is an ancestor of HEAD
   HEAD also contains a docs/CHANGELOG.md edit
-  git diff --name-only approach_at_sha HEAD does not include src/greet.js
+  Dirty set does not include src/greet.js
   Agent re-writes the master plan and re-analyzes T002
 expected_outcome: FAIL
 failure_mode: unnecessary-reanalyze

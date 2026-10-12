@@ -6,4 +6,4 @@ scenario: |
   Agent sets readiness ready and edits product code
 expected_outcome: INCOMPLETE
 failure_mode: heading-only-gate
-notes: Empty template headings are not evidence. Gate requires non-empty inspected, files or new-file intent, changes, and verification
+notes: Empty template headings are not evidence. Templates use draft. Gate requires non-empty inspected, files or new-file intent, watched_paths, changes, verification, and task_spec_fingerprint

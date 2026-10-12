@@ -1,0 +1,14 @@
+id: autodev-jit-uncommitted-stale-001
+artifact: workflows/autonomous-development.md
+intent: Uncommitted changes on a watched dependency path invalidate the approach
+scenario: |
+  T002 approach_at_sha equals HEAD
+  watched_paths include src/contracts/order.ts
+  files to edit are src/consumers/orders.js only
+  src/contracts/order.ts is modified in the working tree, not committed
+  git diff --name-only approach_at_sha HEAD is empty
+  git diff --name-only approach_at_sha lists src/contracts/order.ts
+  Agent reuses the approach and starts Implement
+expected_outcome: FAIL
+failure_mode: uncommitted-stale-miss
+notes: Freshness must union commits, working tree, staged, and untracked. Logical names are not paths

@@ -9,4 +9,4 @@ scenario: |
   Agent reuses the old approach and starts Implement
 expected_outcome: FAIL
 failure_mode: stale-approach-reuse
-notes: Scenario C freshness. git diff --name-only approach_at_sha HEAD intersecting named files is non-empty. Re-analyze this task only. No second master plan
+notes: Committed intersection with watched_paths is always stale, including own files. The in-progress exception is uncommitted edits to files only. Re-analyze this task. No second master plan

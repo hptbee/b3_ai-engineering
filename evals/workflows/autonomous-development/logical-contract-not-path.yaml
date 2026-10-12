@@ -1,0 +1,10 @@
+id: autodev-jit-contract-path-001
+artifact: workflows/autonomous-development.md
+intent: A logical contract name is not a watched path
+scenario: |
+  Approach records contracts OrderCreated and watched_paths only src/app.js
+  src/contracts/order.ts changed since approach_at_sha
+  Agent treats OrderCreated as covering that file and reuses the approach
+expected_outcome: FAIL
+failure_mode: logical-name-as-path
+notes: watched_paths must list inspected contract file paths. OrderCreated does not participate in the git intersection

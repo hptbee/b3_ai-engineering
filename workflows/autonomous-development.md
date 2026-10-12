@@ -142,11 +142,24 @@ Stop as `BLOCKED` only for a genuine business ambiguity, a scope change, or a hi
 8. Re-run the quality gate for an `in_progress` task before trusting it.
 9. **Approach freshness.** Reuse a `ready` approach only when **all** of these hold:
    - Current master-plan `version` equals the approach's recorded `plan_version`
-   - The task's `acceptance_criteria`, `depends_on`, and `scope` still match the text the approach was written against
+   - Recompute `task_spec_fingerprint` from the current task's `depends_on`, `scope`, and `acceptance_criteria` (canonical form below). It equals the fingerprint stored on the approach
    - `HEAD` is a descendant of `task_base`
-   - Named approach `files` still exist, or were explicit new-file intents not yet created
-   - `git diff --name-only {approach_at_sha} HEAD` intersected with those `files` (plus paths the recorded `contracts` name) is empty. Unrelated files changing does **not** invalidate the approach
-   If the record is missing, any freshness check fails, or `approach_at_sha` is absent → re-run [Analyze](#analyze) for **this task only**. Do not write a new master plan. Do not implement from a stale approach.
+   - Paths in `watched_paths` still exist, or were explicit new-file intents not yet created
+   - The **relevant dirty set** intersected with `watched_paths` is empty, except as noted
+   Collect the dirty set (exclude ignored `.b3/` paths):
+
+   ```text
+   git diff --name-only {approach_at_sha} HEAD
+   git diff --name-only {approach_at_sha}
+   git diff --cached --name-only
+   git ls-files --others --exclude-standard
+   ```
+
+   `git diff --name-only {approach_at_sha} HEAD` is commits only. `git diff --name-only {approach_at_sha}` includes the working tree against that tree. Staged and untracked files are the other two commands. Logical contract names (`OrderCreated`) are **not** paths; they do not participate in this intersection.
+   Unrelated dirty files (not in `watched_paths`) do **not** invalidate.
+   Any path in `git diff --name-only {approach_at_sha} HEAD` that is also in `watched_paths` is stale, including this task's `files` (a later commit moved the tree the approach was written against).
+   The in-progress exception applies only to **uncommitted** dirty paths (working tree, staged, untracked) that are in `files`: keep that work (step 7); it does not by itself invalidate the approach. Uncommitted dirty `watched_paths` that are **not** in `files` (inspected dependency or contract) **are** stale → re-run Analyze.
+   If the record is missing (`watched_paths`, `task_spec_fingerprint`, or `approach_at_sha`), any freshness check fails → re-run [Analyze](#analyze) for **this task only**. Do not write a new master plan. Do not implement from a stale approach.
 10. Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved. If the approach is still fresh and implementation had not started, **continue into Implement** in this session. Do not wait for a new user command.
 
 Do not repeat a task that meets the completion tests above. Do not create a second commit for the same completed task.
@@ -224,7 +237,7 @@ Just-in-Time planning for **this** ready task. Scenario A/B already wrote the on
 
 1. Restate current behavior, desired behavior, and constraints from **inspected code**, not from master-plan prose alone.
 2. Inspect the named scope plus callers, callees, types/DTOs, routes, schema, fixtures, and existing tests. Reuse what exists. Do not guess a file list.
-3. Record `contracts` (HTTP, signatures, events, stored data) or `contracts: none`. Sketch who reads/writes the slice. List material edge cases, or `edge_cases: none material` with a one-line reason. An obvious neighbor-code boundary (empty input, unauthorized caller, missing row, compatibility) that is omitted fails the gate.
+3. Record `contracts` as logical names (HTTP, signatures, events, stored data) or `contracts: none`. Record `watched_paths`: repo paths this slice will edit **plus** inspected dependency/contract/schema files (for example `src/contracts/order.ts`, not `OrderCreated`). A logical name is not a watched path. Sketch who reads/writes the slice. List material edge cases, or `edge_cases: none material` with a one-line reason. An obvious neighbor-code boundary (empty input, unauthorized caller, missing row, compatibility) that is omitted fails the gate.
 4. Choose **persistence depth** (not the later review-loop size of the diff):
    | Depth | Use when | Persist |
    | --- | --- | --- |
@@ -240,9 +253,9 @@ Just-in-Time planning for **this** ready task. Scenario A/B already wrote the on
    4. Update `plan_version` on the current approach.
    5. Dropping a requirement or changing business behavior → `BLOCKED`.
    6. Continue Analyze on the narrowed current task. Do not wait for the user.
-7. **Implementation Readiness Gate.** Do not edit product files until inspection evidence, contracts/data-flow/edges, named files/changes/tests/verification, and persistence depth are recorded. Empty template headings are not evidence. `readiness: ready` is allowed only when `inspected`, `files` (or an explicit new-file intent), `changes`, and `verification` have non-empty values. `data_flow` may be `n/a` with a one-line reason when the slice does not move data. Incomplete inspection → task `incomplete`, run `INCOMPLETE`. Business choice or authorization → task `blocked`, run `BLOCKED`. Ordinary technical choices are not `BLOCKED`.
-8. Record `plan_version` and `approach_at_sha` (`git rev-parse HEAD`) on the approach when the gate passes.
-9. **Optional design-only review (detailed depth only).** After the approach file has non-empty Inspected/Changes/Verification, if the host can isolate `.cursor/agents/architecture-reviewer.md`, dispatch it with parent text **design-only** and the approach path. Do not name a product diff. Isolation unavailable, or inline/notes depth → skip and record the limit. Empty approach → do not dispatch. Confirmed unjustified layer/service → revise the approach, or `BLOCKED` if the user must choose architecture. Then **immediately** Implement. Do not ask the user to approve the approach or to run `/implement`.
+7. **Implementation Readiness Gate.** Do not edit product files until inspection evidence, contracts/data-flow/edges, named files/`watched_paths`/changes/tests/verification, persistence depth, and `task_spec_fingerprint` are recorded. Empty template headings are not evidence. Templates start at `readiness: draft`. `readiness: ready` is allowed only when `inspected`, `files` (or an explicit new-file intent), `watched_paths`, `changes`, `verification`, and `task_spec_fingerprint` have non-empty values. `data_flow` may be `n/a` with a one-line reason when the slice does not move data. Incomplete inspection → task `incomplete`, run `INCOMPLETE`. Business choice or authorization → task `blocked`, run `BLOCKED`. Ordinary technical choices are not `BLOCKED`.
+8. When the gate passes, set `readiness: ready`. Record `plan_version`, `approach_at_sha` (`git rev-parse HEAD`), `watched_paths`, and `task_spec_fingerprint`. Canonical fingerprint (one line, stable): `depends_on=<ids comma-sorted or []>|scope=<trimmed scope>|acceptance_criteria=<criteria joined with ; >`. Recompute it from the master-plan task text; do not invent a second hash scheme.
+9. **Optional design-only review (detailed depth only).** After the approach file has non-empty Inspected/Changes/Verification, if the host can isolate `.cursor/agents/architecture-reviewer.md`, dispatch it with parent text **design-only** and the approach path. Do not name a product diff. Isolation unavailable, or inline/notes depth → skip and record the limit. Empty approach → do not dispatch. Confirmed unjustified layer/service → revise the approach, set `readiness: draft`, **re-run the Implementation Readiness Gate (step 7)** on the revised approach, then continue. Do not Implement from a draft or from a revision that has not passed the gate again. Gate pass → **immediately** Implement. Do not ask the user to approve the approach or to run `/implement`.
 
 `notes` / `detailed` approach file (gitignored with `.b3/autodev/`):
 
@@ -250,9 +263,11 @@ Just-in-Time planning for **this** ready task. Scenario A/B already wrote the on
 # T00N approach
 
 - depth: notes
-- readiness: ready
+- readiness: draft
 - plan_version: 1
-- approach_at_sha: <full SHA when the gate passed>
+- approach_at_sha:
+- task_spec_fingerprint:
+- watched_paths:
 
 ## Inspected
 ## Current / desired
@@ -375,9 +390,11 @@ Do not end the turn with “next: run `/autodev resume`” when ready work remai
 
 ### T001
 - depth: inline
-- readiness: ready
+- readiness: draft
 - plan_version: 1
 - approach_at_sha:
+- task_spec_fingerprint:
+- watched_paths:
 - inspected:
 - current_desired:
 - files:

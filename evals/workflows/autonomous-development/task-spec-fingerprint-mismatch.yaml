@@ -1,0 +1,12 @@
+id: autodev-jit-spec-fingerprint-001
+artifact: workflows/autonomous-development.md
+intent: Resume must re-analyze when the task spec fingerprint no longer matches the master plan
+scenario: |
+  Approach stores task_spec_fingerprint for T002 scope src/a.js and depends_on T001
+  Master plan T002 scope was later narrowed and depends_on changed
+  plan_version on the approach still equals the file header version
+  Named watched_paths are unchanged
+  Agent reuses the approach
+expected_outcome: FAIL
+failure_mode: missing-task-spec-snapshot
+notes: Compare recomputed fingerprint from depends_on, scope, and acceptance_criteria. Do not infer from chat history

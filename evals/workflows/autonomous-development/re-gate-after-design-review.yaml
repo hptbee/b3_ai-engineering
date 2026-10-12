@@ -1,0 +1,10 @@
+id: autodev-jit-regate-design-001
+artifact: workflows/autonomous-development.md
+intent: After design-only review revises the approach, the readiness gate must run again before Implement
+scenario: |
+  Detailed T003 passed the gate with readiness ready
+  Architecture reviewer CONFIRMED an extra service in the approach
+  Agent revises the approach and starts coding without setting draft or re-running the gate
+expected_outcome: FAIL
+failure_mode: skip-regate-after-design
+notes: Revised approach is draft until step 7 passes again. Template examples use draft, not ready

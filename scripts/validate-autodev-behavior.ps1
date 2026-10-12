@@ -135,15 +135,20 @@ try {
         'approach_at_sha',
         'Evidence-based refinement',
         'Empty template headings are not evidence',
-        'design-only'
+        'design-only',
+        'watched_paths',
+        'task_spec_fingerprint',
+        'git diff --name-only {approach_at_sha}',
+        're-run the Implementation Readiness Gate',
+        'includes the working tree against that tree'
     )
     $missing = @($needles | Where-Object { $wf -notlike "*$_*" })
     if ($missing.Count -eq 0) { Pass 'workflow-recipes' }
     else { FailCheck 'workflow-recipes' ($missing -join ', ') }
 
-    $inlineOk = ($wf -match '(?m)^\s*- inspected:') -and ($wf -match '(?m)^\s*- changes:') -and ($wf -match '(?m)^\s*- data_flow:')
+    $inlineOk = ($wf -match '(?m)^\s*- inspected:') -and ($wf -match '(?m)^\s*- changes:') -and ($wf -match '(?m)^\s*- data_flow:') -and ($wf -match '(?m)^\s*- watched_paths:') -and ($wf -match '(?m)^\s*- task_spec_fingerprint:') -and ($wf -match '(?m)^\s*- readiness: draft')
     if ($inlineOk) { Pass 'inline-template-fields' }
-    else { FailCheck 'inline-template-fields' 'progress template missing inspected/changes/data_flow' }
+    else { FailCheck 'inline-template-fields' 'progress template missing inspected/changes/data_flow/watched_paths/fingerprint/draft' }
 
     # Simulated Git freshness (not a live /autodev agent). Named-file change vs unrelated change.
     $fresh = Join-Path $sandbox 'freshness'
@@ -173,6 +178,17 @@ try {
     $hit = @($unrelated | Where-Object { $named -contains ($_ -replace '\\','/') -or $named -contains $_ })
     if ($hit.Count -eq 0 -and ($unrelated -match 'docs/NOTE.md')) { Pass 'approach-fresh-unrelated' }
     else { FailCheck 'approach-fresh-unrelated' "diff=`n$unrelated hit=$($hit -join ',')" }
+    git reset --hard $approachAt | Out-Null
+    New-Item -ItemType Directory -Path src\contracts -Force | Out-Null
+    Set-Content src\contracts\order.ts 'export type Order = { id: string }'
+    git add src/contracts/order.ts
+    git commit -qm 'contract file'
+    $approachAt2 = git rev-parse HEAD
+    Set-Content src\contracts\order.ts 'export type Order = { id: string; v: 2 }'
+    $headDiff = git diff --name-only $approachAt2 HEAD
+    $wtDiff = git diff --name-only $approachAt2
+    if ((-not $headDiff) -and ($wtDiff -match 'src/contracts/order.ts')) { Pass 'approach-stale-uncommitted-watched' }
+    else { FailCheck 'approach-stale-uncommitted-watched' "HEAD=`n$headDiff`nWT=`n$wtDiff" }
     Pop-Location
 }
 finally {
