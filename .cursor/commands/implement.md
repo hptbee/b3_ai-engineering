@@ -12,3 +12,5 @@ description: Execute a plan or specified change using the default engineering lo
 Load the smallest domain skill that matches the stack (React, Node, ASP.NET, Three.js, etc.).
 
 Sequence: `workflows/feature-implementation.md`. Do not run the full review loop unless asked (`.cursor/commands/review-loop.md`).
+
+A lifecycle that plans, implements, reviews, commits, and continues is `.cursor/commands/autodev.md`. This command stays one execution request.

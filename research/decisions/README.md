@@ -15,3 +15,4 @@ Each record: ADOPT / ADAPT / REJECT / DEFER with rationale and consequences.
 | [decision-007-backend-skills.md](decision-007-backend-skills.md) | Backend domain skills |
 | [decision-008-skill-synthesis.md](decision-008-skill-synthesis.md) | Skill mining synthesis |
 | [decision-009-cursor-native-layout.md](decision-009-cursor-native-layout.md) | Cursor-native layout (amends 002 location) |
+| [decision-010-autonomous-development.md](decision-010-autonomous-development.md) | One lifecycle workflow; no runner, no second skill |

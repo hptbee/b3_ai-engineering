@@ -62,6 +62,10 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`review-loop/strategy.md`](review-loop/strategy.md). Invoke: [`.cursor/commands/review-loop.md`](.cursor/commands/review-loop.md). Host model slots: `review-loop/models.md`.
 
+## Autonomous development
+
+One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Cursor: [`.cursor/commands/autodev.md`](.cursor/commands/autodev.md). Codex and Claude use the same file through prompt routing (`adapters/`). Checkpoints live in the repo under change at `.b3/autodev/`. A stopped session does not resume until the user invokes the workflow again.
+
 ## Evaluation
 
 Activation fixtures live under `evals/`. Automated runner deferred. Layout: [`docs/evaluation.md`](docs/evaluation.md).
@@ -91,6 +95,7 @@ Portable meaning  →  .cursor/ (this repo)  →  Cursor
 | Commands, agents | Present (Cursor-native, thin) |
 | Eval fixtures | Present; runner deferred |
 | Review-loop orchestration | Present (agent procedure; not a host plugin). Product-PR run and subagent isolation **NOT VERIFIED** |
+| Autonomous development | Present as workflow + `/autodev` (decision-010). Cursor slash UX **INTENDED**. Codex and Claude runtime **NOT TESTED** |
 | Knowledge after lessons | Minimal (`knowledge/personal/` only) |
 | Profile files | Not created (`knowledge/personal/` holds background) |
 | Codex / Claude trees | Not committed; export helper only |

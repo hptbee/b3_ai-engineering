@@ -10,7 +10,7 @@ Do **not** commit duplicate skill trees under `.agents/`, `.claude/`, or `.codex
 
 | Host | Skills | Rules | Project context | Subagents |
 | --- | --- | --- | --- | --- |
-| **Cursor** | `.cursor/skills/` (canonical, committed) | `.cursor/rules/*.mdc` `@`-includes `rules/*.md` | `AGENTS.md` | `.cursor/agents/` |
+| **Cursor** | `.cursor/skills/` (canonical, committed) | `.cursor/rules/*.mdc` `@`-includes `rules/*.md` | `AGENTS.md`; `/autodev` in `.cursor/commands/` | `.cursor/agents/` |
 | **Codex** | symlink `.agents/skills` → `.cursor/skills` | Link from `AGENTS.md` | `AGENTS.md` | Map from `.cursor/agents/` |
 | **Claude Code** | symlink `.claude/skills` → `.cursor/skills` | Claude rules / `CLAUDE.md` bridge | `CLAUDE.md` → `@AGENTS.md` | `.claude/agents/` mapped from `.cursor/agents/` |
 

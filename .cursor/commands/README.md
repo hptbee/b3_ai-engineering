@@ -12,6 +12,7 @@ In Cursor these files are slash-invocable. Each file selects skills; it does not
 | [`review.md`](review.md) | One code-review pass |
 | [`verify.md`](verify.md) | Evidence for a named claim |
 | [`review-loop.md`](review-loop.md) | One-shot independent loop to gate/stuck/limit |
+| [`autodev.md`](autodev.md) | Full lifecycle until completion, blocker, or `status` |
 
 Slash discovery in Cursor is **INTENDED** (files live at `.cursor/commands/`). Runtime `/` UX is **NOT VERIFIED** in this change.
 

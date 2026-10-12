@@ -9,7 +9,7 @@
 | Model slots | [`models.md`](models.md) | Orchestrator / reviewer / fixer (no vendor slugs) |
 | Two-model (Cursor) | [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md) | Host `model:` on agent files |
 | State | `state/` (gitignored except [`state/TEMPLATE.md`](state/TEMPLATE.md)) | Optional working log |
-| Invoke | `.cursor/commands/review-loop.md` | Cursor command |
+| Invoke | `.cursor/commands/review-loop.md` | Cursor command; also each task and the final pass of `workflows/autonomous-development.md` |
 | Roles | `.cursor/agents/` | Cursor subagents |
 
 **Status:** orchestration v1. The agent that receives `/review-loop` **runs until** a quality gate, non-convergence, or iteration limit. It does not stop after the first findings list for the user to re-trigger.

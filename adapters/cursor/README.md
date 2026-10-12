@@ -11,7 +11,7 @@ Discovery of skills after placing them on the native path is **VERIFIED** by Cur
 | Always-on map | `AGENTS.md` | **VERIFIED** docs: root AGENTS.md is loaded |
 | Hard rules | `.cursor/rules/*.mdc` → `@rules/*.md` | **VERIFIED** docs: `.mdc` + `@file`; runtime injection **NOT VERIFIED** here |
 | Skills | `.cursor/skills/**/SKILL.md` | **VERIFIED** docs: native discovery root |
-| Commands | `.cursor/commands/*.md` | **INTENDED** (product still has `/` commands) |
+| Commands | `.cursor/commands/*.md` | **INTENDED** (product still has `/` commands), including `/autodev` |
 | Subagents | `.cursor/agents/*.md` | **VERIFIED** docs: `.cursor/agents/`; isolation working **NOT VERIFIED** |
 
 Do **not** also symlink `.agents/skills` or `.claude/skills` in this repo — Cursor cross-loads those roots and would duplicate skills.

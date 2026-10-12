@@ -19,4 +19,8 @@ During the **Review** step, do not only ask "is it correct?" Also ask: *given th
 
 Independent multi-iteration review: `.cursor/commands/review-loop.md` → `review-loop/strategy.md`.
 
+`/implement` uses the one-pass review in this file and does not start the review loop.
+
+[`autonomous-development.md`](autonomous-development.md) uses the understand, plan, implement, and verify steps here, then the review loop instead of this one-pass review, and it does not stop between tasks.
+
 Architecture choices: `simplest-correct` (strong rule `rules/simplest-correct.md`).

@@ -9,10 +9,12 @@
 | `AGENTS.md` | Source of truth; bridge from `CLAUDE.md` via `@AGENTS.md` |
 | `rules/*.md` | Claude rules / project instructions — same meaning |
 | `.cursor/skills/` | Symlink → `.claude/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
-| `.cursor/commands/` | Claude commands when command layer exists |
+| `.cursor/commands/` | Claude commands when the command layer exists. `/autodev` is `.cursor/commands/autodev.md` → `workflows/autonomous-development.md`. Do not copy that procedure into `.claude/` |
 | `.cursor/agents/` | Map to `.claude/agents/` when roles exist |
 
 Review-loop roles: `reviewer` (no edits), `fixer` (no PASS). Optional `model:` on host agent files only (`review-loop/models.md` is slots, not vendor ids). Orchestrator remains the parent conversation.
+
+Autonomous development uses the same parent orchestrator. Invoke it by naming `autodev`, `resume`, or `status`, then follow `.cursor/commands/autodev.md`. Claude slash commands are skills in current docs (`research/sources/claude-code-skills-plugins.md`); this repo does not add a second skill for that lifecycle (decision-010). A local one-line command may point at the workflow. It must not restate it. Checkpoint resume is manual after a stopped session.
 
 ## CLAUDE.md bridge
 

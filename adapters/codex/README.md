@@ -9,12 +9,14 @@
 | `AGENTS.md` | Primary operating file; merged chain subject to ~32 KiB default cap |
 | `rules/*.md` | Include or link from `AGENTS.md` — do not duplicate prose |
 | `.cursor/skills/` | Symlink → `.agents/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
-| `.cursor/commands/` | Slash or prompt-style invocations when defined |
+| `.cursor/commands/` | Prompt routing to the command file. `autodev` is `.cursor/commands/autodev.md` |
 | `.cursor/agents/` | Role prompts (`reviewer`, `fixer`; optional specialists) |
 
 Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in skill bodies.
 
 Codex discovers `.agents/skills/` at repo root. Same layout as agentskills.io.
+
+Name the intent (`autodev`, `resume`, or `status`) and follow `workflows/autonomous-development.md`. Do not copy that procedure into a Codex-only file. A stopped session does not resume until the user invokes the intent again.
 
 ## AGENTS.md merge chain
 

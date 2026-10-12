@@ -10,14 +10,15 @@ Cursor already loads `.cursor/rules/*.mdc` (hard rules always apply). This file 
 | --- | --- | --- |
 | Always-on constraints | `.cursor/rules/*.mdc` → `rules/*.md` | Every session |
 | Methods | `.cursor/skills/**/SKILL.md` | Agent selects from `description`, or `/skill-name` |
-| User actions | `.cursor/commands/` | Explicit `/plan` `/implement` `/debug` `/review` `/verify` `/review-loop` |
+| User actions | `.cursor/commands/` | Explicit `/plan` `/implement` `/debug` `/review` `/verify` `/review-loop` `/autodev` |
 | Isolated roles | `.cursor/agents/` | Independent review / fix |
-| Default product sequence | `workflows/feature-implementation.md` | Multi-step feature work |
+| Default product sequence | `workflows/feature-implementation.md` | Multi-step feature work inside one stage |
+| Autonomous lifecycle | `workflows/autonomous-development.md` | `/autodev`: plan through verify, commit, and resume |
 | Review-loop contract | `review-loop/spec.md` | Independent iterative review |
 | Review-loop procedure | `review-loop/strategy.md` | `/review-loop` |
 | Taxonomy / precedence | `docs/` | When a definition is required |
 | Provenance | `research/` | When adapting external patterns |
-| Eval fixtures | `evals/` | When changing skills/rules/loop |
+| Eval fixtures | `evals/` | When changing skills, rules, workflows, or the review loop |
 | Personal context | `knowledge/personal/` | Background only; never overrides hard rules |
 | Other hosts | `adapters/` | Codex / Claude later; do not create those trees here |
 
