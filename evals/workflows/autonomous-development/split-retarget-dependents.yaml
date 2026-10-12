@@ -1,0 +1,10 @@
+id: autodev-jit-split-deps-001
+artifact: workflows/autonomous-development.md
+intent: After a split, tasks that depended on the original id must not start until the last new slice completes
+scenario: |
+  T002 depends_on T001
+  Inspection splits T001 into T001 then T008
+  Agent marks narrowed T001 completed and starts T002 before T008 exists
+expected_outcome: FAIL
+failure_mode: split-dependency-skip
+notes: Retarget T002 depends_on to the last new slice. Ready work still requires every depends_on id completed

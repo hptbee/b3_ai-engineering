@@ -140,8 +140,14 @@ Stop as `BLOCKED` only for a genuine business ambiguity, a scope change, or a hi
 6. SHA existence alone is not completion. A SHA on another branch, rewritten off `HEAD`, or reused for two tasks is not completion. Inspect the tree before doing the work again.
 7. If the current task has uncommitted changes → inspect them. Keep valid work. Do not reset, and do not start a second copy of the same change.
 8. Re-run the quality gate for an `in_progress` task before trusting it.
-9. If that task already has a readiness record of `ready` and named files still exist at `task_base` / current tree, reuse the approach. Re-run [Analyze](#analyze) only when the record is missing, files vanished, or HEAD is not a descendant of `task_base`. Do not write a new master plan.
-10. Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved. If Analyze had passed the gate and implementation had not started, **continue into Implement** in this session. Do not wait for a new user command.
+9. **Approach freshness.** Reuse a `ready` approach only when **all** of these hold:
+   - Current master-plan `version` equals the approach's recorded `plan_version`
+   - The task's `acceptance_criteria`, `depends_on`, and `scope` still match the text the approach was written against
+   - `HEAD` is a descendant of `task_base`
+   - Named approach `files` still exist, or were explicit new-file intents not yet created
+   - `git diff --name-only {approach_at_sha} HEAD` intersected with those `files` (plus paths the recorded `contracts` name) is empty. Unrelated files changing does **not** invalidate the approach
+   If the record is missing, any freshness check fails, or `approach_at_sha` is absent → re-run [Analyze](#analyze) for **this task only**. Do not write a new master plan. Do not implement from a stale approach.
+10. Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved. If the approach is still fresh and implementation had not started, **continue into Implement** in this session. Do not wait for a new user command.
 
 Do not repeat a task that meets the completion tests above. Do not create a second commit for the same completed task.
 
@@ -224,11 +230,19 @@ Just-in-Time planning for **this** ready task. Scenario A/B already wrote the on
    | --- | --- | --- |
    | **inline** | One area, few files, no public contract, schema, auth, or migration | `progress.md` → `## Approach` → `### T00N` only. No `approach/` file. |
    | **notes** | More files, two areas, or a local contract inside one module | `.b3/autodev/approach/T00N.md` and the same `### T00N` heading with `depth` + `readiness` |
-   | **detailed** | Public API or schema, auth, migration, production data, or a new layer/service | Same approach file, complete enough to resume without the old chat. Apply `simplest-correct` to the approach. Do **not** dispatch `architecture-reviewer` yet (no product diff). That agent runs in Review after code exists. |
+   | **detailed** | Public API or schema, auth, migration, production data, or a new layer/service | Same approach file, complete enough to resume without the old chat. Apply `simplest-correct` to the approach. Optional design-only review is step 9 (non-empty approach only). Post-code architecture review still runs in Review. |
    When unsure inline vs notes, use notes.
-5. Write the approach: files and functions, required changes, tests ([`.cursor/skills/engineering/testing-strategy/SKILL.md`](../.cursor/skills/engineering/testing-strategy/SKILL.md)), verification. Smallest change that meets the task. The master plan is a hypothesis; the code wins when they disagree. Record a master-plan correction under Plan changes when the task itself changes. Do not add extra tasks for this slice.
-6. **Implementation Readiness Gate.** Do not edit product files until inspection evidence, contracts/data-flow/edges, named files/changes/tests/verification, and persistence depth are recorded. Incomplete inspection → task `incomplete`, run `INCOMPLETE`. Business choice or authorization → task `blocked`, run `BLOCKED`. Ordinary technical choices are not `BLOCKED`.
-7. Gate pass → **immediately** Implement in this session. Do not ask the user to approve the approach or to run `/implement`.
+5. Write the approach: files and functions, required changes, tests ([`.cursor/skills/engineering/testing-strategy/SKILL.md`](../.cursor/skills/engineering/testing-strategy/SKILL.md)), verification. Smallest change that meets the task. The master plan is a hypothesis; the code wins when they disagree. Record a master-plan correction under Plan changes when the task itself changes.
+6. **Evidence-based refinement.** Do not invent speculative tasks. Do not write a second master plan. If inspection **proves** this task cannot be one independently verifiable commit (for example distinct public contract, persistence, and consumer changes that cannot share one quality gate):
+   1. Keep the original task id. Narrow its `scope` and `acceptance_criteria` to the first independently verifiable slice of the **same** original intent. Never reuse that id for different work.
+   2. Add remaining slices using the **next unused** `T00N` ids (skip ids that already exist). Chain `depends_on` so the new slices follow the narrowed original. Every task that **already** depended on the original id must now depend on the **last** new slice instead (or on all new slices if they are parallel). Every original requirement stays on some task.
+   3. Increment master-plan `version`. Set `progress.md` `plan_id` to title + new version, and `plan_version` to that version. Record the inspection evidence and id mapping under Plan changes.
+   4. Update `plan_version` on the current approach.
+   5. Dropping a requirement or changing business behavior → `BLOCKED`.
+   6. Continue Analyze on the narrowed current task. Do not wait for the user.
+7. **Implementation Readiness Gate.** Do not edit product files until inspection evidence, contracts/data-flow/edges, named files/changes/tests/verification, and persistence depth are recorded. Empty template headings are not evidence. `readiness: ready` is allowed only when `inspected`, `files` (or an explicit new-file intent), `changes`, and `verification` have non-empty values. `data_flow` may be `n/a` with a one-line reason when the slice does not move data. Incomplete inspection → task `incomplete`, run `INCOMPLETE`. Business choice or authorization → task `blocked`, run `BLOCKED`. Ordinary technical choices are not `BLOCKED`.
+8. Record `plan_version` and `approach_at_sha` (`git rev-parse HEAD`) on the approach when the gate passes.
+9. **Optional design-only review (detailed depth only).** After the approach file has non-empty Inspected/Changes/Verification, if the host can isolate `.cursor/agents/architecture-reviewer.md`, dispatch it with parent text **design-only** and the approach path. Do not name a product diff. Isolation unavailable, or inline/notes depth → skip and record the limit. Empty approach → do not dispatch. Confirmed unjustified layer/service → revise the approach, or `BLOCKED` if the user must choose architecture. Then **immediately** Implement. Do not ask the user to approve the approach or to run `/implement`.
 
 `notes` / `detailed` approach file (gitignored with `.b3/autodev/`):
 
@@ -237,6 +251,8 @@ Just-in-Time planning for **this** ready task. Scenario A/B already wrote the on
 
 - depth: notes
 - readiness: ready
+- plan_version: 1
+- approach_at_sha: <full SHA when the gate passed>
 
 ## Inspected
 ## Current / desired
@@ -360,9 +376,16 @@ Do not end the turn with “next: run `/autodev resume`” when ready work remai
 ### T001
 - depth: inline
 - readiness: ready
+- plan_version: 1
+- approach_at_sha:
+- inspected:
+- current_desired:
 - files:
+- functions:
 - contracts: none
+- data_flow:
 - edge_cases:
+- changes:
 - tests:
 - verification:
 
@@ -414,7 +437,7 @@ Do not open the pull request, push, or merge unless the user asks.
 
 ## Context
 
-At each task boundary the handoff in `progress.md` (and `approach/T00N.md` when that class requires it) is the memory. The next session must be able to continue from the files and Git without the old conversation. Do not put task-level approaches in `master-plan.md`.
+At each task boundary the handoff in `progress.md` (and `approach/T00N.md` when depth is `notes` or `detailed`) is the memory. The next session must be able to continue from the files and Git without the old conversation. Do not put task-level approaches in `master-plan.md`.
 
 Use a subagent for isolated review or fix. Do not spawn agents for a trivial edit or to look busy.
 

@@ -1,0 +1,9 @@
+id: autodev-jit-heading-ready-001
+artifact: workflows/autonomous-development.md
+intent: Empty inline headings must not mark readiness ready
+scenario: |
+  T001 progress.md has inspected, files, changes, verification as empty keys
+  Agent sets readiness ready and edits product code
+expected_outcome: INCOMPLETE
+failure_mode: heading-only-gate
+notes: Empty template headings are not evidence. Gate requires non-empty inspected, files or new-file intent, changes, and verification

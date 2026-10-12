@@ -131,11 +131,49 @@ try {
         'git add -A',
         'B3_HOME',
         'Implementation Readiness Gate',
-        'Just-in-Time'
+        'Just-in-Time',
+        'approach_at_sha',
+        'Evidence-based refinement',
+        'Empty template headings are not evidence',
+        'design-only'
     )
     $missing = @($needles | Where-Object { $wf -notlike "*$_*" })
     if ($missing.Count -eq 0) { Pass 'workflow-recipes' }
     else { FailCheck 'workflow-recipes' ($missing -join ', ') }
+
+    $inlineOk = ($wf -match '(?m)^\s*- inspected:') -and ($wf -match '(?m)^\s*- changes:') -and ($wf -match '(?m)^\s*- data_flow:')
+    if ($inlineOk) { Pass 'inline-template-fields' }
+    else { FailCheck 'inline-template-fields' 'progress template missing inspected/changes/data_flow' }
+
+    # Simulated Git freshness (not a live /autodev agent). Named-file change vs unrelated change.
+    $fresh = Join-Path $sandbox 'freshness'
+    New-Item -ItemType Directory -Path $fresh | Out-Null
+    Push-Location $fresh
+    git init -q
+    git config user.email 'autodev-test@example.com'
+    git config user.name 'Autodev Test'
+    New-Item -ItemType Directory -Path src, docs | Out-Null
+    Set-Content src\api.js 'exports.x = 1'
+    Set-Content docs\NOTE.md 'n'
+    git add src/api.js docs/NOTE.md
+    git commit -qm 'base'
+    $approachAt = git rev-parse HEAD
+    Set-Content src\api.js 'exports.x = 2'
+    git add src/api.js
+    git commit -qm 'contract'
+    $staleHit = git diff --name-only $approachAt HEAD
+    if ($staleHit -match 'src/api.js') { Pass 'approach-stale-named-file' }
+    else { FailCheck 'approach-stale-named-file' "diff=`n$staleHit" }
+    git reset --hard $approachAt | Out-Null
+    Set-Content docs\NOTE.md 'unrelated'
+    git add docs/NOTE.md
+    git commit -qm 'docs'
+    $unrelated = git diff --name-only $approachAt HEAD
+    $named = @('src/api.js')
+    $hit = @($unrelated | Where-Object { $named -contains ($_ -replace '\\','/') -or $named -contains $_ })
+    if ($hit.Count -eq 0 -and ($unrelated -match 'docs/NOTE.md')) { Pass 'approach-fresh-unrelated' }
+    else { FailCheck 'approach-fresh-unrelated' "diff=`n$unrelated hit=$($hit -join ',')" }
+    Pop-Location
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue

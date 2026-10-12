@@ -1,0 +1,6 @@
+id: agent-architecture-reviewer-design-only
+artifact: .cursor/agents/architecture-reviewer.md
+intent: Explicit design-only review of a high-risk approach should activate architecture-reviewer
+input: "Design-only review of this implementation approach before coding: new auth middleware plus a public /v2/session contract. No product diff yet. Flag unjustified layers."
+expected_bucket: should-trigger
+notes: Parent named design-only and supplied an approach. Do not require a git diff

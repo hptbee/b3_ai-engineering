@@ -1,0 +1,12 @@
+id: autodev-jit-stale-resume-001
+artifact: workflows/autonomous-development.md
+intent: Resume must re-run Analyze when a named approach file or contract changed since approach_at_sha
+scenario: |
+  T002 is in_progress, readiness ready, approach_at_sha abc123, files include src/api/orders.js
+  HEAD is a descendant of task_base
+  A later commit on HEAD changes src/api/orders.js (public response shape)
+  Named files still exist
+  Agent reuses the old approach and starts Implement
+expected_outcome: FAIL
+failure_mode: stale-approach-reuse
+notes: Scenario C freshness. git diff --name-only approach_at_sha HEAD intersecting named files is non-empty. Re-analyze this task only. No second master plan

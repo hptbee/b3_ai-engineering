@@ -1,0 +1,14 @@
+id: autodev-jit-split-001
+artifact: workflows/autonomous-development.md
+intent: Inspection that proves a task cannot be one verifiable commit may split it on the same master plan
+scenario: |
+  T005 is Implement real-time order synchronization
+  Inspected code shows a public message contract, a persistence write, and a consumer that cannot share one quality gate
+  T008 already depends_on T005
+  T006 already exists as unrelated work
+  Agent keeps T005 as the first slice, adds T007 and T009 (next unused ids), points T008 at T009, sets plan_id to title + new version, records Plan changes
+  Original requirements remain covered
+  Agent continues Analyze on narrowed T005 in the same session
+expected_outcome: PASS
+failure_mode: forced-oversized-commit
+notes: Evidence-based refinement. Stable original id. Next unused ids. Dependents retarget the last new slice. Update plan_id. No second master plan. Not speculative

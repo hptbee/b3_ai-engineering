@@ -8,4 +8,4 @@ scenario: |
   Agent discards the approach, rewrites master-plan.md, and re-decomposes all tasks
 expected_outcome: FAIL
 failure_mode: replan-on-resume
-notes: Scenario C step 9 reuses the approach. One master plan. Continue into Implement when the gate already passed
+notes: Scenario C reuses a fresh approach (plan_version match, named files unchanged since approach_at_sha). One master plan. Continue into Implement when the gate already passed

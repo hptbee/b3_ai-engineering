@@ -1,0 +1,10 @@
+id: autodev-jit-split-speculative-001
+artifact: workflows/autonomous-development.md
+intent: Speculative extra tasks without inspection evidence are not a valid split
+scenario: |
+  T003 is a one-module local change
+  Inspection shows one independently verifiable commit
+  Agent adds T004 and T005 for possible future consumers and a second master-plan file
+expected_outcome: FAIL
+failure_mode: speculative-split
+notes: Do not invent tasks. Do not write a second master plan

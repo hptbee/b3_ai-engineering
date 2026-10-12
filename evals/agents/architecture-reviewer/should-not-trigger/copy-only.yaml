@@ -1,0 +1,5 @@
+id: agent-architecture-reviewer-copy
+artifact: .cursor/agents/architecture-reviewer.md
+intent: Copy-only edits are not architecture-reviewer
+input: "Review this PR that only changes a README typo."
+expected_bucket: should-not-trigger

@@ -41,7 +41,7 @@ Knowledge → Skills (constrained by Rules)
 2. Load the smallest relevant skill. Do not load every skill.
 3. Distinguish official spec, established practice, community/research, personal experience, preference.
 4. Do not copy external repositories verbatim. Record intake in `research/` (`docs/research-methodology.md`).
-5. Failed tool, missing evidence, empty diff, or iteration limit → `UNKNOWN / INCOMPLETE`, not `PASS`.
+5. Failed tool, missing evidence, empty **named review target**, or iteration limit → `UNKNOWN / INCOMPLETE`, not `PASS`. For a code-change review that named a product diff, an empty diff is an empty target. For design-only architecture review, the named target is the implementation approach; a missing approach is INCOMPLETE, an absent product diff is not.
 6. Do not claim unimplemented layers already exist.
 7. Lessons learned do not automatically become rules (`docs/system-lifecycle.md`).
 8. `.agents/skills` is a local installation link to `.cursor/skills`, not a second editable skill corpus. Set it up with `adapters/sync-skills.ps1` on Windows or `adapters/sync-skills.sh` on macOS/Linux.
