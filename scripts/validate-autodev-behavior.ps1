@@ -91,6 +91,20 @@ try {
             FailCheck 'install-refuse-overwrite-command' 'exit 0 overwrote custom autodev.md'
         }
         Copy-Item (Join-Path $root 'adapters\product-autodev.md') $cmd -Force
+
+        & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $product -B3Home $root -HostName codex
+        if ($LASTEXITCODE -ne 0) { FailCheck 'install-product-codex' "exit $LASTEXITCODE" }
+        else {
+            $agentsLink = Join-Path $product '.agents\skills'
+            $item = Get-Item -LiteralPath $agentsLink -Force
+            $isLink = $item.LinkType -in @('Junction', 'SymbolicLink')
+            $skillN = @(Get-ChildItem -LiteralPath $agentsLink -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count
+            $giCodex = Get-Content (Join-Path $product '.gitignore') -Raw
+            $agentsMdOk = Test-Path (Join-Path $product 'AGENTS.md')
+            $giSkillOk = ($giCodex -match '(?m)^\s*\.agents/skills\s*$')
+            if ($isLink -and $skillN -ge 1 -and $agentsMdOk -and $giSkillOk) { Pass 'install-product-codex' }
+            else { FailCheck 'install-product-codex' "link=$isLink skills=$skillN agentsMd=$agentsMdOk gi=$giSkillOk" }
+        }
     }
 
     Push-Location $product

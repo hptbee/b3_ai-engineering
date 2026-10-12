@@ -106,18 +106,45 @@ function Update-B3Gitignore([string]$Root) {
     return 'appended'
 }
 
+function Update-HostSkillGitignore([string]$Root, [string]$HostName) {
+    $line = $null
+    if ($HostName -eq 'codex') { $line = '.agents/skills' }
+    if ($HostName -eq 'claude') { $line = '.claude/skills' }
+    if (-not $line) { return 'n/a' }
+    $gi = Join-Path $Root '.gitignore'
+    $escaped = [regex]::Escape($line)
+    if (-not (Test-Path -LiteralPath $gi)) {
+        Set-Content -LiteralPath $gi -Value ("# B3: local host skill link`n$line`n")
+        return 'created'
+    }
+    $text = Get-Content -LiteralPath $gi -Raw
+    if ($text -match "(?m)^\s*$escaped\s*$") { return 'present' }
+    Add-Content -LiteralPath $gi -Value "`n# B3: local host skill link (do not commit)`n$line"
+    return 'appended'
+}
+
 $cursorReadmeTemplate = Join-Path $scriptRoot 'product-cursor-readme.md'
+$agentsMdTemplate = Join-Path $scriptRoot 'product-agents.md'
 $b3Commands = Join-Path $B3Home '.cursor\commands'
 $cursorReadmeDest = Join-Path $ProductRoot '.cursor\README.md'
+$agentsMdDest = Join-Path $ProductRoot 'AGENTS.md'
 
 $ignorePlan = 'dry-run'
-if (-not $DryRun) { $ignorePlan = Update-B3Gitignore $ProductRoot }
+$skillIgnorePlan = 'dry-run'
+if (-not $DryRun) {
+    $ignorePlan = Update-B3Gitignore $ProductRoot
+    $skillIgnorePlan = Update-HostSkillGitignore $ProductRoot $HostName
+}
 
 if ($DryRun) {
     Write-Output "dry-run: write $homeDest = $B3Home"
     if (Test-Path -LiteralPath $commandDest) { Write-Output "dry-run: keep existing $commandDest (matches template)" }
     else { Write-Output "dry-run: write $commandDest from $template" }
+    if (Test-Path -LiteralPath $agentsMdDest) { Write-Output "dry-run: keep existing $agentsMdDest" }
+    elseif (Test-Path -LiteralPath $agentsMdTemplate) { Write-Output "dry-run: write $agentsMdDest from $agentsMdTemplate" }
     Write-Output "dry-run: gitignore .b3/autodev/ (see Update-B3Gitignore)"
+    if ($HostName -eq 'codex') { Write-Output "dry-run: gitignore .agents/skills" }
+    if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills" }
     Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File | ForEach-Object {
         if ($_.Name -eq 'README.md') { return }
         $dest = Join-Path (Join-Path $ProductRoot '.cursor\commands') $_.Name
@@ -139,8 +166,11 @@ if (-not (Test-Path -LiteralPath $homeDest)) {
 if (-not (Test-Path -LiteralPath $commandDest)) {
     Copy-Item -LiteralPath $template -Destination $commandDest
 }
+if ((-not (Test-Path -LiteralPath $agentsMdDest)) -and (Test-Path -LiteralPath $agentsMdTemplate)) {
+    Copy-Item -LiteralPath $agentsMdTemplate -Destination $agentsMdDest
+}
 
-if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $b3Commands)) {
+if (Test-Path -LiteralPath $b3Commands) {
     $cmdDir = Join-Path $ProductRoot '.cursor\commands'
     foreach ($src in Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File) {
         if ($src.Name -in @('README.md', 'autodev.md')) { continue }
@@ -149,7 +179,7 @@ if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $b3Commands)) {
             Copy-Item -LiteralPath $src.FullName -Destination $dest
         }
     }
-    if (Test-Path -LiteralPath $cursorReadmeTemplate) {
+    if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $cursorReadmeTemplate)) {
         Copy-Item -LiteralPath $cursorReadmeTemplate -Destination $cursorReadmeDest -Force
     }
 }
@@ -162,7 +192,15 @@ if ($linkDest -and -not $linkExistsOk) {
 Write-Output "installed B3 pointer in $ProductRoot"
 Write-Output "B3_HOME=$B3Home"
 Write-Output "command=$commandDest"
+Write-Output "agents.md=$agentsMdDest"
 Write-Output "gitignore.b3=$ignorePlan"
+Write-Output "gitignore.skills=$skillIgnorePlan"
 Write-Output "host=$HostName"
-Write-Output "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $skills (not copied into product)"
+if ($HostName -eq 'codex') {
+    Write-Output "skills=$agentsDest -> $skills (gitignored local link, not copied)"
+} elseif ($HostName -eq 'claude') {
+    Write-Output "skills=$claudeDest -> $skills (gitignored local link, not copied)"
+} else {
+    Write-Output "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $skills (not copied into product)"
+}
 Write-Output "note: this proves files were written, not host slash-command or skill discovery"

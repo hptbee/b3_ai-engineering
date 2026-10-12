@@ -85,13 +85,23 @@ LINK_DEST=""
 [[ "$HOST" == "codex" ]] && LINK_DEST="$AGENTS_DEST"
 [[ "$HOST" == "claude" ]] && LINK_DEST="$CLAUDE_DEST"
 if [[ -n "$LINK_DEST" && ( -e "$LINK_DEST" || -L "$LINK_DEST" ) ]]; then
-  echo "error: refusing to replace existing $LINK_DEST" >&2
-  exit 1
+  if [[ -L "$LINK_DEST" ]]; then
+    existing_link="$(cd "$(dirname "$LINK_DEST")" && cd "$(readlink "$LINK_DEST")" && pwd)"
+    if [[ "$existing_link" != "$SKILLS" ]]; then
+      echo "error: refusing to replace existing $LINK_DEST" >&2
+      exit 1
+    fi
+  else
+    echo "error: refusing to replace existing $LINK_DEST" >&2
+    exit 1
+  fi
 fi
 
 B3_COMMANDS="${B3_HOME}/.cursor/commands"
 CURSOR_README_TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/product-cursor-readme.md"
+AGENTS_MD_TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/product-agents.md"
 CURSOR_README_DEST="${PRODUCT_ROOT}/.cursor/README.md"
+AGENTS_MD_DEST="${PRODUCT_ROOT}/AGENTS.md"
 
 update_b3_gitignore() {
   local gi="$1"
@@ -114,10 +124,35 @@ update_b3_gitignore() {
   echo appended
 }
 
+update_host_skill_gitignore() {
+  local gi="$1"
+  local host="$2"
+  local line=""
+  [[ "$host" == "codex" ]] && line=".agents/skills"
+  [[ "$host" == "claude" ]] && line=".claude/skills"
+  if [[ -z "$line" ]]; then
+    echo n/a
+    return
+  fi
+  if [[ ! -f "$gi" ]]; then
+    printf '# B3: local host skill link\n%s\n' "$line" > "$gi"
+    echo created
+    return
+  fi
+  if grep -qE "^[[:space:]]*$(printf '%s' "$line" | sed 's/[.[\*^$()+?{|]/\\&/g')[[:space:]]*$" "$gi"; then
+    echo present
+    return
+  fi
+  printf '\n# B3: local host skill link (do not commit)\n%s\n' "$line" >> "$gi"
+  echo appended
+}
+
 GI="${PRODUCT_ROOT}/.gitignore"
 IGNORE_PLAN=dry-run
+SKILL_IGNORE_PLAN=dry-run
 if ! $DRY_RUN; then
   IGNORE_PLAN="$(update_b3_gitignore "$GI")"
+  SKILL_IGNORE_PLAN="$(update_host_skill_gitignore "$GI" "$HOST")"
 fi
 
 if $DRY_RUN; then
@@ -127,7 +162,14 @@ if $DRY_RUN; then
   else
     echo "dry-run: write $COMMAND_DEST from $TEMPLATE"
   fi
-  echo "dry-run: gitignore .b3/ ($IGNORE_PLAN)"
+  if [[ -f "$AGENTS_MD_DEST" ]]; then
+    echo "dry-run: keep existing $AGENTS_MD_DEST"
+  elif [[ -f "$AGENTS_MD_TEMPLATE" ]]; then
+    echo "dry-run: write $AGENTS_MD_DEST from $AGENTS_MD_TEMPLATE"
+  fi
+  echo "dry-run: gitignore .b3/autodev/ ($IGNORE_PLAN)"
+  [[ "$HOST" == "codex" ]] && echo "dry-run: gitignore .agents/skills"
+  [[ "$HOST" == "claude" ]] && echo "dry-run: gitignore .claude/skills"
   [[ -n "$LINK_DEST" ]] && echo "dry-run: ln -s $SKILLS $LINK_DEST"
   exit 0
 fi
@@ -139,8 +181,11 @@ fi
 if [[ ! -f "$COMMAND_DEST" ]]; then
   cp "$TEMPLATE" "$COMMAND_DEST"
 fi
+if [[ ! -f "$AGENTS_MD_DEST" && -f "$AGENTS_MD_TEMPLATE" ]]; then
+  cp "$AGENTS_MD_TEMPLATE" "$AGENTS_MD_DEST"
+fi
 
-if [[ "$HOST" == "cursor" && -d "$B3_COMMANDS" ]]; then
+if [[ -d "$B3_COMMANDS" ]]; then
   for src in "$B3_COMMANDS"/*.md; do
     [[ -f "$src" ]] || continue
     base="$(basename "$src")"
@@ -150,12 +195,12 @@ if [[ "$HOST" == "cursor" && -d "$B3_COMMANDS" ]]; then
       cp "$src" "$dest"
     fi
   done
-  if [[ -f "$CURSOR_README_TEMPLATE" ]]; then
+  if [[ "$HOST" == "cursor" && -f "$CURSOR_README_TEMPLATE" ]]; then
     cp "$CURSOR_README_TEMPLATE" "$CURSOR_README_DEST"
   fi
 fi
 
-if [[ -n "$LINK_DEST" ]]; then
+if [[ -n "$LINK_DEST" && ( ! -e "$LINK_DEST" && ! -L "$LINK_DEST" ) ]]; then
   mkdir -p "$(dirname "$LINK_DEST")"
   ln -s "$SKILLS" "$LINK_DEST"
 fi
@@ -163,7 +208,15 @@ fi
 echo "installed B3 pointer in $PRODUCT_ROOT"
 echo "B3_HOME=$B3_HOME"
 echo "command=$COMMAND_DEST"
+echo "agents.md=$AGENTS_MD_DEST"
 echo "gitignore.b3=$IGNORE_PLAN"
+echo "gitignore.skills=$SKILL_IGNORE_PLAN"
 echo "host=$HOST"
-echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS (not copied into product)"
+if [[ "$HOST" == "codex" ]]; then
+  echo "skills=$AGENTS_DEST -> $SKILLS (gitignored local link, not copied)"
+elif [[ "$HOST" == "claude" ]]; then
+  echo "skills=$CLAUDE_DEST -> $SKILLS (gitignored local link, not copied)"
+else
+  echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS (not copied into product)"
+fi
 echo "note: this proves files were written, not host slash-command or skill discovery"
