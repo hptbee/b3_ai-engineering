@@ -1,6 +1,6 @@
 # b3-ai-engineering
 
-A personal AI-assisted software engineering system. **Cursor is the first host.** The conceptual core (Agent Skills, rules, review-loop, evals, research) stays portable; Codex and Claude adapters map from this repo later.
+A personal AI-assisted software engineering system. **Cursor is the first host and Codex is now supported.** The conceptual core (Agent Skills, rules, review-loop, evals, research) stays portable; thin host adapters map it onto each product.
 
 This is an **evolving** operating layer for AI coding agents. It is not a company handbook.
 
@@ -8,7 +8,7 @@ This is an **evolving** operating layer for AI coding agents. It is not a compan
 
 ```text
 b3-ai-engineering/
-├── AGENTS.md                 Always-on map (Cursor reads this)
+├── AGENTS.md                 Cross-host always-on map (Cursor and Codex read this)
 ├── README.md                 Human-facing entry
 ├── .cursor/
 │   ├── rules/                Cursor rule activation (.mdc → portable rules/)
@@ -21,7 +21,7 @@ b3-ai-engineering/
 ├── knowledge/                Reusable internal knowledge
 ├── research/                 Provenance
 ├── evals/                    Fixtures (not a runner)
-├── adapters/                 Other-host mapping + export helper
+├── adapters/                 Other-host mapping + cross-platform export helpers
 ├── scripts/                  Repository tooling
 └── docs/                     Architecture, standards, contracts
 ```
@@ -32,9 +32,9 @@ Catalogs: [`.cursor/skills/README.md`](.cursor/skills/README.md), [`docs/archite
 
 Agents are useful when they have durable constraints, reusable methods, verification instead of assertion, a way to learn without turning preference into dogma, and a core whose **meaning** is not rewritten per product.
 
-## Cursor first, portable meaning
+## Cursor and Codex, portable meaning
 
-Skills are Agent Skills (`SKILL.md`) stored where Cursor discovers them. Rule **bodies** stay in `rules/*.md` so other hosts can read them without parsing `.mdc`. Cursor activation is `.cursor/rules/*.mdc` (`@`-includes the bodies). Commands and agents are Cursor-native so `/review` and independent subagents work without a setup script.
+Skills are Agent Skills (`SKILL.md`) stored canonically under `.cursor/skills/`; Codex discovers the same files through a local `.agents/skills` junction or symlink. Rule **bodies** stay in `rules/*.md`; Cursor activates them with `.cursor/rules/*.mdc`, while Codex receives durable cross-host constraints through `AGENTS.md`. Cursor commands/agents remain native. Codex uses explicit prompt routing and delegated role prompts because no repository custom-agent or slash-command surface is established here.
 
 Evidence over opinion. Progressive disclosure. Small composable skills. Research, then adapt — do not copy skill packs.
 
@@ -94,10 +94,10 @@ Portable meaning  →  .cursor/ (this repo)  →  Cursor
 | Engineering + domain skills | Present (see `.cursor/skills/README.md`) |
 | Commands, agents | Present (Cursor-native, thin) |
 | Eval fixtures | Present; runner deferred |
-| Review-loop orchestration | Present (agent procedure; not a host plugin). Product-PR run and subagent isolation **NOT VERIFIED** |
+| Review-loop orchestration | Present (agent procedure; Codex prompt-routed and delegated; product isolation **UNKNOWN / INCOMPLETE**) |
 | Autonomous development | Present as workflow + `/autodev` (decision-010). Cursor slash UX **INTENDED**. Codex and Claude runtime **NOT TESTED** |
 | Knowledge after lessons | Minimal (`knowledge/personal/` only) |
 | Profile files | Not created (`knowledge/personal/` holds background) |
-| Codex / Claude trees | Not committed; export helper only |
+| Codex adapter | Implemented through local .agents/skills link; discovery remains UNKNOWN / INCOMPLETE in the current checkout (see research/validation/codex-host-v1.md) |
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

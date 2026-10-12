@@ -1,17 +1,17 @@
 # AGENTS.md
 
-This is a **personal AI Engineering System**. Cursor is the first host. It is not a company handbook and not a dump of copied skills.
+This is a **personal AI Engineering System**. Cursor is the first host and Codex is now supported. It is not a company handbook and not a dump of copied skills.
 
-Cursor already loads `.cursor/rules/*.mdc` (hard rules always apply). This file is the map: where things live and what to open next. Load the smallest relevant slice. Do not load the whole repository.
+Cursor loads `.cursor/rules/*.mdc`; Codex loads this file and discovers skills through the local `.agents/skills` installation. This file is the map: where things live and what to open next. Load the smallest relevant slice. Do not load the whole repository.
 
 ## What Cursor loads
 
 | Need | Location | When |
 | --- | --- | --- |
-| Always-on constraints | `.cursor/rules/*.mdc` → `rules/*.md` | Every session |
-| Methods | `.cursor/skills/**/SKILL.md` | Agent selects from `description`, or `/skill-name` |
-| User actions | `.cursor/commands/` | Explicit `/plan` `/implement` `/debug` `/review` `/verify` `/review-loop` `/autodev` |
-| Isolated roles | `.cursor/agents/` | Independent review / fix |
+| Always-on constraints | `AGENTS.md`; Cursor `.cursor/rules/*.mdc` → `rules/*.md` | Every session |
+| Methods | Cursor `.cursor/skills/**/SKILL.md`; Codex `.agents/skills/**/SKILL.md` → Cursor source | Description-driven or explicit skill invocation |
+| User actions | Cursor `.cursor/commands/`; Codex prompt routing | `/plan` `/implement` `/debug` `/review` `/verify` `/review-loop` `/autodev`, or name the intent |
+| Isolated roles | Cursor `.cursor/agents/`; Codex delegated role prompts | Reviewer, fixer, security reviewer, architecture reviewer |
 | Default product sequence | `workflows/feature-implementation.md` | Multi-step feature work inside one stage |
 | Autonomous lifecycle | `workflows/autonomous-development.md` | `/autodev`: plan through verify, commit, and resume |
 | Review-loop contract | `review-loop/spec.md` | Independent iterative review |
@@ -20,7 +20,7 @@ Cursor already loads `.cursor/rules/*.mdc` (hard rules always apply). This file 
 | Provenance | `research/` | When adapting external patterns |
 | Eval fixtures | `evals/` | When changing skills, rules, workflows, or the review loop |
 | Personal context | `knowledge/personal/` | Background only; never overrides hard rules |
-| Other hosts | `adapters/` | Codex / Claude later; do not create those trees here |
+| Host adapters | `adapters/` | Read the relevant host README; do not duplicate meaning |
 
 There is no `profiles/` directory. There is no repo-root `skills/`, `commands/`, or `agents/`.
 
@@ -44,13 +44,15 @@ Knowledge → Skills (constrained by Rules)
 5. Failed tool, missing evidence, empty diff, or iteration limit → `UNKNOWN / INCOMPLETE`, not `PASS`.
 6. Do not claim unimplemented layers already exist.
 7. Lessons learned do not automatically become rules (`docs/system-lifecycle.md`).
+8. `.agents/skills` is a local installation link to `.cursor/skills`, not a second editable skill corpus. Set it up with `adapters/sync-skills.ps1` on Windows or `adapters/sync-skills.sh` on macOS/Linux.
 
 ## Source vs host vs docs
 
 - **Source (meaning):** `rules/`, `.cursor/skills/`, `.cursor/commands/`, `.cursor/agents/`, `review-loop/`, `workflows/`, `evals/`, `knowledge/`
 - **Cursor activation:** `.cursor/rules/*.mdc`, native skill/command/agent discovery
+- **Codex activation:** root `AGENTS.md`, plus the local `.agents/skills` link to `.cursor/skills`; use prompt routing for commands and delegated roles
 - **Documentation:** `docs/`, `README.md`
 - **Research:** `research/` (provenance, not production config)
-- **Generated (future hosts only):** `.agents/skills`, `.claude/skills` via `adapters/sync-skills.sh`
+- **Local installation artifacts:** `.agents/skills` and `.claude/skills` are ignored links created by adapter helpers; they are never independently edited or committed.
 
 Layout decision: `research/decisions/decision-009-cursor-native-layout.md`.
