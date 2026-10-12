@@ -67,10 +67,11 @@ try {
         $cmd = Join-Path $product '.cursor\commands\autodev.md'
         $copiedSkills = Test-Path (Join-Path $product '.cursor\skills')
         $gi = Get-Content (Join-Path $product '.gitignore') -Raw
-        if ($homePath -eq $root -and (Test-Path $cmd) -and -not $copiedSkills -and $gi -match '(?m)^\s*\.b3/\s*$') {
+        $giOk = ($gi -match '(?m)^\s*\.b3/autodev/\s*$') -or ($gi -match '(?m)^\s*\.b3/\s*$')
+        if ($homePath -eq $root -and (Test-Path $cmd) -and -not $copiedSkills -and $giOk) {
             Pass 'install-product'
         } else {
-            FailCheck 'install-product' "home=$homePath copiedSkills=$copiedSkills gitignoreMatch=$($gi -match '(?m)^\s*\.b3/\s*$')"
+            FailCheck 'install-product' "home=$homePath copiedSkills=$copiedSkills gitignoreMatch=$giOk"
         }
 
         & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $product -B3Home $root -HostName cursor
@@ -98,12 +99,12 @@ try {
     Set-Content 'app.js' 'module.exports = 1'
     git add -A
     $cached = git diff --cached --name-only
-    if ($cached -match '\.b3/') { FailCheck 'checkpoint-not-staged' "cached=`n$cached" }
+    if ($cached | Where-Object { $_ -match '^\.b3/autodev/' }) { FailCheck 'checkpoint-not-staged' "cached=`n$cached" }
     else { Pass 'checkpoint-not-staged' }
     git add app.js
     git commit -qm 'add app'
     $show = git ls-tree -r --name-only HEAD
-    if ($show -match '\.b3/') { FailCheck 'checkpoint-not-in-commit' "tree=`n$show" }
+    if ($show | Where-Object { $_ -match '^\.b3/autodev/' }) { FailCheck 'checkpoint-not-in-commit' "tree=`n$show" }
     else { Pass 'checkpoint-not-in-commit' }
 
     # --- F5: SHA exists but is not ancestor ---

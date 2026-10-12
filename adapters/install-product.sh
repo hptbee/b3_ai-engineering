@@ -89,13 +89,35 @@ if [[ -n "$LINK_DEST" && ( -e "$LINK_DEST" || -L "$LINK_DEST" ) ]]; then
   exit 1
 fi
 
+B3_COMMANDS="${B3_HOME}/.cursor/commands"
+CURSOR_README_TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/product-cursor-readme.md"
+CURSOR_README_DEST="${PRODUCT_ROOT}/.cursor/README.md"
+
+update_b3_gitignore() {
+  local gi="$1"
+  local block=$'# B3: commit .b3/home; keep autodev checkpoints local\n.b3/autodev/\n'
+  if [[ ! -f "$gi" ]]; then
+    printf '%s' "$block" > "$gi"
+    echo created
+    return
+  fi
+  if grep -qE '^\s*\.b3/autodev/\s*$' "$gi"; then
+    echo present
+    return
+  fi
+  if grep -qE '^\s*\.b3/\s*$' "$gi"; then
+    sed -i.bak -E 's/^[[:space:]]*\.b3\/[[:space:]]*$/.b3\/autodev\//' "$gi" && rm -f "${gi}.bak"
+    echo upgraded
+    return
+  fi
+  printf '\n%s' "$block" >> "$gi"
+  echo appended
+}
+
 GI="${PRODUCT_ROOT}/.gitignore"
-if [[ -f "$GI" ]] && grep -qE '^\s*\.b3/\s*$' "$GI"; then
-  IGNORE_PLAN=present
-elif [[ -f "$GI" ]]; then
-  IGNORE_PLAN=append
-else
-  IGNORE_PLAN=create
+IGNORE_PLAN=dry-run
+if ! $DRY_RUN; then
+  IGNORE_PLAN="$(update_b3_gitignore "$GI")"
 fi
 
 if $DRY_RUN; then
@@ -118,10 +140,19 @@ if [[ ! -f "$COMMAND_DEST" ]]; then
   cp "$TEMPLATE" "$COMMAND_DEST"
 fi
 
-if [[ "$IGNORE_PLAN" == "append" ]]; then
-  printf '\n# B3 autonomous-development checkpoints (local, do not commit)\n.b3/\n' >> "$GI"
-elif [[ "$IGNORE_PLAN" == "create" ]]; then
-  printf '# B3 autonomous-development checkpoints (local, do not commit)\n.b3/\n' > "$GI"
+if [[ "$HOST" == "cursor" && -d "$B3_COMMANDS" ]]; then
+  for src in "$B3_COMMANDS"/*.md; do
+    [[ -f "$src" ]] || continue
+    base="$(basename "$src")"
+    [[ "$base" == "README.md" || "$base" == "autodev.md" ]] && continue
+    dest="${PRODUCT_ROOT}/.cursor/commands/${base}"
+    if [[ ! -f "$dest" ]]; then
+      cp "$src" "$dest"
+    fi
+  done
+  if [[ -f "$CURSOR_README_TEMPLATE" ]]; then
+    cp "$CURSOR_README_TEMPLATE" "$CURSOR_README_DEST"
+  fi
 fi
 
 if [[ -n "$LINK_DEST" ]]; then
@@ -134,4 +165,5 @@ echo "B3_HOME=$B3_HOME"
 echo "command=$COMMAND_DEST"
 echo "gitignore.b3=$IGNORE_PLAN"
 echo "host=$HOST"
+echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS (not copied into product)"
 echo "note: this proves files were written, not host slash-command or skill discovery"

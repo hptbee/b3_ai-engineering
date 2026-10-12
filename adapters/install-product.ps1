@@ -80,23 +80,53 @@ if ($linkDest -and (Test-Path -LiteralPath $linkDest)) {
     if (-not $linkExistsOk) { Fail "refusing to replace existing $linkDest" }
 }
 
-function Get-GitignorePlan([string]$Root) {
-    $gi = Join-Path $Root '.gitignore'
-    if (Test-Path -LiteralPath $gi) {
-        $text = Get-Content -LiteralPath $gi -Raw
-        if ($text -match '(?m)^\s*\.b3/\s*$') { return 'present' }
-        return 'append'
-    }
-    return 'create'
+function Test-B3GitignoreOk([string]$Text) {
+    return ($Text -match '(?m)^\s*\.b3/autodev/\s*$') -or ($Text -match '(?m)^\s*\.b3/\s*$')
 }
 
-$ignorePlan = Get-GitignorePlan $ProductRoot
+function Update-B3Gitignore([string]$Root) {
+    $gi = Join-Path $Root '.gitignore'
+    $block = @"
+
+# B3: commit .b3/home; keep autodev checkpoints local
+.b3/autodev/
+"@
+    if (-not (Test-Path -LiteralPath $gi)) {
+        Set-Content -LiteralPath $gi -Value ($block.TrimStart() + "`n")
+        return 'created'
+    }
+    $text = Get-Content -LiteralPath $gi -Raw
+    if ($text -match '(?m)^\s*\.b3/autodev/\s*$') { return 'present' }
+    if ($text -match '(?m)^\s*\.b3/\s*$') {
+        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', '.b3/autodev/')
+        Set-Content -LiteralPath $gi -Value $text -NoNewline
+        return 'upgraded'
+    }
+    Add-Content -LiteralPath $gi -Value $block
+    return 'appended'
+}
+
+$cursorReadmeTemplate = Join-Path $scriptRoot 'product-cursor-readme.md'
+$b3Commands = Join-Path $B3Home '.cursor\commands'
+$cursorReadmeDest = Join-Path $ProductRoot '.cursor\README.md'
+
+$ignorePlan = 'dry-run'
+if (-not $DryRun) { $ignorePlan = Update-B3Gitignore $ProductRoot }
 
 if ($DryRun) {
     Write-Output "dry-run: write $homeDest = $B3Home"
     if (Test-Path -LiteralPath $commandDest) { Write-Output "dry-run: keep existing $commandDest (matches template)" }
     else { Write-Output "dry-run: write $commandDest from $template" }
-    Write-Output "dry-run: gitignore .b3/ ($ignorePlan)"
+    Write-Output "dry-run: gitignore .b3/autodev/ (see Update-B3Gitignore)"
+    Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File | ForEach-Object {
+        if ($_.Name -eq 'README.md') { return }
+        $dest = Join-Path (Join-Path $ProductRoot '.cursor\commands') $_.Name
+        if ($_.Name -eq 'autodev.md') { return }
+        if (-not (Test-Path -LiteralPath $dest)) { Write-Output "dry-run: copy command $($_.Name)" }
+    }
+    if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $cursorReadmeTemplate)) {
+        Write-Output "dry-run: write $cursorReadmeDest"
+    }
     if ($linkDest -and -not $linkExistsOk) { Write-Output "dry-run: junction $linkDest -> $skills" }
     exit 0
 }
@@ -110,11 +140,18 @@ if (-not (Test-Path -LiteralPath $commandDest)) {
     Copy-Item -LiteralPath $template -Destination $commandDest
 }
 
-$gi = Join-Path $ProductRoot '.gitignore'
-if ($ignorePlan -eq 'append') {
-    Add-Content -LiteralPath $gi -Value "`n# B3 autonomous-development checkpoints (local, do not commit)`n.b3/"
-} elseif ($ignorePlan -eq 'create') {
-    Set-Content -LiteralPath $gi -Value "# B3 autonomous-development checkpoints (local, do not commit)`n.b3/`n"
+if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $b3Commands)) {
+    $cmdDir = Join-Path $ProductRoot '.cursor\commands'
+    foreach ($src in Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File) {
+        if ($src.Name -in @('README.md', 'autodev.md')) { continue }
+        $dest = Join-Path $cmdDir $src.Name
+        if (-not (Test-Path -LiteralPath $dest)) {
+            Copy-Item -LiteralPath $src.FullName -Destination $dest
+        }
+    }
+    if (Test-Path -LiteralPath $cursorReadmeTemplate) {
+        Copy-Item -LiteralPath $cursorReadmeTemplate -Destination $cursorReadmeDest -Force
+    }
 }
 
 if ($linkDest -and -not $linkExistsOk) {
@@ -127,4 +164,5 @@ Write-Output "B3_HOME=$B3Home"
 Write-Output "command=$commandDest"
 Write-Output "gitignore.b3=$ignorePlan"
 Write-Output "host=$HostName"
+Write-Output "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $skills (not copied into product)"
 Write-Output "note: this proves files were written, not host slash-command or skill discovery"
