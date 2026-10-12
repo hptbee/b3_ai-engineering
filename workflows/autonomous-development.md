@@ -287,7 +287,11 @@ Do not label a failed check or a review-loop cap as `BLOCKED`. Leave unrelated n
 
 ### Continue
 
-After a completion commit, write the handoff in `progress.md`: task id, SHA, checks and results, review outcome, next ready task. Start that task. Do not ask the user to invoke the next stage.
+After a completion commit, write the handoff in `progress.md`: task id, SHA, checks and results, review outcome, next ready task. **Immediately** start the next ready task in the **same session**. Do not ask the user to invoke `/implement`, `/plan`, or `/autodev resume` while `run_status` is `running` and a ready `pending` task exists.
+
+Repeat the task loop (implement → test → review → fix → gate → commit → continue) until every required task is `completed`, `run_status` is `BLOCKED` / `FAIL` / `INCOMPLETE`, or final verification finishes with `PASS`. A plan note or an older user message that says “only the first task” or “stop after one task” does **not** override this workflow unless the **current** user message repeats that limit for **this** invocation.
+
+Do not end the turn with “next: run `/autodev resume`” when ready work remains and nothing is `BLOCKED`.
 
 ## Progress
 

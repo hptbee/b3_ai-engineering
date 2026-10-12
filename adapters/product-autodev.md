@@ -5,7 +5,7 @@ description: Run the full development lifecycle from a requirement or plan until
 
 # autodev
 
-**Action now:** run autonomous development until completion or an explicit blocker. Do not stop after the plan and wait for `/implement`.
+**Action now:** run autonomous development until `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`. Do not stop after the plan and wait for `/implement`. Do not stop after one task while other ready tasks remain — continue in this session (workflow **Continue**). Do not tell the user to run `/autodev resume` unless the session ended or the run is blocked.
 
 This file is a **thin product-repo pointer**. It does not contain the procedure.
 
