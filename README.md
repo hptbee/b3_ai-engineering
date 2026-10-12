@@ -38,6 +38,88 @@ Skills are Agent Skills (`SKILL.md`) stored canonically under `.cursor/skills/`;
 
 Evidence over opinion. Progressive disclosure. Small composable skills. Research, then adapt — do not copy skill packs.
 
+## Installation
+
+Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/codex/README.md`](adapters/codex/README.md), [`adapters/claude/README.md`](adapters/claude/README.md).
+
+### Cursor
+
+**Work inside this B3 repository:** Clone and open the repo root in Cursor. `.cursor/rules`, `.cursor/skills`, `.cursor/commands` (including `/autodev`), and `.cursor/agents` are committed and discovered from the project. `AGENTS.md` loads as the cross-host map. No adapter script is required.
+
+Do **not** run `sync-skills` for Cursor in this repo — skills already live at `.cursor/skills`. Do **not** add `.agents/skills` or `.claude/skills` here; Cursor would load duplicate skills.
+
+**Work in a separate product repository:**
+
+1. From **this B3 clone**, attach the product (run on your machine; paths are examples):
+
+```powershell
+# Windows
+.\adapters\install-product.ps1 -ProductRoot D:\path\to\your-product -HostName cursor
+```
+
+```bash
+# macOS / Linux
+./adapters/install-product.sh --product-root /path/to/your-product --host cursor
+```
+
+Optional: `-B3Home` / `--b3-home` if this B3 checkout is not the parent of `adapters/`.
+
+2. Open the **product** folder in Cursor (not only the B3 repo).
+3. Invoke `/autodev`; the workflow resolves this B3 clone via `{product}/.b3/home` or the `B3_HOME` environment variable.
+
+The installer writes `{product}/.b3/home`, a thin `{product}/.cursor/commands/autodev.md`, and a `.b3/` line in `.gitignore`. It does **not** copy `.cursor/skills` into the product. Commit `.b3/home`, `.cursor/commands/autodev.md`, and any `.gitignore` change. Checkpoints under `.b3/autodev/` stay local and gitignored.
+
+To use B3 **engineering skills** while the Agent works in the product (optional, once per machine), link user-level Cursor skills to this clone. Do not combine this with a copied skill tree under `{product}/.cursor/skills`.
+
+```powershell
+# Windows — replace the target with your B3 clone
+$skills = 'D:\Project\b3_ai-engineering\.cursor\skills'
+$dest = Join-Path $env:USERPROFILE '.cursor\skills\b3-ai-engineering'
+New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
+if (-not (Test-Path -LiteralPath $dest)) { cmd /c mklink /J "$dest" "$skills" }
+```
+
+```bash
+# macOS / Linux
+ln -sfn /path/to/b3_ai-engineering/.cursor/skills ~/.cursor/skills/b3-ai-engineering
+```
+
+Product-only rules and commands stay in the product’s own `.cursor/` tree; portable rule bodies remain in this B3 repo under `rules/`.
+
+### Codex (this B3 checkout)
+
+Create the local skill link (gitignored):
+
+```powershell
+.\adapters\sync-skills.ps1 -HostName codex
+.\adapters\sync-skills.ps1 -HostName codex -VerifyOnly
+```
+
+```bash
+./adapters/sync-skills.sh codex
+./adapters/sync-skills.sh --verify codex
+```
+
+If `.agents/skills` is an empty folder and the script fails with “access denied”, close Cursor windows on this repo and retry, or remove that directory, then run the helper again.
+
+On a **product repo without Cursor**, use `install-product` with `--host codex` so the installer may add `.agents/skills` → `B3_HOME/.cursor/skills`.
+
+### Claude Code (this B3 checkout)
+
+When you use Claude Code from this repo and not alongside Cursor in the same tree:
+
+```powershell
+.\adapters\sync-skills.ps1 -HostName claude
+```
+
+```bash
+./adapters/sync-skills.sh claude
+```
+
+On a product repo without Cursor, `install-product` with `--host claude` may add `.claude/skills` → `B3_HOME/.cursor/skills`. Cursor product install refuses product `.agents/skills` / `.claude/skills` to avoid duplicate discovery.
+
+More detail: [`adapters/README.md`](adapters/README.md), [`research/decisions/decision-011-product-repo-attach.md`](research/decisions/decision-011-product-repo-attach.md).
+
 ## Architecture
 
 Definitions: [`docs/architecture.md`](docs/architecture.md). Operating notes: [`AGENTS.md`](AGENTS.md). Conflicts: [`docs/precedence.md`](docs/precedence.md).
@@ -64,7 +146,7 @@ Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`revi
 
 ## Autonomous development
 
-One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Cursor: [`.cursor/commands/autodev.md`](.cursor/commands/autodev.md). Codex and Claude use the same file through prompt routing (`adapters/`). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). To use B3 from a separate product repository, run `adapters/install-product.ps1` or `adapters/install-product.sh` — it writes a pointer, not a skill copy. A stopped session does not resume until the user invokes the workflow again.
+One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Cursor: [`.cursor/commands/autodev.md`](.cursor/commands/autodev.md). Codex and Claude use the same file through prompt routing (`adapters/`). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). Product-repo setup: [Installation](#installation). A stopped session does not resume until the user invokes the workflow again.
 
 ## Evaluation
 
