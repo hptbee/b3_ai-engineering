@@ -1,0 +1,10 @@
+id: autodev-unrelated-001
+artifact: workflows/autonomous-development.md
+intent: A task commit does not stage unrelated user changes
+scenario: |
+  T001 scope is src/auth/
+  The worktree also has the user's uncommitted edit in docs/notes.md
+  Agent runs git add -A and commits both
+expected_outcome: FAIL
+failure_mode: indiscriminate-stage
+notes: Stage only task files. Leave unrelated changes untouched. Overlap on the same files is BLOCKED rather than discarded

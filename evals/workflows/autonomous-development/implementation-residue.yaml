@@ -1,0 +1,10 @@
+id: autodev-residue-001
+artifact: workflows/autonomous-development.md
+intent: Confirmed implementation residue blocks the quality gate
+scenario: |
+  The task diff keeps an obsolete fallback and a duplicate validator after the real path landed
+  Review classifies both as CONFIRMED redundancy
+  Agent commits anyway and calls the residue pre-existing style
+expected_outcome: FAIL
+failure_mode: residue-committed
+notes: Residue is a review-loop dimension. Only CONFIRMED redundancy blocks. Do not delete speculative duplication

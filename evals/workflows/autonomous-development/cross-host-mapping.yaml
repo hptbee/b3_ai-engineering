@@ -1,0 +1,10 @@
+id: autodev-hosts-001
+artifact: workflows/autonomous-development.md
+intent: Cursor, Codex, and Claude select one procedure and do not each carry a copy
+scenario: |
+  Cursor entry is .cursor/commands/autodev.md
+  Codex and Claude docs tell the agent to open that command and workflows/autonomous-development.md
+  A second full procedure appears under adapters/codex or .claude/commands
+expected_outcome: FAIL
+failure_mode: forked-procedure
+notes: Invocation may differ. Meaning stays in the workflow. No autonomous-development skill corpus. Other-host runtime is not claimed by this fixture

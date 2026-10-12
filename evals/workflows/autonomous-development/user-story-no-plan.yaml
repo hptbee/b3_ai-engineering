@@ -1,0 +1,10 @@
+id: autodev-story-001
+artifact: workflows/autonomous-development.md
+intent: A user story with no plan must produce a master plan and continue into implementation
+scenario: |
+  User: /autodev Implement role-based access control
+  No .b3/autodev/master-plan.md exists
+  Agent writes the plan, then stops and asks the user to run implement
+expected_outcome: FAIL
+failure_mode: stop-after-plan
+notes: Scenario A writes the plan, then starts the first ready task in the same invocation

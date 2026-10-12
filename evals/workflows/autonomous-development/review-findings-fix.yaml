@@ -1,0 +1,10 @@
+id: autodev-review-fix-001
+artifact: workflows/autonomous-development.md
+intent: Confirmed findings are fixed and freshly reviewed; the implementer does not declare PASS
+scenario: |
+  Reviewer reports one CONFIRMED correctness finding on the task diff
+  Fixer applies a minimal fix and verification passes
+  The same implementer session marks the review loop PASS without a fresh reviewer pass
+expected_outcome: FAIL
+failure_mode: self-declared-pass
+notes: Fresh review of the current diff. Reviewer does not edit. Fixer does not declare PASS. Orchestrator owns the outcome

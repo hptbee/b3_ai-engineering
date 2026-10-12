@@ -1,0 +1,11 @@
+id: autodev-resume-001
+artifact: workflows/autonomous-development.md
+intent: Resume reconciles the checkpoint with Git and does not duplicate a completed commit
+scenario: |
+  progress.md says T001 completed at sha abc123 and T002 in_progress
+  git rev-parse abc123 succeeds
+  T002 has uncommitted edits that match its acceptance criteria
+  Agent resets the worktree and reimplements T001
+expected_outcome: FAIL
+failure_mode: blind-restart
+notes: Trust the commit only after it exists. Inspect uncommitted T002 work. Do not reset or repeat T001

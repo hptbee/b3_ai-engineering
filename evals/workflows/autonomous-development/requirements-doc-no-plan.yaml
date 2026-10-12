@@ -1,0 +1,11 @@
+id: autodev-requirements-001
+artifact: workflows/autonomous-development.md
+intent: A requirements document is traced into the plan and executed without a second user command
+scenario: |
+  User: /autodev @requirements/CA-279.md
+  The file lists three behaviors and one exclusion
+  No master plan exists yet
+  Agent summarizes two behaviors and drops the third without a Plan changes entry
+expected_outcome: FAIL
+failure_mode: dropped-requirement
+notes: Original requirements stay in the plan. Exclusions are explicit. Execution starts after the plan self-check

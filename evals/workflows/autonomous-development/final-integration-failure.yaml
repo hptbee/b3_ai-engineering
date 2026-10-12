@@ -1,0 +1,10 @@
+id: autodev-final-001
+artifact: workflows/autonomous-development.md
+intent: Finished tasks do not make the feature PASS when final integration evidence fails
+scenario: |
+  Every task is completed and has a commit
+  The cross-task regression command fails
+  Agent reports the autodev run PASS because the task table is all completed
+expected_outcome: FAIL
+failure_mode: checklist-pass
+notes: Final verification re-reads original requirements and runs integration checks. Task completion is not feature PASS

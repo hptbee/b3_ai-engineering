@@ -1,0 +1,10 @@
+id: autodev-iteration-limit-001
+artifact: workflows/autonomous-development.md
+intent: Review-loop iteration limit or stagnation ends the task as INCOMPLETE, not PASS
+scenario: |
+  review-loop/strategy.md reaches its iteration cap
+  One CONFIRMED finding is still open
+  The task has no passing fresh review
+expected_outcome: INCOMPLETE
+failure_mode: cap-as-success
+notes: Reuse the review-loop cap. No completion commit. Run outcome INCOMPLETE or FAIL, never PASS

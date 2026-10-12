@@ -20,6 +20,9 @@ evals/
 │
 ├── agents/
 │
+├── workflows/
+│   └── autonomous-development/
+│
 └── review-loop/
     ├── false-positive/
     ├── false-convergence/
@@ -100,6 +103,10 @@ Quality evals need fixtures with a known good outcome, not only prompt sniff tes
 | `finding-lifecycle/` | Status transitions and severity ≠ confidence |
 
 A loop that always reports success is a failed loop. A loop that always reports dozens of speculative issues is also a failed loop.
+
+## Workflow eval folders
+
+`evals/workflows/autonomous-development/` holds lifecycle fixtures for `workflows/autonomous-development.md`. Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). These are schema-checked fixtures. They are not a live host run.
 
 ## Honesty metrics
 

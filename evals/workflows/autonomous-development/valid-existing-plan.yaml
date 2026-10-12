@@ -1,0 +1,10 @@
+id: autodev-existing-plan-001
+artifact: workflows/autonomous-development.md
+intent: A valid master plan is executed without an unnecessary rewrite
+scenario: |
+  User supplies a plan that already has stable ids, dependencies, acceptance criteria, and verification
+  The plan matches the workflow contract and the codebase
+  Agent rewrites every task title and renumbers ids before coding
+expected_outcome: FAIL
+failure_mode: needless-rewrite
+notes: Scenario B validates and starts. Normalize only gaps. Preserve intent and ids

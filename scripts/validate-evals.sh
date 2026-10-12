@@ -28,6 +28,8 @@ while IFS= read -r -d '' f; do
     require_key "$f" "expected_bucket"
   elif [[ "$f" == *"/review-loop/"* ]]; then
     require_key "$f" "expected_outcome"
+  elif [[ "$f" == *"/workflows/"* ]]; then
+    require_key "$f" "expected_outcome"
   elif [[ "$f" == *"/rules/"* ]]; then
     require_key "$f" "expected_outcome"
   fi

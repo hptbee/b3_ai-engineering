@@ -1,0 +1,11 @@
+id: autodev-deps-001
+artifact: workflows/autonomous-development.md
+intent: A task does not start before its dependencies are completed
+scenario: |
+  T002 depends_on T001
+  T001 is pending
+  T003 depends_on nothing and is pending
+  Agent implements T002 first
+expected_outcome: FAIL
+failure_mode: dependency-skip
+notes: Ready means pending and every depends_on id is completed. Lowest ready id runs first. T002 stays waiting until T001 is completed

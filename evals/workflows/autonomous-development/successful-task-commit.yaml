@@ -1,0 +1,13 @@
+id: autodev-commit-001
+artifact: workflows/autonomous-development.md
+intent: A task that passes the gate gets one focused commit and a recorded SHA
+scenario: |
+  T001 acceptance criteria hold
+  Named tests ran and passed
+  Review loop quality gate passed with no blocking CONFIRMED findings
+  The diff is inside T001 scope
+  Agent creates one commit and writes its SHA on T001 in progress.md
+  Next ready task starts without a new user command
+expected_outcome: PASS
+failure_mode: missing-commit-or-stall
+notes: One commit. No push. Handoff recorded. Continue automatically

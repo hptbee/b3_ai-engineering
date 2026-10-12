@@ -1,0 +1,10 @@
+id: autodev-incomplete-plan-001
+artifact: workflows/autonomous-development.md
+intent: An incomplete plan is normalized, then executed, without dropping original intent
+scenario: |
+  User supplies a partial plan with two tasks and no ids, no dependencies, and no verification
+  The prose still states the required behavior
+  Agent adds T001 and T002, records verification, and implements T001
+expected_outcome: PASS
+failure_mode: stall-on-incomplete-plan
+notes: Fill contract gaps. Record the normalization under Plan changes. Do not wait for a second command
