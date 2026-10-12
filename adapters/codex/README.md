@@ -14,7 +14,7 @@
 
 Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in skill bodies.
 
-Codex discovers `.agents/skills/` at repo root. Same layout as agentskills.io. On Windows use `./adapters/sync-skills.ps1 -HostName codex`; on macOS/Linux use `./adapters/sync-skills.sh codex`.
+Codex discovers `.agents/skills/` at repo root. Same layout as agentskills.io. On Windows use `./adapters/sync-skills.ps1 -HostName codex`; on macOS/Linux use `./adapters/sync-skills.sh codex`. Empty or invalid leftover directories are replaced only when empty; content or a wrong link is a nonzero failure. After linking, `-VerifyOnly` / `--verify` checks that `SKILL.md` files are visible through the link. That check is filesystem evidence, not Codex discovery `PASS`.
 
 ## Capability classification
 

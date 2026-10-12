@@ -36,6 +36,20 @@ There is no `cursor` target. Cursor already has the files.
 
 On Windows the PowerShell helper creates a junction, which does not require developer-mode symlink privileges. The link is ignored and must be recreated after a fresh clone.
 
+Both helpers **exit 1** on an invalid existing path, a wrong link, or a missing `SKILL.md`. An empty leftover directory is removed and replaced. `--verify` / `-VerifyOnly` checks the link without creating it. Filesystem success is not host skill-discovery `PASS`.
+
+## Product repository attach
+
+B3 can drive work in a separate product repo without copying skills.
+
+```bash
+./adapters/install-product.sh --product-root /path/to/product --host cursor
+# Windows:
+./adapters/install-product.ps1 -ProductRoot D:\path\to\product -HostName cursor
+```
+
+Writes `{product}/.b3/home`, a thin `{product}/.cursor/commands/autodev.md` from [`product-autodev.md`](product-autodev.md), and a `.b3/` gitignore line. It does **not** copy `.cursor/skills`. Cursor install refuses product `.agents/skills` or `.claude/skills` (duplicate discovery). Codex/Claude install may add a junction from the product discovery path to `B3_HOME/.cursor/skills`.
+
 ## Deferred
 
 - Automated adapter CI
