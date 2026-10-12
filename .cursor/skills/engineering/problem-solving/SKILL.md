@@ -38,7 +38,7 @@ Near miss: “is this design sound?” with no code change yet → stay in Under
    Restate the problem, the current behavior, the desired behavior, and constraints. Read the relevant code and failure evidence. If understanding is incomplete, stop and gather; do not guess a root cause.
 
 2. **Plan**  
-   Write a short plan: approach, files likely touched, risks, and how success will be verified. Prefer the smallest change. Call out open questions.
+   Write a short plan: approach, files likely touched, risks, and how success will be verified. Prefer the smallest change. Call out open questions. Inside `/autodev`, this step is the workflow Implementation Readiness Gate: inspect code first, then persist by **depth** (`inline` / `notes` / `detailed`). Do not skip it. Do not stop for the user after it.
 
 3. **Implement**  
    Execute the plan. Do not silently expand scope. If the plan is wrong, update the plan, then continue.

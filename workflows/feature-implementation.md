@@ -21,6 +21,6 @@ Independent multi-iteration review: `.cursor/commands/review-loop.md` → `revie
 
 `/implement` uses the one-pass review in this file and does not start the review loop.
 
-[`autonomous-development.md`](autonomous-development.md) uses the understand, plan, implement, and verify steps here, then the review loop instead of this one-pass review, and it does not stop between tasks.
+[`autonomous-development.md`](autonomous-development.md) uses the understand, plan, implement, and verify steps here. Per-task plan is Just-in-Time Analyze plus the Implementation Readiness Gate in that file, then the review loop instead of this one-pass review. It does not stop between the readiness gate and coding, or between tasks.
 
 Architecture choices: `simplest-correct` (strong rule `rules/simplest-correct.md`).

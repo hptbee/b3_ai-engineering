@@ -129,7 +129,9 @@ try {
         'git ls-files --others --exclude-standard',
         'git merge-base --is-ancestor',
         'git add -A',
-        'B3_HOME'
+        'B3_HOME',
+        'Implementation Readiness Gate',
+        'Just-in-Time'
     )
     $missing = @($needles | Where-Object { $wf -notlike "*$_*" })
     if ($missing.Count -eq 0) { Pass 'workflow-recipes' }

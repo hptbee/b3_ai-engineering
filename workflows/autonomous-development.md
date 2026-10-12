@@ -6,7 +6,8 @@ This file is the only autonomous-development procedure. Host entry points select
 
 ```text
 Understand → Analyze → Plan → Decompose
-  → for each ready task: Implement → Test → Review → Fix → Verify → Commit
+  → for each ready task:
+      JIT plan → Readiness gate → Implement → Test → Review → Fix → Verify → Commit
   → Final verification
 ```
 
@@ -71,6 +72,7 @@ Write checkpoints in `PRODUCT_ROOT`:
   master-plan.md
   progress.md
   findings.md
+  approach/T00N.md    optional; notes and detailed depths only
 ```
 
 `findings.md` is the only finding log for this run. Use the review-loop schema ([`../review-loop/spec.md`](../review-loop/spec.md), [`../review-loop/findings.md`](../review-loop/findings.md)). Do not also write `review-loop/state/current.yaml`. Do not invent a second lifecycle.
@@ -125,7 +127,7 @@ Stop as `BLOCKED` only for a genuine business ambiguity, a scope change, or a hi
 
 ## Scenario C — interrupted run
 
-1. Read `.b3/autodev/master-plan.md`, `progress.md`, and `findings.md` if it exists.
+1. Read `.b3/autodev/master-plan.md`, `progress.md`, `findings.md` if it exists, and `approach/*.md` if they exist. Approach notes are decisions, not a second master plan.
 2. Resolve `B3_HOME` and `PRODUCT_ROOT`. If `progress.md` records `b3_home` or `plan_id` and they do not match the current plan file and B3 location → `BLOCKED`.
 3. Read branch, `HEAD`, ancestry, and `git status --porcelain`. Progress files are claims, not proof.
 4. If progress records `branch` and the current branch differs → `BLOCKED`. Do not continue on the wrong branch.
@@ -138,7 +140,8 @@ Stop as `BLOCKED` only for a genuine business ambiguity, a scope change, or a hi
 6. SHA existence alone is not completion. A SHA on another branch, rewritten off `HEAD`, or reused for two tasks is not completion. Inspect the tree before doing the work again.
 7. If the current task has uncommitted changes → inspect them. Keep valid work. Do not reset, and do not start a second copy of the same change.
 8. Re-run the quality gate for an `in_progress` task before trusting it.
-9. Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved.
+9. If that task already has a readiness record of `ready` and named files still exist at `task_base` / current tree, reuse the approach. Re-run [Analyze](#analyze) only when the record is missing, files vanished, or HEAD is not a descendant of `task_base`. Do not write a new master plan.
+10. Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved. If Analyze had passed the gate and implementation had not started, **continue into Implement** in this session. Do not wait for a new user command.
 
 Do not repeat a task that meets the completion tests above. Do not create a second commit for the same completed task.
 
@@ -205,17 +208,51 @@ If `run_base_sha` is missing on resume, reconstruct it only from Git evidence (t
 
 Ready work: `pending`, every `depends_on` id is `completed`. Run ready tasks one at a time, lowest id first. If a task ends `blocked`, `incomplete`, or failed, do not start tasks that depend on it. Stop the run after reporting. Leave independent later tasks `pending`.
 
-When a task starts, set `current_task_base_sha` to `git rev-parse HEAD` and write it on that task as `task_base`.
+When a task starts, set `current_task_base_sha` to `git rev-parse HEAD` and write it on that task as `task_base`. Then run [Analyze](#analyze). Do not open product files for editing until the Implementation Readiness Gate passes.
 
-For the selected task, load only that task, the files it names, and the smallest domain skill. Use progress as the handoff from the previous task. Do not reread the whole repository.
+For the selected task, load that task, the files it names, and the smallest domain skill. Follow imports, callers, and contracts the inspect step names. Use progress and existing approach notes as the handoff. Do not reread the whole repository. Do not write a second master plan.
 
 ### Analyze
 
-Read the task. Inspect the code. Reuse what exists. Name the domain skill, the tests to add or update, and likely breakage. The plan is a hypothesis; the code wins when they disagree. Record a plan correction when that changes the task.
+Just-in-Time planning for **this** ready task. Scenario A/B already wrote the one master plan; do not decompose again. Do **not** load the planning skill here (it stops after a multi-task plan). Follow [`.cursor/skills/engineering/problem-solving/SKILL.md`](../.cursor/skills/engineering/problem-solving/SKILL.md) Understand/Plan for this slice. Load [`.cursor/skills/architecture/simplest-correct/SKILL.md`](../.cursor/skills/architecture/simplest-correct/SKILL.md) only if the approach would add a layer, service, or public-contract shape. Then apply the gate and continue into Implement. Do not wait for the user.
+
+1. Restate current behavior, desired behavior, and constraints from **inspected code**, not from master-plan prose alone.
+2. Inspect the named scope plus callers, callees, types/DTOs, routes, schema, fixtures, and existing tests. Reuse what exists. Do not guess a file list.
+3. Record `contracts` (HTTP, signatures, events, stored data) or `contracts: none`. Sketch who reads/writes the slice. List material edge cases, or `edge_cases: none material` with a one-line reason. An obvious neighbor-code boundary (empty input, unauthorized caller, missing row, compatibility) that is omitted fails the gate.
+4. Choose **persistence depth** (not the later review-loop size of the diff):
+   | Depth | Use when | Persist |
+   | --- | --- | --- |
+   | **inline** | One area, few files, no public contract, schema, auth, or migration | `progress.md` → `## Approach` → `### T00N` only. No `approach/` file. |
+   | **notes** | More files, two areas, or a local contract inside one module | `.b3/autodev/approach/T00N.md` and the same `### T00N` heading with `depth` + `readiness` |
+   | **detailed** | Public API or schema, auth, migration, production data, or a new layer/service | Same approach file, complete enough to resume without the old chat. Apply `simplest-correct` to the approach. Do **not** dispatch `architecture-reviewer` yet (no product diff). That agent runs in Review after code exists. |
+   When unsure inline vs notes, use notes.
+5. Write the approach: files and functions, required changes, tests ([`.cursor/skills/engineering/testing-strategy/SKILL.md`](../.cursor/skills/engineering/testing-strategy/SKILL.md)), verification. Smallest change that meets the task. The master plan is a hypothesis; the code wins when they disagree. Record a master-plan correction under Plan changes when the task itself changes. Do not add extra tasks for this slice.
+6. **Implementation Readiness Gate.** Do not edit product files until inspection evidence, contracts/data-flow/edges, named files/changes/tests/verification, and persistence depth are recorded. Incomplete inspection → task `incomplete`, run `INCOMPLETE`. Business choice or authorization → task `blocked`, run `BLOCKED`. Ordinary technical choices are not `BLOCKED`.
+7. Gate pass → **immediately** Implement in this session. Do not ask the user to approve the approach or to run `/implement`.
+
+`notes` / `detailed` approach file (gitignored with `.b3/autodev/`):
+
+```markdown
+# T00N approach
+
+- depth: notes
+- readiness: ready
+
+## Inspected
+## Current / desired
+## Files and functions
+## Contracts
+## Data flow
+## Edge cases
+## Changes
+## Tests
+## Verification
+## Architecture
+```
 
 ### Implement
 
-Follow [`.cursor/skills/engineering/problem-solving/SKILL.md`](../.cursor/skills/engineering/problem-solving/SKILL.md) for the change: smallest correct diff, existing architecture, no drive-by refactor, no speculative features. Preserve compatibility when the requirement says so. Skip that skill's single review step. The task review is the review loop below.
+Follow [`.cursor/skills/engineering/problem-solving/SKILL.md`](../.cursor/skills/engineering/problem-solving/SKILL.md) for the change: smallest correct diff, existing architecture, no drive-by refactor, no speculative features. Preserve compatibility when the requirement says so. Execute the readiness approach; do not rewrite it as a second plan. If the code disagrees, update the approach (and master-plan Plan changes when the task changes), then continue. Skip that skill's single review step. The task review is the review loop below.
 
 ### Test
 
@@ -254,6 +291,7 @@ Commit only when all of these are true:
 - Named checks ran and passed.
 - No blocking `CONFIRMED` finding remains.
 - The diff stays inside the task scope.
+- Product files in the diff are named in the approach (or tests named under verification). If the code forced extra files, the approach was updated with the reason **before** this gate. Unexplained extra files fail the gate.
 - No unrelated user changes are staged.
 - No confirmed residue remains.
 - The task's checks were run and the results are recorded.
@@ -289,7 +327,7 @@ Do not label a failed check or a review-loop cap as `BLOCKED`. Leave unrelated n
 
 After a completion commit, write the handoff in `progress.md`: task id, SHA, checks and results, review outcome, next ready task. **Immediately** start the next ready task in the **same session**. Do not ask the user to invoke `/implement`, `/plan`, or `/autodev resume` while `run_status` is `running` and a ready `pending` task exists.
 
-Repeat the task loop (implement → test → review → fix → gate → commit → continue) until every required task is `completed`, `run_status` is `BLOCKED` / `FAIL` / `INCOMPLETE`, or final verification finishes with `PASS`. A plan note or an older user message that says “only the first task” or “stop after one task” does **not** override this workflow unless the **current** user message repeats that limit for **this** invocation.
+Repeat the task loop (JIT plan → readiness gate → implement → test → review → fix → quality gate → commit → continue) until every required task is `completed`, `run_status` is `BLOCKED` / `FAIL` / `INCOMPLETE`, or final verification finishes with `PASS`. A plan note or an older user message that says “only the first task” or “stop after one task” does **not** override this workflow unless the **current** user message repeats that limit for **this** invocation. Do not stop after a passing readiness gate to wait for `/implement`.
 
 Do not end the turn with “next: run `/autodev resume`” when ready work remains and nothing is `BLOCKED`.
 
@@ -313,9 +351,20 @@ Do not end the turn with “next: run `/autodev resume`” when ready work remai
 
 ## Tasks
 
-| id | status | task_base | commit | verification | review |
-| --- | --- | --- | --- | --- | --- |
-| T001 | in_progress |  |  |  |  |
+| id | status | task_base | commit | verification | review | depth | readiness |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| T001 | in_progress |  |  |  |  |  |  |
+
+## Approach
+
+### T001
+- depth: inline
+- readiness: ready
+- files:
+- contracts: none
+- edge_cases:
+- tests:
+- verification:
 
 ## Blockers
 ## Next action
@@ -358,14 +407,14 @@ Do not open the pull request, push, or merge unless the user asks.
 | --- | --- |
 | `PASS` | Requirements hold, gates passed, commits exist, and final verification evidence supports completion |
 | `FAIL` | A required check or confirmed defect shows the work is wrong |
-| `INCOMPLETE` | Work or evidence is missing, a tool did not run, or the review loop hit its limit or stagnation rule |
+| `INCOMPLETE` | Work or evidence is missing, the Implementation Readiness Gate failed for lack of inspection, a tool did not run, or the review loop hit its limit or stagnation rule |
 | `BLOCKED` | The run needs a user decision or authorization |
 
 `PASS` means the evidence holds, not that the checklist was ticked. A review-loop `UNKNOWN / INCOMPLETE` stays that loop's outcome and the run is `INCOMPLETE`. A remaining confirmed defect is `FAIL`. `BLOCKED` is only a user decision or authorization, including an overlapping unrelated edit.
 
 ## Context
 
-At each task boundary the handoff in `progress.md` is the memory. The next session must be able to continue from the files and Git without the old conversation.
+At each task boundary the handoff in `progress.md` (and `approach/T00N.md` when that class requires it) is the memory. The next session must be able to continue from the files and Git without the old conversation. Do not put task-level approaches in `master-plan.md`.
 
 Use a subagent for isolated review or fix. Do not spawn agents for a trivial edit or to look busy.
 

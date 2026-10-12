@@ -24,6 +24,7 @@ Adapted from Superpowers writing-plans (file map, bite-sized tasks, no placehold
 - One localized bug with known cause → `debugging`
 - User said implement now on a tiny change → `problem-solving`
 - Pattern mining → `research-engineering-patterns`
+- Per-task implementation approach inside `/autodev` → `workflows/autonomous-development.md` Analyze (not a second master plan)
 
 Near miss: “is this architecture sound?” with no implementation yet → this skill plus `architecture/simplest-correct`.
 
@@ -41,6 +42,7 @@ Near miss: “is this architecture sound?” with no implementation yet → this
 
 - Execution: `.cursor/skills/engineering/problem-solving/SKILL.md`
 - Workflow: `workflows/feature-implementation.md`
+- Autonomous development: Scenario A/B uses this skill for the one master plan. Per-task approach is `workflows/autonomous-development.md` Analyze (problem-solving Plan + readiness gate). Do not load this skill again on a ready task.
 
 ## Verification
 

@@ -1,0 +1,11 @@
+id: autodev-jit-small-001
+artifact: workflows/autonomous-development.md
+intent: An inline-depth task plans in progress.md and continues into implementation without an extra approach file
+scenario: |
+  T001 is a one-file copy fix with no contract change
+  Agent writes ### T001 under ## Approach in progress.md, depth inline
+  No .b3/autodev/approach/T001.md is created
+  Agent starts Implement in the same invocation
+expected_outcome: PASS
+failure_mode: overplan-or-stall
+notes: Do not write a second master plan. Do not stop for the user after the readiness gate

@@ -1,0 +1,12 @@
+id: autodev-jit-resume-small-001
+artifact: workflows/autonomous-development.md
+intent: Resume of an inline-depth task reuses that task's progress.md notes only
+scenario: |
+  T001 completed. T002 is in_progress, depth inline, readiness ready
+  progress.md has ### T001 and ### T002 under ## Approach
+  No approach/T002.md exists
+  task_base is an ancestor of HEAD
+  Agent mixes T001 bullets into T002 or writes approach/T002.md and a new master plan
+expected_outcome: FAIL
+failure_mode: mixed-or-replan-small
+notes: Inline notes are per-task headings in progress.md. Resume T002 only. Continue into Implement

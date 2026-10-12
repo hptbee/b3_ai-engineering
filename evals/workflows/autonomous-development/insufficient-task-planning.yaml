@@ -1,0 +1,11 @@
+id: autodev-jit-insufficient-001
+artifact: workflows/autonomous-development.md
+intent: Coding a ready task without an evidence-based approach and readiness gate is incomplete
+scenario: |
+  T002 is pending and ready
+  Agent sets in_progress and starts editing product files
+  No inspection of current functions, no persistence depth, no readiness record
+  Master plan still has only the original task prose
+expected_outcome: INCOMPLETE
+failure_mode: skip-readiness-gate
+notes: Analyze must inspect code and pass the Implementation Readiness Gate before Implement. Do not treat master-plan scope as the approach

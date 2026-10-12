@@ -1,0 +1,11 @@
+id: autodev-jit-edges-001
+artifact: workflows/autonomous-development.md
+intent: Skipping obvious edge cases in Analyze fails the readiness gate
+scenario: |
+  Task adds lookup-by-id
+  Inspected handler already returns 404 for missing rows in sibling endpoints
+  Approach lists happy path only, no missing-id or unauthorized caller
+  Agent implements the happy path
+expected_outcome: INCOMPLETE
+failure_mode: missed-edge-cases
+notes: Material boundaries from neighboring code must be listed or explicitly none material with a reason

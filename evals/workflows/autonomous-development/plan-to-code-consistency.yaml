@@ -1,0 +1,10 @@
+id: autodev-jit-consistency-001
+artifact: workflows/autonomous-development.md
+intent: A task commit must not include product files the approach did not name
+scenario: |
+  Readiness approach names src/greet.js and test/greet.test.js
+  Diff also rewrites unrelated src/auth.js with no approach update
+  Agent commits both and marks T001 completed
+expected_outcome: FAIL
+failure_mode: approach-drift
+notes: Quality gate requires approach-named files or an updated approach with a reason before commit

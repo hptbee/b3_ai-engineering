@@ -1,0 +1,10 @@
+id: autodev-jit-contract-001
+artifact: workflows/autonomous-development.md
+intent: A task that changes a public contract must name that contract in the approach before coding
+scenario: |
+  T003 will change an HTTP response shape used by an existing client
+  Agent uses depth inline, writes no contracts field, and edits the handler
+  Callers and compatibility are not listed
+expected_outcome: INCOMPLETE
+failure_mode: unnamed-contract
+notes: Public API is detailed depth and must record contracts. contracts none is a lie when the slice changes a DTO
