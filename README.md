@@ -64,7 +64,7 @@ Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`revi
 
 ## Autonomous development
 
-One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Cursor: [`.cursor/commands/autodev.md`](.cursor/commands/autodev.md). Codex and Claude use the same file through prompt routing (`adapters/`). Checkpoints live in the repo under change at `.b3/autodev/`. A stopped session does not resume until the user invokes the workflow again.
+One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Cursor: [`.cursor/commands/autodev.md`](.cursor/commands/autodev.md). Codex and Claude use the same file through prompt routing (`adapters/`). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). To use B3 from a separate product repository, run `adapters/install-product.ps1` or `adapters/install-product.sh` — it writes a pointer, not a skill copy. A stopped session does not resume until the user invokes the workflow again.
 
 ## Evaluation
 

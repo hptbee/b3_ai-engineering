@@ -16,6 +16,8 @@ Discovery of skills after placing them on the native path is **VERIFIED** by Cur
 
 Do **not** also symlink `.agents/skills` or `.claude/skills` in this repo — Cursor cross-loads those roots and would duplicate skills.
 
+To use `/autodev` in a **separate product repository**, run [`../install-product.ps1`](../install-product.ps1) (or `.sh`) with `-HostName cursor`. That writes a pointer command and `.b3/home`. It does not copy skills into the product. User-level `~/.cursor/skills/b3-ai-engineering` is optional and must not be combined with a product `.cursor/skills` copy of the same tree.
+
 ## Rules
 
 Portable meaning stays in `rules/*.md`. Cursor activation is thin `.mdc` files:

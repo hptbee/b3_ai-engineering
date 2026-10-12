@@ -45,6 +45,7 @@ Knowledge → Skills (constrained by Rules)
 6. Do not claim unimplemented layers already exist.
 7. Lessons learned do not automatically become rules (`docs/system-lifecycle.md`).
 8. `.agents/skills` is a local installation link to `.cursor/skills`, not a second editable skill corpus. Set it up with `adapters/sync-skills.ps1` on Windows or `adapters/sync-skills.sh` on macOS/Linux.
+9. In a separate product repository, resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and follow `workflows/autonomous-development.md` from there. Do not copy `.cursor/skills` into the product. Installer: `adapters/install-product.ps1` / `adapters/install-product.sh`.
 
 ## Source vs host vs docs
 

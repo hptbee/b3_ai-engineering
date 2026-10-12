@@ -40,13 +40,31 @@ The planning skill stops after the plan. Problem-solving stops or escalates at t
 | Codex | Name the intent: autonomous development, `autodev`, `resume`, or `status` | Same command file, then this file |
 | Claude Code | Same named intent. A local slash command may point here | Same command file, then this file |
 
-Details and limits: [`../adapters/cursor/README.md`](../adapters/cursor/README.md), [`../adapters/codex/README.md`](../adapters/codex/README.md), [`../adapters/claude/README.md`](../adapters/claude/README.md).
+Details and limits: [`../adapters/cursor/README.md`](../adapters/cursor/README.md), [`../adapters/codex/README.md`](../adapters/codex/README.md), [`../adapters/claude/README.md`](../adapters/claude/README.md). Product-repo attach: [`../adapters/install-product.ps1`](../adapters/install-product.ps1) / [`../adapters/install-product.sh`](../adapters/install-product.sh).
 
 A terminated host session does not restart itself. The next session continues only when the user invokes this workflow again (`resume` or a new `/autodev` with no fresh requirement and an existing checkpoint).
 
+## Locate B3 and the product root
+
+This workflow may run inside the B3 system repository or inside a **separate product repository**.
+
+`PRODUCT_ROOT` is the git root of the repository whose files will change.
+
+`B3_HOME` is the B3 system repository. Resolve it in this order. Stop at the first match that contains `workflows/autonomous-development.md`:
+
+1. This file's repository, if the current git root contains `workflows/autonomous-development.md`
+2. Environment variable `B3_HOME`
+3. `{PRODUCT_ROOT}/.b3/home` (one line, absolute path, written by the product installer)
+
+If none match → `BLOCKED`. Ask the user to set `B3_HOME` or run the product installer. Do not invent a second procedure.
+
+Load skills, rules, review-loop, commands, and agents from `B3_HOME`. Markdown links in this file are relative to `B3_HOME/workflows/`.
+
+Write checkpoints and make Git commits in `PRODUCT_ROOT`. Do not copy `B3_HOME/.cursor/skills` into the product repository. Do not create product `.agents/skills` or `.claude/skills` while using Cursor in that product (duplicate discovery).
+
 ## State
 
-Write checkpoints in the **repository under change**:
+Write checkpoints in `PRODUCT_ROOT`:
 
 ```text
 .b3/autodev/
@@ -59,9 +77,21 @@ Write checkpoints in the **repository under change**:
 
 Create the file on the first review. Append one section per task or final pass. IDs (`R001`, `R002`, …) increment for the whole run and are never recycled or reset. Until the file exists, progress says no finding log yet.
 
-Update checkpoints when the plan is accepted for execution, when a task starts, when a task commits or blocks, and at the final outcome. Do not commit `.b3/autodev/` unless the user asks. Do not discard unrelated user files to make the tree clean.
+Update checkpoints when the plan is accepted for execution, when a task starts, when a task commits or blocks, and at the final outcome.
 
-This system repo ignores `.b3/` so a run here does not become source.
+### Checkpoint git policy
+
+`.b3/` is local run state. It must not enter a task commit.
+
+1. Ensure `{PRODUCT_ROOT}/.gitignore` contains a line `.b3/`. If it is missing, append that line. Do not remove other ignore rules. Do not rewrite the user's gitignore.
+2. Never `git add .b3/`. Never `git add -A` or `git add .`.
+3. Before every commit, run `git diff --cached --name-only`. If any path starts with `.b3/`, unstage those paths. If they cannot be unstaged without discarding user files → `BLOCKED`.
+4. Ignored `.b3/` files do not make the worktree dirty for the final `PASS` check.
+5. Other untracked or uncommitted product files block `PASS`. List them. Do not delete them.
+
+Do not commit `.b3/autodev/` unless the user asks. Do not discard unrelated user files to make the tree clean.
+
+This system repo ignores `.b3/` so a run here does not become source. Product repos get the same ignore line from the installer or from step 1.
 
 ## Input
 
@@ -96,13 +126,21 @@ Stop as `BLOCKED` only for a genuine business ambiguity, a scope change, or a hi
 ## Scenario C — interrupted run
 
 1. Read `.b3/autodev/master-plan.md`, `progress.md`, and `findings.md` if it exists.
-2. Read branch, `HEAD`, task commits, and `git status`. Progress files are claims, not proof.
-3. If progress says a task is `completed` but the recorded commit is missing → treat that task as not complete. Inspect the tree before doing the work again.
-4. If the current task has uncommitted changes → inspect them. Keep valid work. Do not reset, and do not start a second copy of the same change.
-5. Re-run the quality gate for an in-progress task before trusting it.
-6. Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved.
+2. Resolve `B3_HOME` and `PRODUCT_ROOT`. If `progress.md` records `b3_home` or `plan_id` and they do not match the current plan file and B3 location → `BLOCKED`.
+3. Read branch, `HEAD`, ancestry, and `git status --porcelain`. Progress files are claims, not proof.
+4. If progress records `branch` and the current branch differs → `BLOCKED`. Do not continue on the wrong branch.
+5. Treat a task as `completed` only when **all** of these hold:
+   - The recorded commit SHA exists (`git cat-file -t <sha>` is `commit`)
+   - It is an ancestor of `HEAD` (`git merge-base --is-ancestor <sha> HEAD`)
+   - It is unique among completed task SHAs in this run
+   - It is a descendant of that task's `task_base` (or of `run_base_sha` if `task_base` was not recorded)
+   - The commit's tree still supports the task acceptance criteria, or those checks are re-run and pass
+6. SHA existence alone is not completion. A SHA on another branch, rewritten off `HEAD`, or reused for two tasks is not completion. Inspect the tree before doing the work again.
+7. If the current task has uncommitted changes → inspect them. Keep valid work. Do not reset, and do not start a second copy of the same change.
+8. Re-run the quality gate for an `in_progress` task before trusting it.
+9. Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved.
 
-Do not repeat a task whose commit is present and whose acceptance checks still hold. Do not create a second commit for the same completed task.
+Do not repeat a task that meets the completion tests above. Do not create a second commit for the same completed task.
 
 ## Plan contract
 
@@ -155,7 +193,19 @@ Size: one independently verifiable change that can be one commit. A trivial edit
 
 ## Execution
 
+On first start of a run, record in `progress.md` before changing files:
+
+- `b3_home`, `product_root`
+- `plan_id` (title + version from the master plan)
+- `plan_version`
+- `branch` (`git branch --show-current`)
+- `run_base_sha` (`git rev-parse HEAD`)
+
+If `run_base_sha` is missing on resume, reconstruct it only from Git evidence (the parent of the first recorded task commit, or current `HEAD` if no task commits exist). If it cannot be reconstructed → `INCOMPLETE`.
+
 Ready work: `pending`, every `depends_on` id is `completed`. Run ready tasks one at a time, lowest id first. If a task ends `blocked`, `incomplete`, or failed, do not start tasks that depend on it. Stop the run after reporting. Leave independent later tasks `pending`.
+
+When a task starts, set `current_task_base_sha` to `git rev-parse HEAD` and write it on that task as `task_base`.
 
 For the selected task, load only that task, the files it names, and the smallest domain skill. Use progress as the handoff from the previous task. Do not reread the whole repository.
 
@@ -173,7 +223,20 @@ Choose checks with [`.cursor/skills/engineering/testing-strategy/SKILL.md`](../.
 
 ### Review
 
-Run [`../review-loop/strategy.md`](../review-loop/strategy.md) on **this task's diff**. Size with [`../review-loop/sizing.md`](../review-loop/sizing.md).
+Name the review target before dispatching. The range is `{task_base}..HEAD` plus the working tree.
+
+Collect **all** of:
+
+```text
+git diff --name-only {task_base}
+git diff --cached --name-only
+git ls-files --others --exclude-standard
+git status --porcelain
+```
+
+The task diff is staged + unstaged + new untracked files, excluding ignored `.b3/` paths. An unstaged or untracked file that belongs to the task is in scope. `git diff HEAD` alone is not enough if the task created untracked files.
+
+Pass that file list and `{task_base}` to [`../review-loop/strategy.md`](../review-loop/strategy.md). Size with [`../review-loop/sizing.md`](../review-loop/sizing.md). Do not let the reviewer substitute `HEAD~1` or a PR base from another branch.
 
 Cover correctness, security, architecture, performance, reliability, maintainability, tests, requirement fit, unnecessary complexity, duplication, dead code, obsolete fallbacks, and residue from earlier fixes. Those dimensions already live in the review-loop spec. Do not open a second review method.
 
@@ -202,6 +265,7 @@ Missing evidence is `INCOMPLETE`, not `PASS`. A failed check is `FAIL`. Do not c
 One commit for the task that passed the gate.
 
 - Stage only files that belong to the task.
+- Do not stage `.b3/`. Confirm with `git diff --cached --name-only`.
 - Follow the repository's commit message style.
 - Message says why, in a sentence or two.
 - Record the full SHA in `progress.md` and set the task to `completed`.
@@ -232,16 +296,22 @@ After a completion commit, write the handoff in `progress.md`: task id, SHA, che
 ```markdown
 # Progress
 
+- b3_home: <absolute path>
+- product_root: <absolute path>
+- plan_id: <title + version>
 - plan_version: 1
-- run_status: running
+- branch: <branch>
+- run_base_sha: <full SHA at run start>
 - current_task: T001
+- current_task_base_sha: <full SHA when T001 started>
+- run_status: running
 - updated: <ISO-8601>
 
 ## Tasks
 
-| id | status | commit | verification | review |
-| --- | --- | --- | --- | --- |
-| T001 | in_progress |  |  |  |
+| id | status | task_base | commit | verification | review |
+| --- | --- | --- | --- | --- | --- |
+| T001 | in_progress |  |  |  |  |
 
 ## Blockers
 ## Next action
@@ -258,13 +328,13 @@ When every required task is `completed`, the feature is still not done until thi
 2. Check every acceptance criterion.
 3. Check integration across tasks.
 4. Run the regression, build, and type checks the repo uses for this change.
-5. Review the cumulative diff with the review loop. Large diffs use that loop's adaptive sizing, including its cross-cutting pass. Findings still go to `.b3/autodev/findings.md`.
+5. Review the cumulative range `{run_base_sha}..HEAD` plus any remaining uncommitted product files, using the review loop. Include every commit in `git log --oneline {run_base_sha}..HEAD`. Large diffs use that loop's adaptive sizing, including its cross-cutting pass. Findings still go to `.b3/autodev/findings.md`.
 6. Look for duplication introduced across tasks.
 7. Check that architecture still matches the plan.
 8. Confirm no required task was skipped.
-9. Confirm each `completed` task has a commit that exists.
+9. Confirm each `completed` task commit exists, is an ancestor of `HEAD`, and appears in that log.
 
-If that pass edits the tree, those edits are one final commit, not a new feature task. Its scope is the cross-task fix. The task-scope rule does not block it. The other gate rules still apply: checks passed, no blocking confirmed finding, no unrelated files, and evidence recorded. Record the SHA in progress under `final`. A dirty tree, or a fix with no commit, is `INCOMPLETE`. Do not report `PASS` while the worktree differs from the recorded commits.
+If that pass edits the tree, those edits are one final commit, not a new feature task. Its scope is the cross-task fix. The task-scope rule does not block it. The other gate rules still apply: checks passed, no blocking confirmed finding, no unrelated files, and evidence recorded. Record the SHA in progress under `final`. A dirty tree of **non-ignored** files, or a fix with no commit, is `INCOMPLETE`. Ignored `.b3/` files do not block `PASS`. Do not report `PASS` while non-ignored paths differ from the recorded commits.
 
 Then set `run_status` and report:
 

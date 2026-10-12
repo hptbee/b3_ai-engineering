@@ -49,7 +49,7 @@ One extra specialist pass counts toward the reviewer-pass budget.
 
 ## 0. Establish the target
 
-1. Identify the change (`git diff` against the PR base, or the user-named range). Empty/wrong branch → `UNKNOWN / INCOMPLETE`, stop.
+1. Identify the change (`git diff` against the PR base, or the user-named range). When autonomous development names `{task_base}` or `{run_base_sha}`, use that range plus staged, unstaged, and untracked non-ignored files. Do not substitute `HEAD~1`. Empty/wrong branch → `UNKNOWN / INCOMPLETE`, stop.
 2. Classify size ([`sizing.md`](sizing.md)).
 3. Initialize the finding log ([`findings.md`](findings.md)). IDs are stable (`R001`…).
 

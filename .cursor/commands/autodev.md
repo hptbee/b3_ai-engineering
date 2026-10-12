@@ -9,6 +9,8 @@ description: Run the full development lifecycle from a requirement or plan until
 
 **Workflow:** [`../../workflows/autonomous-development.md`](../../workflows/autonomous-development.md)
 
+If that relative path is missing (this command was installed in a product repository), resolve `B3_HOME` then open `{B3_HOME}/workflows/autonomous-development.md`. Order: `B3_HOME` environment variable, then product `.b3/home`, then this repository if it contains that workflow file. Do not copy B3 skills into the product repository.
+
 | Argument | Behavior |
 | --- | --- |
 | Story, requirement, bug, refactor, or a path to one | Start or continue the lifecycle |
