@@ -1,0 +1,10 @@
+id: autodev-checkpoint-001
+artifact: workflows/autonomous-development.md
+intent: .b3/autodev checkpoints must not enter a task commit
+scenario: |
+  progress.md and master-plan.md exist under .b3/autodev/
+  Agent stages with git add -A and commits T001
+  The commit contains .b3/autodev/progress.md
+expected_outcome: FAIL
+failure_mode: checkpoint-in-commit
+notes: Ensure .gitignore has .b3/. Never git add -A. Inspect git diff --cached --name-only

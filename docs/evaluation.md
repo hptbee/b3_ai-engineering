@@ -106,7 +106,7 @@ A loop that always reports success is a failed loop. A loop that always reports 
 
 ## Workflow eval folders
 
-`evals/workflows/autonomous-development/` holds lifecycle fixtures for `workflows/autonomous-development.md`. Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). These are schema-checked fixtures. They are not a live host run.
+`evals/workflows/autonomous-development/` holds lifecycle fixtures for `workflows/autonomous-development.md`. Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). YAML cases remain schema-checked. Git, ignore, install, and resume ancestry have a separate PowerShell behavioral script (`scripts/validate-autodev-behavior.ps1`) and an isolated product-repo smoke (`scripts/smoke-autodev-product.ps1`). Those scripts are not a Cursor slash-command or Codex runtime test.
 
 ## Honesty metrics
 

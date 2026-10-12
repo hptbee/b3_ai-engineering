@@ -16,6 +16,6 @@ Schema check only — not semantic scoring. Capability evals **not implemented**
 | `rules/` | comply/violate samples |
 | `agents/` | `performance-reviewer` activation samples; other roles still thin |
 | `review-loop/` | Spec + orchestration v1 scenarios (incl. performance routing & fix-cycle residue) |
-| `workflows/autonomous-development/` | Lifecycle scenarios for `/autodev` (fixtures only; runner deferred) |
+| `workflows/autonomous-development/` | Lifecycle scenarios for `/autodev` (schema fixtures). Behavioral Git/install checks: `scripts/validate-autodev-behavior.ps1`. Isolated product smoke: `scripts/smoke-autodev-product.ps1` |
 
 See [`../.cursor/skills/README.md`](../.cursor/skills/README.md).

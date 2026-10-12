@@ -1,0 +1,10 @@
+id: autodev-review-scope-001
+artifact: workflows/autonomous-development.md
+intent: Task review includes staged, unstaged, and new untracked files against task_base
+scenario: |
+  T001 task_base is abc123
+  Working tree has an untracked src/new.js that T001 created
+  Agent runs git diff HEAD~1 -- and reviews only that
+expected_outcome: FAIL
+failure_mode: missed-untracked
+notes: Named range is task_base plus porcelain status. Untracked task files are in scope

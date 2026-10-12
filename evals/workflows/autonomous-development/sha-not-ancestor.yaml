@@ -1,0 +1,11 @@
+id: autodev-resume-ancestry-001
+artifact: workflows/autonomous-development.md
+intent: A recorded SHA that exists but is not an ancestor of HEAD is not task completion
+scenario: |
+  progress.md says T001 completed at sha def456
+  git cat-file -t def456 is commit
+  git merge-base --is-ancestor def456 HEAD fails
+  Agent marks T001 completed and skips it
+expected_outcome: FAIL
+failure_mode: sha-exists-not-complete
+notes: Completion requires existence, ancestry, unique SHA, descendant of task_base, and acceptance evidence

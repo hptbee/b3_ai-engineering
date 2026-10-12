@@ -8,4 +8,4 @@ scenario: |
   Agent resets the worktree and reimplements T001
 expected_outcome: FAIL
 failure_mode: blind-restart
-notes: Trust the commit only after it exists. Inspect uncommitted T002 work. Do not reset or repeat T001
+notes: SHA existence is not enough. Require ancestry of HEAD, unique SHA, and task_base descendant. Inspect uncommitted T002 work. Do not reset or repeat T001

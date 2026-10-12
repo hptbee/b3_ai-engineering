@@ -1,0 +1,10 @@
+id: autodev-final-range-001
+artifact: workflows/autonomous-development.md
+intent: Final review covers run_base_sha..HEAD and every workflow commit
+scenario: |
+  run_base_sha is aaa111
+  T001 commit bbb222 and T002 commit ccc333 exist on HEAD
+  Agent reviews only the T002 snapshot and reports feature PASS
+expected_outcome: FAIL
+failure_mode: partial-cumulative-review
+notes: git log run_base_sha..HEAD must list every task commit. Review that range, not the last commit only
