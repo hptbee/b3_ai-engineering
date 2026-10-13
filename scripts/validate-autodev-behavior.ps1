@@ -97,13 +97,15 @@ try {
         else {
             $agentsLink = Join-Path $product '.agents\skills'
             $item = Get-Item -LiteralPath $agentsLink -Force
-            $isLink = $item.LinkType -in @('Junction', 'SymbolicLink')
-            $skillN = @(Get-ChildItem -LiteralPath $agentsLink -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count
+            $isTreeLink = $item.LinkType -in @('Junction', 'SymbolicLink')
+            $autodevOk = Test-Path (Join-Path $agentsLink 'autodev\SKILL.md')
+            $planningOk = Test-Path (Join-Path $agentsLink 'planning\SKILL.md')
+            $skillN = @(Get-ChildItem -LiteralPath $agentsLink -Directory -Force -ErrorAction SilentlyContinue).Count
             $giCodex = Get-Content (Join-Path $product '.gitignore') -Raw
             $agentsMdOk = Test-Path (Join-Path $product 'AGENTS.md')
             $giSkillOk = ($giCodex -match '(?m)^\s*\.agents/skills\s*$')
-            if ($isLink -and $skillN -ge 1 -and $agentsMdOk -and $giSkillOk) { Pass 'install-product-codex' }
-            else { FailCheck 'install-product-codex' "link=$isLink skills=$skillN agentsMd=$agentsMdOk gi=$giSkillOk" }
+            if ((-not $isTreeLink) -and $autodevOk -and $planningOk -and $skillN -ge 24 -and $agentsMdOk -and $giSkillOk) { Pass 'install-product-codex' }
+            else { FailCheck 'install-product-codex' "treeLink=$isTreeLink autodev=$autodevOk planning=$planningOk skills=$skillN agentsMd=$agentsMdOk gi=$giSkillOk" }
         }
     }
 

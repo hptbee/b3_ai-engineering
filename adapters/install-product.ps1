@@ -71,13 +71,64 @@ if (Test-Path -LiteralPath $homeDest) {
 $linkDest = $null
 if ($HostName -eq 'codex') { $linkDest = $agentsDest }
 if ($HostName -eq 'claude') { $linkDest = $claudeDest }
-$linkExistsOk = $false
-if ($linkDest -and (Test-Path -LiteralPath $linkDest)) {
-    $item = Get-Item -LiteralPath $linkDest -Force
+$commandSkillsSrc = Join-Path $scriptRoot 'codex-command-skills'
+
+function Remove-JunctionOrSymlink([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $item = Get-Item -LiteralPath $Path -Force
     if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
-        try { $linkExistsOk = ((Resolve-Path -LiteralPath $linkDest).Path.TrimEnd('\') -eq $skills.TrimEnd('\')) } catch { $linkExistsOk = $false }
+        & cmd.exe /c rmdir "$Path"
+        if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $Path)) { Fail "could not remove junction $Path" }
+        return
     }
-    if (-not $linkExistsOk) { Fail "refusing to replace existing $linkDest" }
+    Fail "refusing to replace existing $Path"
+}
+
+function Get-SkillNameFromFile([string]$Path) {
+    $text = Get-Content -LiteralPath $Path -Raw
+    if ($text -match '(?m)^name:\s*([a-z0-9-]+)\s*$') { return $Matches[1] }
+    return (Split-Path -Leaf (Split-Path -Parent $Path))
+}
+
+function Test-LinkTarget([string]$LinkPath, [string]$Expected) {
+    try {
+        return ((Resolve-Path -LiteralPath $LinkPath).Path.TrimEnd('\')) -eq $Expected.TrimEnd('\')
+    } catch {
+        return $false
+    }
+}
+
+function Install-SkillJunction([string]$Dest, [string]$Target) {
+    if (Test-Path -LiteralPath $Dest) {
+        $item = Get-Item -LiteralPath $Dest -Force
+        if ($item.LinkType -in @('Junction', 'SymbolicLink') -and (Test-LinkTarget $Dest $Target)) { return }
+        Fail "refusing to replace existing $Dest"
+    }
+    New-Item -ItemType Junction -Path $Dest -Target $Target | Out-Null
+}
+
+function Install-CodexSkillIndex([string]$DestRoot, [string]$SkillsSrc, [string]$CommandSkillsSrc) {
+    if (Test-Path -LiteralPath $DestRoot) {
+        $item = Get-Item -LiteralPath $DestRoot -Force
+        if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
+            # Previous install linked the whole nested skill tree. Codex needs one folder per skill.
+            Remove-JunctionOrSymlink $DestRoot
+        } elseif (-not $item.PSIsContainer) {
+            Fail "refusing to replace existing $DestRoot"
+        }
+    }
+    New-Item -ItemType Directory -Path $DestRoot -Force | Out-Null
+    Get-ChildItem -LiteralPath $SkillsSrc -Recurse -Filter 'SKILL.md' -File | ForEach-Object {
+        $name = Get-SkillNameFromFile $_.FullName
+        $srcDir = Split-Path -Parent $_.FullName
+        Install-SkillJunction (Join-Path $DestRoot $name) $srcDir
+    }
+    if (Test-Path -LiteralPath $CommandSkillsSrc) {
+        Get-ChildItem -LiteralPath $CommandSkillsSrc -Directory | ForEach-Object {
+            if (-not (Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md'))) { return }
+            Install-SkillJunction (Join-Path $DestRoot $_.Name) $_.FullName
+        }
+    }
 }
 
 function Test-B3GitignoreOk([string]$Text) {
@@ -154,7 +205,8 @@ if ($DryRun) {
     if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $cursorReadmeTemplate)) {
         Write-Output "dry-run: write $cursorReadmeDest"
     }
-    if ($linkDest -and -not $linkExistsOk) { Write-Output "dry-run: junction $linkDest -> $skills" }
+    if ($HostName -eq 'codex') { Write-Output "dry-run: flatten $linkDest (one junction per skill + command skills)" }
+    elseif ($linkDest) { Write-Output "dry-run: junction $linkDest -> $skills" }
     exit 0
 }
 
@@ -184,9 +236,17 @@ if (Test-Path -LiteralPath $b3Commands) {
     }
 }
 
-if ($linkDest -and -not $linkExistsOk) {
-    New-Item -ItemType Directory -Path (Split-Path -Parent $linkDest) -Force | Out-Null
-    New-Item -ItemType Junction -Path $linkDest -Target $skills | Out-Null
+if ($HostName -eq 'codex') {
+    Install-CodexSkillIndex $agentsDest $skills $commandSkillsSrc
+} elseif ($linkDest) {
+    if (-not (Test-Path -LiteralPath $linkDest)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $linkDest) -Force | Out-Null
+        New-Item -ItemType Junction -Path $linkDest -Target $skills | Out-Null
+    } else {
+        $item = Get-Item -LiteralPath $linkDest -Force
+        $ok = $item.LinkType -in @('Junction', 'SymbolicLink') -and (Test-LinkTarget $linkDest $skills)
+        if (-not $ok) { Fail "refusing to replace existing $linkDest" }
+    }
 }
 
 Write-Output "installed B3 pointer in $ProductRoot"
@@ -197,7 +257,7 @@ Write-Output "gitignore.b3=$ignorePlan"
 Write-Output "gitignore.skills=$skillIgnorePlan"
 Write-Output "host=$HostName"
 if ($HostName -eq 'codex') {
-    Write-Output "skills=$agentsDest -> $skills (gitignored local link, not copied)"
+    Write-Output "skills=$agentsDest (flattened junctions + `$autodev; gitignored, not copied)"
 } elseif ($HostName -eq 'claude') {
     Write-Output "skills=$claudeDest -> $skills (gitignored local link, not copied)"
 } else {

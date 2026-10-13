@@ -33,7 +33,9 @@ Codex discovers `.agents/skills/` at repo root. Same layout as agentskills.io. O
 
 Use the existing command file as the procedure selector: “plan this change”, “implement this change”, “debug this failure”, “review this diff”, “verify this claim”, “run the review loop”, or “run autonomous development” (`autodev`, `resume`, `status`). The selected procedure loads the reusable skill or `workflows/autonomous-development.md`; it does not create a second skill copy.
 
-`autodev` is prompt routing to `.cursor/commands/autodev.md`. Codex does not gain a native slash command or a separate procedure. Checkpoints stay in the repo under change at `.b3/autodev/`. A stopped Codex session does not resume until the user invokes the intent again.
+`autodev` on Codex is the skill `$autodev` (`adapters/codex-command-skills/autodev/SKILL.md`), installed into the product as `.agents/skills/autodev`. Codex does **not** load Cursor `.cursor/commands/` as slash commands. The skill body points at `workflows/autonomous-development.md`; it does not duplicate that procedure. Checkpoints stay in the repo under change at `.b3/autodev/`. A stopped Codex session does not resume until the user invokes `$autodev` (or `resume`) again.
+
+Product Codex install **flattens** B3 skills into `.agents/skills/<skill-name>` (one junction per `SKILL.md`). A single junction of the nested `.cursor/skills` tree is not enough: Codex discovers skill folders that contain `SKILL.md` at the skill root.
 
 For review-loop delegation, send the existing `.cursor/agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, or `architecture-reviewer.md` role text to an isolated delegated agent when available. Reviewer prompts must prohibit edits; fixer prompts may make only confirmed minimal fixes. The parent remains the orchestrator and owns `PASS`, `FAIL`, and `UNKNOWN / INCOMPLETE`.
 

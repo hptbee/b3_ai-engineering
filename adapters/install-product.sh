@@ -84,18 +84,58 @@ fi
 LINK_DEST=""
 [[ "$HOST" == "codex" ]] && LINK_DEST="$AGENTS_DEST"
 [[ "$HOST" == "claude" ]] && LINK_DEST="$CLAUDE_DEST"
-if [[ -n "$LINK_DEST" && ( -e "$LINK_DEST" || -L "$LINK_DEST" ) ]]; then
-  if [[ -L "$LINK_DEST" ]]; then
-    existing_link="$(cd "$(dirname "$LINK_DEST")" && cd "$(readlink "$LINK_DEST")" && pwd)"
-    if [[ "$existing_link" != "$SKILLS" ]]; then
-      echo "error: refusing to replace existing $LINK_DEST" >&2
-      exit 1
+COMMAND_SKILLS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-command-skills"
+
+skill_name_from_file() {
+  awk 'BEGIN{FS=": "} /^name:/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$1"
+}
+
+link_target_ok() {
+  local dest="$1" expected="$2"
+  [[ -L "$dest" ]] || return 1
+  local existing
+  existing="$(cd "$(dirname "$dest")" && cd "$(readlink "$dest")" && pwd)"
+  [[ "$existing" == "$expected" ]]
+}
+
+install_skill_link() {
+  local dest="$1" target="$2"
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    if link_target_ok "$dest" "$target"; then
+      return 0
     fi
-  else
-    echo "error: refusing to replace existing $LINK_DEST" >&2
+    echo "error: refusing to replace existing $dest" >&2
     exit 1
   fi
-fi
+  ln -s "$target" "$dest"
+}
+
+install_codex_skill_index() {
+  local dest_root="$1" skills_src="$2" command_src="$3"
+  if [[ -L "$dest_root" ]]; then
+    rm "$dest_root"
+  elif [[ -e "$dest_root" && ! -d "$dest_root" ]]; then
+    echo "error: refusing to replace existing $dest_root" >&2
+    exit 1
+  fi
+  mkdir -p "$dest_root"
+  local skill_md src_dir name dest
+  while IFS= read -r skill_md; do
+    [[ -n "$skill_md" ]] || continue
+    name="$(skill_name_from_file "$skill_md")"
+    [[ -n "$name" ]] || name="$(basename "$(dirname "$skill_md")")"
+    src_dir="$(cd "$(dirname "$skill_md")" && pwd)"
+    dest="${dest_root}/${name}"
+    install_skill_link "$dest" "$src_dir"
+  done < <(find "$skills_src" -name 'SKILL.md' -type f)
+  if [[ -d "$command_src" ]]; then
+    local cmd_dir
+    for cmd_dir in "$command_src"/*; do
+      [[ -d "$cmd_dir" && -f "$cmd_dir/SKILL.md" ]] || continue
+      install_skill_link "${dest_root}/$(basename "$cmd_dir")" "$(cd "$cmd_dir" && pwd)"
+    done
+  fi
+}
 
 B3_COMMANDS="${B3_HOME}/.cursor/commands"
 CURSOR_README_TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/product-cursor-readme.md"
@@ -170,7 +210,11 @@ if $DRY_RUN; then
   echo "dry-run: gitignore .b3/autodev/ ($IGNORE_PLAN)"
   [[ "$HOST" == "codex" ]] && echo "dry-run: gitignore .agents/skills"
   [[ "$HOST" == "claude" ]] && echo "dry-run: gitignore .claude/skills"
-  [[ -n "$LINK_DEST" ]] && echo "dry-run: ln -s $SKILLS $LINK_DEST"
+  if [[ "$HOST" == "codex" ]]; then
+    echo "dry-run: flatten $AGENTS_DEST (one symlink per skill + command skills)"
+  elif [[ -n "$LINK_DEST" ]]; then
+    echo "dry-run: ln -s $SKILLS $LINK_DEST"
+  fi
   exit 0
 fi
 
@@ -200,9 +244,16 @@ if [[ -d "$B3_COMMANDS" ]]; then
   fi
 fi
 
-if [[ -n "$LINK_DEST" && ( ! -e "$LINK_DEST" && ! -L "$LINK_DEST" ) ]]; then
-  mkdir -p "$(dirname "$LINK_DEST")"
-  ln -s "$SKILLS" "$LINK_DEST"
+if [[ "$HOST" == "codex" ]]; then
+  install_codex_skill_index "$AGENTS_DEST" "$SKILLS" "$COMMAND_SKILLS_SRC"
+elif [[ -n "$LINK_DEST" ]]; then
+  if [[ ! -e "$LINK_DEST" && ! -L "$LINK_DEST" ]]; then
+    mkdir -p "$(dirname "$LINK_DEST")"
+    ln -s "$SKILLS" "$LINK_DEST"
+  elif ! link_target_ok "$LINK_DEST" "$SKILLS"; then
+    echo "error: refusing to replace existing $LINK_DEST" >&2
+    exit 1
+  fi
 fi
 
 echo "installed B3 pointer in $PRODUCT_ROOT"
@@ -213,7 +264,7 @@ echo "gitignore.b3=$IGNORE_PLAN"
 echo "gitignore.skills=$SKILL_IGNORE_PLAN"
 echo "host=$HOST"
 if [[ "$HOST" == "codex" ]]; then
-  echo "skills=$AGENTS_DEST -> $SKILLS (gitignored local link, not copied)"
+  echo "skills=$AGENTS_DEST (flattened links + \$autodev; gitignored, not copied)"
 elif [[ "$HOST" == "claude" ]]; then
   echo "skills=$CLAUDE_DEST -> $SKILLS (gitignored local link, not copied)"
 else

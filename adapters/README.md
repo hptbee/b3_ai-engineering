@@ -48,7 +48,7 @@ B3 can drive work in a separate product repo without copying skills.
 ./adapters/install-product.ps1 -ProductRoot D:\path\to\product -HostName cursor
 ```
 
-Writes `{product}/.b3/home`, a thin `{product}/.cursor/commands/autodev.md` from [`product-autodev.md`](product-autodev.md), a thin `{product}/AGENTS.md` from [`product-agents.md`](product-agents.md) when missing, and a `.b3/autodev/` gitignore line. It does **not** copy `.cursor/skills`. Cursor install refuses product `.agents/skills` or `.claude/skills` (duplicate discovery). Codex/Claude install may add a gitignored junction from the product discovery path to `B3_HOME/.cursor/skills`.
+Writes `{product}/.b3/home`, a thin `{product}/.cursor/commands/autodev.md` from [`product-autodev.md`](product-autodev.md), a thin `{product}/AGENTS.md` from [`product-agents.md`](product-agents.md) when missing, and a `.b3/autodev/` gitignore line. It does **not** copy `.cursor/skills`. Cursor install refuses product `.agents/skills` or `.claude/skills` (duplicate discovery). Codex install writes a gitignored **flattened** `.agents/skills/<name>` index (one junction per B3 skill plus command skills such as `$autodev`). Claude install may add a gitignored junction of the nested skill tree.
 
 ## Deferred
 

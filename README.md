@@ -102,7 +102,7 @@ Create the local skill link (gitignored):
 
 If `.agents/skills` is an empty folder and the script fails with “access denied”, close Cursor windows on this repo and retry, or remove that directory, then run the helper again.
 
-On a **product repo**, use `install-product` with `--host codex` so the installer may add a gitignored `.agents/skills` → `B3_HOME/.cursor/skills` and a thin product `AGENTS.md` if missing. Cursor also discovers `.agents/skills`; do not combine that link with a copied skill tree under `{product}/.cursor/skills`.
+On a **product repo**, use `install-product` with `--host codex`. That writes a thin `AGENTS.md` if missing and a gitignored **flattened** `.agents/skills/<name>` index so Codex can invoke `$autodev` (and `$plan`, `$implement`, …). Codex does not treat `.cursor/commands/` as slash commands. Cursor also discovers `.agents/skills`; do not combine that index with a copied skill tree under `{product}/.cursor/skills`.
 
 ### Claude Code (this B3 checkout)
 
