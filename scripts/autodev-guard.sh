@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Deterministic helper checks for /autodev (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope
+# Deterministic helper checks for /autodev and /review-loop (not an orchestrator or runner).
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | new-run | resolve-run | list-runs | prune
 set -euo pipefail
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|new-run|resolve-run|list-runs|prune [options]" >&2
   exit 1
 fi
 shift
@@ -66,6 +66,56 @@ path_in_list() {
   return 1
 }
 
+valid_run_id() {
+  local LC_ALL=C
+  local id="$1"
+  [[ -n "$id" ]] || return 1
+  [[ "$id" != *".."* && "$id" != *"/"* && "$id" != *"\\"* ]] || return 1
+  [[ "$id" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]
+}
+
+sanitize_slug() {
+  local LC_ALL=C
+  local raw
+  raw="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+  if [[ ${#raw} -gt 40 ]]; then
+    raw="${raw:0:40}"
+    raw="$(printf '%s' "$raw" | LC_ALL=C sed -E 's/-+$//')"
+  fi
+  printf '%s' "$raw"
+}
+
+read_current_run_id() {
+  local cur_file="$1/CURRENT"
+  [[ -f "$cur_file" ]] || return 0
+  trim_str "$(cat "$cur_file")"
+}
+
+read_run_status() {
+  local prog="$1/progress.md"
+  if [[ ! -f "$prog" ]]; then
+    printf 'unknown'
+    return 0
+  fi
+  local st
+  st="$(awk '/^-[[:space:]]*run_status:[[:space:]]*/{sub(/^-[[:space:]]*run_status:[[:space:]]*/, ""); gsub(/\r$/, ""); print; exit}' "$prog")"
+  st="$(trim_str "$st")"
+  if [[ -n "$st" ]]; then
+    printf '%s' "$st"
+  else
+    printf 'unknown'
+  fi
+}
+
+is_noise_file() {
+  local leaf="${1##*/}"
+  case "$leaf" in
+    package-lock.json|pnpm-lock.yaml|yarn.lock|bun.lockb|packages.lock.json|Cargo.lock|poetry.lock) return 0 ;;
+    *.min.js|*.min.css|*.snap|*.Designer.cs|*.g.cs|*.map) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 case "$CMD" in
   fingerprint)
     DEPENDS_ON=""
@@ -92,10 +142,12 @@ case "$CMD" in
     CRIT_FLAT=()
     for c in "${CRITERIA[@]}"; do
       IFS=';' read -ra parts <<< "$c"
-      for part in "${parts[@]}"; do
-        t="$(trim_str "$part")"
-        [[ -n "$t" ]] && CRIT_FLAT+=("$t")
-      done
+      if [[ ${#parts[@]} -gt 0 ]]; then
+        for part in "${parts[@]}"; do
+          t="$(trim_str "$part")"
+          [[ -n "$t" ]] && CRIT_FLAT+=("$t")
+        done
+      fi
     done
     if [[ ${#CRIT_FLAT[@]} -lt 1 ]]; then
       echo "FINGERPRINT_FAIL: empty criteria"
@@ -159,7 +211,7 @@ case "$CMD" in
       exit 2
     fi
 
-    COMMITTED_OUT="$(git -C "$REPO_ROOT" diff --name-only "$APPROACH_AT" HEAD)" || { echo "GIT_ERROR: git diff failed"; exit 1; }
+    COMMITTED_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT" HEAD)" || { echo "GIT_ERROR: git diff failed"; exit 1; }
     COMMITTED_HITS=()
     while IFS= read -r line; do
       p="$(norm_path "$line")"
@@ -184,8 +236,8 @@ case "$CMD" in
     done
 
     if [[ ${#RO_ARR[@]} -gt 0 ]]; then
-      WT_OUT="$(git -C "$REPO_ROOT" diff --name-only "$APPROACH_AT")" || { echo "GIT_ERROR: git diff working tree failed"; exit 1; }
-      CA_OUT="$(git -C "$REPO_ROOT" diff --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; exit 1; }
+      WT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT")" || { echo "GIT_ERROR: git diff working tree failed"; exit 1; }
+      CA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; exit 1; }
       UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "GIT_ERROR: git ls-files failed"; exit 1; }
       RO_HITS=()
       while IFS= read -r line; do
@@ -224,7 +276,7 @@ case "$CMD" in
     ALLOWED_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
 
-    STAGED_OUT="$(git -C "$REPO_ROOT" diff --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; exit 1; }
+    STAGED_OUT="$(git -C "$REPO_ROOT" diff --no-renames --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; exit 1; }
     STAGED_ARR=()
     while IFS= read -r line; do
       p="$(norm_path "$line")"
@@ -294,11 +346,13 @@ case "$CMD" in
   diff-scope)
     REPO_ROOT="."
     BASE_SHA=""
+    PREV_SHA=""
     IGNORE_DIRTY=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
+        --prev-sha) PREV_SHA="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         *) echo "DIFF_SCOPE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
@@ -308,16 +362,7 @@ case "$CMD" in
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
 
-    is_noise_file() {
-      local leaf="${1##*/}"
-      case "$leaf" in
-        package-lock.json|pnpm-lock.yaml|yarn.lock|bun.lockb|packages.lock.json|Cargo.lock|poetry.lock) return 0 ;;
-        *.min.js|*.min.css|*.snap|*.Designer.cs|*.g.cs|*.map) return 0 ;;
-        *) return 1 ;;
-      esac
-    }
-
-    NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --numstat "$BASE_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
+    NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
     UNTRACKED_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "DIFF_SCOPE_FAIL: git ls-files failed"; exit 1; }
 
     REVIEW_ARR=()
@@ -357,6 +402,26 @@ case "$CMD" in
       fi
     done <<< "$UNTRACKED_OUT"
 
+    PREV_SHA="$(trim_str "$PREV_SHA")"
+    HAS_PREV=false
+    DF_OUT="none"
+    if [[ -n "$PREV_SHA" ]]; then
+      HAS_PREV=true
+      DELTA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed"; exit 1; }
+      DELTA_ARR=()
+      while IFS= read -r line; do
+        p="$(norm_path "$line")"
+        [[ -z "$p" ]] && continue
+        [[ "$p" == ".b3/autodev" || "$p" == ".b3/autodev/"* ]] && continue
+        if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
+        if is_noise_file "$p"; then continue; fi
+        DELTA_ARR+=("$p")
+      done < <(printf '%s\n%s\n' "$DELTA_OUT" "$UNTRACKED_OUT")
+      if [[ ${#DELTA_ARR[@]} -gt 0 ]]; then
+        DF_OUT="$(printf '%s\n' "${DELTA_ARR[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+      fi
+    fi
+
     if [[ ${#REVIEW_ARR[@]} -eq 0 && ${#NOISE_ARR[@]} -eq 0 ]]; then
       echo "EMPTY_DIFF"
       exit 2
@@ -375,7 +440,9 @@ case "$CMD" in
       NF_OUT="$(printf '%s\n' "${NOISE_ARR[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
     fi
 
-    if [[ "$FILE_COUNT" -le 8 && "$TOTAL_LINES" -le 300 ]]; then
+    if [[ "$FILE_COUNT" -eq 0 ]]; then
+      SIZE_CLASS="NOISE_ONLY"
+    elif [[ "$FILE_COUNT" -le 8 && "$TOTAL_LINES" -le 300 ]]; then
       SIZE_CLASS="SMALL"
     elif [[ "$FILE_COUNT" -le 20 && "$TOTAL_LINES" -le 800 ]]; then
       SIZE_CLASS="MEDIUM"
@@ -386,6 +453,184 @@ case "$CMD" in
     fi
 
     printf 'size_class=%s\nfiles=%s\nlines=%s\nreview_files=%s\nnoise_files=%s\n' "$SIZE_CLASS" "$FILE_COUNT" "$TOTAL_LINES" "$RF_OUT" "$NF_OUT"
+    if $HAS_PREV; then
+      printf 'delta_files=%s\n' "$DF_OUT"
+    fi
+    ;;
+
+  new-run)
+    REPO_ROOT="."
+    SLUG=""
+    TS=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --slug) SLUG="${2:-}"; shift 2 ;;
+        --timestamp) TS="${2:-}"; shift 2 ;;
+        *) echo "NEW_RUN_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    SLUG="$(trim_str "$SLUG")"
+    [[ -n "$SLUG" ]] || { echo "NEW_RUN_FAIL: missing --slug"; exit 1; }
+    CLEAN_SLUG="$(sanitize_slug "$SLUG")"
+    [[ -n "$CLEAN_SLUG" ]] || { echo "NEW_RUN_FAIL: slug has no alphanumeric characters"; exit 1; }
+
+    if [[ -z "$TS" ]]; then
+      TS="$(date +%Y%m%d-%H%M)"
+    else
+      TS="$(trim_str "$TS")"
+    fi
+    if [[ ! "$TS" =~ ^[0-9]{8}-[0-9]{4}$ ]]; then
+      echo "NEW_RUN_FAIL: invalid timestamp '$TS' (expected YYYYMMDD-HHMM)"
+      exit 1
+    fi
+
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+    mkdir -p "$RUNS_DIR"
+
+    BASE_ID="${TS}-${CLEAN_SLUG}"
+    CANDIDATE="$BASE_ID"
+    SUFFIX=2
+    while [[ -e "${RUNS_DIR}/${CANDIDATE}" ]]; do
+      CANDIDATE="${BASE_ID}-${SUFFIX}"
+      SUFFIX=$((SUFFIX + 1))
+    done
+
+    mkdir -p "${RUNS_DIR}/${CANDIDATE}"
+    printf '%s\n' "$CANDIDATE" > "${AUTODEV_DIR}/CURRENT"
+    printf '%s\n' "$CANDIDATE"
+    ;;
+
+  resolve-run)
+    REPO_ROOT="."
+    RUN_ID=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --run-id) RUN_ID="${2:-}"; shift 2 ;;
+        *) echo "RESOLVE_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+
+    if [[ -n "$RUN_ID" ]]; then
+      RUN_ID="$(trim_str "$RUN_ID")"
+      valid_run_id "$RUN_ID" || { echo "RESOLVE_FAIL: invalid run id '$RUN_ID'"; exit 1; }
+      [[ -d "${RUNS_DIR}/${RUN_ID}" ]] || { echo "RESOLVE_FAIL: run not found '$RUN_ID'"; exit 1; }
+      printf '.b3/autodev/runs/%s\n' "$RUN_ID"
+      exit 0
+    fi
+
+    CUR_FILE="${AUTODEV_DIR}/CURRENT"
+    if [[ -f "$CUR_FILE" ]]; then
+      CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+      valid_run_id "$CUR_ID" || { echo "RESOLVE_FAIL: CURRENT contains invalid run id '$CUR_ID'"; exit 1; }
+      [[ -d "${RUNS_DIR}/${CUR_ID}" ]] || { echo "RESOLVE_FAIL: CURRENT points to missing run '$CUR_ID'"; exit 1; }
+      printf '.b3/autodev/runs/%s\n' "$CUR_ID"
+      exit 0
+    fi
+
+    if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+      printf '.b3/autodev\n'
+      exit 0
+    fi
+
+    echo "NO_ACTIVE_RUN"
+    exit 1
+    ;;
+
+  list-runs)
+    REPO_ROOT="."
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        *) echo "LIST_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+    CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+
+    RUN_NAMES=()
+    if [[ -d "$RUNS_DIR" ]]; then
+      while IFS= read -r d; do
+        [[ -n "$d" ]] && RUN_NAMES+=("$d")
+      done < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
+    fi
+
+    if [[ ${#RUN_NAMES[@]} -eq 0 ]]; then
+      if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+        ST="$(read_run_status "$AUTODEV_DIR")"
+        printf '* legacy [%s]\n' "$ST"
+      else
+        echo "NO_RUNS"
+      fi
+      exit 0
+    fi
+
+    for id in "${RUN_NAMES[@]}"; do
+      ST="$(read_run_status "${RUNS_DIR}/${id}")"
+      MARK="  "
+      if [[ -n "$CUR_ID" && "$id" == "$CUR_ID" ]]; then
+        MARK="* "
+      fi
+      printf '%s%s [%s]\n' "$MARK" "$id" "$ST"
+    done
+    ;;
+
+  prune)
+    REPO_ROOT="."
+    KEEP=10
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --keep) KEEP="${2:-}"; shift 2 ;;
+        *) echo "PRUNE_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    if [[ ! "$KEEP" =~ ^[0-9]+$ ]]; then
+      echo "PRUNE_FAIL: --keep must be >= 0"
+      exit 1
+    fi
+
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+    if [[ ! -d "$RUNS_DIR" ]]; then
+      echo "PRUNE_OK: 0 removed"
+      exit 0
+    fi
+
+    CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+    RUN_NAMES=()
+    while IFS= read -r d; do
+      [[ -n "$d" ]] && RUN_NAMES+=("$d")
+    done < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
+
+    PASS_COUNT=0
+    PRUNED=()
+    if [[ ${#RUN_NAMES[@]} -gt 0 ]]; then
+      for id in "${RUN_NAMES[@]}"; do
+        ST="$(read_run_status "${RUNS_DIR}/${id}")"
+        if [[ "$ST" == "PASS" ]]; then
+          PASS_COUNT=$((PASS_COUNT + 1))
+          if [[ $PASS_COUNT -gt $KEEP && "$id" != "$CUR_ID" ]]; then
+            rm -rf "${RUNS_DIR:?}/${id}"
+            PRUNED+=("$id")
+          fi
+        fi
+      done
+    fi
+
+    if [[ ${#PRUNED[@]} -eq 0 ]]; then
+      echo "PRUNE_OK: 0 removed"
+    else
+      for p in "${PRUNED[@]}"; do
+        printf 'pruned: %s\n' "$p"
+      done
+      printf 'PRUNE_OK: %d removed\n' "${#PRUNED[@]}"
+    fi
     ;;
 
   *)
