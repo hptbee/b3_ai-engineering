@@ -1,6 +1,6 @@
 # Orchestrator procedure
 
-**Trigger once:** `.cursor/commands/review-loop.md`. Do not yield after the first review for a human “run review again” unless a termination condition fires.
+**Trigger once:** `commands/review-loop.md`. Do not yield after the first review for a human “run review again” unless a termination condition fires.
 
 You are the **orchestrator**. You do not review and you do not fix in the same pass. You dispatch roles, merge the finding log, and **alone** declare `PASS` / `INCOMPLETE` / `STUCK` / STOP.
 
@@ -15,12 +15,12 @@ Reuse:
 
 | Role | Artifact |
 | --- | --- |
-| Review (one pass) | `.cursor/agents/reviewer.md` → `.cursor/skills/engineering/code-review` |
-| Security depth | `.cursor/agents/security-reviewer.md` when auth/API trust is in scope |
-| Architecture depth | `.cursor/agents/architecture-reviewer.md` when shape/layering is in scope |
-| Performance depth | `.cursor/agents/performance-reviewer.md` **only** when § Performance routing matches |
-| Fix | `.cursor/agents/fixer.md` |
-| Evidence | `.cursor/skills/engineering/verification` + `rules/verification.md` |
+| Review (one pass) | `agents/reviewer.md` → `skills/engineering/code-review` |
+| Security depth | `agents/security-reviewer.md` when auth/API trust is in scope |
+| Architecture depth | `agents/architecture-reviewer.md` when shape/layering is in scope |
+| Performance depth | `agents/performance-reviewer.md` **only** when § Performance routing matches |
+| Fix | `agents/fixer.md` |
+| Evidence | `skills/engineering/verification` + `rules/verification.md` |
 | Spec | `spec.md` |
 | Slots | [`models.md`](models.md) |
 

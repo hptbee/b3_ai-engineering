@@ -56,3 +56,5 @@ Knowledge → Skills (constrained by Rules)
 - **Antigravity activation:** root `AGENTS.md` + committed `.agents/skills.json` (1-level category entries over `skills/*` and `adapters/command-skills`); optional global plugin via `adapters/antigravity/install-plugin.{ps1,sh}`
 - **Documentation:** `docs/`, `README.md`
 - **Research:** `research/` (provenance, not production config)
+
+Layout decision: `research/decisions/decision-013-host-neutral-multi-host-layout.md` (supersedes `decision-009-cursor-native-layout.md`).

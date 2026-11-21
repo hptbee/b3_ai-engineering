@@ -152,7 +152,7 @@ ln -sfn /path/to/b3_ai-engineering/skills ~/.cursor/skills/b3-ai-engineering
 ./adapters/antigravity/install-plugin.sh
 ```
 
-More detail: [`adapters/README.md`](adapters/README.md), [`research/decisions/decision-011-product-repo-attach.md`](research/decisions/decision-011-product-repo-attach.md).
+More detail: [`adapters/README.md`](adapters/README.md), [`research/decisions/decision-011-product-repo-attach.md`](research/decisions/decision-011-product-repo-attach.md), [`research/decisions/decision-013-host-neutral-multi-host-layout.md`](research/decisions/decision-013-host-neutral-multi-host-layout.md).
 
 ## Architecture
 

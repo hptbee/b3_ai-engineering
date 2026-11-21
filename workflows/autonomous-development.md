@@ -15,21 +15,21 @@ Inner steps: [`feature-implementation.md`](feature-implementation.md). Independe
 ## When to use / not use
 
 - **Use:** end-to-end story, requirement, plan, bug, or refactor lifecycle; `resume` or `status` on `.b3/autodev/`.
-- **Do not use:** plan-only (`.cursor/commands/plan.md`), single implement (`.cursor/commands/implement.md`), root-cause debug only (`debug.md`), one-pass review (`review.md`), review-loop only (`review-loop.md`), or claim verification only (`verify.md`).
+- **Do not use:** plan-only (`commands/plan.md`), single implement (`commands/implement.md`), root-cause debug only (`debug.md`), one-pass review (`review.md`), review-loop only (`review-loop.md`), or claim verification only (`verify.md`).
 - **Precedence inside `/autodev`:** explicit invocation overrides `planning` and `problem-solving` stops (`docs/precedence.md`); skip `problem-solving`'s single review and final stop because this workflow governs task review and continuation.
 
 ## Host entry & B3 resolution
 
 | Host | Start | Entry |
 | --- | --- | --- |
-| Cursor | `/autodev` | `.cursor/commands/autodev.md`, then this file |
-| Codex | `autodev`, `$autodev`, `resume`, or `status` | Same command file / `$autodev`, then this file |
-| Antigravity | Name intent or `autodev` skill | Same command file / skill, then this file |
-| Claude Code | Same named intent | Same command file, then this file |
+| Cursor | `/autodev` | `commands/autodev.md` (via `.cursor/commands` link or product `.cursor/commands/autodev.md`), then this file |
+| Codex | `autodev`, `$autodev`, `resume`, or `status` | `adapters/command-skills/autodev/SKILL.md` → `commands/autodev.md`, then this file |
+| Claude Code | `/autodev`, `autodev`, `resume`, or `status` | `adapters/command-skills/autodev/SKILL.md` (via `.claude/skills/autodev`) → `commands/autodev.md`, then this file |
+| Antigravity | `/autodev` or `autodev` skill | `adapters/command-skills/autodev/SKILL.md` (via `.agents/skills.json` / plugin) → `commands/autodev.md`, then this file |
 
 Host details: [`../adapters/cursor/README.md`](../adapters/cursor/README.md), [`../adapters/codex/README.md`](../adapters/codex/README.md), [`../adapters/antigravity/README.md`](../adapters/antigravity/README.md), [`../adapters/claude/README.md`](../adapters/claude/README.md). A stopped session resumes only when the user re-invokes `/autodev` (`resume`).
 
-Resolve `PRODUCT_ROOT` (git root under change) and `B3_HOME` (first containing `workflows/autonomous-development.md`: this repo if matching, `$env:B3_HOME` / `$B3_HOME`, or `{PRODUCT_ROOT}/.b3/home`; else `BLOCKED`). Load skills/rules/agents from `B3_HOME`. Write checkpoints and commits in `PRODUCT_ROOT`. Never copy `.cursor/skills` into `PRODUCT_ROOT`.
+Resolve `PRODUCT_ROOT` (git root under change) and `B3_HOME` (first containing `workflows/autonomous-development.md`: this repo if matching, `$env:B3_HOME` / `$B3_HOME`, or `{PRODUCT_ROOT}/.b3/home`; else `BLOCKED`). Load skills/rules/agents from `B3_HOME`. Write checkpoints and commits in `PRODUCT_ROOT`. Never copy `skills/` into `PRODUCT_ROOT`.
 
 ## State & checkpoint git policy
 
@@ -51,7 +51,7 @@ Checkpoints live at `{PRODUCT_ROOT}/.b3/autodev/` (`master-plan.md`, `progress.m
 
 1. Restate request, current behavior, and desired behavior from inspected code (never invent implementations over existing helpers).
 2. **Pre-flight discovery:** Record `initial_dirty_paths` (current modified/untracked non-ignored paths) and locate canonical `build`/`typecheck`/`lint`/`test` commands from CI workflows, git hooks, or build manifests (respecting repo linter config per `docs/precedence.md`; never impose extra lint rules). Run the baseline check at `run_base_sha` (in background while planning or before `T001`) and record `baseline_status` in `progress.md` so pre-existing red checks are never misattributed to `T00N`.
-3. Write or normalize `.b3/autodev/master-plan.md` per [`references/autodev-templates.md`](references/autodev-templates.md) using [`.cursor/skills/engineering/planning/SKILL.md`](../.cursor/skills/engineering/planning/SKILL.md) (plus `simplest-correct` for system shape):
+3. Write or normalize `.b3/autodev/master-plan.md` per [`references/autodev-templates.md`](references/autodev-templates.md) using [`skills/engineering/planning/SKILL.md`](../skills/engineering/planning/SKILL.md) (plus `simplest-correct` for system shape):
    - Include 3–5 cross-task `Invariants` and numbered `AC1..ACn` criteria per task.
    - **Contract-first & Shared Hotspots:** Assign shared hotspot files (`package.json`, `.csproj`, barrel `index.ts`, migrations, shared types/contracts) to **one** foundational task committed before dependent tasks read those committed files from disk.
    - **Size & Split check:** Estimate total scope against [`../review-loop/sizing.md`](../review-loop/sizing.md). If `> ~800 lines` or `>= 2 independent areas`, record a 1-line PR split warning in `master-plan.md` without pausing cohesive features.
@@ -66,7 +66,7 @@ Run ready tasks (`pending`, all `depends_on` `completed`) one at a time, lowest 
 
 ### Analyze (Just-in-Time planning)
 
-Do **not** load the planning skill here or write a second master plan. Follow [`../.cursor/skills/engineering/problem-solving/SKILL.md`](../.cursor/skills/engineering/problem-solving/SKILL.md) Understand/Plan for this slice:
+Do **not** load the planning skill here or write a second master plan. Follow [`../skills/engineering/problem-solving/SKILL.md`](../skills/engineering/problem-solving/SKILL.md) Understand/Plan for this slice:
 
 1. Inspect named scope, callers, callees, DTOs/types, routes, schema, fixtures, and existing tests. Restate current/desired behavior from inspected code.
 2. Separate writable **`files`** (owned) from **`read_only_deps`** (inspected contracts/schemas/callers that this task reads but must not edit); **`watched_paths`** = `files` + `read_only_deps` (real repo paths only, never logical names).

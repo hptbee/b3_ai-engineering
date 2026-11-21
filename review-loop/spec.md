@@ -4,7 +4,7 @@ The review loop is independent verification plus iterative correction. It answer
 
 This document is the specification. Orchestration: [`strategy.md`](strategy.md). A single pass of the `code-review` skill is not the loop.
 
-A single invocation of `.cursor/commands/review-loop.md` runs **review → validate → fix → verify → fresh review** until a quality gate, non-convergence, or iteration limit. Do not require the user to re-trigger after each fix.
+A single invocation of `commands/review-loop.md` runs **review → validate → fix → verify → fresh review** until a quality gate, non-convergence, or iteration limit. Do not require the user to re-trigger after each fix.
 
 ## Default sequence
 

@@ -9,7 +9,7 @@ Understand → Plan → Implement → Verify → Review → Fix → Re-verify
 | Step | Use |
 | --- | --- |
 | Understand | Read code and constraints |
-| Plan | `.cursor/skills/engineering/planning` when multi-step; else a short plan in-place |
+| Plan | `skills/engineering/planning` when multi-step; else a short plan in-place |
 | Implement | `problem-solving` + smallest domain skill |
 | Verify | `verification` |
 | Review | `code-review` (one pass: correctness, security, performance, simplification/residue check) |
@@ -17,7 +17,7 @@ Understand → Plan → Implement → Verify → Review → Fix → Re-verify
 
 During the **Review** step, do not only ask "is it correct?" Also ask: *given the final implementation and current requirements, is all of this code still necessary?* Check whether intermediate implementation steps left behind temporary scaffolding, dead branches, or redundant state.
 
-Independent multi-iteration review: `.cursor/commands/review-loop.md` → `review-loop/strategy.md`.
+Independent multi-iteration review: `commands/review-loop.md` → `review-loop/strategy.md`.
 
 `/implement` uses the one-pass review in this file and does not start the review loop.
 
