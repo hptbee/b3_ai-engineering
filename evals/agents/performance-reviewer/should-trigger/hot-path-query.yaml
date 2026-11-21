@@ -1,5 +1,5 @@
 id: agent-performance-reviewer-hot-path
-artifact: .cursor/agents/performance-reviewer.md
+artifact: agents/performance-reviewer.md
 intent: Description should match a query hot-path review
 input: "Independently review this PR: list endpoint now Includes the whole Customer graph and queries lines in a loop. Need material perf risks, not a full code review."
 expected_bucket: should-trigger

@@ -33,8 +33,16 @@ try {
     git commit -qm 'Attach B3 autodev pointer without copying skills'
     $runBase = git rev-parse HEAD
 
-    # Scenario A: write master plan (no replan later)
-    New-Item -ItemType Directory -Path .b3\autodev -Force | Out-Null
+    # Scenario A: allocate run-scoped checkpoint dir and write master plan (no replan later)
+    $guard = Join-Path $root 'scripts\autodev-guard.ps1'
+    $runId = (& $guard new-run -RepoRoot $sandbox -Slug 'add-greet').Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $runId) { Fail "new-run failed: $runId" }
+    $runDirRel = (& $guard resolve-run -RepoRoot $sandbox).Trim()
+    if ($LASTEXITCODE -ne 0 -or $runDirRel -ne ".b3/autodev/runs/$runId") { Fail "resolve-run failed: $runDirRel" }
+    $runDir = Join-Path $sandbox ($runDirRel -replace '/', '\')
+    $planPath = Join-Path $runDir 'master-plan.md'
+    $progressPath = Join-Path $runDir 'progress.md'
+
     @'
 # Add greet(name)
 
@@ -72,10 +80,11 @@ JavaScript greet helper and README
   - README mentions greet(name)
 - verification:
   - findstr /C:"greet(" README.md
-'@ | Set-Content .b3\autodev\master-plan.md
+'@ | Set-Content $planPath
 
     @"
 # Progress
+- run_id: $runId
 - b3_home: $root
 - product_root: $sandbox
 - plan_id: Add greet(name) v1
@@ -83,15 +92,14 @@ JavaScript greet helper and README
 - branch: $(git branch --show-current)
 - run_base_sha: $runBase
 - run_status: running
-"@ | Set-Content .b3\autodev\progress.md
+"@ | Set-Content $progressPath
 
-    $guard = Join-Path $root 'scripts\autodev-guard.ps1'
     $fp1 = (& $guard fingerprint -DependsOn '[]' -Scope 'greet.js' -Criteria 'AC1: greet("Ada") returns "Hello, Ada"').Trim()
     if ($fp1 -ne 'depends_on=[]|scope=greet.js|acceptance_criteria=AC1: greet("Ada") returns "Hello, Ada"') { Fail "unexpected T001 fingerprint: $fp1" }
     $fp2 = (& $guard fingerprint -DependsOn 'T001' -Scope 'README.md' -Criteria 'AC2: README mentions greet(name)').Trim()
     if ($fp2 -ne 'depends_on=T001|scope=README.md|acceptance_criteria=AC2: README mentions greet(name)') { Fail "unexpected T002 fingerprint: $fp2" }
 
-    $planBefore = Get-FileHash .b3\autodev\master-plan.md -Algorithm SHA256
+    $planBefore = Get-FileHash $planPath -Algorithm SHA256
 
     # T001 (includes unused greetAlias residue for the later review/fix)
     $t1Base = git rev-parse HEAD
@@ -131,7 +139,7 @@ module.exports = { greet, greetAlias };
     $t2 = git rev-parse HEAD
 
     # Existing plan: hash unchanged (no unnecessary rewrite)
-    $planAfter = Get-FileHash .b3\autodev\master-plan.md -Algorithm SHA256
+    $planAfter = Get-FileHash $planPath -Algorithm SHA256
     if ($planBefore.Hash -ne $planAfter.Hash) { Fail 'master plan rewritten during execution' }
 
     # Independent review of T001 residue: greetAlias was not in the requirements. Fix, then re-verify.

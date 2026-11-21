@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /autodev (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | new-run | resolve-run | list-runs | prune
 set -euo pipefail
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|new-run|resolve-run|list-runs|prune [options]" >&2
   exit 1
 fi
 shift
@@ -64,6 +64,45 @@ path_in_list() {
     fi
   done
   return 1
+}
+
+valid_run_id() {
+  local id="$1"
+  [[ -n "$id" ]] || return 1
+  [[ "$id" != *".."* && "$id" != *"/"* && "$id" != *"\\"* ]] || return 1
+  [[ "$id" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]
+}
+
+sanitize_slug() {
+  local raw
+  raw="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+  if [[ ${#raw} -gt 40 ]]; then
+    raw="${raw:0:40}"
+    raw="$(printf '%s' "$raw" | sed -E 's/-+$//')"
+  fi
+  printf '%s' "$raw"
+}
+
+read_current_run_id() {
+  local cur_file="$1/CURRENT"
+  [[ -f "$cur_file" ]] || return 0
+  trim_str "$(cat "$cur_file")"
+}
+
+read_run_status() {
+  local prog="$1/progress.md"
+  if [[ ! -f "$prog" ]]; then
+    printf 'unknown'
+    return 0
+  fi
+  local st
+  st="$(awk '/^-[[:space:]]*run_status:[[:space:]]*/{sub(/^-[[:space:]]*run_status:[[:space:]]*/, ""); gsub(/\r$/, ""); print; exit}' "$prog")"
+  st="$(trim_str "$st")"
+  if [[ -n "$st" ]]; then
+    printf '%s' "$st"
+  else
+    printf 'unknown'
+  fi
 }
 
 case "$CMD" in
@@ -289,6 +328,179 @@ case "$CMD" in
       exit 1
     fi
     printf '%s\n' "$SHA"
+    ;;
+
+  new-run)
+    REPO_ROOT="."
+    SLUG=""
+    TS=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --slug) SLUG="${2:-}"; shift 2 ;;
+        --timestamp) TS="${2:-}"; shift 2 ;;
+        *) echo "NEW_RUN_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    SLUG="$(trim_str "$SLUG")"
+    [[ -n "$SLUG" ]] || { echo "NEW_RUN_FAIL: missing --slug"; exit 1; }
+    CLEAN_SLUG="$(sanitize_slug "$SLUG")"
+    [[ -n "$CLEAN_SLUG" ]] || { echo "NEW_RUN_FAIL: slug has no alphanumeric characters"; exit 1; }
+
+    if [[ -z "$TS" ]]; then
+      TS="$(date +%Y%m%d-%H%M)"
+    else
+      TS="$(trim_str "$TS")"
+    fi
+    if [[ ! "$TS" =~ ^[0-9]{8}-[0-9]{4}$ ]]; then
+      echo "NEW_RUN_FAIL: invalid timestamp '$TS' (expected YYYYMMDD-HHMM)"
+      exit 1
+    fi
+
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+    mkdir -p "$RUNS_DIR"
+
+    BASE_ID="${TS}-${CLEAN_SLUG}"
+    CANDIDATE="$BASE_ID"
+    SUFFIX=2
+    while [[ -e "${RUNS_DIR}/${CANDIDATE}" ]]; do
+      CANDIDATE="${BASE_ID}-${SUFFIX}"
+      SUFFIX=$((SUFFIX + 1))
+    done
+
+    mkdir -p "${RUNS_DIR}/${CANDIDATE}"
+    printf '%s\n' "$CANDIDATE" > "${AUTODEV_DIR}/CURRENT"
+    printf '%s\n' "$CANDIDATE"
+    ;;
+
+  resolve-run)
+    REPO_ROOT="."
+    RUN_ID=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --run-id) RUN_ID="${2:-}"; shift 2 ;;
+        *) echo "RESOLVE_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+
+    if [[ -n "$RUN_ID" ]]; then
+      RUN_ID="$(trim_str "$RUN_ID")"
+      valid_run_id "$RUN_ID" || { echo "RESOLVE_FAIL: invalid run id '$RUN_ID'"; exit 1; }
+      [[ -d "${RUNS_DIR}/${RUN_ID}" ]] || { echo "RESOLVE_FAIL: run not found '$RUN_ID'"; exit 1; }
+      printf '.b3/autodev/runs/%s\n' "$RUN_ID"
+      exit 0
+    fi
+
+    CUR_FILE="${AUTODEV_DIR}/CURRENT"
+    if [[ -f "$CUR_FILE" ]]; then
+      CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+      valid_run_id "$CUR_ID" || { echo "RESOLVE_FAIL: CURRENT contains invalid run id '$CUR_ID'"; exit 1; }
+      [[ -d "${RUNS_DIR}/${CUR_ID}" ]] || { echo "RESOLVE_FAIL: CURRENT points to missing run '$CUR_ID'"; exit 1; }
+      printf '.b3/autodev/runs/%s\n' "$CUR_ID"
+      exit 0
+    fi
+
+    if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+      printf '.b3/autodev\n'
+      exit 0
+    fi
+
+    echo "NO_ACTIVE_RUN"
+    exit 1
+    ;;
+
+  list-runs)
+    REPO_ROOT="."
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        *) echo "LIST_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+    CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+
+    RUN_NAMES=()
+    if [[ -d "$RUNS_DIR" ]]; then
+      while IFS= read -r d; do
+        [[ -n "$d" ]] && RUN_NAMES+=("$d")
+      done < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
+    fi
+
+    if [[ ${#RUN_NAMES[@]} -eq 0 ]]; then
+      if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+        ST="$(read_run_status "$AUTODEV_DIR")"
+        printf '* legacy [%s]\n' "$ST"
+      else
+        echo "NO_RUNS"
+      fi
+      exit 0
+    fi
+
+    for id in "${RUN_NAMES[@]}"; do
+      ST="$(read_run_status "${RUNS_DIR}/${id}")"
+      MARK="  "
+      if [[ -n "$CUR_ID" && "$id" == "$CUR_ID" ]]; then
+        MARK="* "
+      fi
+      printf '%s%s [%s]\n' "$MARK" "$id" "$ST"
+    done
+    ;;
+
+  prune)
+    REPO_ROOT="."
+    KEEP=10
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --keep) KEEP="${2:-}"; shift 2 ;;
+        *) echo "PRUNE_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    if [[ ! "$KEEP" =~ ^[0-9]+$ ]]; then
+      echo "PRUNE_FAIL: --keep must be >= 0"
+      exit 1
+    fi
+
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    RUNS_DIR="${AUTODEV_DIR}/runs"
+    if [[ ! -d "$RUNS_DIR" ]]; then
+      echo "PRUNE_OK: 0 removed"
+      exit 0
+    fi
+
+    CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+    RUN_NAMES=()
+    while IFS= read -r d; do
+      [[ -n "$d" ]] && RUN_NAMES+=("$d")
+    done < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
+
+    PASS_COUNT=0
+    PRUNED=()
+    for id in "${RUN_NAMES[@]}"; do
+      ST="$(read_run_status "${RUNS_DIR}/${id}")"
+      if [[ "$ST" == "PASS" ]]; then
+        PASS_COUNT=$((PASS_COUNT + 1))
+        if [[ $PASS_COUNT -gt $KEEP && "$id" != "$CUR_ID" ]]; then
+          rm -rf "${RUNS_DIR:?}/${id}"
+          PRUNED+=("$id")
+        fi
+      fi
+    done
+
+    if [[ ${#PRUNED[@]} -eq 0 ]]; then
+      echo "PRUNE_OK: 0 removed"
+    else
+      for p in "${PRUNED[@]}"; do
+        printf 'pruned: %s\n' "$p"
+      done
+      printf 'PRUNE_OK: %d removed\n' "${#PRUNED[@]}"
+    fi
     ;;
 
   *)

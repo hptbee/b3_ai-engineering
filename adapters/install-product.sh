@@ -1,280 +1,289 @@
 #!/usr/bin/env bash
-# Attach B3 to a product repository without copying skills.
-# Usage: ./adapters/install-product.sh --product-root PATH [--b3-home PATH] [--host cursor|codex|claude|antigravity] [--dry-run]
-# All refusal checks run before any write. Existing autodev.md / .b3/home are not overwritten.
+# Attach a separate product repository to this B3 checkout without copying B3 skills.
+# Usage: ./adapters/install-product.sh --product-root <dir> [--b3-home <dir>] [--host cursor|codex|claude|antigravity] [--dry-run]
+
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT_ROOT=""
-B3_HOME="$ROOT"
-HOST="cursor"
+B3_HOME=""
+HOST_NAME="cursor"
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --product-root) PRODUCT_ROOT="${2:-}"; shift 2 ;;
-    --b3-home) B3_HOME="${2:-}"; shift 2 ;;
-    --host) HOST="${2:-}"; shift 2 ;;
+    --product-root) PRODUCT_ROOT="$2"; shift 2 ;;
+    --b3-home) B3_HOME="$2"; shift 2 ;;
+    --host) HOST_NAME="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
-    *) echo "unknown option: $1" >&2; exit 1 ;;
+    -h|--help)
+      echo "Usage: $0 --product-root <dir> [--b3-home <dir>] [--host cursor|codex|claude|antigravity] [--dry-run]"
+      exit 0
+      ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
 
-if [[ -z "$PRODUCT_ROOT" ]]; then
-  echo "usage: $0 --product-root PATH [--b3-home PATH] [--host cursor|codex|claude|antigravity] [--dry-run]" >&2
-  exit 1
-fi
-
-case "$HOST" in
+case "$HOST_NAME" in
   cursor|codex|claude|antigravity) ;;
-  *) echo "error: unknown host '$HOST' (expected cursor|codex|claude|antigravity)" >&2; exit 1 ;;
+  *) echo "error: invalid --host '$HOST_NAME' (expected cursor|codex|claude|antigravity)" >&2; exit 1 ;;
 esac
 
-B3_HOME="$(cd "$B3_HOME" && pwd)"
-PRODUCT_ROOT="$(cd "$PRODUCT_ROOT" && pwd)"
-WORKFLOW="${B3_HOME}/workflows/autonomous-development.md"
-TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/product-autodev.md"
-SKILLS="${B3_HOME}/.cursor/skills"
+[[ -n "$PRODUCT_ROOT" ]] || { echo "error: --product-root is required" >&2; exit 1; }
 
-if [[ ! -f "$WORKFLOW" ]]; then
-  echo "error: B3_HOME missing workflow: $WORKFLOW" >&2
-  exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "$B3_HOME" ]]; then
+  B3_HOME="$(cd "${SCRIPT_DIR}/.." && pwd)"
+else
+  B3_HOME="$(cd "$B3_HOME" && pwd)"
 fi
-if [[ ! -f "$TEMPLATE" ]]; then
-  echo "error: missing template: $TEMPLATE" >&2
-  exit 1
-fi
-if [[ "$(find "$SKILLS" -name 'SKILL.md' -type f 2>/dev/null | wc -l | tr -d ' ')" -lt 1 ]]; then
-  echo "error: B3_HOME has no SKILL.md under .cursor/skills" >&2
-  exit 1
-fi
+PRODUCT_ROOT="$(cd "$PRODUCT_ROOT" && pwd)"
+
+WORKFLOW="${B3_HOME}/workflows/autonomous-development.md"
+TEMPLATE="${SCRIPT_DIR}/product-autodev.md"
+CURSOR_README_TEMPLATE="${SCRIPT_DIR}/product-cursor-readme.md"
+AGENTS_MD_TEMPLATE="${SCRIPT_DIR}/product-agents.md"
+CLAUDE_MD_TEMPLATE="${SCRIPT_DIR}/product-claude.md"
+SKILLS_SRC="${B3_HOME}/skills"
+COMMANDS_SRC="${B3_HOME}/commands"
+AGENTS_SRC="${B3_HOME}/agents"
+CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
+
+[[ -f "$WORKFLOW" ]] || { echo "error: B3_HOME missing workflow: $WORKFLOW" >&2; exit 1; }
+[[ -f "$TEMPLATE" ]] || { echo "error: missing template: $TEMPLATE" >&2; exit 1; }
+[[ -n "$(find "$SKILLS_SRC" -name 'SKILL.md' -type f -print -quit 2>/dev/null || true)" ]] || {
+  echo "error: B3_HOME has no SKILL.md under skills: $SKILLS_SRC" >&2; exit 1
+}
 
 PRODUCT_SKILLS="${PRODUCT_ROOT}/.cursor/skills"
 COMMAND_DEST="${PRODUCT_ROOT}/.cursor/commands/autodev.md"
 HOME_DEST="${PRODUCT_ROOT}/.b3/home"
 AGENTS_DEST="${PRODUCT_ROOT}/.agents/skills"
-CLAUDE_DEST="${PRODUCT_ROOT}/.claude/skills"
+CLAUDE_SKILLS_DEST="${PRODUCT_ROOT}/.claude/skills"
+CLAUDE_AGENTS_DEST="${PRODUCT_ROOT}/.claude/agents"
+AGENTS_MD_DEST="${PRODUCT_ROOT}/AGENTS.md"
+CLAUDE_MD_DEST="${PRODUCT_ROOT}/CLAUDE.md"
+CURSOR_README_DEST="${PRODUCT_ROOT}/.cursor/README.md"
 
-if [[ -d "$PRODUCT_SKILLS" ]] && [[ "$(find "$PRODUCT_SKILLS" -name 'SKILL.md' -type f 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]]; then
-  echo "error: product already has SKILL.md under .cursor/skills; refusing duplicate skill tree" >&2
+if [[ -d "$PRODUCT_SKILLS" ]] && [[ -n "$(find "$PRODUCT_SKILLS" -name 'SKILL.md' -type f -print -quit 2>/dev/null || true)" ]]; then
+  echo "error: product already has SKILL.md under .cursor/skills; refusing to install a duplicate skill tree" >&2
   exit 1
 fi
 
-if [[ "$HOST" == "cursor" ]]; then
-  if [[ -e "$AGENTS_DEST" ]]; then
+if [[ "$HOST_NAME" == "cursor" ]]; then
+  if [[ -e "$AGENTS_DEST" || -L "$AGENTS_DEST" ]]; then
     echo "error: product has .agents/skills; Cursor would duplicate discovery" >&2
     exit 1
   fi
-  if [[ -e "$CLAUDE_DEST" ]]; then
+  if [[ -e "$CLAUDE_SKILLS_DEST" || -L "$CLAUDE_SKILLS_DEST" ]]; then
     echo "error: product has .claude/skills; Cursor would duplicate discovery" >&2
     exit 1
   fi
 fi
 
-if [[ -f "$COMMAND_DEST" ]]; then
-  if ! cmp -s "$COMMAND_DEST" "$TEMPLATE"; then
-    echo "error: refusing to overwrite existing $COMMAND_DEST (differs from template). Move it aside and re-run" >&2
-    exit 1
-  fi
+if [[ -f "$COMMAND_DEST" ]] && ! cmp -s "$COMMAND_DEST" "$TEMPLATE"; then
+  echo "error: refusing to overwrite existing $COMMAND_DEST (differs from template)" >&2
+  exit 1
 fi
 
 if [[ -f "$HOME_DEST" ]]; then
-  existing_home="$(tr -d '\r\n' < "$HOME_DEST")"
-  if [[ "$existing_home" != "$B3_HOME" ]]; then
-    echo "error: refusing to overwrite $HOME_DEST (points to $existing_home, requested $B3_HOME)" >&2
+  EXISTING_HOME="$(tr -d '\r\n' < "$HOME_DEST")"
+  if [[ "$EXISTING_HOME" != "$B3_HOME" ]]; then
+    echo "error: refusing to overwrite $HOME_DEST (points to $EXISTING_HOME, requested $B3_HOME)" >&2
     exit 1
   fi
 fi
 
-LINK_DEST=""
-[[ "$HOST" == "codex" || "$HOST" == "antigravity" ]] && LINK_DEST="$AGENTS_DEST"
-[[ "$HOST" == "claude" ]] && LINK_DEST="$CLAUDE_DEST"
-COMMAND_SKILLS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-command-skills"
-
 skill_name_from_file() {
-  awk 'BEGIN{FS=": "} /^name:/{gsub(/[[:space:]]/,"",$2); print $2; exit}' "$1"
+  local f="$1"
+  local name
+  name="$(awk 'BEGIN{FS=": "} /^name:/{gsub(/[\r[:space:]]/,"",$2); print $2; exit}' "$f")"
+  if [[ -n "$name" ]]; then echo "$name"; else basename "$(dirname "$f")"; fi
 }
 
 link_target_ok() {
   local dest="$1" expected="$2"
   [[ -L "$dest" ]] || return 1
-  local existing
-  existing="$(cd "$(dirname "$dest")" && cd "$(readlink "$dest")" && pwd)"
-  [[ "$existing" == "$expected" ]]
+  local rd re
+  rd="$(cd -P "$dest" 2>/dev/null && pwd || true)"
+  re="$(cd -P "$expected" 2>/dev/null && pwd || true)"
+  [[ -n "$rd" && "$rd" == "$re" ]]
 }
 
-install_skill_link() {
+install_link() {
   local dest="$1" target="$2"
-  if [[ -e "$dest" || -L "$dest" ]]; then
-    if link_target_ok "$dest" "$target"; then
-      return 0
-    fi
-    echo "error: refusing to replace existing $dest" >&2
-    exit 1
+  if [[ -L "$dest" ]]; then
+    if link_target_ok "$dest" "$target"; then return 0; fi
+    echo "error: refusing to replace existing link $dest" >&2; exit 1
+  elif [[ -e "$dest" ]]; then
+    echo "error: refusing to replace existing $dest" >&2; exit 1
   fi
   ln -s "$target" "$dest"
 }
 
-install_flat_skill_index() {
-  local dest_root="$1" skills_src="$2" command_src="$3"
+install_flat_skills() {
+  local dest_root="$1"
   if [[ -L "$dest_root" ]]; then
     rm "$dest_root"
   elif [[ -e "$dest_root" && ! -d "$dest_root" ]]; then
-    echo "error: refusing to replace existing $dest_root" >&2
-    exit 1
+    echo "error: refusing to replace existing $dest_root" >&2; exit 1
   fi
   mkdir -p "$dest_root"
-  local skill_md src_dir name dest
-  while IFS= read -r skill_md; do
-    [[ -n "$skill_md" ]] || continue
-    name="$(skill_name_from_file "$skill_md")"
-    [[ -n "$name" ]] || name="$(basename "$(dirname "$skill_md")")"
-    src_dir="$(cd "$(dirname "$skill_md")" && pwd)"
-    dest="${dest_root}/${name}"
-    install_skill_link "$dest" "$src_dir"
-  done < <(find "$skills_src" -name 'SKILL.md' -type f)
-  if [[ -d "$command_src" ]]; then
-    local cmd_dir
-    for cmd_dir in "$command_src"/*; do
-      [[ -d "$cmd_dir" && -f "$cmd_dir/SKILL.md" ]] || continue
-      install_skill_link "${dest_root}/$(basename "$cmd_dir")" "$(cd "$cmd_dir" && pwd)"
-    done
-  fi
+  while IFS= read -r sf; do
+    [[ -n "$sf" ]] || continue
+    local name dir
+    name="$(skill_name_from_file "$sf")"
+    dir="$(dirname "$sf")"
+    install_link "${dest_root}/${name}" "$dir"
+  done < <(
+    find "$SKILLS_SRC" -name 'SKILL.md' -type f | sort
+    if [[ -d "$CMD_SKILLS_SRC" ]]; then
+      find "$CMD_SKILLS_SRC" -name 'SKILL.md' -type f | sort
+    fi
+  )
 }
-
-B3_COMMANDS="${B3_HOME}/.cursor/commands"
-CURSOR_README_TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/product-cursor-readme.md"
-AGENTS_MD_TEMPLATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/product-agents.md"
-CURSOR_README_DEST="${PRODUCT_ROOT}/.cursor/README.md"
-AGENTS_MD_DEST="${PRODUCT_ROOT}/AGENTS.md"
 
 update_b3_gitignore() {
-  local gi="$1"
-  local block=$'# B3: commit .b3/home; keep autodev checkpoints local\n.b3/autodev/\n'
+  local gi="${PRODUCT_ROOT}/.gitignore"
   if [[ ! -f "$gi" ]]; then
-    printf '%s' "$block" > "$gi"
-    echo created
+    printf '# B3: commit .b3/home; keep autodev checkpoints local\n.b3/autodev/\n' > "$gi"
+    echo "created"
     return
   fi
-  if grep -qE '^\s*\.b3/autodev/\s*$' "$gi"; then
-    echo present
+  if grep -Eq '^[[:space:]]*\.b3/autodev/[[:space:]]*$' "$gi"; then
+    echo "present"
     return
   fi
-  if grep -qE '^\s*\.b3/\s*$' "$gi"; then
-    sed -i.bak -E 's/^[[:space:]]*\.b3\/[[:space:]]*$/.b3\/autodev\//' "$gi" && rm -f "${gi}.bak"
-    echo upgraded
+  if grep -Eq '^[[:space:]]*\.b3/[[:space:]]*$' "$gi"; then
+    local tmp="${gi}.b3tmp"
+    sed 's|^[[:space:]]*\.b3/[[:space:]]*$|.b3/autodev/|' "$gi" > "$tmp" && mv "$tmp" "$gi"
+    echo "upgraded"
     return
   fi
-  printf '\n%s' "$block" >> "$gi"
-  echo appended
+  printf '\n# B3: commit .b3/home; keep autodev checkpoints local\n.b3/autodev/\n' >> "$gi"
+  echo "appended"
 }
 
-update_host_skill_gitignore() {
-  local gi="$1"
-  local host="$2"
-  local line=""
-  [[ "$host" == "codex" || "$host" == "antigravity" ]] && line=".agents/skills"
-  [[ "$host" == "claude" ]] && line=".claude/skills"
-  if [[ -z "$line" ]]; then
-    echo n/a
-    return
-  fi
+update_host_gitignore() {
+  local lines=()
+  case "$HOST_NAME" in
+    codex|antigravity) lines=(".agents/skills") ;;
+    claude) lines=(".claude/skills" ".claude/agents") ;;
+    *) echo "n/a"; return ;;
+  esac
+  local gi="${PRODUCT_ROOT}/.gitignore"
   if [[ ! -f "$gi" ]]; then
-    printf '# B3: local host skill link\n%s\n' "$line" > "$gi"
-    echo created
+    {
+      echo "# B3: local host links (do not commit)"
+      printf '%s\n' "${lines[@]}"
+    } > "$gi"
+    echo "created"
     return
   fi
-  if grep -qE "^[[:space:]]*$(printf '%s' "$line" | sed 's/[.[\*^$()+?{|]/\\&/g')[[:space:]]*$" "$gi"; then
-    echo present
+  local missing=() line
+  for line in "${lines[@]}"; do
+    if ! grep -Eq "^[[:space:]]*$(printf '%s' "$line" | sed 's/[.[\*^$()+?{|]/\\&/g')[[:space:]]*$" "$gi"; then
+      missing+=("$line")
+    fi
+  done
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    echo "present"
     return
   fi
-  printf '\n# B3: local host skill link (do not commit)\n%s\n' "$line" >> "$gi"
-  echo appended
+  {
+    echo ""
+    echo "# B3: local host links (do not commit)"
+    printf '%s\n' "${missing[@]}"
+  } >> "$gi"
+  echo "appended"
 }
-
-GI="${PRODUCT_ROOT}/.gitignore"
-IGNORE_PLAN=dry-run
-SKILL_IGNORE_PLAN=dry-run
-if ! $DRY_RUN; then
-  IGNORE_PLAN="$(update_b3_gitignore "$GI")"
-  SKILL_IGNORE_PLAN="$(update_host_skill_gitignore "$GI" "$HOST")"
-fi
 
 if $DRY_RUN; then
   echo "dry-run: write $HOME_DEST = $B3_HOME"
-  if [[ -f "$COMMAND_DEST" ]]; then
-    echo "dry-run: keep existing $COMMAND_DEST (matches template)"
-  else
-    echo "dry-run: write $COMMAND_DEST from $TEMPLATE"
+  if [[ -f "$COMMAND_DEST" ]]; then echo "dry-run: keep existing $COMMAND_DEST (matches template)"
+  else echo "dry-run: write $COMMAND_DEST from $TEMPLATE"; fi
+  if [[ -f "$AGENTS_MD_DEST" ]]; then echo "dry-run: keep existing $AGENTS_MD_DEST"
+  elif [[ -f "$AGENTS_MD_TEMPLATE" ]]; then echo "dry-run: write $AGENTS_MD_DEST from $AGENTS_MD_TEMPLATE"; fi
+  if [[ "$HOST_NAME" == "claude" ]]; then
+    if [[ -f "$CLAUDE_MD_DEST" ]]; then echo "dry-run: keep existing $CLAUDE_MD_DEST"
+    elif [[ -f "$CLAUDE_MD_TEMPLATE" ]]; then echo "dry-run: write $CLAUDE_MD_DEST from $CLAUDE_MD_TEMPLATE"; fi
   fi
-  if [[ -f "$AGENTS_MD_DEST" ]]; then
-    echo "dry-run: keep existing $AGENTS_MD_DEST"
-  elif [[ -f "$AGENTS_MD_TEMPLATE" ]]; then
-    echo "dry-run: write $AGENTS_MD_DEST from $AGENTS_MD_TEMPLATE"
+  echo "dry-run: gitignore .b3/autodev/"
+  if [[ -d "$COMMANDS_SRC" ]]; then
+    for src in "$COMMANDS_SRC"/*.md; do
+      [[ -f "$src" ]] || continue
+      base="$(basename "$src")"
+      [[ "$base" == "README.md" || "$base" == "autodev.md" ]] && continue
+      [[ -f "${PRODUCT_ROOT}/.cursor/commands/${base}" ]] || echo "dry-run: copy command $base"
+    done
   fi
-  echo "dry-run: gitignore .b3/autodev/ ($IGNORE_PLAN)"
-  [[ "$HOST" == "codex" || "$HOST" == "antigravity" ]] && echo "dry-run: gitignore .agents/skills"
-  [[ "$HOST" == "claude" ]] && echo "dry-run: gitignore .claude/skills"
-  if [[ "$HOST" == "codex" || "$HOST" == "antigravity" ]]; then
-    echo "dry-run: flatten $AGENTS_DEST (one symlink per skill + command skills)"
-  elif [[ -n "$LINK_DEST" ]]; then
-    echo "dry-run: ln -s $SKILLS $LINK_DEST"
-  fi
+  case "$HOST_NAME" in
+    codex|antigravity)
+      echo "dry-run: gitignore .agents/skills"
+      echo "dry-run: flatten $AGENTS_DEST (one symlink per skill + command skills)"
+      ;;
+    claude)
+      echo "dry-run: gitignore .claude/skills and .claude/agents"
+      echo "dry-run: flatten $CLAUDE_SKILLS_DEST (one symlink per skill + command skills)"
+      echo "dry-run: symlink $CLAUDE_AGENTS_DEST -> $AGENTS_SRC"
+      ;;
+    cursor)
+      [[ -f "$CURSOR_README_TEMPLATE" ]] && echo "dry-run: write $CURSOR_README_DEST"
+      ;;
+  esac
   exit 0
 fi
 
+IGNORE_PLAN="$(update_b3_gitignore)"
+SKILL_IGNORE_PLAN="$(update_host_gitignore)"
+
 mkdir -p "${PRODUCT_ROOT}/.b3" "${PRODUCT_ROOT}/.cursor/commands"
-if [[ ! -f "$HOME_DEST" ]]; then
-  printf '%s' "$B3_HOME" > "$HOME_DEST"
-fi
-if [[ ! -f "$COMMAND_DEST" ]]; then
-  cp "$TEMPLATE" "$COMMAND_DEST"
-fi
+[[ -f "$HOME_DEST" ]] || printf '%s' "$B3_HOME" > "$HOME_DEST"
+[[ -f "$COMMAND_DEST" ]] || cp "$TEMPLATE" "$COMMAND_DEST"
 if [[ ! -f "$AGENTS_MD_DEST" && -f "$AGENTS_MD_TEMPLATE" ]]; then
   cp "$AGENTS_MD_TEMPLATE" "$AGENTS_MD_DEST"
 fi
+if [[ "$HOST_NAME" == "claude" && ! -f "$CLAUDE_MD_DEST" && -f "$CLAUDE_MD_TEMPLATE" ]]; then
+  cp "$CLAUDE_MD_TEMPLATE" "$CLAUDE_MD_DEST"
+fi
 
-if [[ -d "$B3_COMMANDS" ]]; then
-  for src in "$B3_COMMANDS"/*.md; do
+if [[ -d "$COMMANDS_SRC" ]]; then
+  for src in "$COMMANDS_SRC"/*.md; do
     [[ -f "$src" ]] || continue
     base="$(basename "$src")"
     [[ "$base" == "README.md" || "$base" == "autodev.md" ]] && continue
     dest="${PRODUCT_ROOT}/.cursor/commands/${base}"
-    if [[ ! -f "$dest" ]]; then
-      cp "$src" "$dest"
-    fi
+    [[ -f "$dest" ]] || cp "$src" "$dest"
   done
-  if [[ "$HOST" == "cursor" && -f "$CURSOR_README_TEMPLATE" ]]; then
+  if [[ "$HOST_NAME" == "cursor" && -f "$CURSOR_README_TEMPLATE" ]]; then
     cp "$CURSOR_README_TEMPLATE" "$CURSOR_README_DEST"
   fi
 fi
 
-if [[ "$HOST" == "codex" || "$HOST" == "antigravity" ]]; then
-  install_flat_skill_index "$AGENTS_DEST" "$SKILLS" "$COMMAND_SKILLS_SRC"
-elif [[ -n "$LINK_DEST" ]]; then
-  if [[ ! -e "$LINK_DEST" && ! -L "$LINK_DEST" ]]; then
-    mkdir -p "$(dirname "$LINK_DEST")"
-    ln -s "$SKILLS" "$LINK_DEST"
-  elif ! link_target_ok "$LINK_DEST" "$SKILLS"; then
-    echo "error: refusing to replace existing $LINK_DEST" >&2
-    exit 1
-  fi
-fi
+case "$HOST_NAME" in
+  codex|antigravity)
+    install_flat_skills "$AGENTS_DEST"
+    ;;
+  claude)
+    install_flat_skills "$CLAUDE_SKILLS_DEST"
+    if [[ -d "$AGENTS_SRC" ]]; then
+      mkdir -p "$(dirname "$CLAUDE_AGENTS_DEST")"
+      install_link "$CLAUDE_AGENTS_DEST" "$AGENTS_SRC"
+    fi
+    ;;
+esac
 
 echo "installed B3 pointer in $PRODUCT_ROOT"
 echo "B3_HOME=$B3_HOME"
 echo "command=$COMMAND_DEST"
 echo "agents.md=$AGENTS_MD_DEST"
+[[ "$HOST_NAME" == "claude" ]] && echo "claude.md=$CLAUDE_MD_DEST"
 echo "gitignore.b3=$IGNORE_PLAN"
 echo "gitignore.skills=$SKILL_IGNORE_PLAN"
-echo "host=$HOST"
-if [[ "$HOST" == "codex" ]]; then
-  echo "skills=$AGENTS_DEST (flattened links + \$autodev; gitignored, not copied)"
-elif [[ "$HOST" == "antigravity" ]]; then
-  echo "skills=$AGENTS_DEST (flattened links + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.sh if Cursor also opens this repo)"
-elif [[ "$HOST" == "claude" ]]; then
-  echo "skills=$CLAUDE_DEST -> $SKILLS (gitignored local link, not copied)"
-else
-  echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS (not copied into product)"
-fi
+echo "host=$HOST_NAME"
+case "$HOST_NAME" in
+  codex) echo "skills=$AGENTS_DEST (flattened symlinks + \$autodev; gitignored, not copied)" ;;
+  antigravity) echo "skills=$AGENTS_DEST (flattened symlinks + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.sh if Cursor also opens this repo)" ;;
+  claude) echo "skills=$CLAUDE_SKILLS_DEST (flattened symlinks + command skills) + $CLAUDE_AGENTS_DEST -> $AGENTS_SRC (gitignored, not copied)" ;;
+  cursor) echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS_SRC (not copied into product)" ;;
+esac
 echo "note: this proves files were written, not host slash-command or skill discovery"

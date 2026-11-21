@@ -14,11 +14,15 @@ $sandbox = Join-Path $env:TEMP ("b3-autodev-behavior-" + [guid]::NewGuid().ToStr
 New-Item -ItemType Directory -Path $sandbox | Out-Null
 Push-Location $sandbox
 try {
-    # --- F4: empty invalid dest is replaced; nonempty dest fails ---
+    # --- F4: empty invalid dest is replaced; nonempty dest fails; cursor sync & coexistence guard ---
     $fx = Join-Path $sandbox 'sync-fx'
     New-Item -ItemType Directory -Path (Join-Path $fx 'adapters') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fx '.cursor\skills\demo') | Out-Null
-    Set-Content (Join-Path $fx '.cursor\skills\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
+    New-Item -ItemType Directory -Path (Join-Path $fx 'skills\eng\demo') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fx 'commands') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fx 'agents') | Out-Null
+    Set-Content (Join-Path $fx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
+    Set-Content (Join-Path $fx 'commands\plan.md') '# plan'
+    Set-Content (Join-Path $fx 'agents\reviewer.md') '# reviewer'
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fx 'adapters\sync-skills.ps1')
 
     $empty = Join-Path $fx '.agents\skills'
@@ -27,17 +31,60 @@ try {
     if ($LASTEXITCODE -ne 0) {
         FailCheck 'sync-empty-dir' "exit $LASTEXITCODE"
     } else {
-        $n = @(Get-ChildItem -LiteralPath $empty -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count
-        $item = Get-Item -LiteralPath $empty -Force
-        $isLink = $item.LinkType -in @('Junction', 'SymbolicLink') -or (($item.Attributes.ToString()) -match 'ReparsePoint')
-        if ($n -ge 1 -and $isLink) { Pass 'sync-empty-dir' }
-        else { FailCheck 'sync-empty-dir' "LinkType=$($item.LinkType) attrs=$($item.Attributes) skillCount=$n" }
+        $demoLink = Join-Path $empty 'demo'
+        $skillOk = Test-Path -LiteralPath (Join-Path $demoLink 'SKILL.md') -PathType Leaf
+        $item = Get-Item -LiteralPath $demoLink -Force -ErrorAction SilentlyContinue
+        $isLink = $item -and ($item.LinkType -in @('Junction', 'SymbolicLink') -or (($item.Attributes.ToString()) -match 'ReparsePoint'))
+        if ($skillOk -and $isLink) { Pass 'sync-empty-dir' }
+        else { FailCheck 'sync-empty-dir' "demoLink=$isLink skillOk=$skillOk" }
     }
+
+    # Coexistence guard: cursor sync must fail specifically on coexistence guard when .agents/skills exists
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $coexOut = (& powershell -NoProfile -File (Join-Path $fx 'adapters\sync-skills.ps1') -HostName cursor 2>&1 | Out-String)
+    $coexExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    $coexNoCursor = -not (Test-Path -LiteralPath (Join-Path $fx '.cursor\skills'))
+    if ($coexExit -ne 0 -and ($coexOut -match 'coexistence guard') -and $coexNoCursor) { Pass 'sync-coexistence-guard' }
+    else { FailCheck 'sync-coexistence-guard' "exit=$coexExit noCursor=$coexNoCursor out=$coexOut" }
+
+    # Cursor sync on clean fixture
+    $fxCur = Join-Path $sandbox 'sync-fx-cursor'
+    New-Item -ItemType Directory -Path (Join-Path $fxCur 'adapters') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fxCur 'skills\eng\demo') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fxCur 'commands') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fxCur 'agents') | Out-Null
+    Set-Content (Join-Path $fxCur 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
+    Set-Content (Join-Path $fxCur 'commands\plan.md') '# plan'
+    Set-Content (Join-Path $fxCur 'agents\reviewer.md') '# reviewer'
+    Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCur 'adapters\sync-skills.ps1')
+    & powershell -NoProfile -File (Join-Path $fxCur 'adapters\sync-skills.ps1') -HostName cursor | Out-Null
+    $curSyncExit = $LASTEXITCODE
+    & powershell -NoProfile -File (Join-Path $fxCur 'adapters\sync-skills.ps1') -HostName cursor -VerifyOnly | Out-Null
+    $curVerifyExit = $LASTEXITCODE
+    if ($curSyncExit -eq 0 -and $curVerifyExit -eq 0) { Pass 'sync-cursor' }
+    else { FailCheck 'sync-cursor' "sync=$curSyncExit verify=$curVerifyExit" }
+
+    # Claude sync on clean fixture
+    $fxCl = Join-Path $sandbox 'sync-fx-claude'
+    New-Item -ItemType Directory -Path (Join-Path $fxCl 'adapters') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fxCl 'skills\eng\demo') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fxCl 'agents') | Out-Null
+    Set-Content (Join-Path $fxCl 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
+    Set-Content (Join-Path $fxCl 'agents\reviewer.md') '# reviewer'
+    Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCl 'adapters\sync-skills.ps1')
+    & powershell -NoProfile -File (Join-Path $fxCl 'adapters\sync-skills.ps1') -HostName claude | Out-Null
+    $clSyncExit = $LASTEXITCODE
+    & powershell -NoProfile -File (Join-Path $fxCl 'adapters\sync-skills.ps1') -HostName claude -VerifyOnly | Out-Null
+    $clVerifyExit = $LASTEXITCODE
+    if ($clSyncExit -eq 0 -and $clVerifyExit -eq 0) { Pass 'sync-claude' }
+    else { FailCheck 'sync-claude' "sync=$clSyncExit verify=$clVerifyExit" }
 
     $fx2 = Join-Path $sandbox 'sync-fx-nonempty'
     New-Item -ItemType Directory -Path (Join-Path $fx2 'adapters') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fx2 '.cursor\skills\demo') | Out-Null
-    Set-Content (Join-Path $fx2 '.cursor\skills\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
+    New-Item -ItemType Directory -Path (Join-Path $fx2 'skills\eng\demo') | Out-Null
+    Set-Content (Join-Path $fx2 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fx2 'adapters\sync-skills.ps1')
     New-Item -ItemType Directory -Path (Join-Path $fx2 '.agents\skills') | Out-Null
     Set-Content (Join-Path $fx2 '.agents\skills\stale.txt') 'not a link'
@@ -229,8 +276,8 @@ try {
 
     $agSyncFx = Join-Path $sandbox 'ag-sync-fx'
     New-Item -ItemType Directory -Path (Join-Path $agSyncFx 'adapters') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $agSyncFx '.cursor\skills\eng\demo') | Out-Null
-    Set-Content (Join-Path $agSyncFx '.cursor\skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
+    New-Item -ItemType Directory -Path (Join-Path $agSyncFx 'skills\eng\demo') | Out-Null
+    Set-Content (Join-Path $agSyncFx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $agSyncFx 'adapters\sync-skills.ps1')
     & powershell -NoProfile -File (Join-Path $agSyncFx 'adapters\sync-skills.ps1') -HostName antigravity | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -244,7 +291,7 @@ try {
             try {
                 $m = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
                 $jsonOk = $true
-                $entryOk = (@($m.entries | ForEach-Object { $_.path }) -contains '.cursor/skills/eng')
+                $entryOk = (@($m.entries | ForEach-Object { $_.path }) -contains 'skills/eng')
             } catch { $jsonOk = $false }
         }
         & powershell -NoProfile -File (Join-Path $agSyncFx 'adapters\sync-skills.ps1') -HostName antigravity -VerifyOnly | Out-Null
@@ -284,6 +331,45 @@ try {
             Pass 'install-product-antigravity'
         } else {
             FailCheck 'install-product-antigravity' "home=$($agHomePath -eq $root) agentsMd=$agAgentsMd gi=$agGiOk treeLink=$agIsTreeLink skills=$($agSkillDirs.Count) autodev=$agAutodevOk planning=$agPlanningOk idem=$agIdemOk"
+        }
+    }
+
+    $clProduct = Join-Path $sandbox 'claude-product'
+    New-Item -ItemType Directory -Path $clProduct | Out-Null
+    Push-Location $clProduct
+    git init -q
+    git config user.email 'autodev-test@example.com'
+    git config user.name 'Autodev Test'
+    Set-Content README.md 'claude product'
+    git add README.md
+    git commit -qm 'init'
+    Pop-Location
+
+    & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $clProduct -B3Home $root -HostName claude | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        FailCheck 'install-product-claude' "exit $LASTEXITCODE"
+    } else {
+        $clHomePath = (Get-Content (Join-Path $clProduct '.b3\home') -Raw).Trim()
+        $clMdOk = Test-Path (Join-Path $clProduct 'CLAUDE.md')
+        $clAgentsMd = Test-Path (Join-Path $clProduct 'AGENTS.md')
+        $clGi = Get-Content (Join-Path $clProduct '.gitignore') -Raw
+        $clGiOk = ($clGi -match '(?m)^\s*\.b3/autodev/\s*$') -and ($clGi -match '(?m)^\s*\.claude/skills\s*$') -and ($clGi -match '(?m)^\s*\.claude/agents\s*$')
+        $clSkillsDir = Join-Path $clProduct '.claude\skills'
+        $clSkillsItem = Get-Item -LiteralPath $clSkillsDir -Force
+        $clIsTreeLink = $clSkillsItem.LinkType -in @('Junction', 'SymbolicLink')
+        $clSkillDirs = @(Get-ChildItem -LiteralPath $clSkillsDir -Directory -Force -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') })
+        $clAgentsLinkItem = Get-Item -LiteralPath (Join-Path $clProduct '.claude\agents') -Force -ErrorAction SilentlyContinue
+        $clAgentsIsLink = $clAgentsLinkItem -and ($clAgentsLinkItem.LinkType -in @('Junction', 'SymbolicLink') -or (($clAgentsLinkItem.Attributes.ToString()) -match 'ReparsePoint'))
+        $clAgentsOk = $clAgentsIsLink -and (Test-Path (Join-Path $clProduct '.claude\agents\reviewer.md'))
+        $clAutodevItem = Get-Item -LiteralPath (Join-Path $clSkillsDir 'autodev') -Force -ErrorAction SilentlyContinue
+        $clAutodevIsLink = $clAutodevItem -and ($clAutodevItem.LinkType -in @('Junction', 'SymbolicLink') -or (($clAutodevItem.Attributes.ToString()) -match 'ReparsePoint'))
+        $clAutodevOk = $clAutodevIsLink -and (Test-Path (Join-Path $clSkillsDir 'autodev\SKILL.md'))
+        & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $clProduct -B3Home $root -HostName claude | Out-Null
+        $clIdemOk = ($LASTEXITCODE -eq 0)
+        if (($clHomePath -eq $root) -and $clMdOk -and $clAgentsMd -and $clGiOk -and (-not $clIsTreeLink) -and ($clSkillDirs.Count -ge 30) -and $clAgentsOk -and $clAutodevOk -and $clIdemOk) {
+            Pass 'install-product-claude'
+        } else {
+            FailCheck 'install-product-claude' "home=$($clHomePath -eq $root) claudeMd=$clMdOk agentsMd=$clAgentsMd gi=$clGiOk treeLink=$clIsTreeLink skills=$($clSkillDirs.Count) agents=$clAgentsOk autodev=$clAutodevOk idem=$clIdemOk"
         }
     }
 
@@ -457,6 +543,63 @@ try {
         Pass 'guard-snapshot'
     } else {
         FailCheck 'guard-snapshot' "dirty=(${snapDirtyExit}:$snapDirty vs $gHeadNow) stashEmpty=$stashEmpty kept=$workKept clean=(${snapCleanExit}:$snapClean)"
+    }
+
+    # --- run-scoped checkpoint checks (new-run, resolve-run, list-runs, prune) ---
+    $runRepo = Join-Path $sandbox 'run-scoped-repo'
+    New-Item -ItemType Directory -Path $runRepo | Out-Null
+    $r1 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
+    $r1Exit = $LASTEXITCODE
+    $r2 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
+    $r2Exit = $LASTEXITCODE
+    $curContent = (Get-Content -LiteralPath (Join-Path $runRepo '.b3\autodev\CURRENT') -Raw).Trim()
+    $resActive = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $runRepo).Trim()
+    $resActiveExit = $LASTEXITCODE
+    $resExplicit = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $runRepo -RunId $r1).Trim()
+    $resExplicitExit = $LASTEXITCODE
+    $listOut = ((& powershell -NoProfile -File $guardScript list-runs -RepoRoot $runRepo) -join "`n")
+
+    $legacyRepo = Join-Path $sandbox 'legacy-repo'
+    New-Item -ItemType Directory -Path (Join-Path $legacyRepo '.b3\autodev') | Out-Null
+    Set-Content (Join-Path $legacyRepo '.b3\autodev\progress.md') "- run_status: running`n"
+    $resLegacy = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $legacyRepo).Trim()
+    $resLegacyExit = $LASTEXITCODE
+
+    if ($r1Exit -eq 0 -and $r1 -eq '20261122-0010-add-billing-webhook' -and
+        $r2Exit -eq 0 -and $r2 -eq '20261122-0010-add-billing-webhook-2' -and
+        $curContent -eq $r2 -and
+        $resActiveExit -eq 0 -and $resActive -eq ".b3/autodev/runs/$r2" -and
+        $resExplicitExit -eq 0 -and $resExplicit -eq ".b3/autodev/runs/$r1" -and
+        ($listOut -match ('\* ' + [regex]::Escape($r2))) -and
+        $resLegacyExit -eq 0 -and $resLegacy -eq '.b3/autodev') {
+        Pass 'guard-new-and-resolve-run'
+    } else {
+        FailCheck 'guard-new-and-resolve-run' "r1=(${r1Exit}:$r1) r2=(${r2Exit}:$r2) cur=$curContent active=(${resActiveExit}:$resActive) explicit=(${resExplicitExit}:$resExplicit) legacy=(${resLegacyExit}:$resLegacy)"
+    }
+
+    $pruneRepo = Join-Path $sandbox 'prune-repo'
+    New-Item -ItemType Directory -Path $pruneRepo | Out-Null
+    $p1 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'old-pass-1' -Timestamp '20261122-0001').Trim()
+    $p2 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'old-pass-2' -Timestamp '20261122-0002').Trim()
+    $p3 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'active-running' -Timestamp '20261122-0003').Trim()
+    $p4 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'latest-pass' -Timestamp '20261122-0004').Trim()
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p1\progress.md") "- run_status: PASS`n"
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p2\progress.md") "- run_status: PASS`n"
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p3\progress.md") "- run_status: running`n"
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p4\progress.md") "- run_status: PASS`n"
+    # Point CURRENT at $p1 (oldest PASS) to verify CURRENT is NEVER pruned even when beyond Keep
+    Set-Content (Join-Path $pruneRepo '.b3\autodev\CURRENT') "$p1`n"
+
+    $pruneOut = ((& powershell -NoProfile -File $guardScript prune -RepoRoot $pruneRepo -Keep 1) -join "`n")
+    $pruneExit = $LASTEXITCODE
+    $p1Kept = Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p1")
+    $p2Removed = -not (Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p2"))
+    $p3Kept = Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p3")
+    $p4Kept = Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p4")
+    if ($pruneExit -eq 0 -and $p1Kept -and $p2Removed -and $p3Kept -and $p4Kept -and $pruneOut -match 'PRUNE_OK: 1 removed') {
+        Pass 'guard-prune-safe'
+    } else {
+        FailCheck 'guard-prune-safe' "exit=$pruneExit p1Kept=$p1Kept p2Removed=$p2Removed p3Kept=$p3Kept p4Kept=$p4Kept out=$pruneOut"
     }
 }
 finally {

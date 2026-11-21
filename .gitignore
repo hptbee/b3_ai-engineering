@@ -23,11 +23,16 @@ venv/
 .codex/cache/
 .serena/
 
-# Cursor-native skills/commands/agents/rules are committed under .cursor/.
-# Optional other-host discovery links (adapters/sync-skills.sh). Do not commit
-# a duplicate skill tree.
+# Host-neutral canonical core lives at rules/, skills/, commands/, agents/.
+# Local host activation links created by adapters/sync-skills.{ps1,sh}.
+# Keep .cursor/rules/*.mdc and .agents/skills.json tracked; never commit
+# duplicate skill/command/agent trees.
+.cursor/skills
+.cursor/commands
+.cursor/agents
 .agents/skills
 .claude/skills
+.claude/agents
 .codex/skills
 
 # Optional review-loop working log (keep TEMPLATE.md)

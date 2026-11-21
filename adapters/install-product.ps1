@@ -25,19 +25,24 @@ $B3Home = (Resolve-Path -LiteralPath $B3Home).Path
 $ProductRoot = (Resolve-Path -LiteralPath $ProductRoot).Path
 $workflow = Join-Path $B3Home 'workflows\autonomous-development.md'
 $template = Join-Path $scriptRoot 'product-autodev.md'
-$skills = Join-Path $B3Home '.cursor\skills'
+$skills = Join-Path $B3Home 'skills'
+$b3Commands = Join-Path $B3Home 'commands'
+$b3Agents = Join-Path $B3Home 'agents'
+$commandSkillsSrc = Join-Path $B3Home 'adapters\command-skills'
 
 if (-not (Test-Path -LiteralPath $workflow)) { Fail "B3_HOME missing workflow: $workflow" }
 if (-not (Test-Path -LiteralPath $template)) { Fail "missing template: $template" }
 if (@(Get-ChildItem -LiteralPath $skills -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count -lt 1) {
-    Fail "B3_HOME has no SKILL.md under .cursor/skills: $skills"
+    Fail "B3_HOME has no SKILL.md under skills: $skills"
 }
 
 $productSkills = Join-Path $ProductRoot '.cursor\skills'
 $commandDest = Join-Path $ProductRoot '.cursor\commands\autodev.md'
 $homeDest = Join-Path $ProductRoot '.b3\home'
 $agentsDest = Join-Path $ProductRoot '.agents\skills'
-$claudeDest = Join-Path $ProductRoot '.claude\skills'
+$claudeSkillsDest = Join-Path $ProductRoot '.claude\skills'
+$claudeAgentsDest = Join-Path $ProductRoot '.claude\agents'
+$claudeMdDest = Join-Path $ProductRoot 'CLAUDE.md'
 
 if (Test-Path -LiteralPath $productSkills) {
     $productSkillCount = @(Get-ChildItem -LiteralPath $productSkills -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count
@@ -50,7 +55,7 @@ if ($HostName -eq 'cursor') {
     if (Test-Path -LiteralPath $agentsDest) {
         Fail "product has .agents/skills; Cursor would duplicate discovery. Remove it or install with -HostName codex only in a Codex-only checkout"
     }
-    if (Test-Path -LiteralPath $claudeDest) {
+    if (Test-Path -LiteralPath $claudeSkillsDest) {
         Fail "product has .claude/skills; Cursor would duplicate discovery. Remove it before a Cursor install"
     }
 }
@@ -67,11 +72,6 @@ if (Test-Path -LiteralPath $homeDest) {
         Fail "refusing to overwrite $homeDest (points to $existingHome, requested $B3Home)"
     }
 }
-
-$linkDest = $null
-if ($HostName -in @('codex', 'antigravity')) { $linkDest = $agentsDest }
-if ($HostName -eq 'claude') { $linkDest = $claudeDest }
-$commandSkillsSrc = Join-Path $scriptRoot 'codex-command-skills'
 
 function Remove-JunctionOrSymlink([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
@@ -120,11 +120,10 @@ function Install-SkillJunction([string]$Dest, [string]$Target) {
     New-Item -ItemType Junction -Path $Dest -Target $Target | Out-Null
 }
 
-function Install-FlatSkillIndex([string]$DestRoot, [string]$SkillsSrc, [string]$CommandSkillsSrc) {
+function Install-FlatSkillIndex([string]$DestRoot, [string]$SkillsSrc, [string]$CmdSkillsSrc) {
     if (Test-Path -LiteralPath $DestRoot) {
         $item = Get-Item -LiteralPath $DestRoot -Force
         if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
-            # Previous install linked the whole nested skill tree. Codex/Antigravity need one folder per skill.
             Remove-JunctionOrSymlink $DestRoot
         } elseif (-not $item.PSIsContainer) {
             Fail "refusing to replace existing $DestRoot"
@@ -136,16 +135,12 @@ function Install-FlatSkillIndex([string]$DestRoot, [string]$SkillsSrc, [string]$
         $srcDir = Split-Path -Parent $_.FullName
         Install-SkillJunction (Join-Path $DestRoot $name) $srcDir
     }
-    if (Test-Path -LiteralPath $CommandSkillsSrc) {
-        Get-ChildItem -LiteralPath $CommandSkillsSrc -Directory | ForEach-Object {
+    if (Test-Path -LiteralPath $CmdSkillsSrc) {
+        Get-ChildItem -LiteralPath $CmdSkillsSrc -Directory | ForEach-Object {
             if (-not (Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md'))) { return }
             Install-SkillJunction (Join-Path $DestRoot $_.Name) $_.FullName
         }
     }
-}
-
-function Test-B3GitignoreOk([string]$Text) {
-    return ($Text -match '(?m)^\s*\.b3/autodev/\s*$') -or ($Text -match '(?m)^\s*\.b3/\s*$')
 }
 
 function Update-B3Gitignore([string]$Root) {
@@ -171,25 +166,30 @@ function Update-B3Gitignore([string]$Root) {
 }
 
 function Update-HostSkillGitignore([string]$Root, [string]$HostName) {
-    $line = $null
-    if ($HostName -in @('codex', 'antigravity')) { $line = '.agents/skills' }
-    if ($HostName -eq 'claude') { $line = '.claude/skills' }
-    if (-not $line) { return 'n/a' }
+    $lines = @()
+    if ($HostName -in @('codex', 'antigravity')) { $lines = @('.agents/skills') }
+    if ($HostName -eq 'claude') { $lines = @('.claude/skills', '.claude/agents') }
+    if ($lines.Count -eq 0) { return 'n/a' }
+
     $gi = Join-Path $Root '.gitignore'
-    $escaped = [regex]::Escape($line)
     if (-not (Test-Path -LiteralPath $gi)) {
-        Set-Content -LiteralPath $gi -Value ("# B3: local host skill link`n$line`n")
+        Set-Content -LiteralPath $gi -Value ("# B3: local host links (do not commit)`n" + ($lines -join "`n") + "`n")
         return 'created'
     }
     $text = Get-Content -LiteralPath $gi -Raw
-    if ($text -match "(?m)^\s*$escaped\s*$") { return 'present' }
-    Add-Content -LiteralPath $gi -Value "`n# B3: local host skill link (do not commit)`n$line"
+    $missing = @()
+    foreach ($line in $lines) {
+        $escaped = [regex]::Escape($line)
+        if ($text -notmatch "(?m)^\s*$escaped\s*$") { $missing += $line }
+    }
+    if ($missing.Count -eq 0) { return 'present' }
+    Add-Content -LiteralPath $gi -Value ("`n# B3: local host links (do not commit)`n" + ($missing -join "`n"))
     return 'appended'
 }
 
 $cursorReadmeTemplate = Join-Path $scriptRoot 'product-cursor-readme.md'
 $agentsMdTemplate = Join-Path $scriptRoot 'product-agents.md'
-$b3Commands = Join-Path $B3Home '.cursor\commands'
+$claudeMdTemplate = Join-Path $scriptRoot 'product-claude.md'
 $cursorReadmeDest = Join-Path $ProductRoot '.cursor\README.md'
 $agentsMdDest = Join-Path $ProductRoot 'AGENTS.md'
 
@@ -206,20 +206,29 @@ if ($DryRun) {
     else { Write-Output "dry-run: write $commandDest from $template" }
     if (Test-Path -LiteralPath $agentsMdDest) { Write-Output "dry-run: keep existing $agentsMdDest" }
     elseif (Test-Path -LiteralPath $agentsMdTemplate) { Write-Output "dry-run: write $agentsMdDest from $agentsMdTemplate" }
+    if ($HostName -eq 'claude') {
+        if (Test-Path -LiteralPath $claudeMdDest) { Write-Output "dry-run: keep existing $claudeMdDest" }
+        elseif (Test-Path -LiteralPath $claudeMdTemplate) { Write-Output "dry-run: write $claudeMdDest from $claudeMdTemplate" }
+    }
     Write-Output "dry-run: gitignore .b3/autodev/ (see Update-B3Gitignore)"
     if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: gitignore .agents/skills" }
-    if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills" }
-    Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File | ForEach-Object {
-        if ($_.Name -eq 'README.md') { return }
-        $dest = Join-Path (Join-Path $ProductRoot '.cursor\commands') $_.Name
-        if ($_.Name -eq 'autodev.md') { return }
-        if (-not (Test-Path -LiteralPath $dest)) { Write-Output "dry-run: copy command $($_.Name)" }
+    if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills and .claude/agents" }
+    if (Test-Path -LiteralPath $b3Commands) {
+        Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File | ForEach-Object {
+            if ($_.Name -in @('README.md', 'autodev.md')) { return }
+            $dest = Join-Path (Join-Path $ProductRoot '.cursor\commands') $_.Name
+            if (-not (Test-Path -LiteralPath $dest)) { Write-Output "dry-run: copy command $($_.Name)" }
+        }
     }
     if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $cursorReadmeTemplate)) {
         Write-Output "dry-run: write $cursorReadmeDest"
     }
-    if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: flatten $linkDest (one junction per skill + command skills)" }
-    elseif ($linkDest) { Write-Output "dry-run: junction $linkDest -> $skills" }
+    if ($HostName -in @('codex', 'antigravity')) {
+        Write-Output "dry-run: flatten $agentsDest (one junction per skill + command skills)"
+    } elseif ($HostName -eq 'claude') {
+        Write-Output "dry-run: flatten $claudeSkillsDest (one junction per skill + command skills)"
+        Write-Output "dry-run: junction $claudeAgentsDest -> $b3Agents"
+    }
     exit 0
 }
 
@@ -233,6 +242,9 @@ if (-not (Test-Path -LiteralPath $commandDest)) {
 }
 if ((-not (Test-Path -LiteralPath $agentsMdDest)) -and (Test-Path -LiteralPath $agentsMdTemplate)) {
     Copy-Item -LiteralPath $agentsMdTemplate -Destination $agentsMdDest
+}
+if ($HostName -eq 'claude' -and (-not (Test-Path -LiteralPath $claudeMdDest)) -and (Test-Path -LiteralPath $claudeMdTemplate)) {
+    Copy-Item -LiteralPath $claudeMdTemplate -Destination $claudeMdDest
 }
 
 if (Test-Path -LiteralPath $b3Commands) {
@@ -251,14 +263,11 @@ if (Test-Path -LiteralPath $b3Commands) {
 
 if ($HostName -in @('codex', 'antigravity')) {
     Install-FlatSkillIndex $agentsDest $skills $commandSkillsSrc
-} elseif ($linkDest) {
-    if (-not (Test-Path -LiteralPath $linkDest)) {
-        New-Item -ItemType Directory -Path (Split-Path -Parent $linkDest) -Force | Out-Null
-        New-Item -ItemType Junction -Path $linkDest -Target $skills | Out-Null
-    } else {
-        $item = Get-Item -LiteralPath $linkDest -Force
-        $ok = $item.LinkType -in @('Junction', 'SymbolicLink') -and (Test-LinkTarget $linkDest $skills)
-        if (-not $ok) { Fail "refusing to replace existing $linkDest" }
+} elseif ($HostName -eq 'claude') {
+    Install-FlatSkillIndex $claudeSkillsDest $skills $commandSkillsSrc
+    if (Test-Path -LiteralPath $b3Agents -PathType Container) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $claudeAgentsDest) -Force | Out-Null
+        Install-SkillJunction $claudeAgentsDest $b3Agents
     }
 }
 
@@ -266,6 +275,7 @@ Write-Output "installed B3 pointer in $ProductRoot"
 Write-Output "B3_HOME=$B3Home"
 Write-Output "command=$commandDest"
 Write-Output "agents.md=$agentsMdDest"
+if ($HostName -eq 'claude') { Write-Output "claude.md=$claudeMdDest" }
 Write-Output "gitignore.b3=$ignorePlan"
 Write-Output "gitignore.skills=$skillIgnorePlan"
 Write-Output "host=$HostName"
@@ -274,7 +284,7 @@ if ($HostName -eq 'codex') {
 } elseif ($HostName -eq 'antigravity') {
     Write-Output "skills=$agentsDest (flattened junctions + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.ps1 if Cursor also opens this repo)"
 } elseif ($HostName -eq 'claude') {
-    Write-Output "skills=$claudeDest -> $skills (gitignored local link, not copied)"
+    Write-Output "skills=$claudeSkillsDest (flattened junctions + command skills) + $claudeAgentsDest -> $b3Agents (gitignored, not copied)"
 } else {
     Write-Output "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $skills (not copied into product)"
 }

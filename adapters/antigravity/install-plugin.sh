@@ -27,13 +27,13 @@ fi
 B3_HOME="$(cd "$B3_HOME" && pwd)"
 
 WORKFLOW="${B3_HOME}/workflows/autonomous-development.md"
-SKILLS_SRC="${B3_HOME}/.cursor/skills"
-CMD_SKILLS_SRC="${B3_HOME}/adapters/codex-command-skills"
+SKILLS_SRC="${B3_HOME}/skills"
+CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
 RULES_DIR="${B3_HOME}/rules"
-AGENTS_DIR="${B3_HOME}/.cursor/agents"
+AGENTS_DIR="${B3_HOME}/agents"
 
 [[ -f "$WORKFLOW" ]] || { echo "error: B3_HOME missing workflow: $WORKFLOW" >&2; exit 1; }
-[[ -d "$SKILLS_SRC" ]] || { echo "error: B3_HOME missing .cursor/skills: $SKILLS_SRC" >&2; exit 1; }
+[[ -d "$SKILLS_SRC" ]] || { echo "error: B3_HOME missing skills: $SKILLS_SRC" >&2; exit 1; }
 
 skill_name_from_file() {
   awk 'BEGIN{FS=": "} /^name:/{gsub(/[\r[:space:]]/,"",$2); print $2; exit}' "$1"
@@ -125,7 +125,7 @@ render_agent() {
       print tools
       print "---"
       print ""
-      print "<!-- Generated from " b3_home "/.cursor/agents/" base " - do not edit here -->"
+      print "<!-- Generated from " b3_home "/agents/" base " - do not edit here -->"
       if (body_n > 0) {
         print ""
         for (i = 1; i <= body_n; i++) print body[i]
@@ -140,7 +140,7 @@ while IFS= read -r f; do
 done < <(find "$SKILLS_SRC" -name 'SKILL.md' -type f | LC_ALL=C sort)
 
 if [[ ${#SKILL_FILES[@]} -lt 1 ]]; then
-  echo "error: B3_HOME has no SKILL.md under .cursor/skills: $SKILLS_SRC" >&2
+  echo "error: B3_HOME has no SKILL.md under skills: $SKILLS_SRC" >&2
   exit 1
 fi
 
@@ -298,7 +298,7 @@ for existing in "${PLUGIN_ROOT}/agents"/*.md; do
     fi
   done
   if ! $keep; then
-    if $FORCE || grep -q '<!-- Generated from .*/\.cursor/agents/' "$existing"; then
+    if $FORCE || grep -Eq '<!-- Generated from .*/(\.cursor/)?agents/' "$existing"; then
       rm -f "$existing"
     fi
   fi

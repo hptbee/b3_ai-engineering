@@ -27,9 +27,9 @@ Load B3 skills, rules, review-loop, and agents from `B3_HOME`. Write checkpoints
 | --- | --- |
 | Story, requirement, bug, refactor, or a path to one | Start or continue the lifecycle |
 | Path to an existing plan | Validate it, then execute |
-| `resume` | Reconcile `.b3/autodev/` with Git, then continue |
-| `status` | Report the checkpoint. Do not implement |
+| `resume [<run_id>]` | Reconcile active run (`.b3/autodev/CURRENT` or `<run_id>`) with Git, then continue |
+| `status [<run_id>\|--all]` | Report the resolved run (or list runs on `--all`). Do not implement |
 
-You are the orchestrator in this session. Dispatch reviewer and fixer subagents when this host can isolate them. If it cannot, record that limit in `.b3/autodev/progress.md`.
+You are the orchestrator in this session. Dispatch reviewer and fixer subagents when this host can isolate them. If it cannot, record that limit in `{RUN_DIR}/progress.md` (under `.b3/autodev/runs/<run_id>/`).
 
 `/plan`, `/implement`, `/debug`, `/review`, `/verify`, and `/review-loop` stay single-purpose. This command composes them; it does not replace their files.

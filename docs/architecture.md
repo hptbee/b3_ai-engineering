@@ -6,13 +6,13 @@ This document defines the building blocks of the system. It is definitional. Ope
 
 | Kind | What | Where |
 | --- | --- | --- |
-| **Source (meaning)** | Rule bodies, skills, commands, agents, review-loop, workflows, evals, knowledge | `rules/`, `.cursor/skills/`, `.cursor/commands/`, `.cursor/agents/`, `review-loop/`, `workflows/`, `evals/`, `knowledge/` |
-| **Cursor activation** | Host discovery / always-on injection | `.cursor/rules/*.mdc`, native skill/command/agent folders |
+| **Source (meaning)** | Rule bodies, skills, commands, agents, review-loop, workflows, evals, knowledge | `rules/`, `skills/`, `commands/`, `agents/`, `review-loop/`, `workflows/`, `evals/`, `knowledge/` |
+| **Host entrypoints (committed)** | Thin wrappers/manifests that activate canonical core without duplicating prose | `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json` |
 | **Documentation** | Explains the system; not configuration | `docs/`, `README.md` |
 | **Research** | Provenance; not production config | `research/` |
-| **Generated** | Other-host discovery links only | `.agents/skills`, `.claude/skills` via `adapters/sync-skills.sh` (not committed) |
+| **Local activation links** | Gitignored host discovery links created by `adapters/sync-skills.{ps1,sh}` | `.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}`, `.codex/skills` |
 
-Cursor is the first host. Skills/commands/agents are stored on Cursor discovery paths so a fresh clone works. Format stays portable (Agent Skills, Markdown). Decision: [`../research/decisions/decision-009-cursor-native-layout.md`](../research/decisions/decision-009-cursor-native-layout.md).
+B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `agents/`) mapped onto Cursor, Codex, Claude Code, and Antigravity via thin adapters. Decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`).
 
 The system is evolving. Layers marked **specified** exist as documentation and directories. Layers marked **present** have usable files.
 
@@ -67,7 +67,7 @@ Around that loop:
 | **Knowledge** | Feeds the system and receives lessons learned. What we know. |
 | **Profiles** | Personal engineering context. Not universal truth and not a rule. |
 | **Research** | External intake before knowledge or skills are created. Where conclusions came from. |
-| **Adapters** | Map this repo onto other hosts. Cursor consumes `.cursor/` directly. |
+| **Adapters** | Map canonical core onto Cursor, Codex, Claude Code, and Antigravity without forking meaning. |
 | **Evals** | Test whether the system behaves as designed. |
 
 Lessons learned do **not** automatically become rules. Promotion is in [`system-lifecycle.md`](system-lifecycle.md). Conflict resolution is in [`precedence.md`](precedence.md).
@@ -120,7 +120,7 @@ See [`rule-standard.md`](rule-standard.md).
 
 A skill is a focused, on-demand method. It has a `SKILL.md`, optional `references/`, `scripts/`, and `examples/`, and a description that states when it should and should not trigger.
 
-**Present.** Foundation engineering skills plus domain skills (React, APIs, .NET, Three.js). Catalog: [`../.cursor/skills/README.md`](../.cursor/skills/README.md).
+**Present.** Foundation engineering skills plus domain skills (React, APIs, .NET, Three.js). Catalog: [`../skills/README.md`](../skills/README.md).
 
 Example:
 
@@ -134,7 +134,7 @@ See [`skill-standard.md`](skill-standard.md).
 
 A command is an explicit, user-triggered operation. It selects a workflow or skill and runs it now. Commands are not standing constraints and not long-form knowledge.
 
-**Present (thin).** See [`../.cursor/commands/README.md`](../.cursor/commands/README.md).
+**Present (thin).** See [`../commands/README.md`](../commands/README.md).
 
 Example:
 
@@ -146,7 +146,7 @@ Example:
 
 An agent is a specialized role with a narrower mandate than the default coding agent. Roles exist so review and research can be independent of implementation.
 
-**Present (reviewer, fixer, security, architecture, performance).** See [`../.cursor/agents/README.md`](../.cursor/agents/README.md).
+**Present (reviewer, fixer, security, architecture, performance).** See [`../agents/README.md`](../agents/README.md).
 
 Example:
 
@@ -158,13 +158,13 @@ Example:
 
 A workflow orchestrates skills, commands, and agents across multiple steps. It does not replace a skill; it sequences them.
 
-**Present (default sequence + autonomous lifecycle).** See [`../workflows/README.md`](../workflows/README.md). Independent review is `review-loop/` + `.cursor/commands/review-loop.md`, not a separate workflow file.
+**Present (default sequence + autonomous lifecycle).** See [`../workflows/README.md`](../workflows/README.md). Independent review is `review-loop/` + `commands/review-loop.md`, not a separate workflow file.
 
 Example:
 
 > Workflow: feature implementation — understand, plan, implement, verify, review, fix, re-verify.
 
-The default product sequence is `workflows/feature-implementation.md`. One-shot lifecycle through commits and resume is `workflows/autonomous-development.md` (`.cursor/commands/autodev.md`).
+The default product sequence is `workflows/feature-implementation.md`. One-shot lifecycle through commits and resume is `workflows/autonomous-development.md` (`commands/autodev.md`).
 
 ## Review Loop
 
@@ -172,7 +172,7 @@ The default product sequence is `workflows/feature-implementation.md`. One-shot 
 
 The review loop is independent checking plus iterative correction. It is stricter than a single code-review skill: it has scope, iteration limits, stagnation detection, a finding lifecycle, and a ban on treating tool failure as success.
 
-**Present (orchestration).** Spec: [`../review-loop/spec.md`](../review-loop/spec.md). Procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md). Trigger: `.cursor/commands/review-loop.md`. This is agent procedure, not a host plugin or eval runner.
+**Present (orchestration).** Spec: [`../review-loop/spec.md`](../review-loop/spec.md). Procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md). Trigger: `commands/review-loop.md`. This is agent procedure, not a host plugin or eval runner.
 
 Example:
 
@@ -200,7 +200,7 @@ A reference is supporting material consumed by a skill or workflow. Skill-local 
 
 Example:
 
-> `.cursor/skills/frontend/react-performance/references/checklist.md` — opened while applying that skill.
+> `skills/frontend/react-performance/references/checklist.md` — opened while applying that skill.
 
 ## Research
 
@@ -226,15 +226,15 @@ A profile must never override safety, correctness, explicit project requirements
 
 ## Adapter
 
-**Question:** How does this work in Cursor, Codex, or Claude Code?
+**Question:** How does this work in Cursor, Codex, Claude Code, or Antigravity?
 
-An adapter maps this repo onto a host tool. Cursor consumes `.cursor/` directly (not generated). Codex/Claude adapters may symlink or generate host-specific manifests. They must not fork rules or skills.
+An adapter maps the canonical core (`rules/`, `skills/`, `commands/`, `agents/`) onto a host tool via thin wrappers, manifests, local links, or plugins. Adapters must not fork rules or skills.
 
-**Present (Cursor native + other-host docs).** See [`../adapters/README.md`](../adapters/README.md).
+**Present (4-host adapters).** See [`../adapters/README.md`](../adapters/README.md).
 
 Example:
 
-> Codex symlink `.agents/skills` → `.cursor/skills`.
+> `adapters/sync-skills.{ps1,sh}` links `.cursor/{skills,commands,agents}`, `.agents/skills/<name>`, `.claude/{skills,agents}`, or verifies `.agents/skills.json`.
 
 ## Eval
 

@@ -4,7 +4,7 @@ Host-only note. Portable slots: [`../../review-loop/models.md`](../../review-loo
 
 ## Default (committed)
 
-`.cursor/agents/reviewer.md` and `fixer.md` use:
+`agents/reviewer.md` and `agents/fixer.md` (exposed to Cursor via `.cursor/agents`) use:
 
 ```yaml
 model: inherit
@@ -20,8 +20,8 @@ Edit **your checkout** (or a user-level agent file if you keep project files on 
 
 | File | `model:` intent |
 | --- | --- |
-| `.cursor/agents/reviewer.md` | Deeper / stronger judgment |
-| `.cursor/agents/fixer.md` | Faster / surgical edits |
+| `agents/reviewer.md` | Deeper / stronger judgment |
+| `agents/fixer.md` | Faster / surgical edits |
 
 Use whatever ids **this Cursor build** accepts in subagent frontmatter (the product picker / docs — not a list maintained in this repo). Official field: `model` on `.cursor/agents/*.md` ([Cursor subagents](https://cursor.com/docs/context/subagents)).
 

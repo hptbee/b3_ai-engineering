@@ -1,6 +1,6 @@
 # Agent evals
 
-Independent reviewer roles: `.cursor/agents/security-reviewer.md`, `.cursor/agents/architecture-reviewer.md`, `.cursor/agents/performance-reviewer.md`.
+Independent reviewer roles: `agents/security-reviewer.md`, `agents/architecture-reviewer.md`, `agents/performance-reviewer.md`.
 
 | Agent | Fixtures |
 | --- | --- |

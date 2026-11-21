@@ -8,11 +8,11 @@ authority: high
 
 # Portability
 
-Hard rule: portable **meaning** (`AGENTS.md`, `docs/`, `rules/` bodies, Agent Skills, `knowledge/`, `research/`, review-loop spec) must not be rewritten per host.
+Hard rule: portable **meaning** (`AGENTS.md`, `docs/`, `rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `review-loop/`, `knowledge/`, `research/`) must not be rewritten per host.
 
-Hard rule: Cursor is the first host. Skills, commands, and agents live in `.cursor/` so discovery works on a fresh clone (decision-009). That location is a discovery choice, not a meaning fork.
+Hard rule: canonical skills, commands, agents, and rules live in host-neutral root directories (`skills/`, `commands/`, `agents/`, `rules/`) so Cursor, Codex, Claude Code, and Antigravity consume the same single source of truth (decision-013, superseding decision-009).
 
-Hard rule: host-only metadata (`.mdc` frontmatter, hooks, MCP, command IDs, other-host trees) belongs in `.cursor/rules` activation files or `adapters/`. Adapters may map or generate; they may not fork meaning.
+Hard rule: host-only metadata and activation wrappers (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`, hooks, MCP, local discovery links, plugin generators) belong in thin host entrypoints or `adapters/`. Adapters may map, link, or generate; they may not fork meaning.
 
 Strong guideline: prefer Markdown, `SKILL.md`, YAML frontmatter, and plain shell/Node/Python scripts.
 

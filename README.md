@@ -1,6 +1,6 @@
 # b3-ai-engineering
 
-A personal AI-assisted software engineering system. **Cursor is the first host and Codex is now supported.** The conceptual core (Agent Skills, rules, review-loop, evals, research) stays portable; thin host adapters map it onto each product.
+A personal AI-assisted software engineering system built on a **host-neutral canonical core** supporting **Cursor**, **Codex**, **Claude Code**, and **Antigravity**. The conceptual core (Agent Skills, rules, commands, agents, workflows, review-loop, evals, research) stays portable; thin host wrappers and adapters map it onto each product without duplicating prose.
 
 This is an **evolving** operating layer for AI coding agents. It is not a company handbook.
 
@@ -8,49 +8,60 @@ This is an **evolving** operating layer for AI coding agents. It is not a compan
 
 ```text
 b3-ai-engineering/
-├── AGENTS.md                 Cross-host always-on map (Cursor and Codex read this)
+├── AGENTS.md                 Universal always-on map (Cursor, Codex, Antigravity)
+├── CLAUDE.md                 Thin @AGENTS.md bridge (Claude Code)
 ├── README.md                 Human-facing entry
-├── .cursor/
-│   ├── rules/                Cursor rule activation (.mdc → portable rules/)
-│   ├── skills/               Canonical skills (Agent Skills SKILL.md)
-│   ├── commands/             User-facing / actions
-│   └── agents/               Reviewer / fixer subagents
 ├── rules/                    Portable rule bodies (source of meaning)
-├── workflows/                Default product sequence
+├── skills/                   Canonical skills (Agent Skills SKILL.md)
+├── commands/                 Canonical user-facing / actions
+├── agents/                   Canonical reviewer / fixer subagent specs
+├── workflows/                Default product sequence & /autodev lifecycle
 ├── review-loop/              Spec + orchestration procedure
 ├── knowledge/                Reusable internal knowledge
-├── research/                 Provenance
+├── research/                 Provenance & architecture decisions
 ├── evals/                    Fixtures (not a runner)
-├── adapters/                 Other-host mapping + cross-platform export helpers
-├── scripts/                  Repository tooling
+├── adapters/                 4-host adapters, command-skills & installers
+├── .cursor/rules/            Committed thin Cursor .mdc wrappers (@rules/*.md)
+├── .agents/skills.json       Committed Antigravity 1-level skill manifest
+├── scripts/                  Repository tooling & validation
 └── docs/                     Architecture, standards, contracts
 ```
 
-Catalogs: [`.cursor/skills/README.md`](.cursor/skills/README.md), [`docs/architecture.md`](docs/architecture.md). What Cursor loads: [`AGENTS.md`](AGENTS.md).
+Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md). Universal map: [`AGENTS.md`](AGENTS.md).
 
 ## Why it exists
 
 Agents are useful when they have durable constraints, reusable methods, verification instead of assertion, a way to learn without turning preference into dogma, and a core whose **meaning** is not rewritten per product.
 
-## Cursor and Codex, portable meaning
+## Host-neutral core, 4-host activation
 
-Skills are Agent Skills (`SKILL.md`) stored canonically under `.cursor/skills/`; Codex discovers the same files through a local `.agents/skills` junction or symlink. Rule **bodies** stay in `rules/*.md`; Cursor activates them with `.cursor/rules/*.mdc`, while Codex receives durable cross-host constraints through `AGENTS.md`. Cursor commands/agents remain native. Codex uses explicit prompt routing and delegated role prompts because no repository custom-agent or slash-command surface is established here.
+Skills are Agent Skills (`SKILL.md`) stored canonically under `skills/`, commands under `commands/`, subagent roles under `agents/`, and rule bodies under `rules/`. Each host consumes that single source of truth through thin committed entrypoints (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`) and/or gitignored local links managed by `adapters/sync-skills.{ps1,sh}` and `adapters/install-product.{ps1,sh}`.
 
 Evidence over opinion. Progressive disclosure. Small composable skills. Research, then adapt — do not copy skill packs.
 
 ## Installation
 
-Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/codex/README.md`](adapters/codex/README.md), [`adapters/antigravity/README.md`](adapters/antigravity/README.md), [`adapters/claude/README.md`](adapters/claude/README.md).
+Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/codex/README.md`](adapters/codex/README.md), [`adapters/claude/README.md`](adapters/claude/README.md), [`adapters/antigravity/README.md`](adapters/antigravity/README.md).
+
+> **Coexistence note:** Do not activate conflicting skill discovery roots in the same checkout. Cursor cross-loads `.agents/skills` and `.claude/skills`, and Antigravity reads both `.agents/skills.json` and `.agents/skills`. `sync-skills` guards against conflicts unless `-Force` / `--force` is passed.
 
 ### Cursor
 
-**Work inside this B3 repository:** Clone and open the repo root in Cursor. `.cursor/rules`, `.cursor/skills`, `.cursor/commands` (including `/autodev`), and `.cursor/agents` are committed and discovered from the project. `AGENTS.md` loads as the cross-host map. No adapter script is required.
+**Work inside this B3 repository:** `.cursor/rules/*.mdc` and `AGENTS.md` work on fresh clone. To expose `skills/`, `commands/`, and `agents/` on Cursor's native paths (gitignored links):
 
-Do **not** run `sync-skills` for Cursor in this repo — skills already live at `.cursor/skills`. Do **not** add `.agents/skills` or `.claude/skills` here; Cursor would load duplicate skills.
+```powershell
+# Windows
+.\adapters\sync-skills.ps1 -HostName cursor
+.\adapters\sync-skills.ps1 -HostName cursor -VerifyOnly
+```
+
+```bash
+# macOS / Linux
+./adapters/sync-skills.sh cursor
+./adapters/sync-skills.sh --verify cursor
+```
 
 **Work in a separate product repository:**
-
-1. From **this B3 clone**, attach the product (run on your machine; paths are examples):
 
 ```powershell
 # Windows
@@ -62,18 +73,11 @@ Do **not** run `sync-skills` for Cursor in this repo — skills already live at 
 ./adapters/install-product.sh --product-root /path/to/your-product --host cursor
 ```
 
-Optional: `-B3Home` / `--b3-home` if this B3 checkout is not the parent of `adapters/`.
-
-2. Open the **product** folder in Cursor (not only the B3 repo).
-3. Invoke `/autodev`; the workflow resolves this B3 clone via `{product}/.b3/home` or the `B3_HOME` environment variable.
-
-The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md` (including `autodev.md`), and a `.b3/autodev/` line in `.gitignore` (instead of `.b3/`, so `.b3/home` can be committed). It does **not** copy `.cursor/skills` into the product. Commit `.b3/home`, `AGENTS.md`, `.cursor/commands/`, and any `.gitignore` change. Checkpoints under `.b3/autodev/` stay local and gitignored.
-
-To use B3 **engineering skills** while the Agent works in the product (optional, once per machine), link user-level Cursor skills to this clone. Do not combine this with a copied skill tree under `{product}/.cursor/skills`.
+The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/autodev.md`, and `.b3/autodev/` in `.gitignore`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
 
 ```powershell
 # Windows — replace the target with your B3 clone
-$skills = 'D:\Project\b3_ai-engineering\.cursor\skills'
+$skills = 'D:\Project\b3_ai-engineering\skills'
 $dest = Join-Path $env:USERPROFILE '.cursor\skills\b3-ai-engineering'
 New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
 if (-not (Test-Path -LiteralPath $dest)) { cmd /c mklink /J "$dest" "$skills" }
@@ -81,14 +85,12 @@ if (-not (Test-Path -LiteralPath $dest)) { cmd /c mklink /J "$dest" "$skills" }
 
 ```bash
 # macOS / Linux
-ln -sfn /path/to/b3_ai-engineering/.cursor/skills ~/.cursor/skills/b3-ai-engineering
+ln -sfn /path/to/b3_ai-engineering/skills ~/.cursor/skills/b3-ai-engineering
 ```
 
-Product-only rules and commands stay in the product’s own `.cursor/` tree; portable rule bodies remain in this B3 repo under `rules/`.
+### Codex
 
-### Codex (this B3 checkout)
-
-Create the local skill link (gitignored):
+**Inside this B3 checkout:** Create the local flattened `.agents/skills/<name>` index (core `skills/` + `adapters/command-skills/`):
 
 ```powershell
 .\adapters\sync-skills.ps1 -HostName codex
@@ -100,13 +102,27 @@ Create the local skill link (gitignored):
 ./adapters/sync-skills.sh --verify codex
 ```
 
-If `.agents/skills` is an empty folder and the script fails with “access denied”, close Cursor windows on this repo and retry, or remove that directory, then run the helper again.
+**Separate product repo:** Use `install-product` with `-HostName codex` / `--host codex`. That writes `.b3/home`, a thin `AGENTS.md` if missing, and a gitignored flattened `.agents/skills/<name>` index so Codex can invoke `$autodev` (and `$plan`, `$implement`, …).
 
-On a **product repo**, use `install-product` with `--host codex`. That writes a thin `AGENTS.md` if missing and a gitignored **flattened** `.agents/skills/<name>` index so Codex can invoke `$autodev` (and `$plan`, `$implement`, …). Codex does not treat `.cursor/commands/` as slash commands. Cursor also discovers `.agents/skills`; do not combine that index with a copied skill tree under `{product}/.cursor/skills`.
+### Claude Code
+
+**Inside this B3 checkout:** Root `CLAUDE.md` (`@AGENTS.md`) is committed and works on fresh clone. Create the local gitignored `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`, unified slash commands as skills) and `.claude/agents` links:
+
+```powershell
+.\adapters\sync-skills.ps1 -HostName claude
+.\adapters\sync-skills.ps1 -HostName claude -VerifyOnly
+```
+
+```bash
+./adapters/sync-skills.sh claude
+./adapters/sync-skills.sh --verify claude
+```
+
+**Separate product repo:** Use `install-product` with `-HostName claude` / `--host claude`. That writes `.b3/home`, `AGENTS.md` and `CLAUDE.md` (when missing), plus gitignored flattened `.claude/skills/<name>` and `.claude/agents` links.
 
 ### Antigravity
 
-- **Inside this B3 checkout:** Root `AGENTS.md` and committed `.agents/skills.json` (one-level category entries plus `adapters/codex-command-skills`) let Antigravity discover all skills without creating a duplicate `.agents/skills` junction. Verify with:
+- **Inside this B3 checkout:** Root `AGENTS.md` and committed `.agents/skills.json` (1-level category entries over `skills/*` plus `adapters/command-skills`) work out of the box without creating a `.agents/skills` link. Verify with:
 
 ```powershell
 .\adapters\sync-skills.ps1 -HostName antigravity -VerifyOnly
@@ -136,21 +152,7 @@ On a **product repo**, use `install-product` with `--host codex`. That writes a 
 ./adapters/antigravity/install-plugin.sh
 ```
 
-### Claude Code (this B3 checkout)
-
-When you use Claude Code from this repo and not alongside Cursor in the same tree:
-
-```powershell
-.\adapters\sync-skills.ps1 -HostName claude
-```
-
-```bash
-./adapters/sync-skills.sh claude
-```
-
-On a product repo without Cursor, `install-product` with `--host claude` may add `.claude/skills` → `B3_HOME/.cursor/skills`. Cursor product install refuses product `.agents/skills` / `.claude/skills` to avoid duplicate discovery.
-
-More detail: [`adapters/README.md`](adapters/README.md), [`research/decisions/decision-011-product-repo-attach.md`](research/decisions/decision-011-product-repo-attach.md).
+More detail: [`adapters/README.md`](adapters/README.md), [`research/decisions/decision-011-product-repo-attach.md`](research/decisions/decision-011-product-repo-attach.md), [`research/decisions/decision-013-host-neutral-multi-host-layout.md`](research/decisions/decision-013-host-neutral-multi-host-layout.md).
 
 ## Architecture
 
@@ -162,7 +164,7 @@ Rules constrain → Skills provide methods → Commands start work
  → Lessons → Knowledge
 ```
 
-**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** export to Codex/Claude; they must not fork meaning.
+**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** map the canonical core onto Cursor, Codex, Claude Code, and Antigravity; they must not fork meaning.
 
 ## Research → knowledge → skills
 
@@ -174,11 +176,11 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Review loop
 
-Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`review-loop/strategy.md`](review-loop/strategy.md). Invoke: [`.cursor/commands/review-loop.md`](.cursor/commands/review-loop.md). Host model slots: `review-loop/models.md`.
+Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`review-loop/strategy.md`](review-loop/strategy.md). Invoke: [`commands/review-loop.md`](commands/review-loop.md). Host model slots: `review-loop/models.md`.
 
 ## Autonomous development
 
-One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Cursor: [`.cursor/commands/autodev.md`](.cursor/commands/autodev.md). Codex and Claude use the same file through prompt routing (`adapters/`). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). Product-repo setup: [Installation](#installation). A stopped session does not resume until the user invokes the workflow again.
+One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Command: [`commands/autodev.md`](commands/autodev.md) (and `adapters/command-skills/autodev/SKILL.md` for skill-based hosts). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). Product-repo setup: [Installation](#installation). A stopped session does not resume until the user invokes the workflow again.
 
 ## Evaluation
 
@@ -195,8 +197,11 @@ Personal preference  ≠  Engineering rule
 ## Platforms
 
 ```text
-Portable meaning  →  .cursor/ (this repo)  →  Cursor
-                  →  adapters/ (Codex, Claude) when those hosts are used
+Canonical core (rules/, skills/, commands/, agents/)
+  → .cursor/rules/*.mdc + sync-skills cursor     → Cursor
+  → AGENTS.md + sync-skills codex                → Codex
+  → CLAUDE.md + sync-skills claude               → Claude Code
+  → AGENTS.md + .agents/skills.json / plugin     → Antigravity
 ```
 
 ## Current maturity
@@ -204,15 +209,14 @@ Portable meaning  →  .cursor/ (this repo)  →  Cursor
 | Area | Status |
 | --- | --- |
 | Architecture, standards, precedence, lifecycle | Present |
-| Foundation rules + Cursor `.mdc` activation | Present |
-| Engineering + domain skills | Present (see `.cursor/skills/README.md`) |
-| Commands, agents | Present (Cursor-native, thin) |
+| Foundation rules + Cursor `.mdc` activation + Claude `CLAUDE.md` bridge | Present |
+| Engineering + domain skills | Present (see [`skills/README.md`](skills/README.md)) |
+| Commands, agents | Present (host-neutral canonical core) |
 | Eval fixtures | Present; runner deferred |
-| Review-loop orchestration | Present (agent procedure; Codex prompt-routed and delegated; product isolation **UNKNOWN / INCOMPLETE**) |
-| Autonomous development | Present as workflow + `/autodev` (decision-010). Cursor slash UX **INTENDED**. Codex and Claude runtime **NOT TESTED** |
+| Review-loop orchestration | Present (agent procedure; host isolation **UNKNOWN / INCOMPLETE**) |
+| Autonomous development | Present as workflow + `commands/autodev.md` + `adapters/command-skills/autodev/` |
 | Knowledge after lessons | Minimal (`knowledge/personal/` only) |
 | Profile files | Not created (`knowledge/personal/` holds background) |
-| Codex adapter | Implemented through local .agents/skills link; discovery remains UNKNOWN / INCOMPLETE in the current checkout (see research/validation/codex-host-v1.md) |
-| Antigravity adapter | Implemented via `.agents/skills.json`, product-repo attach, and plugin generator; runtime discovery and subagent isolation UNKNOWN / INCOMPLETE |
+| Cursor / Codex / Claude / Antigravity adapters | Present (`sync-skills`, `install-product`, Antigravity plugin); live runtime host discovery **UNKNOWN / INCOMPLETE** |
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

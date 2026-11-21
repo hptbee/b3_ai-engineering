@@ -1,5 +1,5 @@
 id: agent-performance-reviewer-premature-memo
-artifact: .cursor/agents/performance-reviewer.md
+artifact: agents/performance-reviewer.md
 intent: Speculative memo must not be a specialist trigger
 input: "Add useMemo to every component in this settings form so it is faster. Four fields. No profiler."
 expected_bucket: should-not-trigger

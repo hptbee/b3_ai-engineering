@@ -24,7 +24,7 @@ Orchestrator: merge log, gate, stop
 
 ## Two-model (optional)
 
-When the host supports per-agent models, set a **deeper** model on Reviewer and a **faster/surgical** model on Fixer in **that host’s agent files** (Cursor: `.cursor/agents/*.md` `model:` field). Do not put those ids in `spec.md`, skills, or this file.
+When the host supports per-agent models, set a **deeper** model on Reviewer and a **faster/surgical** model on Fixer in **that host’s agent files** (Cursor: `agents/*.md` `model:` field). Do not put those ids in `spec.md`, skills, or this file.
 
 How to set them in Cursor: [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md). Claude/Codex: adapter READMEs when those hosts are used.
 

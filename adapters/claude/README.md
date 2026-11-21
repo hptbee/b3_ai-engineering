@@ -1,57 +1,60 @@
 # Claude Code adapter
 
-**Status:** intended mapping only. No `.claude/` tree is committed and this mapping has not been verified in this repository.
+**Status:** implemented adapter (committed `CLAUDE.md` bridge + `sync-skills claude` + `install-product --host claude`). Live runtime discovery and subagent isolation in a fresh Claude Code session remain `UNKNOWN / INCOMPLETE` until independently observed and recorded.
 
 ## This repo → Claude Code
 
-| Core | Claude mapping |
+| Core | Claude Code mapping |
 | --- | --- |
-| `AGENTS.md` | Source of truth; bridge from `CLAUDE.md` via `@AGENTS.md` |
-| `rules/*.md` | Claude rules / project instructions — same meaning |
-| `.cursor/skills/` | Symlink → `.claude/skills/` via [`../sync-skills.sh`](../sync-skills.sh) |
-| `.cursor/commands/` | Claude commands when the command layer exists. `/autodev` is `.cursor/commands/autodev.md` → `workflows/autonomous-development.md`. Do not copy that procedure into `.claude/` |
-| `.cursor/agents/` | Map to `.claude/agents/` when roles exist |
+| `AGENTS.md` | Bridged by committed root [`CLAUDE.md`](../../CLAUDE.md) (`@AGENTS.md`) |
+| `rules/*.md` | Referenced via `AGENTS.md` — same meaning, no duplicated prose |
+| `skills/` + `adapters/command-skills/` | Gitignored flattened `.claude/skills/<name>` via [`../sync-skills.ps1`](../sync-skills.ps1) / [`../sync-skills.sh`](../sync-skills.sh) |
+| `commands/` | Unified with skills via `adapters/command-skills/` in `.claude/skills/<name>` (Claude Code treats slash commands as skills — no duplicate `.claude/commands` link) |
+| `agents/*.md` | Gitignored `.claude/agents` → `agents/` |
 
-Review-loop roles: `reviewer` (no edits), `fixer` (no PASS). Optional `model:` on host agent files only (`review-loop/models.md` is slots, not vendor ids). Orchestrator remains the parent conversation.
+Review-loop roles: `reviewer` (no edits), `fixer` (no PASS), plus specialists. Optional `model:` overrides stay host-configured (`review-loop/models.md`). Orchestrator remains the parent conversation.
 
-Autonomous development uses the same parent orchestrator. Invoke it by naming `autodev`, `resume`, or `status`, then follow `.cursor/commands/autodev.md`. Claude slash commands are skills in current docs (`research/sources/claude-code-skills-plugins.md`); this repo does not add a second skill for that lifecycle (decision-010). A local one-line command may point at the workflow. It must not restate it. Checkpoint resume is manual after a stopped session.
+## Setup
 
-## CLAUDE.md bridge
+### Inside this B3 checkout
 
-Claude Code often expects root `CLAUDE.md`. **Do not fork** the handbook — generate a pointer file:
+Root `CLAUDE.md` works on fresh clone. Create the local gitignored `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`) and `.claude/agents` links:
 
-```markdown
-# Project instructions
-
-Follow @AGENTS.md for operating context, precedence, and review standards.
-
-Skills: `.claude/skills/` (symlinked from `.cursor/skills`).
-Rules: see portable `rules/` — map to Claude rules without rewriting policy.
+```powershell
+# Windows
+.\adapters\sync-skills.ps1 -HostName claude
+.\adapters\sync-skills.ps1 -HostName claude -VerifyOnly
 ```
-
-Optional: commit `CLAUDE.md` after user approval. Do not add it in this Cursor-first repo until Claude is actually used.
-
-## Plugin / marketplace namespacing
-
-Portable core skills use simple `name:` fields. Do **not** copy namespaced plugin subagent names into `.cursor/skills/`.
-
-## allowed-tools frontmatter
-
-Foundation skills omit `allowed-tools`. Optional overlay in `.claude/skills/<name>/` if tool restrictions are wanted.
-
-## Hooks (optional)
-
-Hooks are **not** portable. Optional Claude hook wrappers may invoke review or verification procedures. The core must remain usable without hooks.
-
-## Symlink
 
 ```bash
+# macOS / Linux
 ./adapters/sync-skills.sh claude
-# creates .claude/skills → ../.cursor/skills
+./adapters/sync-skills.sh --verify claude
 ```
+
+> **Coexistence note:** `sync-skills claude` refuses to run while `.cursor/skills` exists (Cursor cross-loads `.claude/skills` and duplicates skills) unless `-Force` / `--force` is passed.
+
+### Separate product repository
+
+```powershell
+# Windows
+.\adapters\install-product.ps1 -ProductRoot D:\path\to\product -HostName claude
+```
+
+```bash
+# macOS / Linux
+./adapters/install-product.sh --product-root /path/to/product --host claude
+```
+
+Writes `.b3/home`, `AGENTS.md` and thin `CLAUDE.md` (`@AGENTS.md`, when missing), `.b3/autodev/` + `.claude/skills` + `.claude/agents` in `.gitignore`, flattened `.claude/skills/<name>` junctions/symlinks (including `autodev`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`), and `.claude/agents` → `{B3_HOME}/agents`.
+
+## Thin by design
+
+- Portable core skills keep simple `name:` fields and omit Claude-specific `allowed-tools` overlays.
+- Hooks are optional and non-portable; the core must remain usable without hooks.
 
 ## References
 
 - [`../README.md`](../README.md)
 - `research/sources/claude-code-skills-plugins.md`
-- `research/decisions/decision-009-cursor-native-layout.md`
+- `research/decisions/decision-013-host-neutral-multi-host-layout.md`

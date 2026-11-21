@@ -4,7 +4,7 @@ Reconciliation protocol for [`../autonomous-development.md`](../autonomous-devel
 
 ## 1–4. Load checkpoint and verify Git identity
 
-1. Read `.b3/autodev/master-plan.md`, `progress.md`, `findings.md` (if it exists), and `approach/*.md` (if they exist). Approach notes are decisions, not a second master plan.
+1. Resolve `{RUN_DIR}` via `scripts/autodev-guard.{ps1,sh} resolve-run` (from explicit `<run_id>`, `.b3/autodev/CURRENT`, or legacy `.b3/autodev/progress.md` fallback if `CURRENT` is absent). Never scan sibling directories under `.b3/autodev/runs/`. Read `{RUN_DIR}/master-plan.md`, `progress.md`, `findings.md` (if it exists), and `approach/*.md` (if they exist). Approach notes are decisions, not a second master plan.
 2. Resolve `B3_HOME` and `PRODUCT_ROOT`. If `progress.md` records `b3_home` or `plan_id` and they do not match the current plan file and B3 location → `BLOCKED`.
 3. Read branch, `HEAD`, ancestry, and `git status --porcelain`.
 4. If `progress.md` records `branch` and the current branch differs → `BLOCKED`. Do not continue on the wrong branch.

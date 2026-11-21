@@ -29,7 +29,7 @@ Knowledge
 | Research | What externals say | `research/sources/` |
 | Synthesis | Findings, comparisons, adopt/reject | `research/findings/`, `comparisons/`, `decisions/`, `rejected/` |
 | Knowledge | Canonical reusable knowledge | `knowledge/` |
-| Skill / Rule / Workflow | Executable method or constraint | `.cursor/skills/`, `rules/`, `workflows/` |
+| Skill / Rule / Workflow | Executable method or constraint | `skills/`, `rules/`, `workflows/` |
 | Implementation | Change in a product (or in this system) | the target repo |
 | Verification | Evidence | verification skill / rule |
 | Review | Independent check; loop when implemented | `review-loop/spec.md` |
@@ -78,8 +78,8 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 | Layer | Status |
 | --- | --- |
 | Research and domain synthesis | **Present** |
-| Review-loop spec and orchestrator procedure | **Present** — [`../review-loop/spec.md`](../review-loop/spec.md), [`../review-loop/strategy.md`](../review-loop/strategy.md), [`.cursor/commands/review-loop.md`](../.cursor/commands/review-loop.md). Agent procedure, not a host plugin. Default inner-loop cap is 5 (`strategy.md`). |
-| Autonomous development | **Present** — [`../workflows/autonomous-development.md`](../workflows/autonomous-development.md), [`.cursor/commands/autodev.md`](../.cursor/commands/autodev.md). Session orchestrator, not a runner. Slash UX and other-host runtime are **NOT VERIFIED**. |
+| Review-loop spec and orchestrator procedure | **Present** — [`../review-loop/spec.md`](../review-loop/spec.md), [`../review-loop/strategy.md`](../review-loop/strategy.md), [`commands/review-loop.md`](../commands/review-loop.md). Agent procedure, not a host plugin. Default inner-loop cap is 5 (`strategy.md`). |
+| Autonomous development | **Present** — [`../workflows/autonomous-development.md`](../workflows/autonomous-development.md), [`commands/autodev.md`](../commands/autodev.md). Session orchestrator, not a runner. Slash UX and other-host runtime are **NOT VERIFIED**. |
 | Review-loop on a real product PR / host subagent isolation | **NOT VERIFIED** — tabletop only: [`../research/validation/review-loop-results.md`](../research/validation/review-loop-results.md) |
 | Knowledge after lessons | **Minimal** — [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md); no `stable/` or `volatile/` yet |
 
