@@ -40,7 +40,7 @@ Evidence over opinion. Progressive disclosure. Small composable skills. Research
 
 ## Installation
 
-Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/codex/README.md`](adapters/codex/README.md), [`adapters/claude/README.md`](adapters/claude/README.md).
+Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/codex/README.md`](adapters/codex/README.md), [`adapters/antigravity/README.md`](adapters/antigravity/README.md), [`adapters/claude/README.md`](adapters/claude/README.md).
 
 ### Cursor
 
@@ -67,7 +67,7 @@ Optional: `-B3Home` / `--b3-home` if this B3 checkout is not the parent of `adap
 2. Open the **product** folder in Cursor (not only the B3 repo).
 3. Invoke `/autodev`; the workflow resolves this B3 clone via `{product}/.b3/home` or the `B3_HOME` environment variable.
 
-The installer writes `{product}/.b3/home`, a thin `{product}/.cursor/commands/autodev.md`, and a `.b3/` line in `.gitignore`. It does **not** copy `.cursor/skills` into the product. Commit `.b3/home`, `.cursor/commands/autodev.md`, and any `.gitignore` change. Checkpoints under `.b3/autodev/` stay local and gitignored.
+The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md` (including `autodev.md`), and a `.b3/autodev/` line in `.gitignore` (instead of `.b3/`, so `.b3/home` can be committed). It does **not** copy `.cursor/skills` into the product. Commit `.b3/home`, `AGENTS.md`, `.cursor/commands/`, and any `.gitignore` change. Checkpoints under `.b3/autodev/` stay local and gitignored.
 
 To use B3 **engineering skills** while the Agent works in the product (optional, once per machine), link user-level Cursor skills to this clone. Do not combine this with a copied skill tree under `{product}/.cursor/skills`.
 
@@ -103,6 +103,38 @@ Create the local skill link (gitignored):
 If `.agents/skills` is an empty folder and the script fails with “access denied”, close Cursor windows on this repo and retry, or remove that directory, then run the helper again.
 
 On a **product repo**, use `install-product` with `--host codex`. That writes a thin `AGENTS.md` if missing and a gitignored **flattened** `.agents/skills/<name>` index so Codex can invoke `$autodev` (and `$plan`, `$implement`, …). Codex does not treat `.cursor/commands/` as slash commands. Cursor also discovers `.agents/skills`; do not combine that index with a copied skill tree under `{product}/.cursor/skills`.
+
+### Antigravity
+
+- **Inside this B3 checkout:** Root `AGENTS.md` and committed `.agents/skills.json` (one-level category entries plus `adapters/codex-command-skills`) let Antigravity discover all skills without creating a duplicate `.agents/skills` junction. Verify with:
+
+```powershell
+.\adapters\sync-skills.ps1 -HostName antigravity -VerifyOnly
+```
+
+```bash
+./adapters/sync-skills.sh --verify antigravity
+```
+
+- **Separate product repo:** Run `install-product` with `-HostName antigravity` / `--host antigravity` (or use `-HostName cursor` + the global plugin below if Cursor also opens that repo):
+
+```powershell
+.\adapters\install-product.ps1 -ProductRoot D:\path\to\your-product -HostName antigravity
+```
+
+```bash
+./adapters/install-product.sh --product-root /path/to/your-product --host antigravity
+```
+
+- **Machine-global plugin:** Generate `~/.gemini/config/plugins/b3-ai-engineering/` (rules, 1-level skill links, and isolated `agents/*.md` subagents) via:
+
+```powershell
+.\adapters\antigravity\install-plugin.ps1
+```
+
+```bash
+./adapters/antigravity/install-plugin.sh
+```
 
 ### Claude Code (this B3 checkout)
 
@@ -181,5 +213,6 @@ Portable meaning  →  .cursor/ (this repo)  →  Cursor
 | Knowledge after lessons | Minimal (`knowledge/personal/` only) |
 | Profile files | Not created (`knowledge/personal/` holds background) |
 | Codex adapter | Implemented through local .agents/skills link; discovery remains UNKNOWN / INCOMPLETE in the current checkout (see research/validation/codex-host-v1.md) |
+| Antigravity adapter | Implemented via `.agents/skills.json`, product-repo attach, and plugin generator; runtime discovery and subagent isolation UNKNOWN / INCOMPLETE |
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

@@ -11,7 +11,7 @@ Cursor loads `.cursor/rules/*.mdc`; Codex loads this file and discovers skills t
 | Always-on constraints | `AGENTS.md`; Cursor `.cursor/rules/*.mdc` → `rules/*.md` | Every session |
 | Methods | Cursor `.cursor/skills/**/SKILL.md`; Codex `.agents/skills/**/SKILL.md` → Cursor source | Description-driven or explicit skill invocation |
 | User actions | Cursor `.cursor/commands/`; Codex prompt routing | `/plan` `/implement` `/debug` `/review` `/verify` `/review-loop` `/autodev`, or name the intent |
-| Isolated roles | Cursor `.cursor/agents/`; Codex delegated role prompts | Reviewer, fixer, security reviewer, architecture reviewer |
+| Isolated roles | Cursor `.cursor/agents/`; Codex delegated role prompts | Reviewer, fixer, security reviewer, architecture reviewer, performance reviewer |
 | Default product sequence | `workflows/feature-implementation.md` | Multi-step feature work inside one stage |
 | Autonomous lifecycle | `workflows/autonomous-development.md` | `/autodev`: plan through verify, commit, and resume |
 | Review-loop contract | `review-loop/spec.md` | Independent iterative review |
@@ -41,7 +41,7 @@ Knowledge → Skills (constrained by Rules)
 2. Load the smallest relevant skill. Do not load every skill.
 3. Distinguish official spec, established practice, community/research, personal experience, preference.
 4. Do not copy external repositories verbatim. Record intake in `research/` (`docs/research-methodology.md`).
-5. Failed tool, missing evidence, empty **named review target**, or iteration limit → `UNKNOWN / INCOMPLETE`, not `PASS`. For a code-change review that named a product diff, an empty diff is an empty target. For design-only architecture review, the named target is the implementation approach; a missing approach is INCOMPLETE, an absent product diff is not.
+5. Failed tool, missing evidence, empty **named review target**, or iteration limit → `UNKNOWN / INCOMPLETE`, not `PASS`. For a code-change review that named a product diff, an empty diff is an empty target. For an explicit design-only review, the named target is the implementation approach; a missing approach is INCOMPLETE, an absent product diff is not.
 6. Do not claim unimplemented layers already exist.
 7. Lessons learned do not automatically become rules (`docs/system-lifecycle.md`).
 8. `.agents/skills` is a local installation link to `.cursor/skills`, not a second editable skill corpus. Set it up with `adapters/sync-skills.ps1` on Windows or `adapters/sync-skills.sh` on macOS/Linux.
@@ -52,6 +52,7 @@ Knowledge → Skills (constrained by Rules)
 - **Source (meaning):** `rules/`, `.cursor/skills/`, `.cursor/commands/`, `.cursor/agents/`, `review-loop/`, `workflows/`, `evals/`, `knowledge/`
 - **Cursor activation:** `.cursor/rules/*.mdc`, native skill/command/agent discovery
 - **Codex activation:** root `AGENTS.md`, plus the local `.agents/skills` link to `.cursor/skills`; use prompt routing for commands and delegated roles
+- **Antigravity activation:** root `AGENTS.md` plus `.agents/skills.json` (1-level category entries); optional global plugin via `adapters/antigravity/install-plugin.{ps1,sh}`
 - **Documentation:** `docs/`, `README.md`
 - **Research:** `research/` (provenance, not production config)
 - **Local installation artifacts:** `.agents/skills` and `.claude/skills` are ignored links created by adapter helpers; they are never independently edited or committed.

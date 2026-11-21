@@ -26,12 +26,30 @@ while IFS= read -r -d '' f; do
 
   if [[ "$f" == *"/skills/"* ]]; then
     require_key "$f" "expected_bucket"
+  elif [[ "$f" == *"/agents/"* ]]; then
+    require_key "$f" "expected_bucket"
   elif [[ "$f" == *"/review-loop/"* ]]; then
     require_key "$f" "expected_outcome"
   elif [[ "$f" == *"/workflows/"* ]]; then
     require_key "$f" "expected_outcome"
   elif [[ "$f" == *"/rules/"* ]]; then
     require_key "$f" "expected_outcome"
+  fi
+
+  art="$(awk '
+    { sub(/\r$/, "") }
+    /^artifact:[[:space:]]*/ {
+      val = $0
+      sub(/^artifact:[[:space:]]*/, "", val)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+      gsub(/^["'\'']|["'\'']$/, "", val)
+      print val
+      exit
+    }
+  ' "$f")"
+  if [[ -z "$art" || ! -e "${ROOT}/${art}" ]]; then
+    echo "error: $f artifact not found: $art" >&2
+    ERRORS=$((ERRORS + 1))
   fi
 done < <(find "$EVALS" -name '*.yaml' -print0)
 

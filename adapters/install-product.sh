@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Attach B3 to a product repository without copying skills.
-# Usage: ./adapters/install-product.sh --product-root PATH [--b3-home PATH] [--host cursor|codex|claude] [--dry-run]
+# Usage: ./adapters/install-product.sh --product-root PATH [--b3-home PATH] [--host cursor|codex|claude|antigravity] [--dry-run]
 # All refusal checks run before any write. Existing autodev.md / .b3/home are not overwritten.
 set -euo pipefail
 
@@ -21,9 +21,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$PRODUCT_ROOT" ]]; then
-  echo "usage: $0 --product-root PATH [--b3-home PATH] [--host cursor|codex|claude] [--dry-run]" >&2
+  echo "usage: $0 --product-root PATH [--b3-home PATH] [--host cursor|codex|claude|antigravity] [--dry-run]" >&2
   exit 1
 fi
+
+case "$HOST" in
+  cursor|codex|claude|antigravity) ;;
+  *) echo "error: unknown host '$HOST' (expected cursor|codex|claude|antigravity)" >&2; exit 1 ;;
+esac
 
 B3_HOME="$(cd "$B3_HOME" && pwd)"
 PRODUCT_ROOT="$(cd "$PRODUCT_ROOT" && pwd)"
@@ -82,7 +87,7 @@ if [[ -f "$HOME_DEST" ]]; then
 fi
 
 LINK_DEST=""
-[[ "$HOST" == "codex" ]] && LINK_DEST="$AGENTS_DEST"
+[[ "$HOST" == "codex" || "$HOST" == "antigravity" ]] && LINK_DEST="$AGENTS_DEST"
 [[ "$HOST" == "claude" ]] && LINK_DEST="$CLAUDE_DEST"
 COMMAND_SKILLS_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex-command-skills"
 
@@ -110,7 +115,7 @@ install_skill_link() {
   ln -s "$target" "$dest"
 }
 
-install_codex_skill_index() {
+install_flat_skill_index() {
   local dest_root="$1" skills_src="$2" command_src="$3"
   if [[ -L "$dest_root" ]]; then
     rm "$dest_root"
@@ -168,7 +173,7 @@ update_host_skill_gitignore() {
   local gi="$1"
   local host="$2"
   local line=""
-  [[ "$host" == "codex" ]] && line=".agents/skills"
+  [[ "$host" == "codex" || "$host" == "antigravity" ]] && line=".agents/skills"
   [[ "$host" == "claude" ]] && line=".claude/skills"
   if [[ -z "$line" ]]; then
     echo n/a
@@ -208,9 +213,9 @@ if $DRY_RUN; then
     echo "dry-run: write $AGENTS_MD_DEST from $AGENTS_MD_TEMPLATE"
   fi
   echo "dry-run: gitignore .b3/autodev/ ($IGNORE_PLAN)"
-  [[ "$HOST" == "codex" ]] && echo "dry-run: gitignore .agents/skills"
+  [[ "$HOST" == "codex" || "$HOST" == "antigravity" ]] && echo "dry-run: gitignore .agents/skills"
   [[ "$HOST" == "claude" ]] && echo "dry-run: gitignore .claude/skills"
-  if [[ "$HOST" == "codex" ]]; then
+  if [[ "$HOST" == "codex" || "$HOST" == "antigravity" ]]; then
     echo "dry-run: flatten $AGENTS_DEST (one symlink per skill + command skills)"
   elif [[ -n "$LINK_DEST" ]]; then
     echo "dry-run: ln -s $SKILLS $LINK_DEST"
@@ -244,8 +249,8 @@ if [[ -d "$B3_COMMANDS" ]]; then
   fi
 fi
 
-if [[ "$HOST" == "codex" ]]; then
-  install_codex_skill_index "$AGENTS_DEST" "$SKILLS" "$COMMAND_SKILLS_SRC"
+if [[ "$HOST" == "codex" || "$HOST" == "antigravity" ]]; then
+  install_flat_skill_index "$AGENTS_DEST" "$SKILLS" "$COMMAND_SKILLS_SRC"
 elif [[ -n "$LINK_DEST" ]]; then
   if [[ ! -e "$LINK_DEST" && ! -L "$LINK_DEST" ]]; then
     mkdir -p "$(dirname "$LINK_DEST")"
@@ -265,6 +270,8 @@ echo "gitignore.skills=$SKILL_IGNORE_PLAN"
 echo "host=$HOST"
 if [[ "$HOST" == "codex" ]]; then
   echo "skills=$AGENTS_DEST (flattened links + \$autodev; gitignored, not copied)"
+elif [[ "$HOST" == "antigravity" ]]; then
+  echo "skills=$AGENTS_DEST (flattened links + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.sh if Cursor also opens this repo)"
 elif [[ "$HOST" == "claude" ]]; then
   echo "skills=$CLAUDE_DEST -> $SKILLS (gitignored local link, not copied)"
 else

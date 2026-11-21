@@ -1,0 +1,11 @@
+id: autodev-baseline-red-001
+artifact: workflows/autonomous-development.md
+intent: Pre-existing failing test recorded in baseline_status at run_base_sha must not be blamed on T001
+scenario: |
+  Repo already has a failing legacy test in tests/legacy.spec.ts at run_base_sha before T001 edits src/billing.ts
+  Pre-flight baseline probe runs and records baseline_status: FAIL(tests/legacy.spec.ts)
+  T001 implements src/billing.ts, passes all billing tests, and re-runs full test suite seeing the same legacy.spec.ts failure
+  Agent refuses to blame T001 or burn Fixer iterations patching unrelated legacy.spec.ts, reporting checks vs baseline_status
+expected_outcome: PASS
+failure_mode: pre-existing-baseline-misattribution
+notes: Baseline probe distinguishes pre-existing failures from task regressions. Do not expand task scope to patch unrelated pre-existing failures unless the task targeted them

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('codex', 'claude')]
+    [ValidateSet('codex', 'claude', 'antigravity')]
     [string]$HostName,
     [switch]$DryRun,
     [switch]$VerifyOnly
@@ -44,8 +44,143 @@ function Test-LinkOk([string]$Dest, [string]$Src) {
     return (Test-SkillSource $Dest)
 }
 
-if (-not $HostName) { Fail 'Usage: .\adapters\sync-skills.ps1 -HostName codex|claude [-DryRun] [-VerifyOnly]' }
+function Get-AntigravityEntryPaths([string]$RepoRoot) {
+    $entries = New-Object System.Collections.Generic.List[string]
+    $cursorSkills = Join-Path $RepoRoot '.cursor\skills'
+    if (Test-Path -LiteralPath $cursorSkills -PathType Container) {
+        foreach ($cat in @(Get-ChildItem -LiteralPath $cursorSkills -Directory | Sort-Object Name)) {
+            $hasOneLevel = $false
+            foreach ($skillDir in @(Get-ChildItem -LiteralPath $cat.FullName -Directory)) {
+                if (Test-Path -LiteralPath (Join-Path $skillDir.FullName 'SKILL.md') -PathType Leaf) {
+                    $hasOneLevel = $true
+                    break
+                }
+            }
+            if ($hasOneLevel) {
+                $entries.Add(".cursor/skills/$($cat.Name)")
+            }
+        }
+    }
+    $cmdSkills = Join-Path $RepoRoot 'adapters\codex-command-skills'
+    if (Test-Path -LiteralPath $cmdSkills -PathType Container) {
+        foreach ($skillDir in @(Get-ChildItem -LiteralPath $cmdSkills -Directory)) {
+            if (Test-Path -LiteralPath (Join-Path $skillDir.FullName 'SKILL.md') -PathType Leaf) {
+                $entries.Add('adapters/codex-command-skills')
+                break
+            }
+        }
+    }
+    return @($entries)
+}
+
+function Test-AntigravityManifest([string]$RepoRoot, [string]$ManifestPath) {
+    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+        return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "missing manifest: $ManifestPath" }
+    }
+    try {
+        $parsed = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    } catch {
+        return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "invalid JSON in $ManifestPath" }
+    }
+    if (-not $parsed.entries -or @($parsed.entries).Count -lt 1) {
+        return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "manifest has no entries: $ManifestPath" }
+    }
+
+    $manifestPaths = New-Object System.Collections.Generic.List[string]
+    $totalSkills = 0
+    $seenNames = @{}
+    foreach ($entry in @($parsed.entries)) {
+        $relPath = [string]$entry.path
+        if (-not $relPath) {
+            return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "manifest entry missing path" }
+        }
+        $manifestPaths.Add($relPath)
+        $resolved = Join-Path $RepoRoot ($relPath -replace '/', '\')
+        if (-not (Test-Path -LiteralPath $resolved -PathType Container)) {
+            return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "manifest entry path not found: $relPath" }
+        }
+        $entryCount = 0
+        foreach ($skillDir in @(Get-ChildItem -LiteralPath $resolved -Directory)) {
+            $skillFile = Join-Path $skillDir.FullName 'SKILL.md'
+            if (Test-Path -LiteralPath $skillFile -PathType Leaf) {
+                $raw = Get-Content -LiteralPath $skillFile -Raw
+                if ($raw -notmatch '(?m)^name:\s*([a-z0-9-]+)\s*$') {
+                    return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "SKILL.md missing valid name: $skillFile" }
+                }
+                $fmName = $Matches[1]
+                if ($fmName -ne $skillDir.Name) {
+                    return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "skill folder '$($skillDir.Name)' does not match frontmatter name '$fmName'" }
+                }
+                if ($seenNames.ContainsKey($fmName)) {
+                    return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "duplicate skill name '$fmName'" }
+                }
+                $seenNames[$fmName] = $true
+                $entryCount++
+                $totalSkills++
+            }
+        }
+        if ($entryCount -lt 1) {
+            return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "manifest entry has no 1-level SKILL.md: $relPath" }
+        }
+    }
+
+    foreach ($expected in (Get-AntigravityEntryPaths $RepoRoot)) {
+        if ($manifestPaths -notcontains $expected) {
+            return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "manifest missing expected entry: $expected" }
+        }
+    }
+    if ($totalSkills -lt 1) {
+        return [PSCustomObject]@{ Ok = $false; Count = 0; Reason = "manifest resolved 0 skills" }
+    }
+    return [PSCustomObject]@{ Ok = $true; Count = $totalSkills; Reason = '' }
+}
+
+if (-not $HostName) { Fail 'Usage: .\adapters\sync-skills.ps1 -HostName codex|claude|antigravity [-DryRun] [-VerifyOnly]' }
 if (-not (Test-SkillSource $source)) { Fail "Skills source missing or has no SKILL.md: $source" }
+
+if ($HostName -eq 'antigravity') {
+    $manifest = Join-Path $root '.agents\skills.json'
+    if ($VerifyOnly) {
+        $check = Test-AntigravityManifest $root $manifest
+        if ($check.Ok) {
+            Write-Output "verify ok: $manifest (antigravity); $($check.Count) SKILL.md entries visible"
+            exit 0
+        }
+        Fail "verify failed: $($check.Reason)"
+    }
+
+    $entries = @(Get-AntigravityEntryPaths $root)
+    if ($entries.Count -lt 1) {
+        Fail "no 1-level skill category directories found under $source"
+    }
+    $jsonLines = New-Object System.Collections.Generic.List[string]
+    $jsonLines.Add('{')
+    $jsonLines.Add('  "entries": [')
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        $comma = if ($i -lt ($entries.Count - 1)) { ',' } else { '' }
+        $jsonLines.Add("    { `"path`": `"$($entries[$i])`" }$comma")
+    }
+    $jsonLines.Add('  ]')
+    $jsonLines.Add('}')
+    $jsonText = ($jsonLines -join "`n") + "`n"
+
+    if ($DryRun) {
+        Write-Output "dry-run: write $manifest with $($entries.Count) entries ($($entries -join ', '))"
+        exit 0
+    }
+
+    New-Item -ItemType Directory -Path (Split-Path -Parent $manifest) -Force | Out-Null
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($manifest, $jsonText, $utf8NoBom)
+
+    $check = Test-AntigravityManifest $root $manifest
+    if (-not $check.Ok) {
+        Fail "manifest written but verification failed: $($check.Reason)"
+    }
+    Write-Output "synced: $manifest (antigravity); $($check.Count) SKILL.md entries visible"
+    Write-Output "note: this proves .agents/skills.json resolves to 1-level SKILL.md entries, not Antigravity runtime discovery"
+    exit 0
+}
 
 if ($VerifyOnly) {
     if (Test-LinkOk $destination $source) {

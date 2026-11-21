@@ -24,23 +24,23 @@ If none match → stop. Do not invent a second procedure.
 
 Product files and Git commits stay in this repository. Checkpoints go under `.b3/autodev/` (gitignored).
 
-## Codex invocation
+## Codex and Antigravity invocation
 
-Codex does **not** load `.cursor/commands/` as slash commands (`/autodev` is Cursor-only). Use **skills**:
+Codex and Antigravity do **not** load `.cursor/commands/` as slash commands (`/autodev` is Cursor-only). Use **skills** (Codex `$<name>` / `/skills`; Antigravity skill activation or prompt intent):
 
 | Intent | Invoke |
 | --- | --- |
-| Autonomous lifecycle | `$autodev` (also `/skills` → autodev) |
-| Plan only | `$plan` |
-| Implement | `$implement` |
-| Debug | `$debug` |
-| Review | `$review` |
-| Verify | `$verify` |
-| Review loop | `$review-loop` |
+| Autonomous lifecycle | `autodev` (`$autodev` in Codex) |
+| Plan only | `plan` (`$plan`) |
+| Implement | `implement` (`$implement`) |
+| Debug | `debug` (`$debug`) |
+| Review | `review` (`$review`) |
+| Verify | `verify` (`$verify`) |
+| Review loop | `review-loop` (`$review-loop`) |
 
 When the user says “autodev”, “run autodev”, or `$autodev`, **read and follow** `.agents/skills/autodev/SKILL.md`, then `{B3_HOME}/workflows/autonomous-development.md`. Do not stop after the plan.
 
-For review-loop delegation, send `{B3_HOME}/.cursor/agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, or `architecture-reviewer.md` to an isolated agent when available. The parent owns `PASS`, `FAIL`, and `UNKNOWN / INCOMPLETE`.
+For review-loop delegation, send `{B3_HOME}/.cursor/agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, `architecture-reviewer.md`, or `performance-reviewer.md` to an isolated agent when available. The parent owns `PASS`, `FAIL`, and `UNKNOWN / INCOMPLETE`.
 
 ## Operating constraints
 

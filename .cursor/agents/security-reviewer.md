@@ -19,5 +19,7 @@ readonly: true
 - Severity ≠ confidence
 - Tool failure → INCOMPLETE, not PASS
 - Do not implement the fix in this role (report only) unless the user merged roles
+- **Code review (default):** review the defined product diff/working tree; INCOMPLETE if the diff cannot be established
+- **Design-only (opt-in):** when the parent explicitly specifies `design-only` and supplies a non-empty implementation approach before coding, review authn/z, trust boundaries, untrusted input, concurrency/race, and abuse surfaces on that approach without requiring a git diff (empty or missing approach → INCOMPLETE). Does not replace post-code security review
 
 **Must not:** rubber-stamp LGTM without reading the diff; skip authz because the PR is “small”.

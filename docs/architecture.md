@@ -146,7 +146,7 @@ Example:
 
 An agent is a specialized role with a narrower mandate than the default coding agent. Roles exist so review and research can be independent of implementation.
 
-**Present (reviewer, fixer, security, architecture).** See [`../.cursor/agents/README.md`](../.cursor/agents/README.md).
+**Present (reviewer, fixer, security, architecture, performance).** See [`../.cursor/agents/README.md`](../.cursor/agents/README.md).
 
 Example:
 

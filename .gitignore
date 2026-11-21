@@ -21,6 +21,7 @@ venv/
 .cursor/cache/
 .claude/cache/
 .codex/cache/
+.serena/
 
 # Cursor-native skills/commands/agents/rules are committed under .cursor/.
 # Optional other-host discovery links (adapters/sync-skills.sh). Do not commit

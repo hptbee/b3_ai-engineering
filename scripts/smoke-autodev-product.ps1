@@ -1,4 +1,4 @@
-# Isolated product-repo smoke for autodev Git/checkpoint/resume contracts.
+﻿# Isolated product-repo smoke for autodev Git/checkpoint/resume contracts.
 # This is not a Cursor slash-command test and not a Codex/Claude runtime test.
 # Usage: powershell -File scripts/smoke-autodev-product.ps1
 $ErrorActionPreference = 'Stop'
@@ -27,9 +27,9 @@ try {
     if (-not (Test-Path .cursor\commands\autodev.md)) { Fail 'missing autodev command pointer' }
     if (Test-Path .cursor\skills) { Fail 'installer copied skills' }
 
-    git add .gitignore .cursor/commands/autodev.md
+    git add .gitignore .b3/home AGENTS.md .cursor/README.md .cursor/commands
     $installCached = git diff --cached --name-only
-    if ($installCached -match '\.b3/') { Fail 'install commit staged .b3' }
+    if ($installCached | Where-Object { $_ -match '^\.b3/autodev/' }) { Fail 'install commit staged .b3/autodev' }
     git commit -qm 'Attach B3 autodev pointer without copying skills'
     $runBase = git rev-parse HEAD
 
@@ -85,6 +85,12 @@ JavaScript greet helper and README
 - run_status: running
 "@ | Set-Content .b3\autodev\progress.md
 
+    $guard = Join-Path $root 'scripts\autodev-guard.ps1'
+    $fp1 = (& $guard fingerprint -DependsOn '[]' -Scope 'greet.js' -Criteria 'AC1: greet("Ada") returns "Hello, Ada"').Trim()
+    if ($fp1 -ne 'depends_on=[]|scope=greet.js|acceptance_criteria=AC1: greet("Ada") returns "Hello, Ada"') { Fail "unexpected T001 fingerprint: $fp1" }
+    $fp2 = (& $guard fingerprint -DependsOn 'T001' -Scope 'README.md' -Criteria 'AC2: README mentions greet(name)').Trim()
+    if ($fp2 -ne 'depends_on=T001|scope=README.md|acceptance_criteria=AC2: README mentions greet(name)') { Fail "unexpected T002 fingerprint: $fp2" }
+
     $planBefore = Get-FileHash .b3\autodev\master-plan.md -Algorithm SHA256
 
     # T001 (includes unused greetAlias residue for the later review/fix)
@@ -96,9 +102,15 @@ module.exports = { greet, greetAlias };
 "@
     node -e "const {greet}=require('./greet'); if (greet('Ada')!=='Hello, Ada') process.exit(1)"
     if ($LASTEXITCODE -ne 0) { Fail 'T001 verification' }
+    $preFixSnap = (& $guard snapshot -RepoRoot $sandbox).Trim()
+    if ($LASTEXITCODE -ne 0 -or $preFixSnap -notmatch '^[0-9a-f]{40}$') { Fail "invalid pre-fix snapshot: $preFixSnap" }
+    $stashList = git stash list
+    if ($stashList) { Fail "snapshot mutated git stash list: $stashList" }
     git add greet.js
     $cached = git diff --cached --name-only
     if ($cached -match '\.b3/') { Fail 'T001 staged .b3' }
+    & $guard precommit -RepoRoot $sandbox -AllowedPaths 'greet.js' | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail 'T001 precommit guard failed' }
     git commit -qm 'Add greet helper so callers can format a hello message'
     $t1 = git rev-parse HEAD
 
@@ -126,6 +138,8 @@ module.exports = { greet, greetAlias };
     Set-Content greet.js "function greet(name) { return 'Hello, ' + name; }`nmodule.exports = { greet };`n"
     node -e "const {greet}=require('./greet'); if (greet('Ada')!=='Hello, Ada') process.exit(1)"
     git add greet.js
+    & $guard precommit -RepoRoot $sandbox -AllowedPaths 'greet.js' | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail 'residue fix precommit guard failed' }
     git diff --cached --quiet
     if ($LASTEXITCODE -eq 0) { Fail 'expected residue fix to produce a diff' }
     git commit -qm 'Remove unused greet alias left after the helper landed'
@@ -142,7 +156,7 @@ module.exports = { greet, greetAlias };
     git merge-base --is-ancestor $final HEAD | Out-Null
 
     $tree = git ls-tree -r --name-only HEAD
-    if ($tree -match '\.b3/') { Fail 'checkpoint leaked into git tree' }
+    if ($tree -match '(^|/)(\.b3/autodev/)') { Fail 'checkpoint leaked into git tree' }
 
     $porcelain = git status --porcelain
     if ($porcelain -and ($porcelain | Where-Object { $_ -notmatch '^\?\? \.b3/' })) {

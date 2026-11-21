@@ -10,7 +10,7 @@
 | `rules/*.md` | Include or link from `AGENTS.md` — do not duplicate prose |
 | `.cursor/skills/` | Canonical source; expose through `.agents/skills` via [`../sync-skills.sh`](../sync-skills.sh) or [`../sync-skills.ps1`](../sync-skills.ps1) |
 | `.cursor/commands/` | Prompt routing: name the intent and point to the command file; no duplicate Codex command files |
-| `.cursor/agents/` | Role prompt source for delegated reviewer/fixer/security/architecture work; file-based Codex custom-agent discovery is not established |
+| `.cursor/agents/` | Role prompt source for delegated reviewer/fixer/security/architecture/performance work; file-based Codex custom-agent discovery is not established |
 
 Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in skill bodies.
 
@@ -37,7 +37,7 @@ Use the existing command file as the procedure selector: “plan this change”,
 
 Product Codex install **flattens** B3 skills into `.agents/skills/<skill-name>` (one junction per `SKILL.md`). A single junction of the nested `.cursor/skills` tree is not enough: Codex discovers skill folders that contain `SKILL.md` at the skill root.
 
-For review-loop delegation, send the existing `.cursor/agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, or `architecture-reviewer.md` role text to an isolated delegated agent when available. Reviewer prompts must prohibit edits; fixer prompts may make only confirmed minimal fixes. The parent remains the orchestrator and owns `PASS`, `FAIL`, and `UNKNOWN / INCOMPLETE`.
+For review-loop delegation, send the existing `.cursor/agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, `architecture-reviewer.md`, or `performance-reviewer.md` role text to an isolated delegated agent when available. Reviewer prompts must prohibit edits; fixer prompts may make only confirmed minimal fixes. The parent remains the orchestrator and owns `PASS`, `FAIL`, and `UNKNOWN / INCOMPLETE`.
 
 ## AGENTS.md merge chain
 

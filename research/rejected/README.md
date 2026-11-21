@@ -12,3 +12,4 @@ Current records:
 - `reject-auto-lesson-to-rule.md`
 - `reject-tdd-iron-law-default.md`
 - `reject-microsoft-azure-sdk-catalog.md`
+- `reject-mandatory-debate-and-broad-autodev-gates.md`
