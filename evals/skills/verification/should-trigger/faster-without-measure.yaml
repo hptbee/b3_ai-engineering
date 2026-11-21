@@ -1,5 +1,5 @@
 id: verification-faster-without-measure
-artifact: .cursor/skills/engineering/verification/SKILL.md
+artifact: skills/engineering/verification/SKILL.md
 intent: Faster claims need measurement
 input: "Confirm the API is faster after I inlined three methods. I did not record p95."
 expected_bucket: should-trigger

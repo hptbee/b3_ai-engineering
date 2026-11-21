@@ -1,5 +1,5 @@
 id: ef-core-unbounded-list
-artifact: .cursor/skills/backend/ef-core/SKILL.md
+artifact: skills/backend/ef-core/SKILL.md
 intent: Unbounded ToListAsync of a table
 input: "GET /orders does ToListAsync with no Skip/Take. Table has 2 million rows."
 expected_bucket: should-trigger

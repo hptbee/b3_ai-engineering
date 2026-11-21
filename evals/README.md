@@ -18,4 +18,4 @@ Schema check only — not semantic scoring. Capability evals **not implemented**
 | `review-loop/` | Spec + orchestration v1 scenarios (incl. performance routing & fix-cycle residue) |
 | `workflows/autonomous-development/` | Lifecycle scenarios for `/autodev` (schema fixtures, including JIT freshness/split/gate). Behavioral Git/install checks: `scripts/validate-autodev-behavior.ps1` (simulated). Isolated product smoke: `scripts/smoke-autodev-product.ps1` (simulated Git). Live `/autodev` agent compliance **NOT VERIFIED** |
 
-See [`../.cursor/skills/README.md`](../.cursor/skills/README.md).
+See [`../skills/README.md`](../skills/README.md).

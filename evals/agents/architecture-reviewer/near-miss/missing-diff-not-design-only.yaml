@@ -1,5 +1,5 @@
 id: agent-architecture-reviewer-missing-diff
-artifact: .cursor/agents/architecture-reviewer.md
+artifact: agents/architecture-reviewer.md
 intent: Default code-review mode needs a product diff; missing diff without design-only is INCOMPLETE not a design review
 input: "Independently review architecture of the current PR. No range named. No implementation approach. No design-only flag."
 expected_bucket: near-miss

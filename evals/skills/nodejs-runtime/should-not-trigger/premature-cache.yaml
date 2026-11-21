@@ -1,5 +1,5 @@
 id: nodejs-runtime-premature-cache
-artifact: .cursor/skills/backend/nodejs-runtime/SKILL.md
+artifact: skills/backend/nodejs-runtime/SKILL.md
 intent: Do not add a worker pool or cache on a tiny cold path
 input: "Add Redis and worker_threads to the 12-row settings GET. No p95 complaint."
 expected_bucket: should-not-trigger

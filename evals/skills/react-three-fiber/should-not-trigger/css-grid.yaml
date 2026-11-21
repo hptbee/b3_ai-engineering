@@ -1,5 +1,5 @@
 id: react-three-fiber-css-grid
-artifact: .cursor/skills/threejs/react-three-fiber/SKILL.md
+artifact: skills/threejs/react-three-fiber/SKILL.md
 intent: DOM layout
 input: "Layout the sidebar with CSS grid."
 expected_bucket: should-not-trigger

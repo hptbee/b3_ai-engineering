@@ -7,4 +7,4 @@ scenario: |
   Reviewer marks loop PASS
 expected_outcome: INCOMPLETE
 failure_mode: finding-lifecycle
-skill: .cursor/skills/engineering/verification/SKILL.md
+skill: skills/engineering/verification/SKILL.md
