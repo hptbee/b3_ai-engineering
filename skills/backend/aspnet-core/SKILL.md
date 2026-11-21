@@ -1,11 +1,9 @@
 ---
 name: aspnet-core
 description: >
-  Use when building ASP.NET Core hosting: DI lifetimes, middleware order,
-  Options, logging, auth middleware configuration, background services.
-  Do not use for object-level API authorization (api-security), REST
-  pagination/error-contract design (api-design), raw Task/.Result
-  (csharp-async), or EF query shape (ef-core).
+  Use for ASP.NET Core hosting: DI lifetimes, middleware order, Options,
+  logging, auth middleware config, background services. Not for object
+  authz (api-security), REST contracts (api-design), Task/.Result, or EF.
 ---
 
 # ASP.NET Core

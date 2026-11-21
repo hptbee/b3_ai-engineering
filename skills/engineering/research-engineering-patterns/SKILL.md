@@ -1,12 +1,9 @@
 ---
 name: research-engineering-patterns
 description: >
-  Use when discovering, comparing, or adapting engineering patterns from
-  external repositories, docs, papers, or community sources into this
-  personal system. Use when asked to research a repo, extract a pattern,
-  decide whether to adopt a method, or record provenance. Do not use for
-  ordinary product implementation, local debugging, or copying third-party
-  skills verbatim into `skills/`.
+  Use when researching external repos/docs/papers to extract, compare,
+  adapt/reject patterns, or record provenance in `research/`. Not for
+  product coding, local debugging, or copying skills verbatim.
 ---
 
 # Research engineering patterns

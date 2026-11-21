@@ -1,10 +1,9 @@
 ---
 name: autodev
 description: >
-  Run the full B3 autonomous development lifecycle from a requirement or plan
-  until PASS, FAIL, INCOMPLETE, or BLOCKED. Use when the user says autodev,
-  $autodev, /autodev, resume autodev, or autodev status. Do not use for
-  plan-only, a single implement, debug, one review, or review-loop-only.
+  Run the full B3 autonomous lifecycle until PASS, FAIL, INCOMPLETE, or
+  BLOCKED (autodev, $autodev, /autodev, resume, status). Not for
+  plan-only, single implement, debug, single review, or review-loop-only.
 ---
 
 # autodev

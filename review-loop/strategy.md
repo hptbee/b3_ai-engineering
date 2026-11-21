@@ -1,154 +1,54 @@
 # Orchestrator procedure
 
-**Trigger once:** `commands/review-loop.md`. Do not yield after the first review for a human “run review again” unless a termination condition fires.
+**Trigger once:** `commands/review-loop.md`. Run **review → validate → fix → verify → fresh review** until quality gate, non-convergence, or iteration cap. Do not yield after the first review.
 
-You are the **orchestrator**. You do not review and you do not fix in the same pass. You dispatch roles, merge the finding log, and **alone** declare `PASS` / `INCOMPLETE` / `STUCK` / STOP.
+You are the **orchestrator**. Do not review and fix in the same pass. Dispatch roles, merge the finding log, and **alone** declare `PASS` / `INCOMPLETE` / `STUCK` / STOP. Normative contract: [`spec.md`](spec.md).
 
-```text
-Analyze size → choose SMALL loop or LARGE units
-  → (per scope) Review → Validate → Fix → Verify → Fresh review
-  → [LARGE] Cross-cutting review
-  → Quality gate or STUCK
-```
-
-Reuse:
+## Roles & dispatch
 
 | Role | Artifact |
 | --- | --- |
 | Review (one pass) | `agents/reviewer.md` → `skills/engineering/code-review` |
-| Security depth | `agents/security-reviewer.md` when auth/API trust is in scope |
-| Architecture depth | `agents/architecture-reviewer.md` when shape/layering is in scope |
-| Performance depth | `agents/performance-reviewer.md` **only** when § Performance routing matches |
+| Security / Architecture / Perf depth | `agents/security-reviewer.md`, `agents/architecture-reviewer.md`, `agents/performance-reviewer.md` (hot-path only) |
 | Fix | `agents/fixer.md` |
-| Evidence | `skills/engineering/verification` + `rules/verification.md` |
-| Spec | `spec.md` |
-| Slots | [`models.md`](models.md) |
+| Evidence / Sizing / Findings / Slots | `skills/engineering/verification`, [`sizing.md`](sizing.md), [`findings.md`](findings.md), [`models.md`](models.md) |
 
-### Dispatch
+1. With host subagents: dispatch fresh Reviewer per review pass and Fixer per fix pass (read-only specialists may run in parallel with Reviewer). Without subagents: hat-change in-session with the same prohibitions and record the limit.
+2. After every Fixer pass, dispatch Reviewer on the **current** implementation (never “did we fix R001?” as the whole review). Reviewer and Fixer never declare loop outcomes.
 
-1. If the host can run subagents: **each review pass** → Reviewer; **each fix pass** → Fixer. Different context (and different `model:` when the user set them).
-2. If subagents are unavailable: **hat-change** in this session — same three slots, same prohibitions.
-3. After every Fixer pass: dispatch Reviewer again on the **current** implementation. Forbidden as the whole review: “did we fix R001?”
-4. Do not mix review and fix in one agent turn when isolation is possible.
+### Compact handoff & reply contract (context budget)
 
-Reviewer and Fixer must not declare loop PASS / INCOMPLETE / STOP.
+- **Parent → Subagent:** pass `{base_sha}`, `diff-scope` file list, `approach/T00N.md` path (if any), and **only active (`OPEN` / unverified `FIXED`) findings for that scope** plus a 1-line `closed:` ID list (never paste whole files or full historical `findings.md`).
+- **Reviewer reply (≤ 25 lines):** compact table `id | sev | conf | status | location | 1-line issue | evidence_ref` + checked/skipped dimensions. No prose summaries or echoed code blocks.
+- **Fixer reply (≤ 20 lines):** `finding_id -> files_touched -> verification_cmd (exit code + 1-line result)`. On passing tests keep summary line only; on failure keep only the failing assertion slice (~30–40 lines) or log to `.b3/autodev/logs/`.
 
 ### Performance routing
 
-Dispatch `performance-reviewer` when the **diff** (not the ticket title alone) hits at least one:
+Dispatch `performance-reviewer` **only** when the diff touches: render/animation loops (`useFrame`, Three.js/GPU), large lists/hot serialization, EF/SQL query shape/N+1/pagination, caching/concurrency/event-loop blocking, or known latency-sensitive request paths. Skip (and record skip) for copy, docs, CSS, or trivial CRUD. Specialist passes count toward the reviewer-pass budget.
 
-- render / animation loop, `useFrame`, Three.js scene, GPU resources
-- large lists/collections, hot-path serialization
-- EF/SQL query shape, N+1, list pagination, extra round trips
-- caching, batching, concurrency, thread-pool / event-loop blocking
-- known latency-sensitive service (p95, request path)
+## 0. Establish target & size
 
-Do **not** dispatch for copy, docs, labels, CSS-only, or typical single-field CRUD. Record the skip. The general reviewer still covers the performance *dimension* lightly: SPECULATIVE must not block (`spec.md`).
+1. Run `scripts/autodev-guard.{ps1,sh} diff-scope` (or `git diff` against PR base / `{task_base}` / `{run_base_sha}` plus staged, unstaged, untracked non-ignored files; never substitute `HEAD~1`). Exclude lockfile/generated noise from diff text while keeping `noise_files` listed. Empty target → `UNKNOWN / INCOMPLETE`, stop.
+2. Use `size_class` ([`sizing.md`](sizing.md)) and initialize the finding log ([`findings.md`](findings.md), stable `R001`…).
 
-One extra specialist pass counts toward the reviewer-pass budget.
+## 1. SMALL / MEDIUM — full-PR loop (max 5 iterations)
 
-## 0. Establish the target
-
-1. Identify the change (`git diff` against the PR base, or the user-named range). When autonomous development names `{task_base}` or `{run_base_sha}`, use that range plus staged, unstaged, and untracked non-ignored files. Do not substitute `HEAD~1`. Empty/wrong branch → `UNKNOWN / INCOMPLETE`, stop.
-2. Classify size ([`sizing.md`](sizing.md)).
-3. Initialize the finding log ([`findings.md`](findings.md)). IDs are stable (`R001`…).
-
-## 1. SMALL / MEDIUM — full-PR loop
-
-Do **not** partition.
-
-```text
-loop iteration 1..MAX_ITERATIONS (default 5):
-  Reviewer: fresh review of the current full diff (not “did we fix R00x?”)
-  Orchestrator: merge into finding log; validate (drop speculative as non-blocking)
-  If quality gate met → PASS (report leftover LOW/NIT)
-  If stagnation / non-convergence → STUCK
-  Fixer: only CONFIRMED (valid) findings that are in-scope
-  Verify: build + relevant tests (`verification` skill)
-  If tools did not run → INCOMPLETE, not PASS
-```
+Do not partition. Per iteration:
+1. **Reviewer:** fresh review of current diff (check bugs, regressions, edge cases, missing tests, and **fix-cycle residue**: duplicated logic, obsolete paths, redundant guards/state, temporary wrappers, stale comments). Previous IDs are supplied only to prevent reopening `CLOSED` items without new evidence.
+2. **Orchestrator:** merge findings; classify before fixing:
+   - Valid, in-scope, concrete (`CONFIRMED` or `CONFIRMED REDUNDANCY`) → Fix (minimal).
+   - Invalid → `REJECTED` + reason; Already handled → `CLOSED`; Out of scope / `INTENTIONAL COMPLEXITY` → `ACCEPTED` + reason; Nit → `LOW` (non-blocking); Hypothetical / `LIKELY REDUNDANT` / `UNKNOWN` → `SPECULATIVE` (do not fix/delete without proof).
+3. **Gate check:** `PASS` when `critical = 0 AND high = 0 AND medium = 0` AND required build/tests `PASS` (list leftover `LOW`/nits; missing tool evidence → `INCOMPLETE`, never `PASS`).
+4. **Stagnation check:** stop `STUCK` / `INCOMPLETE` (`REVIEW LOOP DID NOT CONVERGE`) on flat/rising blocker counts (`4 → 4 → 4`, `5 → 5 → 6`), oscillation, no-op fix, or cap reached (`FAIL` if `CONFIRMED` blockers remain).
+5. **Fixer + Verify:** fix only `CONFIRMED` in-scope items, re-run affected build/tests, then loop to fresh Reviewer.
 
 ## 2. LARGE / VERY_LARGE — unit loops then cross-cut
 
-1. Partition into **logical review units** (feature / architectural boundary), not one-class crumbs. If the change is too coupled to split safely → do **not** fake units; report “split the PR” and run MEDIUM full-PR loop with the same iteration cap, or stop INCOMPLETE.
-2. **Max units:** 4. If more coherent units exist, recommend splitting the PR; review the four highest-risk units plus cross-cut.
-3. **Per unit:** same inner loop as SMALL, but:
-   - Reviewer sees **unit diff + required interfaces/deps + applicable rules + open findings for that unit**
-   - Do **not** re-send the entire PR on every unit iteration
-   - **Max 3 iterations per unit** (not 5 × units)
-4. Only advance to the next unit when the current unit hits the quality gate **or** is STUCK (then continue other units; overall cannot PASS).
-5. **Cross-cutting review** (after units): interactions only — contracts, data flow, shared types, transactions, error propagation, integration tests. Max **2** iterations. Not a replay of every unit finding.
+1. Partition into ≤ **4** logical review units (feature/architectural boundary, not single-class crumbs). If too coupled to split safely, report “split the PR” and run MEDIUM loop or stop `INCOMPLETE`.
+2. Per unit: max **3** iterations; Reviewer sees unit diff + interfaces/deps + active unit findings (never re-send full PR per unit). Advance when unit passes gate or hits `STUCK` (overall cannot `PASS` if any unit is `STUCK`).
+3. **Cross-cutting review** (max **2** iterations after units): interactions only — contracts, data flow, shared types, transactions, error propagation, cross-task duplication, integration tests.
+4. **Budget cap:** total reviewer passes ≤ **12** (exceeding → `STUCK` / `INCOMPLETE`).
 
-**Budget cap:** total reviewer passes for one invocation ≤ **12**. Exceeding that → STUCK / INCOMPLETE.
+## 3. Stop & report
 
-## 3. Fresh review
-
-After fixes, the reviewer reviews **the current implementation** as an independent pass.
-
-Forbidden as the whole review: “Are R001–R003 fixed?”
-
-Allowed: previous IDs in the log so the reviewer does not reopen CLOSED items without **new evidence**.
-
-Look for:
-- bugs from fixes, wrong fixes, regressions, new edge cases, missing tests
-- **fix cycle residue:** repeated fix cycles create high residue risk. Review whether previous fixes introduced:
-  - duplicated logic or duplicate conditions across fixed files
-  - obsolete intermediate paths or abandoned branches
-  - unnecessary defensive guards for states already handled upstream
-  - redundant state or redundant derived state
-  - temporary adapters or compatibility wrappers left behind
-  - stale workarounds or comments describing removed behavior
-
-## 4. Finding validation (before fix)
-
-Fixer/orchestrator classifies each OPEN item:
-
-| Class | Action |
-| --- | --- |
-| Valid, in-scope, concrete | Fix (minimal) |
-| Invalid / misunderstanding | REJECTED + reason |
-| Already handled | CLOSED |
-| Out of scope / intentional | ACCEPTED + reason |
-| Stylistic / nit | leave LOW; do not block gate |
-| Hypothetical, no impact | SPECULATIVE; do not fix |
-| Simplification: CONFIRMED REDUNDANCY | Fix (understand responsibility → prove redundancy → remove/simplify smallest scope → verify) |
-| Simplification: LIKELY REDUNDANT / UNKNOWN | Keep INVESTIGATING / SPECULATIVE; do not delete without proof |
-| Simplification: INTENTIONAL COMPLEXITY | ACCEPTED + reason (named responsibility holds) |
-
-Vague “this could be optimized” without a mechanism is not CONFIRMED.
-Code that “looks redundant” without repository evidence is not CONFIRMED REDUNDANCY.
-
-## 5. Quality gate
-
-A scope **PASS**es when:
-
-```text
-critical = 0 AND high = 0 AND medium = 0
-AND build evidence PASS
-AND relevant tests PASS
-```
-
-LOW/NIT may remain; list them. Never claim perfection.
-
-Tool/build/test **did not run** → INCOMPLETE, not PASS.
-
-## 6. Convergence and limits
-
-After each iteration, record counts of blocking OPEN findings (critical+high+medium CONFIRMED).
-
-**Healthy:** 8 → 4 → 1 → 0  
-**Non-convergence (stop):** 5 → 5 → 6, or 4 → 4 → 4, or fix class A always births class B.
-
-On non-convergence or cap:
-
-```text
-REVIEW LOOP DID NOT CONVERGE
-```
-
-Hand remaining OPEN items to the human. Outcome: `INCOMPLETE` (and FAIL if CONFIRMED blockers remain). **Not PASS.**
-
-Defaults: [`spec.md`](spec.md) (`MAX_ITERATIONS = 5` for full-PR scope).
-
-## 7. Stop and report
-
-Always report: size class, units (if any), iteration log, finding table, what was verified, stop reason (`PASS` | `STUCK` | `INCOMPLETE`).
+Report: `size_class`, units (if any), iteration blocker counts, active/closed finding table, verification commands + results, and stop reason (`PASS` | `STUCK` | `INCOMPLETE`).

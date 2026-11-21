@@ -1,11 +1,9 @@
 ---
 name: verification
 description: >
-  Use when claiming that work works, when finishing implementation, when
-  asked to confirm tests, builds, behavior, or reviews, or when evidence
-  is missing. Use after fixes and before declaring a review loop done.
-  Do not use for design-only discussion, for writing tests without running
-  them, or for explaining verification philosophy without a concrete claim.
+  Use when claiming work passes, finishing fixes/review loops, or
+  confirming tests, builds, or behavior with executed evidence. Not for
+  design-only discussion or writing tests without running them.
 ---
 
 # Verification

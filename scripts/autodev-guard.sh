@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /autodev (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope
 set -euo pipefail
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope [options]" >&2
   exit 1
 fi
 shift
@@ -289,6 +289,103 @@ case "$CMD" in
       exit 1
     fi
     printf '%s\n' "$SHA"
+    ;;
+
+  diff-scope)
+    REPO_ROOT="."
+    BASE_SHA=""
+    IGNORE_DIRTY=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
+        --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
+        *) echo "DIFF_SCOPE_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    [[ -n "$BASE_SHA" ]] || { echo "DIFF_SCOPE_FAIL: missing --base-sha"; exit 1; }
+
+    IGNORE_ARR=()
+    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+
+    is_noise_file() {
+      local leaf="${1##*/}"
+      case "$leaf" in
+        package-lock.json|pnpm-lock.yaml|yarn.lock|bun.lockb|packages.lock.json|Cargo.lock|poetry.lock) return 0 ;;
+        *.min.js|*.min.css|*.snap|*.Designer.cs|*.g.cs|*.map) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
+
+    NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --numstat "$BASE_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
+    UNTRACKED_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "DIFF_SCOPE_FAIL: git ls-files failed"; exit 1; }
+
+    REVIEW_ARR=()
+    NOISE_ARR=()
+    TOTAL_LINES=0
+
+    while IFS=$'\t' read -r add del raw_path; do
+      [[ -n "${raw_path:-}" ]] || continue
+      p="$(norm_path "$raw_path")"
+      [[ -z "$p" ]] && continue
+      [[ "$p" == ".b3/autodev" || "$p" == ".b3/autodev/"* ]] && continue
+      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
+      if is_noise_file "$p"; then
+        NOISE_ARR+=("$p")
+        continue
+      fi
+      REVIEW_ARR+=("$p")
+      [[ "$add" =~ ^[0-9]+$ ]] && TOTAL_LINES=$((TOTAL_LINES + add))
+      [[ "$del" =~ ^[0-9]+$ ]] && TOTAL_LINES=$((TOTAL_LINES + del))
+    done <<< "$NUMSTAT_OUT"
+
+    while IFS= read -r line; do
+      p="$(norm_path "$line")"
+      [[ -z "$p" ]] && continue
+      [[ "$p" == ".b3/autodev" || "$p" == ".b3/autodev/"* ]] && continue
+      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
+      if is_noise_file "$p"; then
+        NOISE_ARR+=("$p")
+        continue
+      fi
+      if [[ ${#REVIEW_ARR[@]} -eq 0 ]] || ! path_in_list "$p" "${REVIEW_ARR[@]}"; then
+        REVIEW_ARR+=("$p")
+        if [[ -f "${REPO_ROOT}/${p}" ]]; then
+          lc="$(wc -l < "${REPO_ROOT}/${p}" | tr -d ' ')"
+          TOTAL_LINES=$((TOTAL_LINES + lc))
+        fi
+      fi
+    done <<< "$UNTRACKED_OUT"
+
+    if [[ ${#REVIEW_ARR[@]} -eq 0 && ${#NOISE_ARR[@]} -eq 0 ]]; then
+      echo "EMPTY_DIFF"
+      exit 2
+    fi
+
+    FILE_COUNT=0
+    RF_OUT="none"
+    if [[ ${#REVIEW_ARR[@]} -gt 0 ]]; then
+      RF_SORTED="$(printf '%s\n' "${REVIEW_ARR[@]}" | LC_ALL=C sort -u)"
+      FILE_COUNT="$(printf '%s\n' "$RF_SORTED" | wc -l | tr -d ' ')"
+      RF_OUT="$(printf '%s\n' "$RF_SORTED" | paste -sd ',' -)"
+    fi
+
+    NF_OUT="none"
+    if [[ ${#NOISE_ARR[@]} -gt 0 ]]; then
+      NF_OUT="$(printf '%s\n' "${NOISE_ARR[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    fi
+
+    if [[ "$FILE_COUNT" -le 8 && "$TOTAL_LINES" -le 300 ]]; then
+      SIZE_CLASS="SMALL"
+    elif [[ "$FILE_COUNT" -le 20 && "$TOTAL_LINES" -le 800 ]]; then
+      SIZE_CLASS="MEDIUM"
+    elif [[ "$FILE_COUNT" -le 50 && "$TOTAL_LINES" -le 2000 ]]; then
+      SIZE_CLASS="LARGE"
+    else
+      SIZE_CLASS="VERY_LARGE"
+    fi
+
+    printf 'size_class=%s\nfiles=%s\nlines=%s\nreview_files=%s\nnoise_files=%s\n' "$SIZE_CLASS" "$FILE_COUNT" "$TOTAL_LINES" "$RF_OUT" "$NF_OUT"
     ;;
 
   *)

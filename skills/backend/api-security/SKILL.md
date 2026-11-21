@@ -1,10 +1,9 @@
 ---
 name: api-security
 description: >
-  Use when reviewing or implementing API authentication and authorization:
-  object-level authz, property-level authz, function-level roles, tokens,
-  sessions, mass assignment, SSRF, rate limits. Do not use for generic
-  Node process hardening or UI accessibility.
+  Use for API authn/authz: object/property/function-level authz, tokens,
+  sessions, mass assignment, SSRF, rate limits. Not for generic Node
+  process hardening or UI accessibility.
 ---
 
 # API security

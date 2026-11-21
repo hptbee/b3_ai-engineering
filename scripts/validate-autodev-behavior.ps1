@@ -544,6 +544,30 @@ try {
     } else {
         FailCheck 'guard-snapshot' "dirty=(${snapDirtyExit}:$snapDirty vs $gHeadNow) stashEmpty=$stashEmpty kept=$workKept clean=(${snapCleanExit}:$snapClean)"
     }
+
+    # --- guard-diff-scope & context-budget-strict ---
+    Push-Location $guardRepo
+    $dsHead = (git rev-parse HEAD).Trim()
+    $dsEmpty = (& $guardScript diff-scope -RepoRoot $guardRepo -BaseSha $dsHead) -join "`n"
+    $dsEmptyExit = $LASTEXITCODE
+    Set-Content src\owned.js "exports.a = 4`nexports.b = 5"
+    Set-Content package-lock.json '{"lockfileVersion":3}'
+    Set-Content docs\note.md 'ignored dirty'
+    $dsOut = (& $guardScript diff-scope -RepoRoot $guardRepo -BaseSha $dsHead -IgnoreDirtyPaths 'docs/note.md') -join "`n"
+    $dsExit = $LASTEXITCODE
+    Pop-Location
+    if ($dsEmptyExit -eq 2 -and $dsEmpty -match 'EMPTY_DIFF' -and $dsExit -eq 0 -and $dsOut -match 'size_class=SMALL' -and $dsOut -match 'review_files=src/owned\.js' -and $dsOut -match 'noise_files=package-lock\.json' -and ($dsOut -notmatch 'docs/note\.md')) {
+        Pass 'guard-diff-scope'
+    } else {
+        FailCheck 'guard-diff-scope' "empty=(${dsEmptyExit}:$dsEmpty) out=(${dsExit}:$dsOut)"
+    }
+
+    $ctxOut = (& powershell -NoProfile -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot $root -Strict) -join "`n"
+    if ($LASTEXITCODE -eq 0 -and $ctxOut -match 'warnings\s*:\s*0') {
+        Pass 'context-budget-strict'
+    } else {
+        FailCheck 'context-budget-strict' "exit=$LASTEXITCODE out=$ctxOut"
+    }
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue

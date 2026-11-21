@@ -73,7 +73,7 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 ./adapters/install-product.sh --product-root /path/to/your-product --host cursor
 ```
 
-The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/autodev.md`, and `.b3/autodev/` in `.gitignore`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
+The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md` (including `autodev.md`), and `.b3/autodev/` in `.gitignore`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
 
 ```powershell
 # Windows — replace the target with your B3 clone
@@ -176,11 +176,15 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Review loop
 
-Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`review-loop/strategy.md`](review-loop/strategy.md). Invoke: [`commands/review-loop.md`](commands/review-loop.md). Host model slots: `review-loop/models.md`.
+Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`review-loop/strategy.md`](review-loop/strategy.md) (compact subagent handoffs, active-only findings slices, and `scripts/autodev-guard.{ps1,sh} diff-scope` noise filtering). Invoke: [`commands/review-loop.md`](commands/review-loop.md). Host model slots: `review-loop/models.md`.
 
 ## Autonomous development
 
-One invocation runs plan (when needed), implementation, the review loop, focused commits, and resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md). Command: [`commands/autodev.md`](commands/autodev.md) (and `adapters/command-skills/autodev/SKILL.md` for skill-based hosts). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). Product-repo setup: [Installation](#installation). A stopped session does not resume until the user invokes the workflow again.
+One invocation runs pre-flight baseline checks, planning, JIT task analysis, implementation, risk-tiered review, focused commits, and Git-verified resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md) (templates and resume reconciliation under `workflows/references/`). Guard helpers: [`scripts/README.md`](scripts/README.md). Command: [`commands/autodev.md`](commands/autodev.md) (and `adapters/command-skills/autodev/SKILL.md` for skill-based hosts). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). Product-repo setup: [Installation](#installation). A stopped session does not resume until the user invokes the workflow again.
+
+## Context budget & validation
+
+Static always-on and workflow token budgets are tracked by [`scripts/measure-context.ps1`](scripts/measure-context.ps1) / [`scripts/measure-context.sh`](scripts/measure-context.sh) (`-Strict` / `--strict`). Behavioral, smoke, and eval schema checks are cataloged in [`scripts/README.md`](scripts/README.md).
 
 ## Evaluation
 

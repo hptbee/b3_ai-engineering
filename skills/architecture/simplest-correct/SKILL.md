@@ -1,11 +1,9 @@
 ---
 name: simplest-correct
 description: >
-  Use when choosing system architecture: layers, Clean/Hexagonal/DDD/CQRS,
-  microservices vs modular monolith, extra buses or frameworks. Complexity
-  is allowed when a named requirement justifies it. Do not use for local
-  “write the shortest code”, one-line bugfixes, or coding-style simplicity
-  (that is smallest-change, not this skill).
+  Use when choosing system architecture (layers, Clean/DDD/CQRS,
+  microservices vs monolith, buses/frameworks); complexity needs a named
+  requirement. Not for one-line bugfixes or local coding style.
 ---
 
 # Simplest correct architecture

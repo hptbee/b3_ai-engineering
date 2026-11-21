@@ -1,11 +1,9 @@
 ---
 name: problem-solving
 description: >
-  Use when executing a product change end to end (understand → plan →
-  implement → verify) and no more specific skill covers the whole task.
-  Do not use for root-cause investigation before a patch (debugging),
-  plan-only requests, structure-only refactors, isolated code review,
-  choosing tests, claiming tests passed, or research-only pattern mining.
+  Use for end-to-end product changes (understand -> plan -> implement ->
+  verify) when no narrower skill fits. Not for debugging, plan-only,
+  refactoring, code review, testing-strategy, verification, or research.
 ---
 
 # Problem solving

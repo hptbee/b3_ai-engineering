@@ -16,7 +16,9 @@
 
 **Two models:** committed default is `model: inherit` (one session, hat-change if needed). To use a deeper Reviewer and a faster Fixer, set `model:` in `agents/reviewer.md` and `fixer.md` — see the Cursor note above. Do not put vendor model names in `spec.md` or skills.
 
-Review method stays in `skills/engineering/code-review`. Fix method stays in `agents/fixer.md`. Do not duplicate those bodies here.
+Review method stays in `skills/engineering/code-review` (detailed residue checklist in `skills/engineering/code-review/references/residue-checklist.md`). Fix method stays in `agents/fixer.md`. Do not duplicate those bodies here.
+
+**Context discipline:** Use `scripts/autodev-guard.{ps1,sh} diff-scope` to filter lockfile/generated noise and classify size in one call. Pass file paths + active (`OPEN` / unverified `FIXED`) findings + 1-line `closed:` IDs to subagents, and keep subagent replies compact (see `strategy.md`).
 
 **Performance specialist:** `performance-reviewer.md` only when `strategy.md` routing matches a hot-path diff. Not every PR.
 

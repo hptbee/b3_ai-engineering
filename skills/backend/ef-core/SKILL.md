@@ -1,11 +1,9 @@
 ---
 name: ef-core
 description: >
-  Use when writing or reviewing EF Core LINQ-to-Entities: tracking,
-  projections, Include/N+1, round trips, list pagination, transactions,
-  concurrency tokens, migrations. Do not use for Dapper or ADO.NET SQL,
-  DI lifetimes of DbContext (aspnet-core), blocking .Result (csharp-async),
-  API authz, or adding indexes with no slow-query evidence.
+  Use for EF Core LINQ-to-Entities: tracking, projections, Include/N+1,
+  round trips, pagination, transactions, concurrency tokens, migrations.
+  Not for Dapper/ADO.NET, DbContext DI (aspnet-core), or unmeasured indexes.
 ---
 
 # EF Core

@@ -1,84 +1,41 @@
 ---
 name: code-review
 description: >
-  Use when reviewing an existing change: a diff, PR, patch, or
-  implementation just produced. Use to produce evidence-based findings on
-  architecture, correctness, security, performance, simplification/residue,
-  tests, and maintainability. Do not use to implement a feature from
-  scratch, to run the full multi-iteration review loop, or to rubber-stamp
-  “LGTM” without reading the change.
+  Use for one evidence-based review pass on a diff, PR, or recent change
+  (architecture, correctness, security, perf, residue, tests). Not for
+  implementing features, full review-loop, or rubber-stamp LGTM.
 ---
 
 # Code review
 
-Produce an honest review of a defined change. This skill is **one review pass**. The iterative loop is `review-loop/spec.md`, run by `review-loop/strategy.md`.
+Produce one honest review pass on a defined change. Iterative loops live in `review-loop/strategy.md` (`review-loop/spec.md`).
 
-## When to use
+## When to use / not use
 
-- User asks to review a PR, diff, or recent edits
-- After implementation, before claiming the work is ready
-- When producing findings with separate severity and confidence, and a lifecycle status
+- **Use:** reviewing a PR, diff, or recent edits with separate severity, confidence, and finding lifecycle status.
+- **Do not use:** implementing features (`problem-solving`), researching external playbooks (`research-engineering-patterns`), declaring a multi-iteration loop done without `review-loop/strategy.md`, or specialist deep dives (`security-reviewer`, `architecture-reviewer`, hot-path `performance-reviewer`).
 
-## When not to use
-
-- Implementing the feature itself → `problem-solving`
-- Researching external review playbooks → `research-engineering-patterns`
-- Declaring the full loop done (iteration limits, re-review after fixes) without that process
-- Accessibility-only, security-only, performance-only, or UX-only deep dives: use the specialist agent/skill when it exists (`performance-reviewer` is hot-path only). Otherwise cover lightly here or mark the dimension INCOMPLETE
-
-Near miss: “write tests for this PR” → implementation, then verification. “Is this safe to ship?” → this skill plus verification evidence, not a vibe.
+Near miss: “write tests for this PR” → implementation + verification. “Is this safe to ship?” → this skill + executed verification evidence.
 
 ## Procedure
 
-1. **Scope** — what is in/out; empty or wrong target → INCOMPLETE.
-2. **Understand** — read the change; restate intent; do not invent requirements.
-3. **Review** — examine the scoped dimensions in `review-loop/spec.md`; skip only with a recorded reason.
-   **Performance dimension (every pass, light):** do not skip silently. Classify findings:
-   - **CONFIRMED** — measured stall/regression or a reproduction (N+1 SQL log, blocked event loop, profiler).
-   - **EVIDENCED RISK** — known hot-path pattern in the diff (unbounded list query, `useFrame`+`setState`, sync CPU on request) without a profile yet. May block if the path is clearly hot; otherwise record confidence honestly.
-   - **SPECULATIVE** — “could be faster”, memo-everywhere, extra cache with no load. **Must not** block the PR.
-   Load the smallest domain performance skill when the diff matches that stack. Independent depth: `agents/performance-reviewer.md` only when `review-loop/strategy.md` routes it — not on every PR.
-
-   **Simplification / implementation residue dimension (every pass):**
-   Do not only ask: “Is this code correct?” Also ask:
-   *“Given the final implementation and current requirements, is all of this code still necessary?”*
-   Look for **change residue**: code that remains reachable/understandable but exists primarily because of an earlier implementation, maintenance, or fix state rather than a current requirement.
-   Inspect nearby code, call sites, tests, and current contracts (use git history only when useful; do not perform archaeology on trivial reviews).
-   Target categories (risk-based, not a giant checklist):
-   - duplicated business logic, duplicate conditions, equivalent or redundant branches
-   - unreachable or effectively unreachable paths, obsolete fallback behavior, stale compatibility paths
-   - dead feature flags, temporary migration logic left behind, accidental permanent workarounds
-   - redundant state, redundant derived state, unnecessary React effects, duplicate event subscriptions
-   - duplicate mappings/transforms, duplicate validation, duplicate error handling
-   - pass-through wrappers with no remaining responsibility, abstractions whose original consumer disappeared
-   - obsolete overloads, stale DTO/model fields, duplicated API contracts, obsolete caching layers
-   - defensive code for impossible states when impossibility is proven by current contracts
-   - comments describing removed behavior, completed TODOs, obsolete tests or fixtures protecting removed behavior
-   - old code paths retained after a replacement became canonical
-
-   **Classification of simplification findings:**
-   - **CONFIRMED REDUNDANCY** — repository evidence shows the logic has no remaining responsibility or is fully duplicated elsewhere. Only confirmed items become cleanup requirements.
-   - **LIKELY REDUNDANT** — strong evidence, but one dependency or requirement remains uncertain. Keep SPECULATIVE / INVESTIGATING; do not delete without proof.
-   - **INTENTIONAL COMPLEXITY** — named current responsibility holds (compatibility, correctness, performance, security, external consumer, trust boundary). Accept, do not delete.
-   - **UNKNOWN** — evidence cannot determine safety. Do not convert uncertainty into a deletion request.
-   This is not aesthetic cleanup or “make code shorter”. Never refactor unrelated code.
-4. **Record findings** — use the schema and lifecycle in `review-loop/spec.md`; promote to `CONFIRMED` only with evidence. Map EVIDENCED RISK onto `CONFIRMED` + medium confidence **or** keep `SPECULATIVE` if the path is not shown to be hot. Map CONFIRMED REDUNDANCY onto category `simplification` + `CONFIRMED`.
-5. **Consolidate** — merge duplicates; separate blockers from nits; speculative ≠ confirmed.
-6. **Tie to verification** — name probes/tests; do not claim they passed unless run (`verification` skill).
+1. **Scope** — establish in/out target; empty or wrong target → `UNKNOWN / INCOMPLETE`.
+2. **Understand** — read the diff and surrounding contracts; restate intent without inventing requirements.
+3. **Review** — examine scoped dimensions from `review-loop/spec.md` (skip only with a recorded reason):
+   - **Performance (every pass, light):** classify as **CONFIRMED** (measured/reproduced), **EVIDENCED RISK** (known hot-path defect in diff, e.g. unbounded query, `useFrame`+`setState`, sync CPU on request), or **SPECULATIVE** (non-blocking). Load the smallest stack perf skill if matched; route `agents/performance-reviewer.md` only on hot-path diffs.
+   - **Simplification / implementation residue (every pass):** ask *“Given the final implementation and current requirements, is all of this code still necessary?”* Look for change residue from earlier iterations/fixes using [`references/residue-checklist.md`](references/residue-checklist.md). Only **CONFIRMED REDUNDANCY** becomes a cleanup finding; leave `LIKELY REDUNDANT` / `UNKNOWN` non-blocking and accept `INTENTIONAL COMPLEXITY`. Never refactor unrelated code.
+4. **Record findings** — use `review-loop/spec.md` schema (`id`, `severity`, `confidence`, `status`, `category`, `location`, `description`, `evidence`, `verification`). Promote to `CONFIRMED` only with concrete evidence.
+5. **Consolidate** — merge duplicates; separate blockers from nits; output compactly without echoing full code blocks.
+6. **Tie to verification** — name checks/probes; never claim they passed unless executed (`verification` skill).
 
 ## Progressive disclosure
 
-- Finding schema, lifecycle, dimensions, false convergence: `review-loop/spec.md`
-- Specialist roles when isolation matters: `agents/reviewer.md`, `agents/security-reviewer.md`, `agents/architecture-reviewer.md`, `agents/performance-reviewer.md`, `agents/fixer.md`
-- Evidence and verification rules: `rules/evidence-and-provenance.md`, `rules/verification.md`
+- Residue taxonomy & classification: [`references/residue-checklist.md`](references/residue-checklist.md)
+- Finding schema, lifecycle & false convergence: `review-loop/spec.md`
+- Isolated roles: `agents/{reviewer,security-reviewer,architecture-reviewer,performance-reviewer,fixer}.md`
+- Hard rules: `rules/evidence-and-provenance.md`, `rules/verification.md`
 
-## Verification
+## Verification & failure handling
 
-A review is complete only if the scoped dimensions were actually examined or explicitly marked incomplete. Tool failure during review → `UNKNOWN / INCOMPLETE` for that dimension, not PASS.
-
-## Failure handling
-
-- Diff too large → sample by risk, state what was not reviewed
-- Cannot run tests → do not infer they pass; mark verification incomplete
-- Disagreement with a prior review → record both views; do not average them into a fake PASS
-- No findings → possible; still record what was checked, or the empty review is not evidence of quality
+- Complete only when scoped dimensions were examined or marked incomplete; tool failure → `UNKNOWN / INCOMPLETE`.
+- Diff too large → sample by risk and state what was not reviewed; missing tests → mark verification incomplete; zero findings → still list what was checked.

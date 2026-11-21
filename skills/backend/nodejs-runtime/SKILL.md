@@ -1,11 +1,9 @@
 ---
 name: nodejs-runtime
 description: >
-  Use when building or reviewing Node.js services: async, event loop,
-  streams, concurrency, shutdown, errors, logging, blocking or CPU-bound
-  work, memory growth, hot-path serialization. Do not use for browser
-  React, C# / ASP.NET, API authz taxonomies, or micro-optimizing cold
-  paths with no stall or leak.
+  Use for Node.js services: async, event loop, streams, concurrency,
+  shutdown, errors, CPU blocking, memory leaks, hot serialization. Not for
+  browser React, .NET, API authz, or unmeasured cold-path micro-tuning.
 ---
 
 # Node.js runtime

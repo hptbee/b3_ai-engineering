@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Measure static context footprint for B3 always-on, /autodev, and /review-loop.
+# Usage: ./scripts/measure-context.sh [--repo-root DIR] [--strict]
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+STRICT=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+    --strict) STRICT=true; shift ;;
+    *) echo "unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
+
+file_bytes() {
+  local p="${REPO_ROOT}/$1"
+  if [[ -f "$p" ]]; then
+    wc -c < "$p" | tr -d ' '
+  else
+    echo 0
+  fi
+}
+
+est_tok() {
+  echo $(( ($1 + 2) / 4 ))
+}
+
+WARNINGS=()
+
+AGENTS_B="$(file_bytes "AGENTS.md")"
+[[ "$AGENTS_B" -gt 3600 ]] && WARNINGS+=("AGENTS.md (${AGENTS_B} B > 3600 B)")
+
+RULES_B=0
+for rf in "${REPO_ROOT}/rules"/*.md; do
+  [[ -f "$rf" ]] || continue
+  b="$(wc -c < "$rf" | tr -d ' ')"
+  RULES_B=$((RULES_B + b))
+done
+
+SKILL_COUNT=0
+FM_TOTAL=0
+MAX_FM=0
+MAX_FM_FILE=""
+MAX_SKILL=0
+MAX_SKILL_FILE=""
+
+while IFS= read -r sf; do
+  [[ -n "$sf" && -f "$sf" ]] || continue
+  SKILL_COUNT=$((SKILL_COUNT + 1))
+  rel="${sf#${REPO_ROOT}/}"
+  sb="$(wc -c < "$sf" | tr -d ' ')"
+  if [[ "$sb" -gt "$MAX_SKILL" ]]; then
+    MAX_SKILL="$sb"
+    MAX_SKILL_FILE="$rel"
+  fi
+  [[ "$sb" -gt 4000 ]] && WARNINGS+=("${rel} (${sb} B > 4000 B)")
+
+  fm_b="$(awk '
+    { sub(/\r$/, "") }
+    NR == 1 && $0 == "---" { in_fm = 1; next }
+    in_fm && $0 == "---" { exit }
+    in_fm { sum += length($0) + 1 }
+    END { print (sum > 0 ? sum - 1 : 0) }
+  ' "$sf")"
+  FM_TOTAL=$((FM_TOTAL + fm_b))
+  if [[ "$fm_b" -gt "$MAX_FM" ]]; then
+    MAX_FM="$fm_b"
+    MAX_FM_FILE="$rel"
+  fi
+  [[ "$fm_b" -gt 280 ]] && WARNINGS+=("${rel} frontmatter (${fm_b} B > 280 B)")
+done < <(find "${REPO_ROOT}/skills" "${REPO_ROOT}/adapters/command-skills" -name 'SKILL.md' -type f 2>/dev/null | LC_ALL=C sort)
+
+ALWAYS_ON=$((AGENTS_B + RULES_B + FM_TOTAL))
+WF_AUTODEV_B="$(file_bytes "workflows/autonomous-development.md")"
+[[ "$WF_AUTODEV_B" -gt 10000 ]] && WARNINGS+=("workflows/autonomous-development.md (${WF_AUTODEV_B} B > 10000 B)")
+AUTODEV_CORE=$((WF_AUTODEV_B + $(file_bytes "commands/autodev.md")))
+
+RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
+[[ "$RL_STRAT_B" -gt 6000 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 6000 B)")
+CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
+RL_OP=$((RL_STRAT_B + $(file_bytes "commands/review-loop.md") + $(file_bytes "agents/reviewer.md") + CR_SKILL_B))
+RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/findings.md") + $(file_bytes "review-loop/models.md")))
+
+echo "=== B3 Context Budget Report ==="
+printf "always_on_total   : %6d B (~%4d tok)  [AGENTS.md=%d B, rules=%d B, %d skill frontmatters=%d B]\n" "$ALWAYS_ON" "$(est_tok "$ALWAYS_ON")" "$AGENTS_B" "$RULES_B" "$SKILL_COUNT" "$FM_TOTAL"
+printf "autodev_core_load : %6d B (~%4d tok)  [autonomous-development.md=%d B + commands/autodev.md]\n" "$AUTODEV_CORE" "$(est_tok "$AUTODEV_CORE")" "$WF_AUTODEV_B"
+printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer + code-review/SKILL.md=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$CR_SKILL_B"
+printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+findings+models]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
+printf "max_skill_file    : %6d B  (%s)\n" "$MAX_SKILL" "$MAX_SKILL_FILE"
+printf "max_frontmatter   : %6d B  (%s)\n" "$MAX_FM" "$MAX_FM_FILE"
+
+if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+  echo "warnings          : ${#WARNINGS[@]}"
+  for w in "${WARNINGS[@]}"; do
+    echo "  - $w"
+  done
+  $STRICT && exit 1
+else
+  echo "warnings          : 0"
+fi
+exit 0

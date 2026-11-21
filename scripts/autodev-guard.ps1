@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -8,6 +8,7 @@ param(
     [string]$RepoRoot = '.',
     [string]$ApproachAtSha = '',
     [string]$TaskBaseSha = '',
+    [string]$BaseSha = '',
     [string]$WatchedPaths = '',
     [string]$OwnedFiles = '',
     [string]$IgnoreDirtyPaths = '',
@@ -215,6 +216,90 @@ switch ($Command) {
             Fail "SNAPSHOT_FAIL: invalid snapshot commit '$sha'" 1
         }
         Write-Output $sha
+        exit 0
+    }
+
+    'diff-scope' {
+        if (-not $BaseSha) { Fail 'DIFF_SCOPE_FAIL: missing -BaseSha' 1 }
+        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+
+        function Test-NoiseFile([string]$PathVal) {
+            $leaf = ($PathVal -split '/')[-1]
+            if ($leaf -in @('package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'packages.lock.json', 'Cargo.lock', 'poetry.lock')) {
+                return $true
+            }
+            if ($leaf -match '\.(min\.js|min\.css|snap|Designer\.cs|g\.cs|map)$') {
+                return $true
+            }
+            return $false
+        }
+
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $numstat = & git -C $RepoRoot diff --numstat $BaseSha 2>&1
+            $nsCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($nsCode -ne 0) {
+            Fail ("DIFF_SCOPE_FAIL: git diff --numstat failed: " + ($numstat | Out-String).Trim()) 1
+        }
+
+        $untracked = @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard'))
+        $reviewFiles = New-Object System.Collections.Generic.List[string]
+        $noiseFiles = New-Object System.Collections.Generic.List[string]
+        $totalLines = 0
+
+        foreach ($row in @($numstat)) {
+            if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
+            $lineStr = ([string]$row).Trim()
+            if (-not $lineStr) { continue }
+            $parts = $lineStr -split "`t", 3
+            if ($parts.Count -lt 3) { continue }
+            $p = Normalize-PathValue $parts[2]
+            if (-not $p -or $p -match '^\.b3/autodev(/|$)' -or (Test-PathMatch $p $ignored)) { continue }
+            if (Test-NoiseFile $p) {
+                if (-not $noiseFiles.Contains($p)) { $noiseFiles.Add($p) }
+                continue
+            }
+            if (-not $reviewFiles.Contains($p)) { $reviewFiles.Add($p) }
+            if ($parts[0] -match '^\d+$') { $totalLines += [int]$parts[0] }
+            if ($parts[1] -match '^\d+$') { $totalLines += [int]$parts[1] }
+        }
+
+        foreach ($u in $untracked) {
+            if (-not $u -or $u -match '^\.b3/autodev(/|$)' -or (Test-PathMatch $u $ignored)) { continue }
+            if (Test-NoiseFile $u) {
+                if (-not $noiseFiles.Contains($u)) { $noiseFiles.Add($u) }
+                continue
+            }
+            if (-not $reviewFiles.Contains($u)) {
+                $reviewFiles.Add($u)
+                $full = Join-Path $RepoRoot ($u -replace '/', '\')
+                if (Test-Path -LiteralPath $full -PathType Leaf) {
+                    $totalLines += @(Get-Content -LiteralPath $full -ErrorAction SilentlyContinue).Count
+                }
+            }
+        }
+
+        if ($reviewFiles.Count -eq 0 -and $noiseFiles.Count -eq 0) {
+            Fail 'EMPTY_DIFF' 2
+        }
+
+        $fileCount = $reviewFiles.Count
+        $sizeClass = if ($fileCount -le 8 -and $totalLines -le 300) { 'SMALL' }
+            elseif ($fileCount -le 20 -and $totalLines -le 800) { 'MEDIUM' }
+            elseif ($fileCount -le 50 -and $totalLines -le 2000) { 'LARGE' }
+            else { 'VERY_LARGE' }
+
+        $rfOut = if ($reviewFiles.Count -gt 0) { ($reviewFiles | Sort-Object -Unique) -join ',' } else { 'none' }
+        $nfOut = if ($noiseFiles.Count -gt 0) { ($noiseFiles | Sort-Object -Unique) -join ',' } else { 'none' }
+        Write-Output "size_class=$sizeClass"
+        Write-Output "files=$fileCount"
+        Write-Output "lines=$totalLines"
+        Write-Output "review_files=$rfOut"
+        Write-Output "noise_files=$nfOut"
         exit 0
     }
 }

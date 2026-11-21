@@ -1,10 +1,9 @@
 ---
 name: debugging
 description: >
-  Use when a bug, test failure, unexpected behavior, or regression needs
-  root-cause investigation before a fix. Use when the agent is about to
-  guess a patch. Do not use for greenfield features, isolated code review
-  of a known-good diff, or claiming tests passed.
+  Use when a bug, test failure, or regression needs root-cause
+  investigation before patching (before guessing a fix). Not for
+  greenfield features, known-good diff reviews, or claiming tests passed.
 ---
 
 # Debugging

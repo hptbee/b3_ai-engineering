@@ -1,11 +1,9 @@
 ---
 name: api-design
 description: >
-  Use when designing HTTP/REST (or similar) APIs: contracts, errors,
-  pagination, chatty list+detail round-trips, compatibility, validation
-  at boundaries, ProblemDetails. Do not use for object-level authorization,
-  Node event-loop tuning, EF SQL N+1, UI component APIs, or adding a cache
-  with no latency requirement.
+  Use when designing HTTP/REST APIs: contracts, errors, ProblemDetails,
+  pagination, chatty round-trips, compatibility, boundary validation. Not
+  for object-level authz, EF N+1, Node event loop, or UI APIs.
 ---
 
 # API design

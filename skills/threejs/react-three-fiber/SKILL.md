@@ -1,10 +1,9 @@
 ---
 name: react-three-fiber
 description: >
-  Use when integrating Three.js with React via React Three Fiber: Canvas,
-  useFrame, declarative objects, React state vs render loop, Drei helpers,
-  resource lifecycle on unmount. Do not use for DOM React performance or
-  vanilla Three.js scenes without R3F.
+  Use for React Three Fiber: Canvas, useFrame, declarative scenes, React
+  state vs render loop, Drei helpers, unmount resource lifecycle. Not for
+  DOM React perf or vanilla Three.js without R3F.
 ---
 
 # React Three Fiber
