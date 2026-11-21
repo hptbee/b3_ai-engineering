@@ -1,37 +1,27 @@
 # Autodev resume procedure (Scenario C)
 
-Reconciliation protocol for [`../autonomous-development.md`](../autonomous-development.md) when resuming an interrupted `/autodev` run. Progress files are claims, not proof — verify against Git before acting.
+Reconcile [`../autonomous-development.md`](../autonomous-development.md) checkpoints against Git before acting (progress files are claims, not proof).
 
-## 1–4. Load checkpoint and verify Git identity
+## 1. Load checkpoint & verify Git identity
 
-1. Read `.b3/autodev/master-plan.md`, `progress.md`, `findings.md` (if it exists), and `approach/*.md` (if they exist). Approach notes are decisions, not a second master plan.
-2. Resolve `B3_HOME` and `PRODUCT_ROOT`. If `progress.md` records `b3_home` or `plan_id` and they do not match the current plan file and B3 location → `BLOCKED`.
-3. Read branch, `HEAD`, ancestry, and `git status --porcelain`.
-4. If `progress.md` records `branch` and the current branch differs → `BLOCKED`. Do not continue on the wrong branch.
+1. Resolve `{RUN_DIR}` via `scripts/autodev-guard.{ps1,sh} resolve-run` (from explicit `<run_id>`, `.b3/autodev/CURRENT`, or legacy `.b3/autodev/progress.md` fallback when `CURRENT` is absent). If explicit `<run_id>` was given and resolves, write `<run_id>` to `.b3/autodev/CURRENT`. Never scan sibling dirs under `.b3/autodev/runs/`.
+2. Read `{RUN_DIR}/master-plan.md`, `progress.md`, `findings.md` (if present), and `approach/*.md` (if present).
+3. Verify `B3_HOME`, `PRODUCT_ROOT`, `plan_id`, and `branch`: if `progress.md` mismatches current `plan_id`, `b3_home`, or active Git branch → `BLOCKED`.
 
-## 5–8. Verify completed and in-progress tasks
+## 2. Verify completed & in-progress tasks
 
-5. Treat a task as `completed` only when **all** of these hold:
-   - The recorded commit SHA exists (`git cat-file -t <sha>` is `commit`)
-   - It is an ancestor of `HEAD` (`git merge-base --is-ancestor <sha> HEAD`)
-   - It is unique among completed task SHAs in this run
-   - It is a descendant of that task's `task_base` (or of `run_base_sha` if `task_base` was not recorded)
-   - The commit's tree still supports the task acceptance criteria, or those checks are re-run and pass
-6. SHA existence alone is not completion. A SHA on another branch, rewritten off `HEAD`, or reused for two tasks is not completion. Inspect the tree before doing the work again.
-7. If the current task has uncommitted changes → inspect them. Keep valid work. Do not reset, and do not start a second copy of the same change.
-8. Re-run the quality gate for an `in_progress` task before trusting it.
+1. Treat a task as `completed` **only** when its recorded SHA is a valid `commit`, is an ancestor of `HEAD` (`git merge-base --is-ancestor <sha> HEAD`), is unique in this run, descends from `task_base` (or `run_base_sha`), and its tree still satisfies ACs (or checks re-run green).
+2. For an `in_progress` task with uncommitted edits: inspect and keep valid work (never `git reset` or duplicate edits); re-run the quality gate before trusting it.
 
-## 9. Approach freshness
+## 3. Approach freshness
 
-Reuse a `ready` approach only when **all** of these hold:
+Reuse a `ready` approach **only** when:
+- Master-plan `version` == approach `plan_version`
+- Recomputed `task_spec_fingerprint` (`autodev-guard fingerprint`) == stored fingerprint
+- `HEAD` descends from `task_base`, and `watched_paths` exist (or are explicit new-file intents)
+- `scripts/autodev-guard.{ps1,sh} check-freshness` returns **`FRESH`**
 
-- Current master-plan `version` equals the approach's recorded `plan_version`
-- Recompute `task_spec_fingerprint` (via `scripts/autodev-guard.{ps1,sh} fingerprint` or canonical form `depends_on=<ids comma-sorted or []>|scope=<trimmed scope>|acceptance_criteria=<criteria joined with ; >`) and verify it equals the stored fingerprint
-- `HEAD` is a descendant of `task_base`
-- Paths in `watched_paths` (`files` + `read_only_deps`) still exist, or were explicit new-file intents not yet created
-- Run `scripts/autodev-guard.{ps1,sh} check-freshness` (or the 4 Git queries below) and confirm **FRESH**
-
-Manual / equivalent Git dirty-set check (exclude ignored `.b3/autodev/` paths and unchanged `initial_dirty_paths`):
+Equivalent Git dirty-set check (excluding `.b3/autodev/` and unchanged `initial_dirty_paths`):
 
 ```text
 git diff --name-only {approach_at_sha} HEAD
@@ -40,18 +30,9 @@ git diff --cached --name-only
 git ls-files --others --exclude-standard
 ```
 
-- `git diff --name-only {approach_at_sha} HEAD` is commits only.
-- `git diff --name-only {approach_at_sha}` includes the working tree against that tree.
-- Staged and untracked files are the other two commands.
-- Logical contract names (`OrderCreated`) are **not** paths and do not participate in this intersection.
-- Unrelated dirty files (not in `watched_paths`) do **not** invalidate.
-- Any path in `git diff --name-only {approach_at_sha} HEAD` that is also in `watched_paths` is stale, including this task's `files` (a later commit moved the tree the approach was written against).
-- The in-progress exception applies only to **uncommitted** dirty paths (working tree, staged, untracked) in `files`: keep that work (step 7); it does not by itself invalidate the approach.
-- Uncommitted dirty `read_only_deps` (`watched_paths` not in `files`, e.g., inspected dependency or contract) **are** stale → re-run `Analyze`.
-- If any required field (`watched_paths`, `reuse`, `obsoletes`, `task_spec_fingerprint`, or `approach_at_sha`) is missing or any freshness check fails → re-run `Analyze` for **this task only**. Do not write a new master plan. Do not implement from a stale approach.
+- `git diff --name-only {approach_at_sha} HEAD` checks commits only; `git diff --name-only {approach_at_sha}` includes the working tree against that tree.
+- Any committed change in `watched_paths`, or any uncommitted change in `read_only_deps` (`watched_paths` minus `files`), is **stale** → re-run `Analyze` for **this task only** (uncommitted edits in owned `files` are kept in-progress work, not stale). Missing freshness fields also require re-running `Analyze`.
 
-## 10. Resume ready work
+## 4. Continue ready work
 
-Resume the lowest-id `in_progress` task whose dependencies are `completed`. If none, take the lowest-id ready `pending` task. Leave `blocked` tasks blocked until the recorded blocker is resolved. If the approach is fresh and implementation had not started, **continue into Implement** in this session without waiting for a new user command.
-
-Do not repeat a task that meets the completion tests above. Do not create a second commit for the same completed task.
+Resume the lowest-id ready `in_progress` task (else lowest-id ready `pending` task; leave `blocked` tasks blocked) and continue directly into `Implement` in this session without waiting for another command.

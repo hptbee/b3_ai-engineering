@@ -3,7 +3,7 @@ artifact: workflows/autonomous-development.md
 intent: Cursor, Codex, and Claude select one procedure and do not each carry a copy
 scenario: |
   Cursor entry is commands/autodev.md
-  Codex and Claude docs tell the agent to open that command and workflows/autonomous-development.md
+  Skill-based hosts (Codex, Claude Code, Antigravity) route via adapters/command-skills/autodev/SKILL.md directly to workflows/autonomous-development.md
   A second full procedure appears under adapters/codex or .claude/commands
 expected_outcome: FAIL
 failure_mode: forked-procedure

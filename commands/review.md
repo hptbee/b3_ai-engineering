@@ -5,12 +5,6 @@ description: One evidence-based code-review pass on the current change. Not the 
 
 # review
 
-**Action now:** one evidence-based review pass on the current change (diff/PR).
+**Action now:** one evidence-based review pass on the current diff/PR via `skills/engineering/code-review/SKILL.md` (load smallest matching domain skill such as `api-security`, `accessibility`, `react-performance`, `ef-core`, or `threejs-performance` only when applicable).
 
-**Skill:** `skills/engineering/code-review/SKILL.md`
-
-This is **not** the full independent review loop. For the loop: `commands/review-loop.md` and `review-loop/spec.md`.
-
-Covers all core review dimensions: architecture, correctness, security, performance, simplification / implementation residue, tests, maintainability. Evaluates whether every meaningful piece of complexity in the diff still has a current responsibility.
-
-Optional depth: `api-security`, `accessibility`, `react-performance`, `threejs-performance`, `ef-core` when those dimensions apply. Independent `performance-reviewer` only for hot-path diffs (`review-loop/strategy.md` routing) — not every PR.
+Not the full iterative loop (`commands/review-loop.md` → `review-loop/strategy.md`; do **not** load `review-loop/spec.md` on routine passes).

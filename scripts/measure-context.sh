@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measure static context footprint for B3 always-on, /autodev, and /review-loop.
+# Measure static context footprint (canonical LF UTF-8 bytes) for B3 always-on, /autodev, /review-loop, and subagent roles.
 # Usage: ./scripts/measure-context.sh [--repo-root DIR] [--strict]
 set -euo pipefail
 
@@ -16,13 +16,16 @@ while [[ $# -gt 0 ]]; do
 done
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 
-file_bytes() {
-  local p="${REPO_ROOT}/$1"
-  if [[ -f "$p" ]]; then
-    wc -c < "$p" | tr -d ' '
+raw_lf_bytes() {
+  if [[ -f "$1" ]]; then
+    tr -d '\r' < "$1" | wc -c | tr -d ' '
   else
     echo 0
   fi
+}
+
+file_bytes() {
+  raw_lf_bytes "${REPO_ROOT}/$1"
 }
 
 est_tok() {
@@ -37,7 +40,7 @@ AGENTS_B="$(file_bytes "AGENTS.md")"
 RULES_B=0
 for rf in "${REPO_ROOT}/rules"/*.md; do
   [[ -f "$rf" ]] || continue
-  b="$(wc -c < "$rf" | tr -d ' ')"
+  b="$(raw_lf_bytes "$rf")"
   RULES_B=$((RULES_B + b))
 done
 
@@ -52,14 +55,14 @@ while IFS= read -r sf; do
   [[ -n "$sf" && -f "$sf" ]] || continue
   SKILL_COUNT=$((SKILL_COUNT + 1))
   rel="${sf#${REPO_ROOT}/}"
-  sb="$(wc -c < "$sf" | tr -d ' ')"
+  sb="$(raw_lf_bytes "$sf")"
   if [[ "$sb" -gt "$MAX_SKILL" ]]; then
     MAX_SKILL="$sb"
     MAX_SKILL_FILE="$rel"
   fi
   [[ "$sb" -gt 4000 ]] && WARNINGS+=("${rel} (${sb} B > 4000 B)")
 
-  fm_b="$(awk '
+  fm_b="$(LC_ALL=C awk '
     { sub(/\r$/, "") }
     NR == 1 && $0 == "---" { in_fm = 1; next }
     in_fm && $0 == "---" { exit }
@@ -76,20 +79,34 @@ done < <(find "${REPO_ROOT}/skills" "${REPO_ROOT}/adapters/command-skills" -name
 
 ALWAYS_ON=$((AGENTS_B + RULES_B + FM_TOTAL))
 WF_AUTODEV_B="$(file_bytes "workflows/autonomous-development.md")"
-[[ "$WF_AUTODEV_B" -gt 10000 ]] && WARNINGS+=("workflows/autonomous-development.md (${WF_AUTODEV_B} B > 10000 B)")
+[[ "$WF_AUTODEV_B" -gt 9500 ]] && WARNINGS+=("workflows/autonomous-development.md (${WF_AUTODEV_B} B > 9500 B)")
 AUTODEV_CORE=$((WF_AUTODEV_B + $(file_bytes "commands/autodev.md")))
 
+AUTODEV_REFS=$(($(file_bytes "workflows/references/autodev-templates.md") + $(file_bytes "workflows/references/autodev-resume.md")))
+[[ "$AUTODEV_REFS" -gt 6000 ]] && WARNINGS+=("workflows/references/autodev-{templates,resume}.md (${AUTODEV_REFS} B > 6000 B)")
+
 RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
-[[ "$RL_STRAT_B" -gt 6000 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 6000 B)")
+[[ "$RL_STRAT_B" -gt 5400 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5400 B)")
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
 RL_OP=$((RL_STRAT_B + $(file_bytes "commands/review-loop.md") + $(file_bytes "agents/reviewer.md") + CR_SKILL_B))
 RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/findings.md") + $(file_bytes "review-loop/models.md")))
 
+AGENT_ROLES_B=0
+for af in "${REPO_ROOT}/agents"/*.md; do
+  [[ -f "$af" ]] || continue
+  [[ "$(basename "$af")" == "README.md" ]] && continue
+  ab="$(raw_lf_bytes "$af")"
+  AGENT_ROLES_B=$((AGENT_ROLES_B + ab))
+done
+[[ "$AGENT_ROLES_B" -gt 8500 ]] && WARNINGS+=("agents/*.md roles (${AGENT_ROLES_B} B > 8500 B)")
+
 echo "=== B3 Context Budget Report ==="
 printf "always_on_total   : %6d B (~%4d tok)  [AGENTS.md=%d B, rules=%d B, %d skill frontmatters=%d B]\n" "$ALWAYS_ON" "$(est_tok "$ALWAYS_ON")" "$AGENTS_B" "$RULES_B" "$SKILL_COUNT" "$FM_TOTAL"
 printf "autodev_core_load : %6d B (~%4d tok)  [autonomous-development.md=%d B + commands/autodev.md]\n" "$AUTODEV_CORE" "$(est_tok "$AUTODEV_CORE")" "$WF_AUTODEV_B"
+printf "autodev_refs_load : %6d B (~%4d tok)  [autodev-templates.md + autodev-resume.md]\n" "$AUTODEV_REFS" "$(est_tok "$AUTODEV_REFS")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer + code-review/SKILL.md=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$CR_SKILL_B"
-printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+findings+models]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
+printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+findings+models (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
+printf "agents_roles_total: %6d B (~%4d tok)  [5 runtime subagent roles excl. README.md]\n" "$AGENT_ROLES_B" "$(est_tok "$AGENT_ROLES_B")"
 printf "max_skill_file    : %6d B  (%s)\n" "$MAX_SKILL" "$MAX_SKILL_FILE"
 printf "max_frontmatter   : %6d B  (%s)\n" "$MAX_FM" "$MAX_FM_FILE"
 

@@ -10,4 +10,4 @@ description: >
 
 **Action now:** produce an implementation plan; do not write product code unless the user also asked to implement.
 
-Resolve `B3_HOME` (env `B3_HOME`, then `.b3/home`). Open `{B3_HOME}/commands/plan.md` and follow it. Load `{B3_HOME}/skills/engineering/planning/SKILL.md`.
+Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and open `{B3_HOME}/skills/engineering/planning/SKILL.md` directly (plus `{B3_HOME}/skills/architecture/simplest-correct/SKILL.md` if choosing system shape).

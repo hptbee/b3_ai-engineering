@@ -1,12 +1,11 @@
 # Autodev checkpoint templates
 
-Reference templates for [`../autonomous-development.md`](../autonomous-development.md). Do not edit product source files from template placeholders alone.
+Schemas for [`../autonomous-development.md`](../autonomous-development.md). Active `{RUN_DIR}` = `.b3/autodev/runs/<run_id>/` via 1-line `.b3/autodev/CURRENT`. Empty template headings are not evidence.
 
-## 1. Master plan (`.b3/autodev/master-plan.md`)
+## 1. Master plan (`{RUN_DIR}/master-plan.md`)
 
 ```markdown
 # <objective>
-
 - version: 1
 - source: <user text or path>
 
@@ -14,23 +13,22 @@ Reference templates for [`../autonomous-development.md`](../autonomous-developme
 ## Scope
 ## Exclusions
 ## Invariants
-- INV1: <invariant no task may violate>
+- INV1: <cross-task invariant>
 ## Technical context
-- canonical_checks: <build / typecheck / lint / test commands from CI/hooks/repo config>
+- canonical_checks: <CI / hook / manifest build+typecheck+lint+test commands>
 ## Architecture
 ## Assumptions
 ## Risks
 ## Size and split check
-- estimate: <SMALL|MEDIUM|LARGE|VERY_LARGE> (~<files> files, ~<lines> lines, <areas> logical areas)
-- warning: <none, or 1-line PR split suggestion when > ~800 lines or >= 2 independent areas>
+- estimate: <SMALL|MEDIUM|LARGE|VERY_LARGE> (~<files>f, ~<lines>L, <areas> areas)
+- warning: <none, or 1-line split note when > ~800L or >= 2 independent areas>
 
 ## Tasks
 
 ### T001 — <title>
-
 - status: pending
 - depends_on: []
-- scope: <paths or components>
+- scope: <owned paths/components>
 - acceptance_criteria:
   - AC1: <observable behavior>
 - verification:
@@ -40,50 +38,33 @@ Reference templates for [`../autonomous-development.md`](../autonomous-developme
 ## Plan changes
 ```
 
-### Task field rules
+**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; one independently verifiable commit per task; assign shared hotspots (`package.json`, `.csproj`, `index.ts`, migrations, shared contracts) to one foundational task committed first; bump `version` + log under `Plan changes` when tasks/scope change (never weaken criteria or drop requirements without user decision → `BLOCKED`).
 
-| Field | Rule |
-| --- | --- |
-| `id` | Stable (`T001`, `T002`, …). Never reuse an id for different work |
-| `status` | `pending`, `in_progress`, `completed`, `blocked`, `incomplete` |
-| `depends_on` | Task ids that must be `completed` first (`[]` if none) |
-| `scope` | Owned component/files this task may change |
-| `acceptance_criteria` | Numbered `AC1..ACn` observable behavior, not a restatement of the patch |
-| `verification` | Command or probe proving each AC holds |
-
-### Task boundaries & sizing rules
-
-- **Size:** One independently verifiable change that can be one commit. Trivial edits stay one task; large features split into coherent slices (not a swarm of one-line tasks).
-- **Contract-first & Shared Hotspots:** Shared hotspot files (`package.json`, `.csproj`, barrel `index.ts`, DB migrations, shared DTOs/contracts) belong to **one** foundational task committed first so dependent tasks via `depends_on` read committed files on disk instead of duplicating contract text.
-- **Version bumps:** Increment `version` when tasks, criteria, or scope change and log the reason under `## Plan changes`. Dropping a requirement, widening scope, or changing business behavior is `BLOCKED` until the user decides. Do not weaken criteria to make incomplete work look finished.
-
-## 2. Progress & inline approach (`.b3/autodev/progress.md`)
+## 2. Progress & inline approach (`{RUN_DIR}/progress.md`)
 
 ```markdown
 # Progress
-
-- b3_home: <absolute path>
-- product_root: <absolute path>
+- run_id: <YYYYMMDD-HHMM-slug>
+- b3_home: <abs path>
+- product_root: <abs path>
 - plan_id: <title + version>
 - plan_version: 1
 - branch: <branch>
-- run_base_sha: <full SHA at run start>
-- baseline_status: <PASS | FAIL(<detail>) | NOT_RUN(<reason>)>
-- initial_dirty_paths: <comma-separated repo-relative paths or none>
+- run_base_sha: <SHA>
+- baseline_status: <PASS | FAIL(detail) | NOT_RUN(reason)>
+- initial_dirty_paths: <csv paths or none>
 - current_task: T001
-- current_task_base_sha: <full SHA when T001 started>
-- pre_fix_object: <commit SHA from git stash create before Fix, or none>
+- current_task_base_sha: <SHA>
+- pre_fix_object: <SHA or none>
 - run_status: running
 - updated: <ISO-8601>
 
 ## Tasks
-
 | id | status | task_base | commit | verification | review | depth | readiness |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| T001 | in_progress |  |  |  |  |  |  |
+| T001 | in_progress | | | | | | |
 
 ## Approach
-
 ### T001
 - depth: inline
 - readiness: draft
@@ -110,13 +91,10 @@ Reference templates for [`../autonomous-development.md`](../autonomous-developme
 ## Limitations
 ```
 
-`run_status` is `running` while ready work remains; final values are `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`.
-
-## 3. Persistent approach (`.b3/autodev/approach/T00N.md`, `notes` / `detailed`)
+## 3. Persistent approach (`{RUN_DIR}/approach/T00N.md`, `notes` / `detailed`)
 
 ```markdown
 # T00N approach
-
 - depth: notes
 - readiness: draft
 - plan_version: 1
@@ -141,7 +119,4 @@ Reference templates for [`../autonomous-development.md`](../autonomous-developme
 ## Architecture
 ```
 
-Conditional `detailed` fields:
-- `write_paths:` Required (not `n/a`) when an entity is written/cached in `>= 2` stores (e.g., DB + cache/state); list each write path and its cache invalidation rule.
-- `io_budget:` Required (not `n/a`) when touching list/query endpoints, DB queries, or render loops; state expected DB/network calls and query/index plan.
-- `edge_cases:` Must cover concrete outcomes for crash/retry/timeout/double-submit/auth/permission states whenever stateful/async/auth surfaces are in scope.
+**Conditional `detailed` fields:** `write_paths:` required when persisting/caching in `>= 2` stores (+ cache invalidation rule); `io_budget:` required on list/query endpoints, DB queries, or render loops; `edge_cases:` must state crash/retry/timeout/double-submit/auth outcomes when stateful/async/auth surfaces apply.

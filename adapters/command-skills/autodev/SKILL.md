@@ -8,30 +8,9 @@ description: >
 
 # autodev
 
-**Action now:** run autonomous development until `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`. Do not stop after the plan and wait for implement. Do not stop after one task while other ready tasks remain — continue in this session.
+**Action now:** run autonomous development until `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`. Do not stop after the plan or between ready tasks — continue in this session.
 
-This skill exists so skill-based hosts (**Codex**, **Claude Code**, **Antigravity**) can discover `autodev`. The procedure is not duplicated here.
-
-## Locate B3
-
-Resolve `B3_HOME` in this order. Stop at the first match that contains `workflows/autonomous-development.md`:
-
-1. Environment variable `B3_HOME`
-2. Product git root file `.b3/home` (one line, absolute path)
-3. This repository itself, if it contains `workflows/autonomous-development.md`
-
-If none match → `BLOCKED`. Do not invent a second procedure. Do not copy B3 skills into this product repository.
-
-**Then open and follow:**
-
-1. `{B3_HOME}/commands/autodev.md` (or this product `.cursor/commands/autodev.md` if present)
-2. `{B3_HOME}/workflows/autonomous-development.md`
-
-Write checkpoints and make Git commits in this product repository. Checkpoints: `.b3/autodev/` (gitignored).
-
-| Argument | Behavior |
-| --- | --- |
-| Story, requirement, bug, refactor, or a path to one | Start or continue the lifecycle |
-| Path to an existing plan | Validate it, then execute |
-| `resume` | Reconcile `.b3/autodev/` with Git, then continue |
-| `status` | Report the checkpoint. Do not implement |
+1. Resolve `B3_HOME` (first match containing `workflows/autonomous-development.md`: `B3_HOME` env, product `.b3/home`, or this repo; else `BLOCKED`). Never copy B3 `skills/` into the product repo.
+2. **Single-hop load:** open and follow `{B3_HOME}/workflows/autonomous-development.md` directly (do not waste a hop reading `commands/autodev.md`).
+3. Write checkpoints under `.b3/autodev/runs/<run_id>/` via `.b3/autodev/CURRENT` (gitignored) and commit in this product repo. Dispatch isolated reviewer/fixer subagents when available; otherwise record the hat-change limit in `{RUN_DIR}/progress.md`.
+4. Arguments: story/requirement/bug/refactor/plan path → run lifecycle; `resume [<run_id>]` → reconcile & continue; `status [<run_id>|--all]` → report only.

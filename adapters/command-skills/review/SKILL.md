@@ -8,6 +8,6 @@ description: >
 
 # review
 
-**Action now:** one evidence-based review pass on the current change (diff/PR).
+**Action now:** one evidence-based review pass on the current diff/PR (not the multi-iteration `/review-loop`).
 
-Resolve `B3_HOME` (env `B3_HOME`, then `.b3/home`). Open `{B3_HOME}/commands/review.md` and follow it. Load `{B3_HOME}/skills/engineering/code-review/SKILL.md`.
+Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and open `{B3_HOME}/skills/engineering/code-review/SKILL.md` directly (plus smallest domain skill such as `api-security`, `accessibility`, `react-performance`, `ef-core`, or `threejs-performance` only when matched).

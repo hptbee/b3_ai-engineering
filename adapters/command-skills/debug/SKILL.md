@@ -8,6 +8,6 @@ description: >
 
 # debug
 
-**Action now:** investigate root cause of a failure before patching.
+**Action now:** investigate root cause before patching (never guess-and-patch).
 
-Resolve `B3_HOME` (env `B3_HOME`, then `.b3/home`). Open `{B3_HOME}/commands/debug.md` and follow it. Load `{B3_HOME}/skills/engineering/debugging/SKILL.md`.
+Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and open `{B3_HOME}/skills/engineering/debugging/SKILL.md` directly (then `{B3_HOME}/skills/engineering/verification/SKILL.md` after a fix).

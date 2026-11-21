@@ -9,6 +9,6 @@ description: >
 
 # review-loop
 
-**Action now:** run the autonomous review loop **to completion** (gate, stuck, or limit). Do not stop after the first findings list.
+**Action now:** run the autonomous review loop **to completion** (gate, `STUCK`, or cap). Never yield after pass 1.
 
-Resolve `B3_HOME` (env `B3_HOME`, then `.b3/home`). Open `{B3_HOME}/commands/review-loop.md` and follow `{B3_HOME}/review-loop/strategy.md`.
+Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and open `{B3_HOME}/review-loop/strategy.md` directly (single-hop; do not load `commands/review-loop.md` or `review-loop/spec.md` on normal runs).
