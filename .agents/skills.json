@@ -1,10 +1,10 @@
 {
   "entries": [
-    { "path": ".cursor/skills/architecture" },
-    { "path": ".cursor/skills/backend" },
-    { "path": ".cursor/skills/engineering" },
-    { "path": ".cursor/skills/frontend" },
-    { "path": ".cursor/skills/threejs" },
-    { "path": "adapters/codex-command-skills" }
+    { "path": "skills/architecture" },
+    { "path": "skills/backend" },
+    { "path": "skills/engineering" },
+    { "path": "skills/frontend" },
+    { "path": "skills/threejs" },
+    { "path": "adapters/command-skills" }
   ]
 }
