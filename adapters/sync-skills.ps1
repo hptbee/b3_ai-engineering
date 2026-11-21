@@ -1,33 +1,71 @@
 param(
-    [ValidateSet('codex', 'claude', 'antigravity')]
+    [ValidateSet('cursor', 'codex', 'claude', 'antigravity')]
     [string]$HostName,
     [switch]$DryRun,
-    [switch]$VerifyOnly
+    [switch]$VerifyOnly,
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$source = Join-Path $root '.cursor\skills'
-$destination = if ($HostName -eq 'codex') { Join-Path $root '.agents\skills' } else { Join-Path $root '.claude\skills' }
+$skillsSource = Join-Path $root 'skills'
+$commandsSource = Join-Path $root 'commands'
+$agentsSource = Join-Path $root 'agents'
+$commandSkillsSource = Join-Path $root 'adapters\command-skills'
 
 function Fail([string]$Message) {
     Write-Error $Message
     exit 1
 }
 
-function Test-SkillSource([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
-        return $false
+function Test-IsLink([System.IO.FileSystemInfo]$Item) {
+    return ($Item.LinkType -in @('Junction', 'SymbolicLink')) -or (($Item.Attributes.ToString()) -match 'ReparsePoint')
+}
+
+function Test-HasActivePath([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (Test-IsLink $item) { return $true }
+    if ($item.PSIsContainer) {
+        return @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue).Count -gt 0
     }
+    return $true
+}
+
+function Test-SkillSource([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return $false }
     return @(Get-ChildItem -LiteralPath $Path -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count -gt 0
 }
 
-function Test-LinkOk([string]$Dest, [string]$Src) {
+function Get-SkillNameFromFile([string]$Path) {
+    $text = Get-Content -LiteralPath $Path -Raw
+    if ($text -match '(?m)^name:\s*([a-z0-9-]+)\s*$') { return $Matches[1] }
+    return (Split-Path -Leaf (Split-Path -Parent $Path))
+}
+
+function Get-ExpectedFlatSkills() {
+    $map = @{}
+    $list = @()
+    $files = @(Get-ChildItem -LiteralPath $skillsSource -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
+    if (Test-Path -LiteralPath $commandSkillsSource -PathType Container) {
+        $files += @(Get-ChildItem -LiteralPath $commandSkillsSource -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
+    }
+    foreach ($f in $files) {
+        $name = Get-SkillNameFromFile $f.FullName
+        $srcDir = Split-Path -Parent $f.FullName
+        if ($map.ContainsKey($name)) {
+            Fail "duplicate skill name '$name': $($map[$name]) and $srcDir"
+        }
+        $map[$name] = $srcDir
+        $list += [PSCustomObject]@{ Name = $name; Source = $srcDir }
+    }
+    return $list
+}
+
+function Test-LinkTarget([string]$Dest, [string]$Src) {
     if (-not (Test-Path -LiteralPath $Dest)) { return $false }
     $item = Get-Item -LiteralPath $Dest -Force
-    $isLink = $item.LinkType -in @('Junction', 'SymbolicLink') -or
-        (($item.Attributes.ToString()) -match 'ReparsePoint')
-    if (-not $isLink) { return $false }
+    if (-not (Test-IsLink $item)) { return $false }
     $resolvedSrc = [IO.Path]::GetFullPath($Src).TrimEnd('\')
     $candidate = $null
     if ($item.Target) {
@@ -40,15 +78,130 @@ function Test-LinkOk([string]$Dest, [string]$Src) {
     if (-not $candidate) {
         try { $candidate = (Resolve-Path -LiteralPath $Dest).Path.TrimEnd('\') } catch { $candidate = $null }
     }
-    if ($candidate -ne $resolvedSrc) { return $false }
-    return (Test-SkillSource $Dest)
+    return $candidate -eq $resolvedSrc
+}
+
+function Remove-LinkPath([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not (Test-IsLink $item)) { Fail "refusing to remove non-link path: $Path" }
+    & cmd.exe /c rmdir "$Path" | Out-Null
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $Path)) {
+        Fail "could not remove link $Path"
+    }
+}
+
+function Sync-DirectoryLink([string]$Dest, [string]$Src, [string]$Label) {
+    if (Test-Path -LiteralPath $Dest) {
+        $item = Get-Item -LiteralPath $Dest -Force
+        if (Test-IsLink $item) {
+            if (Test-LinkTarget $Dest $Src) {
+                Write-Output "ok: $Dest already links to $Src ($Label)"
+                return
+            }
+            Fail "existing link $Dest does not resolve to $Src"
+        }
+        $children = @(Get-ChildItem -LiteralPath $Dest -Force -ErrorAction SilentlyContinue)
+        if ($children.Count -eq 0) {
+            if ($DryRun) {
+                Write-Output "dry-run: remove empty directory $Dest then junction to $Src"
+                return
+            }
+            try {
+                Remove-Item -LiteralPath $Dest -Force
+            } catch {
+                Fail "cannot remove empty directory $Dest : $($_.Exception.Message)"
+            }
+        } else {
+            Fail "existing non-link path with content; refusing to replace: $Dest"
+        }
+    }
+
+    if ($DryRun) {
+        Write-Output "dry-run: junction $Dest -> $Src"
+        return
+    }
+
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Dest) -Force | Out-Null
+    try {
+        New-Item -ItemType Junction -Path $Dest -Target $Src | Out-Null
+    } catch {
+        Fail "failed to create junction $Dest -> $Src : $($_.Exception.Message)"
+    }
+    if (-not (Test-LinkTarget $Dest $Src)) {
+        Fail "link created but verification failed: $Dest -> $Src"
+    }
+    Write-Output "linked: $Dest -> $Src ($Label)"
+}
+
+function Test-FlatSkillIndex([string]$DestRoot, [object[]]$ExpectedSkills) {
+    if (-not (Test-Path -LiteralPath $DestRoot -PathType Container)) { return $false }
+    $rootItem = Get-Item -LiteralPath $DestRoot -Force
+    if (Test-IsLink $rootItem) { return $false }
+    foreach ($sk in $ExpectedSkills) {
+        $entryDest = Join-Path $DestRoot $sk.Name
+        if (-not (Test-LinkTarget $entryDest $sk.Source)) { return $false }
+        if (-not (Test-Path -LiteralPath (Join-Path $entryDest 'SKILL.md') -PathType Leaf)) { return $false }
+    }
+    return $true
+}
+
+function Sync-FlatSkillIndex([string]$DestRoot, [object[]]$ExpectedSkills, [string]$Label) {
+    if (Test-Path -LiteralPath $DestRoot) {
+        $item = Get-Item -LiteralPath $DestRoot -Force
+        if (Test-IsLink $item) {
+            if ($DryRun) {
+                Write-Output "dry-run: replace legacy nested link $DestRoot with flattened $($ExpectedSkills.Count)-skill index ($Label)"
+                return
+            }
+            Remove-LinkPath $DestRoot
+        } elseif (-not $item.PSIsContainer) {
+            Fail "existing non-directory path; refusing to replace: $DestRoot"
+        } else {
+            foreach ($child in @(Get-ChildItem -LiteralPath $DestRoot -Force -ErrorAction SilentlyContinue)) {
+                if (-not (Test-IsLink $child)) {
+                    Fail "existing non-link content in $DestRoot; refusing to replace: $($child.FullName)"
+                }
+            }
+        }
+    }
+
+    if ($DryRun) {
+        Write-Output "dry-run: flatten $DestRoot with $($ExpectedSkills.Count) skill junctions ($Label)"
+        return
+    }
+
+    New-Item -ItemType Directory -Path $DestRoot -Force | Out-Null
+    $expectedNames = @{}
+    foreach ($sk in $ExpectedSkills) {
+        $expectedNames[$sk.Name] = $true
+        $entryDest = Join-Path $DestRoot $sk.Name
+        if (Test-Path -LiteralPath $entryDest) {
+            if (Test-LinkTarget $entryDest $sk.Source) { continue }
+            Remove-LinkPath $entryDest
+        }
+        try {
+            New-Item -ItemType Junction -Path $entryDest -Target $sk.Source | Out-Null
+        } catch {
+            Fail "failed to create junction $entryDest -> $($sk.Source) : $($_.Exception.Message)"
+        }
+    }
+    foreach ($child in @(Get-ChildItem -LiteralPath $DestRoot -Force -ErrorAction SilentlyContinue)) {
+        if (-not $expectedNames.ContainsKey($child.Name)) {
+            Remove-LinkPath $child.FullName
+        }
+    }
+    if (-not (Test-FlatSkillIndex $DestRoot $ExpectedSkills)) {
+        Fail "flattened skill index verification failed: $DestRoot"
+    }
+    Write-Output "linked: $DestRoot ($($ExpectedSkills.Count) flattened skills; $Label)"
 }
 
 function Get-AntigravityEntryPaths([string]$RepoRoot) {
     $entries = New-Object System.Collections.Generic.List[string]
-    $cursorSkills = Join-Path $RepoRoot '.cursor\skills'
-    if (Test-Path -LiteralPath $cursorSkills -PathType Container) {
-        foreach ($cat in @(Get-ChildItem -LiteralPath $cursorSkills -Directory | Sort-Object Name)) {
+    $coreSkills = Join-Path $RepoRoot 'skills'
+    if (Test-Path -LiteralPath $coreSkills -PathType Container) {
+        foreach ($cat in @(Get-ChildItem -LiteralPath $coreSkills -Directory | Sort-Object Name)) {
             $hasOneLevel = $false
             foreach ($skillDir in @(Get-ChildItem -LiteralPath $cat.FullName -Directory)) {
                 if (Test-Path -LiteralPath (Join-Path $skillDir.FullName 'SKILL.md') -PathType Leaf) {
@@ -56,16 +209,14 @@ function Get-AntigravityEntryPaths([string]$RepoRoot) {
                     break
                 }
             }
-            if ($hasOneLevel) {
-                $entries.Add(".cursor/skills/$($cat.Name)")
-            }
+            if ($hasOneLevel) { $entries.Add("skills/$($cat.Name)") }
         }
     }
-    $cmdSkills = Join-Path $RepoRoot 'adapters\codex-command-skills'
+    $cmdSkills = Join-Path $RepoRoot 'adapters\command-skills'
     if (Test-Path -LiteralPath $cmdSkills -PathType Container) {
         foreach ($skillDir in @(Get-ChildItem -LiteralPath $cmdSkills -Directory)) {
             if (Test-Path -LiteralPath (Join-Path $skillDir.FullName 'SKILL.md') -PathType Leaf) {
-                $entries.Add('adapters/codex-command-skills')
+                $entries.Add('adapters/command-skills')
                 break
             }
         }
@@ -135,24 +286,32 @@ function Test-AntigravityManifest([string]$RepoRoot, [string]$ManifestPath) {
     return [PSCustomObject]@{ Ok = $true; Count = $totalSkills; Reason = '' }
 }
 
-if (-not $HostName) { Fail 'Usage: .\adapters\sync-skills.ps1 -HostName codex|claude|antigravity [-DryRun] [-VerifyOnly]' }
-if (-not (Test-SkillSource $source)) { Fail "Skills source missing or has no SKILL.md: $source" }
+if (-not $HostName) { Fail 'Usage: .\adapters\sync-skills.ps1 -HostName cursor|codex|claude|antigravity [-DryRun] [-VerifyOnly] [-Force]' }
+if (-not (Test-SkillSource $skillsSource)) { Fail "Skills source missing or has no SKILL.md: $skillsSource" }
+
+$cursorSkillsDest = Join-Path $root '.cursor\skills'
+$cursorCommandsDest = Join-Path $root '.cursor\commands'
+$cursorAgentsDest = Join-Path $root '.cursor\agents'
+$codexSkillsDest = Join-Path $root '.agents\skills'
+$claudeSkillsDest = Join-Path $root '.claude\skills'
+$claudeAgentsDest = Join-Path $root '.claude\agents'
+$antigravityManifest = Join-Path $root '.agents\skills.json'
 
 if ($HostName -eq 'antigravity') {
-    $manifest = Join-Path $root '.agents\skills.json'
+    if (Test-HasActivePath $codexSkillsDest) {
+        Write-Warning "coexistence notice: .agents/skills exists alongside .agents/skills.json; Antigravity may double-discover skills."
+    }
     if ($VerifyOnly) {
-        $check = Test-AntigravityManifest $root $manifest
+        $check = Test-AntigravityManifest $root $antigravityManifest
         if ($check.Ok) {
-            Write-Output "verify ok: $manifest (antigravity); $($check.Count) SKILL.md entries visible"
+            Write-Output "verify ok: $antigravityManifest (antigravity); $($check.Count) SKILL.md entries visible"
             exit 0
         }
         Fail "verify failed: $($check.Reason)"
     }
 
     $entries = @(Get-AntigravityEntryPaths $root)
-    if ($entries.Count -lt 1) {
-        Fail "no 1-level skill category directories found under $source"
-    }
+    if ($entries.Count -lt 1) { Fail "no 1-level skill category directories found under $skillsSource" }
     $jsonLines = New-Object System.Collections.Generic.List[string]
     $jsonLines.Add('{')
     $jsonLines.Add('  "entries": [')
@@ -165,72 +324,95 @@ if ($HostName -eq 'antigravity') {
     $jsonText = ($jsonLines -join "`n") + "`n"
 
     if ($DryRun) {
-        Write-Output "dry-run: write $manifest with $($entries.Count) entries ($($entries -join ', '))"
+        Write-Output "dry-run: write $antigravityManifest with $($entries.Count) entries ($($entries -join ', '))"
         exit 0
     }
 
-    New-Item -ItemType Directory -Path (Split-Path -Parent $manifest) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path -Parent $antigravityManifest) -Force | Out-Null
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($manifest, $jsonText, $utf8NoBom)
+    [System.IO.File]::WriteAllText($antigravityManifest, $jsonText, $utf8NoBom)
 
-    $check = Test-AntigravityManifest $root $manifest
-    if (-not $check.Ok) {
-        Fail "manifest written but verification failed: $($check.Reason)"
-    }
-    Write-Output "synced: $manifest (antigravity); $($check.Count) SKILL.md entries visible"
+    $check = Test-AntigravityManifest $root $antigravityManifest
+    if (-not $check.Ok) { Fail "manifest written but verification failed: $($check.Reason)" }
+    Write-Output "synced: $antigravityManifest (antigravity); $($check.Count) SKILL.md entries visible"
     Write-Output "note: this proves .agents/skills.json resolves to 1-level SKILL.md entries, not Antigravity runtime discovery"
     exit 0
 }
 
-if ($VerifyOnly) {
-    if (Test-LinkOk $destination $source) {
-        Write-Output "verify ok: $destination -> $source ($HostName); SKILL.md visible"
-        exit 0
-    }
-    Fail "verify failed: $destination is not a working link to $source with SKILL.md files"
-}
+if ($HostName -eq 'cursor') {
+    if (-not (Test-Path -LiteralPath $commandsSource -PathType Container)) { Fail "Commands source missing: $commandsSource" }
+    if (-not (Test-Path -LiteralPath $agentsSource -PathType Container)) { Fail "Agents source missing: $agentsSource" }
 
-if (Test-Path -LiteralPath $destination) {
-    $item = Get-Item -LiteralPath $destination -Force
-    if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
-        if (Test-LinkOk $destination $source) {
-            Write-Output "ok: $destination already links to canonical skills ($HostName)"
+    if ($VerifyOnly) {
+        $ok = (Test-LinkTarget $cursorSkillsDest $skillsSource) -and
+              (Test-SkillSource $cursorSkillsDest) -and
+              (Test-LinkTarget $cursorCommandsDest $commandsSource) -and
+              (Test-LinkTarget $cursorAgentsDest $agentsSource)
+        if ($ok) {
+            Write-Output "verify ok: .cursor/{skills,commands,agents} -> canonical root (cursor)"
             exit 0
         }
-        Fail "existing link $destination does not resolve to $source with SKILL.md"
+        Fail "verify failed: .cursor/{skills,commands,agents} links are missing or invalid"
     }
 
-    $children = @(Get-ChildItem -LiteralPath $destination -Force -ErrorAction SilentlyContinue)
-    if ($children.Count -eq 0) {
-        if ($DryRun) {
-            Write-Output "dry-run: remove empty directory $destination then junction to $source"
-            exit 0
+    if (-not $Force) {
+        if (Test-HasActivePath $codexSkillsDest) {
+            Fail "coexistence guard: .agents/skills exists; Cursor cross-loads it and would duplicate skills. Remove .agents/skills or re-run with -Force"
         }
-        try {
-            Remove-Item -LiteralPath $destination -Force
-        } catch {
-            Fail "cannot remove empty invalid directory $destination : $($_.Exception.Message)"
+        if (Test-HasActivePath $claudeSkillsDest) {
+            Fail "coexistence guard: .claude/skills exists; Cursor cross-loads it and would duplicate skills. Remove .claude/skills or re-run with -Force"
         }
-    } else {
-        Fail "existing non-link path with content; refusing to replace: $destination"
     }
-}
 
-if ($DryRun) {
-    Write-Output "dry-run: New-Item -ItemType Junction -Path '$destination' -Target '$source'"
+    Sync-DirectoryLink $cursorSkillsDest $skillsSource 'cursor skills'
+    Sync-DirectoryLink $cursorCommandsDest $commandsSource 'cursor commands'
+    Sync-DirectoryLink $cursorAgentsDest $agentsSource 'cursor agents'
+    Write-Output "note: this proves filesystem links, not Cursor runtime skill discovery"
     exit 0
 }
 
-New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-try {
-    New-Item -ItemType Junction -Path $destination -Target $source | Out-Null
-} catch {
-    Fail "failed to create junction $destination -> $source : $($_.Exception.Message)"
+$expectedFlatSkills = @(Get-ExpectedFlatSkills)
+
+if ($HostName -eq 'codex') {
+    if ($VerifyOnly) {
+        if (Test-FlatSkillIndex $codexSkillsDest $expectedFlatSkills) {
+            Write-Output "verify ok: $codexSkillsDest ($($expectedFlatSkills.Count) flattened skills; codex)"
+            exit 0
+        }
+        Fail "verify failed: $codexSkillsDest is not a valid flattened skill index"
+    }
+
+    if (-not $Force -and (Test-HasActivePath $cursorSkillsDest)) {
+        Fail "coexistence guard: .cursor/skills exists; Cursor cross-loads .agents/skills and would duplicate skills. Remove .cursor/skills or re-run with -Force"
+    }
+    if (Test-Path -LiteralPath $antigravityManifest -PathType Leaf) {
+        Write-Warning "coexistence notice: .agents/skills.json is committed for Antigravity; if Antigravity also opens this checkout, it may read both .agents/skills.json and .agents/skills."
+    }
+
+    Sync-FlatSkillIndex $codexSkillsDest $expectedFlatSkills 'codex'
+    Write-Output "note: this proves filesystem links, not Codex runtime skill discovery"
+    exit 0
 }
 
-if (-not (Test-LinkOk $destination $source)) {
-    Fail "link created but verification failed: $destination -> $source"
-}
+if ($HostName -eq 'claude') {
+    if (-not (Test-Path -LiteralPath $agentsSource -PathType Container)) { Fail "Agents source missing: $agentsSource" }
 
-Write-Output "linked: $destination -> $source ($HostName); SKILL.md visible"
-Write-Output "note: this proves the filesystem link, not Codex or Cursor skill discovery"
+    if ($VerifyOnly) {
+        $ok = (Test-FlatSkillIndex $claudeSkillsDest $expectedFlatSkills) -and
+              (Test-LinkTarget $claudeAgentsDest $agentsSource)
+        if ($ok) {
+            Write-Output "verify ok: $claudeSkillsDest ($($expectedFlatSkills.Count) flattened skills) + $claudeAgentsDest -> $agentsSource (claude)"
+            exit 0
+        }
+        Fail "verify failed: .claude/skills or .claude/agents link is missing or invalid"
+    }
+
+    if (-not $Force -and (Test-HasActivePath $cursorSkillsDest)) {
+        Fail "coexistence guard: .cursor/skills exists; Cursor cross-loads .claude/skills and would duplicate skills. Remove .cursor/skills or re-run with -Force"
+    }
+
+    Sync-FlatSkillIndex $claudeSkillsDest $expectedFlatSkills 'claude'
+    Sync-DirectoryLink $claudeAgentsDest $agentsSource 'claude agents'
+    Write-Output "note: this proves filesystem links, not Claude Code runtime skill discovery"
+    exit 0
+}

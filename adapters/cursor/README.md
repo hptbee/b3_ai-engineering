@@ -1,50 +1,56 @@
 # Cursor adapter
 
-Cursor consumes this repository **directly**. `.cursor/skills`, `.cursor/commands`, `.cursor/agents`, and `.cursor/rules` are committed source, not a generated copy.
-
-Discovery of skills after placing them on the native path is **VERIFIED** by Cursor docs ([cursor.com/docs/skills](https://cursor.com/docs/skills)). Auto-activation in a new Agent session is **NOT VERIFIED** in this change. Slash commands and subagent auto-delegation are **INTENDED**.
+B3 keeps canonical rules, skills, commands, and agents in host-neutral root directories (`rules/`, `skills/`, `commands/`, `agents/`). Cursor activates rules natively via committed `.cursor/rules/*.mdc` (`@rules/*.md`) and `AGENTS.md`, and activates skills, commands, and agents via local gitignored links created by `adapters/sync-skills.{ps1,sh} cursor`.
 
 ## What Cursor reads
 
-| Artifact | Path | Status |
+| Artifact | Path | Activation |
 | --- | --- | --- |
-| Always-on map | `AGENTS.md` | **VERIFIED** docs: root AGENTS.md is loaded |
-| Hard rules | `.cursor/rules/*.mdc` → `@rules/*.md` | **VERIFIED** docs: `.mdc` + `@file`; runtime injection **NOT VERIFIED** here |
-| Skills | `.cursor/skills/**/SKILL.md` | **VERIFIED** docs: native discovery root |
-| Commands | `.cursor/commands/*.md` | **INTENDED** (product still has `/` commands), including `/autodev` |
-| Subagents | `.cursor/agents/*.md` | **VERIFIED** docs: `.cursor/agents/`; isolation working **NOT VERIFIED** |
+| Always-on map | `AGENTS.md` | Committed at repo root |
+| Hard / strong rules | `.cursor/rules/*.mdc` → `@rules/*.md` | Committed thin wrappers |
+| Skills | `.cursor/skills` → `skills/` | Gitignored link (`sync-skills cursor`) |
+| Commands | `.cursor/commands` → `commands/` | Gitignored link (`sync-skills cursor`) |
+| Subagents | `.cursor/agents` → `agents/` | Gitignored link (`sync-skills cursor`) |
 
-Do **not** also symlink `.agents/skills` or `.claude/skills` in this repo — Cursor cross-loads those roots and would duplicate skills.
+## Setup
 
-To use `/autodev` in a **separate product repository**, run [`../install-product.ps1`](../install-product.ps1) (or `.sh`) with `-HostName cursor`. That writes a pointer command and `.b3/home`. It does not copy skills into the product. User-level `~/.cursor/skills/b3-ai-engineering` is optional and must not be combined with a product `.cursor/skills` copy of the same tree.
+### Inside this B3 checkout
 
-## Rules
+```powershell
+# Windows
+.\adapters\sync-skills.ps1 -HostName cursor
+.\adapters\sync-skills.ps1 -HostName cursor -VerifyOnly
+```
 
-Portable meaning stays in `rules/*.md`. Cursor activation is thin `.mdc` files:
+```bash
+# macOS / Linux
+./adapters/sync-skills.sh cursor
+./adapters/sync-skills.sh --verify cursor
+```
 
-- hard / global → `alwaysApply: true`
-- `simplest-correct` → `alwaysApply: false` + description (architecture tasks)
+Do **not** also activate `.agents/skills` or `.claude/skills` in the same checkout — Cursor cross-loads those roots and duplicates skills (`sync-skills` enforces this coexistence guard unless `-Force` / `--force` is passed).
 
-## Subagents vs skills
+### Separate product repository
 
-| Use subagent when | Use skill when |
-| --- | --- |
-| Isolated context, independent review | Repeatable procedure, on-demand method |
-| Reviewer must not edit (`readonly: true`) | Single-purpose engineering workflow |
+Run [`../install-product.ps1`](../install-product.ps1) (or `.sh`) with `-HostName cursor` / `--host cursor`. That writes `.b3/home`, `AGENTS.md` (when missing), `.cursor/commands/*.md`, and `.gitignore` `.b3/autodev/`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
 
-Orchestrator stays the parent session (`review-loop/models.md`). Two-model `model:` on Reviewer/Fixer: [`review-loop-models.md`](review-loop-models.md).
+```powershell
+# Windows
+cmd /c mklink /J "$env:USERPROFILE\.cursor\skills\b3-ai-engineering" "D:\path\to\b3_ai-engineering\skills"
+```
 
-## Built-in Cursor skills
+```bash
+# macOS / Linux
+ln -sfn /path/to/b3_ai-engineering/skills ~/.cursor/skills/b3-ai-engineering
+```
 
-Product ships `/create-skill`, `/migrate-to-skills`, `/review`, subagent creators — separate from this repo’s skills.
+## Rules & Subagents
 
-## Thin by design
-
-MCP, hooks, and marketplace stay out of the portable meaning. Verification and engineering methods stay in skills and `rules/`.
+- Portable meaning stays in `rules/*.md`; `.cursor/rules/*.mdc` only carries `alwaysApply` and `description`.
+- Orchestrator stays the parent session (`review-loop/models.md`). Two-model `model:` override notes: [`review-loop-models.md`](review-loop-models.md).
 
 ## References
 
 - [`../README.md`](../README.md)
 - `research/sources/cursor-docs-2026-09.md`
-- `research/decisions/decision-009-cursor-native-layout.md`
-- `research/validation/cursor-host-v2.md` (pre-restructure evidence)
+- `research/decisions/decision-013-host-neutral-multi-host-layout.md`

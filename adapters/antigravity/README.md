@@ -8,16 +8,16 @@
 | --- | --- |
 | `AGENTS.md` | Native workspace rule (auto-loaded from repo root) |
 | `rules/*.md` | Referenced via `AGENTS.md` in-repo, or generated into plugin `rules/AGENTS.md` (plain Markdown, no frontmatter, `< 24 KB`) |
-| `.cursor/skills/` | `.agents/skills.json` (1-level category entries) in this repo; flattened `.agents/skills/<name>` junctions/symlinks in product repos (`install-product -HostName antigravity`), or inside plugin `skills/<name>` |
-| `.cursor/commands/` | Exposed as skills via `adapters/codex-command-skills/` (`autodev`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`) or natural prompt intent; no `.cursor/commands/` slash duplication |
-| `.cursor/agents/*.md` | Generated into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, explicit least-privilege `tools:`), or dynamically delegated via `define_subagent` / `invoke_subagent` |
+| `skills/` | Committed `.agents/skills.json` (1-level category entries) in this repo; flattened `.agents/skills/<name>` junctions/symlinks in product repos (`install-product -HostName antigravity`), or inside plugin `skills/<name>` |
+| `commands/` + `adapters/command-skills/` | Exposed as skills via `adapters/command-skills/` (`autodev`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`) or natural prompt intent |
+| `agents/*.md` | Generated into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, explicit least-privilege `tools:`), or dynamically delegated via `define_subagent` / `invoke_subagent` |
 
 ## Capability classification
 
 | Antigravity mechanism | B3 use | Classification |
 | --- | --- | --- |
 | Root `AGENTS.md` | Durable project map and precedence | SUPPORTED |
-| `.agents/skills.json` (`entries`) | One-level discovery over categorized `.cursor/skills/*` and `adapters/codex-command-skills` without duplicate copies | SUPPORTED |
+| `.agents/skills.json` (`entries`) | One-level discovery over categorized `skills/*` and `adapters/command-skills` without duplicate copies | SUPPORTED |
 | `.agents/skills/<name>/SKILL.md` | Flattened skill discovery in product repos | SUPPORTED |
 | Global plugin (`~/.gemini/config/plugins/b3-ai-engineering/`) | Machine-wide bundle of rules, skills, and isolated subagents (`plugin.json`, `rules/AGENTS.md`, `skills/`, `agents/`) | SUPPORTED |
 | Subagents (`agents/<name>.md` or dynamic `define_subagent`) | Review-loop isolation (`reviewer`, `fixer`, specialists) | SUPPORTED BY ANTIGRAVITY; B3 runtime isolation `UNKNOWN / INCOMPLETE` |
@@ -26,7 +26,7 @@
 
 ## Subagent tool mapping
 
-When generating plugin agents from `.cursor/agents/*.md`, `model:` and `readonly:` are mapped to Antigravity subagent frontmatter (`subagent: true`, `mainAgent: false`, explicit `tools:`):
+When generating plugin agents from `agents/*.md`, `model:` and `readonly:` are mapped to Antigravity subagent frontmatter (`subagent: true`, `mainAgent: false`, explicit `tools:`):
 
 | B3 role | Source `readonly` | Antigravity `tools` |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ When generating plugin agents from `.cursor/agents/*.md`, `model:` and `readonly
 
 ### 1. Working inside this B3 checkout
 
-No symlink or junction is needed (and **do not** create `.agents/skills` here — Cursor would duplicate-discover skills). This repository commits `.agents/skills.json` pointing one level above the categorized skill folders plus `adapters/codex-command-skills`.
+No symlink or junction is needed (and **do not** keep `.agents/skills` alongside `.agents/skills.json` if Antigravity opens this checkout — Antigravity reads both). This repository commits `.agents/skills.json` pointing one level above the categorized `skills/*` folders plus `adapters/command-skills`.
 
 Verify the manifest resolves all `SKILL.md` entries:
 
@@ -63,7 +63,7 @@ To regenerate `.agents/skills.json` from the canonical skill tree:
 
 ### 2. Product repository attach
 
-Attach B3 to a separate product repository without copying `.cursor/skills` into it:
+Attach B3 to a separate product repository without copying `skills/` into it:
 
 ```powershell
 # Windows PowerShell
@@ -99,10 +99,10 @@ Enable, disable, or uninstall the plugin from the Antigravity Customizations UI 
 
 ## Thin by design
 
-`plugin.json`, `.agents/skills.json`, and Antigravity `tools:` mappings belong here or in generated plugin directories. Portable rules (`rules/*.md`), Agent Skills (`.cursor/skills/`), workflows, and the review-loop specification stay host-agnostic.
+`plugin.json`, `.agents/skills.json`, and Antigravity `tools:` mappings belong here or in generated plugin directories. Portable rules (`rules/*.md`), Agent Skills (`skills/`), commands (`commands/`), agents (`agents/`), workflows, and the review-loop specification stay host-agnostic.
 
 ## References
 
 - [`../README.md`](../README.md)
-- [`../../research/decisions/decision-009-cursor-native-layout.md`](../../research/decisions/decision-009-cursor-native-layout.md)
 - [`../../research/decisions/decision-011-product-repo-attach.md`](../../research/decisions/decision-011-product-repo-attach.md)
+- [`../../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../../research/decisions/decision-013-host-neutral-multi-host-layout.md)

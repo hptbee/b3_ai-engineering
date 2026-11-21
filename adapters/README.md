@@ -1,19 +1,17 @@
 # Adapters
 
-Cursor is the first host. This repository’s `.cursor/` tree **is** the Cursor integration (committed, not generated).
+B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `review-loop/`) mapped onto **Cursor**, **Codex**, **Claude Code**, and **Antigravity** without duplicating prose.
 
-`adapters/` documents other hosts and provides cross-platform local-install helpers. Codex skills are exposed through a local discovery link; no duplicate skill tree is committed. Runtime discovery is tracked separately from link creation.
-
-Do **not** commit duplicate skill trees under `.agents/`, `.claude/`, or `.codex/` in this Cursor-first repo (Cursor would triple-discover the same skills).
+Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only thin committed entrypoints (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json`) are committed; local discovery links are gitignored and managed by `adapters/sync-skills.{ps1,sh}`.
 
 ## Host path matrix
 
-| Host | Skills | Rules | Project context | Subagents |
+| Host | Rules / context | Skills | Commands | Subagents |
 | --- | --- | --- | --- | --- |
-| **Cursor** | `.cursor/skills/` (canonical, committed) | `.cursor/rules/*.mdc` `@`-includes `rules/*.md` | `AGENTS.md`; commands in `.cursor/commands/` (`/autodev` included) | `.cursor/agents/` |
-| **Codex** | local symlink/junction `.agents/skills` → `.cursor/skills` | `AGENTS.md` | prompt routing + delegated roles | No documented repository custom-agent file surface; role prompts preserve isolation where delegated |
-| **Antigravity** | `.agents/skills.json` (1-level category entries) in-repo; flattened `.agents/skills/<name>` in product repos; or global plugin `skills/` | `AGENTS.md` in-repo; generated `rules/AGENTS.md` in global plugin | prompt intent or command skills (`adapters/codex-command-skills/`) | Generated `agents/<name>.md` (`subagent: true`, explicit `tools:`) in global plugin, or dynamic `define_subagent` / `invoke_subagent` |
-| **Claude Code** | symlink `.claude/skills` → `.cursor/skills` | Claude rules / `CLAUDE.md` bridge | `CLAUDE.md` → `@AGENTS.md` | `.claude/agents/` mapped from `.cursor/agents/` |
+| **Cursor** | `AGENTS.md` + committed `.cursor/rules/*.mdc` (`@rules/*.md`) | Gitignored `.cursor/skills` → `skills/` (or `~/.cursor/skills/b3-ai-engineering` in products) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
+| **Codex** | `AGENTS.md` | Gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`) | `adapters/command-skills/` (`$autodev`, `$plan`, …) + prompt routing | Delegated role prompts from `agents/*.md` |
+| **Claude Code** | Committed `CLAUDE.md` (`@AGENTS.md`) | Gitignored flattened `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`) | Unified with skills (`adapters/command-skills/` via `.claude/skills/<name>`) | Gitignored `.claude/agents` → `agents/` |
+| **Antigravity** | `AGENTS.md` (or plugin `rules/AGENTS.md`) | Committed `.agents/skills.json` (in-repo), flattened `.agents/skills/<name>` (product), or plugin `skills/` | `adapters/command-skills/` via `.agents/skills.json` / plugin | Generated plugin `agents/*.md` (`subagent: true`, explicit `tools:`) or dynamic `define_subagent` |
 
 ## Per-host docs
 
@@ -21,48 +19,56 @@ Do **not** commit duplicate skill trees under `.agents/`, `.claude/`, or `.codex
 | --- | --- |
 | Cursor | [`cursor/README.md`](cursor/README.md) |
 | Codex | [`codex/README.md`](codex/README.md) |
-| Antigravity | [`antigravity/README.md`](antigravity/README.md) |
 | Claude Code | [`claude/README.md`](claude/README.md) |
+| Antigravity | [`antigravity/README.md`](antigravity/README.md) |
 
-## Export helper (other hosts only)
+## Local checkout activation (`sync-skills`)
 
-```bash
-./adapters/sync-skills.sh codex        # macOS/Linux: .agents/skills → ../.cursor/skills
-# Windows PowerShell:
-./adapters/sync-skills.ps1 -HostName codex
-./adapters/sync-skills.sh antigravity  # writes .agents/skills.json (no duplicate junction)
-./adapters/sync-skills.ps1 -HostName antigravity -VerifyOnly
-./adapters/sync-skills.sh claude       # .claude/skills → ../.cursor/skills
-./adapters/sync-skills.sh --dry-run all
+```powershell
+# Windows PowerShell (creates NTFS junctions; no dev-mode symlink privilege required)
+.\adapters\sync-skills.ps1 -HostName cursor
+.\adapters\sync-skills.ps1 -HostName codex
+.\adapters\sync-skills.ps1 -HostName claude
+.\adapters\sync-skills.ps1 -HostName antigravity -VerifyOnly
 ```
 
-There is no `cursor` target. Cursor already has the files.
+```bash
+# macOS / Linux
+./adapters/sync-skills.sh cursor
+./adapters/sync-skills.sh codex
+./adapters/sync-skills.sh claude
+./adapters/sync-skills.sh --verify antigravity
+```
 
-On Windows the PowerShell helper creates a junction, which does not require developer-mode symlink privileges. The link is ignored and must be recreated after a fresh clone.
+- Supports `--dry-run` / `-DryRun`, `--verify` / `-VerifyOnly`, and `--force` / `-Force`.
+- **Coexistence guards:** `sync-skills` refuses (unless `-Force` / `--force`) to create `.cursor/skills` alongside `.agents/skills` or `.claude/skills` (Cursor cross-loads those roots and duplicates skills), and warns when `.agents/skills` coexists with committed `.agents/skills.json` (Antigravity reads both). There is intentionally no unguarded `all` target.
+- Both helpers **exit 1** on missing sources, wrong links, or non-empty non-link content. Filesystem success is not runtime host-discovery `PASS`.
 
-Both helpers **exit 1** on an invalid existing path, a wrong link, or a missing `SKILL.md`. An empty leftover directory is removed and replaced. `--verify` / `-VerifyOnly` checks the link without creating it. Filesystem success is not host skill-discovery `PASS`.
+## Product repository attach (`install-product`)
 
-## Product repository attach
+B3 drives work in a separate product repository without copying `skills/`:
 
-B3 can drive work in a separate product repo without copying skills.
+```powershell
+# Windows
+.\adapters\install-product.ps1 -ProductRoot D:\path\to\product -HostName cursor
+.\adapters\install-product.ps1 -ProductRoot D:\path\to\product -HostName codex
+.\adapters\install-product.ps1 -ProductRoot D:\path\to\product -HostName claude
+.\adapters\install-product.ps1 -ProductRoot D:\path\to\product -HostName antigravity
+```
 
 ```bash
+# macOS / Linux
 ./adapters/install-product.sh --product-root /path/to/product --host cursor
+./adapters/install-product.sh --product-root /path/to/product --host codex
+./adapters/install-product.sh --product-root /path/to/product --host claude
 ./adapters/install-product.sh --product-root /path/to/product --host antigravity
-# Windows:
-./adapters/install-product.ps1 -ProductRoot D:\path\to\product -HostName cursor
-./adapters/install-product.ps1 -ProductRoot D:\path\to\product -HostName antigravity
 ```
 
-Writes `{product}/.b3/home`, a thin `{product}/.cursor/commands/autodev.md` from [`product-autodev.md`](product-autodev.md), a thin `{product}/AGENTS.md` from [`product-agents.md`](product-agents.md) when missing, and a `.b3/autodev/` gitignore line. It does **not** copy `.cursor/skills`. Cursor install refuses product `.agents/skills` or `.claude/skills` (duplicate discovery). Codex and Antigravity product installs write a gitignored **flattened** `.agents/skills/<name>` index (one junction per B3 skill plus command skills such as `autodev`). Claude install may add a gitignored junction of the nested skill tree.
+Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md`, and `.b3/autodev/` in `.gitignore`. Host specifics:
+- **cursor:** refuses existing `.agents/skills` or `.claude/skills`; writes `.cursor/README.md`.
+- **codex / antigravity:** writes gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`).
+- **claude:** writes thin `CLAUDE.md` (`@AGENTS.md`, when missing), gitignored flattened `.claude/skills/<name>`, and gitignored `.claude/agents` → `{B3_HOME}/agents`.
 
-For a machine-global Antigravity plugin (`~/.gemini/config/plugins/b3-ai-engineering/` with generated `rules/AGENTS.md`, `skills/`, and isolated `agents/*.md`), use `adapters/antigravity/install-plugin.ps1` / `adapters/antigravity/install-plugin.sh`. See [`antigravity/README.md`](antigravity/README.md).
+For a machine-global Antigravity plugin (`~/.gemini/config/plugins/b3-ai-engineering/`), use `adapters/antigravity/install-plugin.{ps1,sh}`. See [`antigravity/README.md`](antigravity/README.md).
 
-## Deferred
-
-- Automated adapter CI
-- Hook wrappers for review-loop gates
-- Marketplace / team publishing
-- Committing Codex/Claude trees (intentionally avoided: local links are installation artifacts)
-
-See `research/decisions/decision-009-cursor-native-layout.md` (amends decision-002 location, not meaning).
+Layout decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`).

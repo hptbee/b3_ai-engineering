@@ -49,7 +49,7 @@ function Strip-YamlFrontmatter([string]$Text) {
     return $normalized.Trim()
 }
 
-function Parse-CursorAgent([string]$FilePath, [string]$B3HomeNormalized) {
+function Parse-CanonicalAgent([string]$FilePath, [string]$B3HomeNormalized) {
     $raw = (Get-Content -LiteralPath $FilePath -Raw) -replace "`r`n", "`n"
     $lines = $raw -split "`n"
     if ($lines.Count -lt 3 -or $lines[0].Trim() -ne '---') {
@@ -119,7 +119,7 @@ function Parse-CursorAgent([string]$FilePath, [string]$B3HomeNormalized) {
     $outLines.Add($toolsLine)
     $outLines.Add('---')
     $outLines.Add('')
-    $outLines.Add("<!-- Generated from $B3HomeNormalized/.cursor/agents/$fileName - do not edit here -->")
+    $outLines.Add("<!-- Generated from $B3HomeNormalized/agents/$fileName - do not edit here -->")
     $outLines.Add('')
     if ($body) { $outLines.Add($body) }
 
@@ -144,21 +144,21 @@ if (-not $PluginRoot) {
 }
 
 $workflowPath = Join-Path $B3Home 'workflows\autonomous-development.md'
-$skillsSrc = Join-Path $B3Home '.cursor\skills'
-$cmdSkillsSrc = Join-Path $B3Home 'adapters\codex-command-skills'
+$skillsSrc = Join-Path $B3Home 'skills'
+$cmdSkillsSrc = Join-Path $B3Home 'adapters\command-skills'
 $rulesDir = Join-Path $B3Home 'rules'
-$agentsDir = Join-Path $B3Home '.cursor\agents'
+$agentsDir = Join-Path $B3Home 'agents'
 
 if (-not (Test-Path -LiteralPath $workflowPath -PathType Leaf)) {
     Fail "B3_HOME missing workflow: $workflowPath"
 }
 if (-not (Test-Path -LiteralPath $skillsSrc -PathType Container)) {
-    Fail "B3_HOME missing .cursor/skills: $skillsSrc"
+    Fail "B3_HOME missing skills: $skillsSrc"
 }
 
 $canonicalSkillFiles = @(Get-ChildItem -LiteralPath $skillsSrc -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
 if ($canonicalSkillFiles.Count -lt 1) {
-    Fail "B3_HOME has no SKILL.md under .cursor/skills: $skillsSrc"
+    Fail "B3_HOME has no SKILL.md under skills: $skillsSrc"
 }
 $cmdSkillFiles = @()
 if (Test-Path -LiteralPath $cmdSkillsSrc -PathType Container) {
@@ -208,7 +208,7 @@ if ($agentFiles.Count -lt 1) {
 }
 $renderedAgents = New-Object System.Collections.Generic.List[object]
 foreach ($af in $agentFiles) {
-    $renderedAgents.Add((Parse-CursorAgent $af.FullName $b3HomeForward))
+    $renderedAgents.Add((Parse-CanonicalAgent $af.FullName $b3HomeForward))
 }
 
 # Fail-closed checks on existing $PluginRoot before writing anything
@@ -295,7 +295,7 @@ $expectedAgentFiles = @($renderedAgents | ForEach-Object { $_.FileName })
 foreach ($existingAgent in @(Get-ChildItem -LiteralPath $agentsOutDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
     if ($expectedAgentFiles -notcontains $existingAgent.Name) {
         $existingText = Get-Content -LiteralPath $existingAgent.FullName -Raw
-        if ($Force -or ($existingText -match '<!-- Generated from .*/\.cursor/agents/')) {
+        if ($Force -or ($existingText -match '<!-- Generated from .*/(\.cursor/)?agents/')) {
             Remove-Item -LiteralPath $existingAgent.FullName -Force
         }
     }
