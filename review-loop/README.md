@@ -1,25 +1,14 @@
 # Review loop
 
-| Piece | File | Kind |
+| Piece | File | Runtime load |
 | --- | --- | --- |
-| Contract | [`spec.md`](spec.md) | Portable specification |
-| Procedure | [`strategy.md`](strategy.md) | Orchestrator steps |
-| Sizing | [`sizing.md`](sizing.md) | SMALL / MEDIUM / LARGE / VERY_LARGE |
-| Findings | [`findings.md`](findings.md) | IDs, lifecycle aliases, iteration log |
-| Model slots | [`models.md`](models.md) | Orchestrator / reviewer / fixer (no vendor slugs) |
-| Two-model (Cursor) | [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md) | Host `model:` on agent files |
-| State | `state/` (gitignored except [`state/TEMPLATE.md`](state/TEMPLATE.md)) | Optional working log |
-| Invoke | `commands/review-loop.md` | Canonical command; also each task and the final pass of `workflows/autonomous-development.md` |
-| Roles | `agents/` | Canonical subagent roles |
+| Procedure | [`strategy.md`](strategy.md) | **Load on `/review-loop` and `autodev` Review** (self-sufficient at runtime) |
+| Contract / Sizing / Findings / Slots | [`spec.md`](spec.md), [`sizing.md`](sizing.md), [`findings.md`](findings.md), [`models.md`](models.md) | **Reference only** — do not load on normal runs unless disambiguating an edge case |
+| Two-model (Cursor) | [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md) | Optional host `model:` override |
+| State | `state/` (gitignored except [`state/TEMPLATE.md`](state/TEMPLATE.md)) | Optional standalone working log (`autodev` uses `{RUN_DIR}/findings.md` instead) |
+| Invoke / Roles | `commands/review-loop.md`, `agents/*.md` | Entry command & isolated subagent roles |
 
-**Status:** orchestration v1. The agent that receives `/review-loop` **runs until** a quality gate, non-convergence, or iteration limit. It does not stop after the first findings list for the user to re-trigger.
-
-**Two models:** committed default is `model: inherit` (one session, hat-change if needed). To use a deeper Reviewer and a faster Fixer, set `model:` in `agents/reviewer.md` and `fixer.md` — see the Cursor note above. Do not put vendor model names in `spec.md` or skills.
-
-Review method stays in `skills/engineering/code-review` (detailed residue checklist in `skills/engineering/code-review/references/residue-checklist.md`). Fix method stays in `agents/fixer.md`. Do not duplicate those bodies here.
-
-**Context discipline:** Use `scripts/autodev-guard.{ps1,sh} diff-scope` to filter lockfile/generated noise and classify size in one call. Pass file paths + active (`OPEN` / unverified `FIXED`) findings + 1-line `closed:` IDs to subagents, and keep subagent replies compact (see `strategy.md`).
-
-**Performance specialist:** `performance-reviewer.md` only when `strategy.md` routing matches a hot-path diff. Not every PR.
-
-**Simplification dimension:** general review covers simplification and implementation residue in every pass (`spec.md` dimension 7). Fixer addresses only CONFIRMED REDUNDANCY; later passes check for fix-cycle residue. No extra standalone agent or command is added.
+**Context discipline:**
+1. Load `strategy.md` only; sizing thresholds, status aliases, and Iteration 2+ `--prev-sha` delta rules are inlined there.
+2. Run `scripts/autodev-guard.{ps1,sh} diff-scope` (`--no-renames`, `NOISE_ONLY`, optional `-PrevSha`/`--prev-sha`) to scope files without dumping lockfile noise.
+3. Pass file paths + active (`OPEN` / unverified `FIXED`) findings + 1-line `closed:` IDs to subagents; subagents obey strict line caps (`≤ 25` lines Reviewer, `≤ 20` lines Fixer).

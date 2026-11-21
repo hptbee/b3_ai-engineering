@@ -5,20 +5,8 @@ description: Run the autonomous independent review loop to completion (quality g
 
 # review-loop
 
-**Action now:** run the autonomous review loop **to completion** (gate, stuck, or limit). Do not stop after the first findings list for the user to re-invoke this command.
+**Action now:** open and follow [`../review-loop/strategy.md`](../review-loop/strategy.md) **to completion** (quality gate, `STUCK`, or iteration cap). Do not stop after the first findings list.
 
-**Orchestrator:** [`review-loop/strategy.md`](../review-loop/strategy.md)
-
-**Spec:** [`review-loop/spec.md`](../review-loop/spec.md)
-
-```text
-Review → validate findings → fix valid ones → build/test → fresh review → …
-```
-
-- Size the PR first (`review-loop/sizing.md`). Small/medium = full-PR loop. Large = unit loops, then cross-cutting review.
-- You are the orchestrator: dispatch Reviewer then Fixer (subagents if available, else hat-change). Do not review-and-fix in one pass.
-- Reviewer does not edit. Fixer does not declare PASS. Only you declare PASS / INCOMPLETE / STOP.
-- After every fix: fresh Reviewer pass on current code, not “did we fix R001?”
-- One `review` command remains a **single** pass (`commands/review.md`).
-
-Slots: [`review-loop/models.md`](../review-loop/models.md). Cursor two-model setup: [`adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md).
+- **Context budget:** `strategy.md` is self-contained at runtime — do **not** load `spec.md`, `sizing.md`, `findings.md`, or `models.md` unless an edge case requires disambiguation.
+- You are the orchestrator: dispatch Reviewer (`agents/reviewer.md`) and Fixer (`agents/fixer.md`) in separate passes (subagents if available, else strict hat-change). Only you declare `PASS` / `FAIL` / `STUCK` / `INCOMPLETE`.
+- Single-pass review remains `commands/review.md`.
