@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'new-run', 'resolve-run', 'list-runs', 'prune')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -11,7 +11,11 @@ param(
     [string]$WatchedPaths = '',
     [string]$OwnedFiles = '',
     [string]$IgnoreDirtyPaths = '',
-    [string]$AllowedPaths = ''
+    [string]$AllowedPaths = '',
+    [string]$Slug = '',
+    [string]$Timestamp = '',
+    [string]$RunId = '',
+    [int]$Keep = 10
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +81,38 @@ function Invoke-GitLines([string]$Root, [string[]]$GitArgs) {
         }
     }
     return @($lines)
+}
+
+function Test-ValidRunId([string]$Id) {
+    if (-not $Id) { return $false }
+    if ($Id -match '\.\.' -or $Id -match '[/\\]') { return $false }
+    return ($Id -match '^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
+}
+
+function Get-SanitizedSlug([string]$RawSlug) {
+    $s = $RawSlug.ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+    $s = $s.Trim('-')
+    if ($s.Length -gt 40) {
+        $s = $s.Substring(0, 40).Trim('-')
+    }
+    return $s
+}
+
+function Get-CurrentRunId([string]$AutodevDir) {
+    $curFile = Join-Path $AutodevDir 'CURRENT'
+    if (-not (Test-Path -LiteralPath $curFile -PathType Leaf)) { return $null }
+    return ([IO.File]::ReadAllText($curFile)).Trim()
+}
+
+function Get-RunStatus([string]$RunDir) {
+    $prog = Join-Path $RunDir 'progress.md'
+    if (-not (Test-Path -LiteralPath $prog -PathType Leaf)) { return 'unknown' }
+    $raw = [IO.File]::ReadAllText($prog)
+    if ($raw -match '(?m)^-\s*run_status:\s*(.+?)\s*$') {
+        $st = $Matches[1].Trim()
+        if ($st) { return $st }
+    }
+    return 'unknown'
 }
 
 switch ($Command) {
@@ -215,6 +251,139 @@ switch ($Command) {
             Fail "SNAPSHOT_FAIL: invalid snapshot commit '$sha'" 1
         }
         Write-Output $sha
+        exit 0
+    }
+
+    'new-run' {
+        if (-not $Slug -or -not $Slug.Trim()) { Fail 'NEW_RUN_FAIL: missing -Slug' 1 }
+        $cleanSlug = Get-SanitizedSlug $Slug
+        if (-not $cleanSlug) { Fail 'NEW_RUN_FAIL: slug has no alphanumeric characters' 1 }
+
+        $ts = if ($Timestamp) { $Timestamp.Trim() } else { (Get-Date).ToString('yyyyMMdd-HHmm') }
+        if ($ts -notmatch '^[0-9]{8}-[0-9]{4}$') {
+            Fail "NEW_RUN_FAIL: invalid timestamp '$ts' (expected YYYYMMDD-HHMM)" 1
+        }
+
+        $autodevDir = Join-Path $RepoRoot '.b3\autodev'
+        $runsDir = Join-Path $autodevDir 'runs'
+        New-Item -ItemType Directory -Path $runsDir -Force | Out-Null
+
+        $baseId = "$ts-$cleanSlug"
+        $candidate = $baseId
+        $suffix = 2
+        while (Test-Path -LiteralPath (Join-Path $runsDir $candidate)) {
+            $candidate = "$baseId-$suffix"
+            $suffix++
+        }
+
+        $runDir = Join-Path $runsDir $candidate
+        New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [IO.File]::WriteAllText((Join-Path $autodevDir 'CURRENT'), "$candidate`n", $utf8NoBom)
+
+        Write-Output $candidate
+        exit 0
+    }
+
+    'resolve-run' {
+        $autodevDir = Join-Path $RepoRoot '.b3\autodev'
+        $runsDir = Join-Path $autodevDir 'runs'
+
+        if ($RunId) {
+            $trimmed = $RunId.Trim()
+            if (-not (Test-ValidRunId $trimmed)) {
+                Fail "RESOLVE_FAIL: invalid run id '$RunId'" 1
+            }
+            $target = Join-Path $runsDir $trimmed
+            if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+                Fail "RESOLVE_FAIL: run not found '$trimmed'" 1
+            }
+            Write-Output ".b3/autodev/runs/$trimmed"
+            exit 0
+        }
+
+        $curFile = Join-Path $autodevDir 'CURRENT'
+        if (Test-Path -LiteralPath $curFile -PathType Leaf) {
+            $curId = ([IO.File]::ReadAllText($curFile)).Trim()
+            if (-not (Test-ValidRunId $curId)) {
+                Fail "RESOLVE_FAIL: CURRENT contains invalid run id '$curId'" 1
+            }
+            $target = Join-Path $runsDir $curId
+            if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+                Fail "RESOLVE_FAIL: CURRENT points to missing run '$curId'" 1
+            }
+            Write-Output ".b3/autodev/runs/$curId"
+            exit 0
+        }
+
+        if (Test-Path -LiteralPath (Join-Path $autodevDir 'progress.md') -PathType Leaf) {
+            Write-Output '.b3/autodev'
+            exit 0
+        }
+
+        Fail 'NO_ACTIVE_RUN' 1
+    }
+
+    'list-runs' {
+        $autodevDir = Join-Path $RepoRoot '.b3\autodev'
+        $runsDir = Join-Path $autodevDir 'runs'
+        $curId = Get-CurrentRunId $autodevDir
+
+        $dirs = @()
+        if (Test-Path -LiteralPath $runsDir -PathType Container) {
+            $dirs = @(Get-ChildItem -LiteralPath $runsDir -Directory | Sort-Object Name -Descending)
+        }
+        if ($dirs.Count -eq 0) {
+            if (Test-Path -LiteralPath (Join-Path $autodevDir 'progress.md') -PathType Leaf) {
+                $st = Get-RunStatus $autodevDir
+                Write-Output "* legacy [$st]"
+            } else {
+                Write-Output 'NO_RUNS'
+            }
+            exit 0
+        }
+
+        foreach ($d in $dirs) {
+            $st = Get-RunStatus $d.FullName
+            $mark = if ($curId -and ($d.Name -eq $curId)) { '* ' } else { '  ' }
+            Write-Output "$mark$($d.Name) [$st]"
+        }
+        exit 0
+    }
+
+    'prune' {
+        if ($Keep -lt 0) { Fail 'PRUNE_FAIL: -Keep must be >= 0' 1 }
+        $autodevDir = Join-Path $RepoRoot '.b3\autodev'
+        $runsDir = Join-Path $autodevDir 'runs'
+        if (-not (Test-Path -LiteralPath $runsDir -PathType Container)) {
+            Write-Output 'PRUNE_OK: 0 removed'
+            exit 0
+        }
+
+        $curId = Get-CurrentRunId $autodevDir
+        $dirs = @(Get-ChildItem -LiteralPath $runsDir -Directory | Sort-Object Name -Descending)
+        $passCount = 0
+        $pruned = New-Object System.Collections.Generic.List[string]
+
+        foreach ($d in $dirs) {
+            $id = $d.Name
+            $st = Get-RunStatus $d.FullName
+            $isCurrent = ($curId -and ($id -eq $curId))
+            if ($st -eq 'PASS') {
+                $passCount++
+                if ($passCount -gt $Keep -and -not $isCurrent) {
+                    Remove-Item -LiteralPath $d.FullName -Recurse -Force
+                    $pruned.Add($id)
+                }
+            }
+        }
+
+        if ($pruned.Count -eq 0) {
+            Write-Output 'PRUNE_OK: 0 removed'
+        } else {
+            foreach ($p in $pruned) { Write-Output "pruned: $p" }
+            Write-Output "PRUNE_OK: $($pruned.Count) removed"
+        }
         exit 0
     }
 }

@@ -33,34 +33,41 @@ Resolve `PRODUCT_ROOT` (git root under change) and `B3_HOME` (first containing `
 
 ## State & checkpoint git policy
 
-Checkpoints live at `{PRODUCT_ROOT}/.b3/autodev/` (`master-plan.md`, `progress.md`, `findings.md`, optional `approach/T00N.md`). Update `progress.md` at plan acceptance, task start, pre-fix snapshot, commit/block, and final outcome. `findings.md` is the sole finding log (`R001`, `R002`, … monotonic; never write `review-loop/state/current.yaml`).
+Checkpoints are run-scoped under `{PRODUCT_ROOT}/.b3/autodev/`:
+- `CURRENT`: 1-line plain-text file holding the active `<run_id>` (`YYYYMMDD-HHMM-<slug>`). Never use symlinks.
+- `runs/<run_id>/`: `master-plan.md`, `progress.md`, `findings.md`, optional `approach/T00N.md`.
+- `{RUN_DIR}` resolves via `scripts/autodev-guard.{ps1,sh} resolve-run` (from explicit `<run_id>`, `CURRENT`, or legacy `.b3/autodev/progress.md` fallback when `CURRENT` is absent).
+- **Token hygiene:** Read `CURRENT` (1 line) and jump straight to `{RUN_DIR}/`. Never scan or list `.b3/autodev/runs/` during normal execution, `resume`, or single `status` (only on `status --all` or `prune`).
+
+Update `{RUN_DIR}/progress.md` at plan acceptance, task start, pre-fix snapshot, commit/block, and final outcome. `findings.md` is the sole finding log (`R001`, `R002`, … monotonic; never write `review-loop/state/current.yaml`).
 
 1. In product repos, ensure `{PRODUCT_ROOT}/.gitignore` ignores `.b3/autodev/` (upgrading bare `.b3/` if needed so `.b3/home` can commit). This system repo keeps `.b3/` ignored.
 2. Never `git add .b3/autodev/`, `git add -A`, or `git add .`.
 3. Before every commit, check `scripts/autodev-guard.{ps1,sh} precommit` or `git diff --cached --name-only`; unstage any checkpoint paths (`BLOCKED` if impossible without discarding user edits).
 4. Ignored `.b3/` files never make the tree dirty. Remaining untracked/uncommitted files created during the run block `PASS` (list them; never delete them).
+5. Old completed runs (`run_status: PASS` and not `CURRENT`) may be trimmed via `scripts/autodev-guard.{ps1,sh} prune` (default keeps newest 10 `PASS` runs; never deletes `CURRENT` or non-`PASS` runs).
 
 ## Input & Pre-flight
 
-1. `status` → read `.b3/autodev/` and Git; report without editing.
-2. `resume`, or no new requirement while `.b3/autodev/progress.md` exists → **Scenario C** ([`references/autodev-resume.md`](references/autodev-resume.md)).
-3. No requirement and no checkpoint → ask what to build; stop `BLOCKED`.
-4. Existing plan → **Scenario B**; requirement/story/bug/refactor → **Scenario A** (`debugging` skill first for unknown bug cause; `refactoring` skill for behavior-preserving restructure).
+1. `status [<run_id>|--all]` → for `status --all`, run `scripts/autodev-guard.{ps1,sh} list-runs`; otherwise resolve `{RUN_DIR}` (`resolve-run`), read it + Git, and report without editing.
+2. `resume [<run_id>]`, or no new requirement while an unfinished checkpoint resolves → **Scenario C** ([`references/autodev-resume.md`](references/autodev-resume.md)).
+3. No requirement and no active checkpoint → ask what to build; stop `BLOCKED`.
+4. Existing plan or new requirement/story/bug/refactor → allocate a new run via `scripts/autodev-guard.{ps1,sh} new-run` (keeps any prior run untouched in `runs/` and updates `CURRENT`), then **Scenario B** (existing plan) or **Scenario A** (`debugging` skill first for unknown bug cause; `refactoring` skill for behavior-preserving restructure).
 
 ### Scenario A / B (Master plan & pre-flight)
 
 1. Restate request, current behavior, and desired behavior from inspected code (never invent implementations over existing helpers).
-2. **Pre-flight discovery:** Record `initial_dirty_paths` (current modified/untracked non-ignored paths) and locate canonical `build`/`typecheck`/`lint`/`test` commands from CI workflows, git hooks, or build manifests (respecting repo linter config per `docs/precedence.md`; never impose extra lint rules). Run the baseline check at `run_base_sha` (in background while planning or before `T001`) and record `baseline_status` in `progress.md` so pre-existing red checks are never misattributed to `T00N`.
-3. Write or normalize `.b3/autodev/master-plan.md` per [`references/autodev-templates.md`](references/autodev-templates.md) using [`skills/engineering/planning/SKILL.md`](../skills/engineering/planning/SKILL.md) (plus `simplest-correct` for system shape):
+2. **Pre-flight discovery:** Record `initial_dirty_paths` (current modified/untracked non-ignored paths) and locate canonical `build`/`typecheck`/`lint`/`test` commands from CI workflows, git hooks, or build manifests (respecting repo linter config per `docs/precedence.md`; never impose extra lint rules). Run the baseline check at `run_base_sha` (in background while planning or before `T001`) and record `baseline_status` in `{RUN_DIR}/progress.md` so pre-existing red checks are never misattributed to `T00N`.
+3. Write or normalize `{RUN_DIR}/master-plan.md` per [`references/autodev-templates.md`](references/autodev-templates.md) using [`skills/engineering/planning/SKILL.md`](../skills/engineering/planning/SKILL.md) (plus `simplest-correct` for system shape):
    - Include 3–5 cross-task `Invariants` and numbered `AC1..ACn` criteria per task.
    - **Contract-first & Shared Hotspots:** Assign shared hotspot files (`package.json`, `.csproj`, barrel `index.ts`, migrations, shared types/contracts) to **one** foundational task committed before dependent tasks read those committed files from disk.
    - **Size & Split check:** Estimate total scope against [`../review-loop/sizing.md`](../review-loop/sizing.md). If `> ~800 lines` or `>= 2 independent areas`, record a 1-line PR split warning in `master-plan.md` without pausing cohesive features.
-   - Scenario B: keep supplied requirements/intent; mark tasks `completed` only if Git/code proves them; copy external plan once to `.b3/autodev/master-plan.md` (leave matching plans intact).
+   - Scenario B: keep supplied requirements/intent; mark tasks `completed` only if Git/code proves them; copy external plan once to `{RUN_DIR}/master-plan.md` (leave matching plans intact).
 4. Proceed directly into **Execution** without waiting for user approval. Stop as `BLOCKED` only for genuine business ambiguity, overlapping `initial_dirty_paths`, external authorization (push, merge, deploy, destructive git, secrets, prod data), or **unrequested destructive/breaking changes** (data-loss column drop/rename, weakening existing authz, breaking existing public API contracts). Ordinary `>= 4`-task plans or routine `auth`/`migration`/`shared` changes stay autonomous (`depth: detailed`).
 
 ## Execution
 
-On run start, record in `progress.md`: `b3_home`, `product_root`, `plan_id` (title + version), `plan_version`, `branch`, `run_base_sha`, `baseline_status`, and `initial_dirty_paths`. (If missing on resume, reconstruct `run_base_sha` only from Git history, else `INCOMPLETE`.)
+On run start, record in `{RUN_DIR}/progress.md`: `run_id`, `b3_home`, `product_root`, `plan_id` (title + version), `plan_version`, `branch`, `run_base_sha`, `baseline_status`, and `initial_dirty_paths`. (If missing on resume, reconstruct `run_base_sha` only from Git history, else `INCOMPLETE`.)
 
 Run ready tasks (`pending`, all `depends_on` `completed`) one at a time, lowest id first. When a task starts, record `task_base` = `git rev-parse HEAD` and run **Analyze**. Never edit product files until the **Implementation Readiness Gate** passes.
 

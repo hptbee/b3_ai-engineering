@@ -544,6 +544,63 @@ try {
     } else {
         FailCheck 'guard-snapshot' "dirty=(${snapDirtyExit}:$snapDirty vs $gHeadNow) stashEmpty=$stashEmpty kept=$workKept clean=(${snapCleanExit}:$snapClean)"
     }
+
+    # --- run-scoped checkpoint checks (new-run, resolve-run, list-runs, prune) ---
+    $runRepo = Join-Path $sandbox 'run-scoped-repo'
+    New-Item -ItemType Directory -Path $runRepo | Out-Null
+    $r1 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
+    $r1Exit = $LASTEXITCODE
+    $r2 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
+    $r2Exit = $LASTEXITCODE
+    $curContent = (Get-Content -LiteralPath (Join-Path $runRepo '.b3\autodev\CURRENT') -Raw).Trim()
+    $resActive = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $runRepo).Trim()
+    $resActiveExit = $LASTEXITCODE
+    $resExplicit = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $runRepo -RunId $r1).Trim()
+    $resExplicitExit = $LASTEXITCODE
+    $listOut = ((& powershell -NoProfile -File $guardScript list-runs -RepoRoot $runRepo) -join "`n")
+
+    $legacyRepo = Join-Path $sandbox 'legacy-repo'
+    New-Item -ItemType Directory -Path (Join-Path $legacyRepo '.b3\autodev') | Out-Null
+    Set-Content (Join-Path $legacyRepo '.b3\autodev\progress.md') "- run_status: running`n"
+    $resLegacy = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $legacyRepo).Trim()
+    $resLegacyExit = $LASTEXITCODE
+
+    if ($r1Exit -eq 0 -and $r1 -eq '20261122-0010-add-billing-webhook' -and
+        $r2Exit -eq 0 -and $r2 -eq '20261122-0010-add-billing-webhook-2' -and
+        $curContent -eq $r2 -and
+        $resActiveExit -eq 0 -and $resActive -eq ".b3/autodev/runs/$r2" -and
+        $resExplicitExit -eq 0 -and $resExplicit -eq ".b3/autodev/runs/$r1" -and
+        ($listOut -match ('\* ' + [regex]::Escape($r2))) -and
+        $resLegacyExit -eq 0 -and $resLegacy -eq '.b3/autodev') {
+        Pass 'guard-new-and-resolve-run'
+    } else {
+        FailCheck 'guard-new-and-resolve-run' "r1=(${r1Exit}:$r1) r2=(${r2Exit}:$r2) cur=$curContent active=(${resActiveExit}:$resActive) explicit=(${resExplicitExit}:$resExplicit) legacy=(${resLegacyExit}:$resLegacy)"
+    }
+
+    $pruneRepo = Join-Path $sandbox 'prune-repo'
+    New-Item -ItemType Directory -Path $pruneRepo | Out-Null
+    $p1 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'old-pass-1' -Timestamp '20261122-0001').Trim()
+    $p2 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'old-pass-2' -Timestamp '20261122-0002').Trim()
+    $p3 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'active-running' -Timestamp '20261122-0003').Trim()
+    $p4 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'latest-pass' -Timestamp '20261122-0004').Trim()
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p1\progress.md") "- run_status: PASS`n"
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p2\progress.md") "- run_status: PASS`n"
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p3\progress.md") "- run_status: running`n"
+    Set-Content (Join-Path $pruneRepo ".b3\autodev\runs\$p4\progress.md") "- run_status: PASS`n"
+    # Point CURRENT at $p1 (oldest PASS) to verify CURRENT is NEVER pruned even when beyond Keep
+    Set-Content (Join-Path $pruneRepo '.b3\autodev\CURRENT') "$p1`n"
+
+    $pruneOut = ((& powershell -NoProfile -File $guardScript prune -RepoRoot $pruneRepo -Keep 1) -join "`n")
+    $pruneExit = $LASTEXITCODE
+    $p1Kept = Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p1")
+    $p2Removed = -not (Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p2"))
+    $p3Kept = Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p3")
+    $p4Kept = Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\autodev\runs\$p4")
+    if ($pruneExit -eq 0 -and $p1Kept -and $p2Removed -and $p3Kept -and $p4Kept -and $pruneOut -match 'PRUNE_OK: 1 removed') {
+        Pass 'guard-prune-safe'
+    } else {
+        FailCheck 'guard-prune-safe' "exit=$pruneExit p1Kept=$p1Kept p2Removed=$p2Removed p3Kept=$p3Kept p4Kept=$p4Kept out=$pruneOut"
+    }
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue

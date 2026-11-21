@@ -28,11 +28,11 @@ If none match → `BLOCKED`. Do not invent a second procedure. Do not copy B3 sk
 1. `{B3_HOME}/commands/autodev.md` (or this product `.cursor/commands/autodev.md` if present)
 2. `{B3_HOME}/workflows/autonomous-development.md`
 
-Write checkpoints and make Git commits in this product repository. Checkpoints: `.b3/autodev/` (gitignored).
+Write checkpoints and make Git commits in this product repository. Checkpoints are run-scoped under `.b3/autodev/runs/<run_id>/` via `.b3/autodev/CURRENT` (gitignored).
 
 | Argument | Behavior |
 | --- | --- |
 | Story, requirement, bug, refactor, or a path to one | Start or continue the lifecycle |
 | Path to an existing plan | Validate it, then execute |
-| `resume` | Reconcile `.b3/autodev/` with Git, then continue |
-| `status` | Report the checkpoint. Do not implement |
+| `resume [<run_id>]` | Reconcile active run (`.b3/autodev/CURRENT` or `<run_id>`) with Git, then continue |
+| `status [<run_id>\|--all]` | Report the checkpoint (or list runs on `--all`). Do not implement |

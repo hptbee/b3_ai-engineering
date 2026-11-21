@@ -1,8 +1,8 @@
 # Autodev checkpoint templates
 
-Reference templates for [`../autonomous-development.md`](../autonomous-development.md). Do not edit product source files from template placeholders alone.
+Reference templates for [`../autonomous-development.md`](../autonomous-development.md). Active run directory `{RUN_DIR}` is `.b3/autodev/runs/<run_id>/` referenced by 1-line plain-text `.b3/autodev/CURRENT`. Do not edit product source files from template placeholders alone.
 
-## 1. Master plan (`.b3/autodev/master-plan.md`)
+## 1. Master plan (`.b3/autodev/runs/<run_id>/master-plan.md`)
 
 ```markdown
 # <objective>
@@ -57,11 +57,12 @@ Reference templates for [`../autonomous-development.md`](../autonomous-developme
 - **Contract-first & Shared Hotspots:** Shared hotspot files (`package.json`, `.csproj`, barrel `index.ts`, DB migrations, shared DTOs/contracts) belong to **one** foundational task committed first so dependent tasks via `depends_on` read committed files on disk instead of duplicating contract text.
 - **Version bumps:** Increment `version` when tasks, criteria, or scope change and log the reason under `## Plan changes`. Dropping a requirement, widening scope, or changing business behavior is `BLOCKED` until the user decides. Do not weaken criteria to make incomplete work look finished.
 
-## 2. Progress & inline approach (`.b3/autodev/progress.md`)
+## 2. Progress & inline approach (`.b3/autodev/runs/<run_id>/progress.md`)
 
 ```markdown
 # Progress
 
+- run_id: <YYYYMMDD-HHMM-slug>
 - b3_home: <absolute path>
 - product_root: <absolute path>
 - plan_id: <title + version>
@@ -112,7 +113,7 @@ Reference templates for [`../autonomous-development.md`](../autonomous-developme
 
 `run_status` is `running` while ready work remains; final values are `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`.
 
-## 3. Persistent approach (`.b3/autodev/approach/T00N.md`, `notes` / `detailed`)
+## 3. Persistent approach (`.b3/autodev/runs/<run_id>/approach/T00N.md`, `notes` / `detailed`)
 
 ```markdown
 # T00N approach
