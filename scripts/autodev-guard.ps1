@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'new-run', 'resolve-run', 'list-runs', 'prune')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -14,6 +14,8 @@ param(
     [string]$OwnedFiles = '',
     [string]$IgnoreDirtyPaths = '',
     [string]$AllowedPaths = '',
+    [string]$Obsoletes = '',
+    [string]$WaveSpecs = '',
     [string]$Slug = '',
     [string]$Timestamp = '',
     [string]$RunId = '',
@@ -140,6 +142,15 @@ function Test-NoiseFile([string]$PathVal) {
         return $true
     }
     return $false
+}
+
+function Find-LeftoverTag([string]$Line) {
+    if ($Line -cmatch '(^|[^a-zA-Z0-9_])debugger([^a-zA-Z0-9_]|$)') { return 'debugger' }
+    if ($Line -cmatch '\.only\(') { return '.only(' }
+    if ($Line -cmatch '@ts-ignore') { return '@ts-ignore' }
+    if ($Line -cmatch 'eslint-disable') { return 'eslint-disable' }
+    if ($Line -cmatch '(^|[^a-zA-Z0-9_])(TODO|FIXME)[ \t]*:?[ \t]*$') { return 'empty-todo' }
+    return $null
 }
 
 switch ($Command) {
@@ -385,6 +396,205 @@ switch ($Command) {
         if ($null -ne $dfOut) {
             Write-Output "delta_files=$dfOut"
         }
+        exit 0
+    }
+
+    'mechanical-check' {
+        if (-not $BaseSha) { Fail 'MECHANICAL_FAIL: missing -BaseSha' 1 }
+        $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
+        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $obsoletesList = @(Split-CsvList $Obsoletes)
+
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $changedRaw = & git -C $RepoRoot diff --no-renames --name-only $BaseSha 2>&1
+            $chCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($chCode -ne 0) {
+            Fail ("MECHANICAL_FAIL: git diff --name-only failed: " + ($changedRaw | Out-String).Trim()) 1
+        }
+        $untracked = @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard'))
+
+        $allChanged = New-Object System.Collections.Generic.List[string]
+        foreach ($row in @($changedRaw)) {
+            if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
+            $p = Normalize-PathValue ([string]$row)
+            if (-not $p -or $p -match '^\.b3/autodev(/|$)' -or (Test-PathMatch $p $ignored)) { continue }
+            if (-not $allChanged.Contains($p)) { $allChanged.Add($p) }
+        }
+        foreach ($u in $untracked) {
+            if (-not $u -or $u -match '^\.b3/autodev(/|$)' -or (Test-PathMatch $u $ignored)) { continue }
+            if (-not $allChanged.Contains($u)) { $allChanged.Add($u) }
+        }
+
+        $scopeCreep = New-Object System.Collections.Generic.List[string]
+        if ($allowed.Count -gt 0) {
+            foreach ($p in $allChanged) {
+                if (-not (Test-PathMatch $p $allowed)) { $scopeCreep.Add($p) }
+            }
+        }
+
+        $leftoverHits = New-Object System.Collections.Generic.List[string]
+        $ErrorActionPreference = 'Continue'
+        try {
+            $diffLines = & git -C $RepoRoot diff --no-renames -U0 $BaseSha 2>&1
+            $dlCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($dlCode -ne 0) {
+            Fail ("MECHANICAL_FAIL: git diff -U0 failed: " + ($diffLines | Out-String).Trim()) 1
+        }
+
+        $curFile = ''
+        $curLine = 0
+        $skipFile = $true
+        $inHunk = $false
+        foreach ($rawLine in @($diffLines)) {
+            if ($rawLine -is [System.Management.Automation.ErrorRecord]) { continue }
+            $ln = [string]$rawLine
+            if ($ln.StartsWith('diff --git ')) {
+                $curFile = ''
+                $skipFile = $true
+                $inHunk = $false
+                continue
+            }
+            if (-not $inHunk -and $ln.StartsWith('+++ ')) {
+                if ($ln -eq '+++ /dev/null') {
+                    $curFile = ''
+                    $skipFile = $true
+                } else {
+                    $cand = $ln.Substring(4)
+                    if ($cand.StartsWith('b/')) { $cand = $cand.Substring(2) }
+                    $curFile = Normalize-PathValue $cand
+                    $skipFile = (-not $curFile) -or ($curFile -match '^\.b3/autodev(/|$)') -or (Test-PathMatch $curFile $ignored) -or (Test-NoiseFile $curFile) -or ($curFile -match '\.md$')
+                }
+                continue
+            }
+            if ($ln -match '^@@ -[0-9,]+ \+([0-9]+)(,[0-9]+)? @@') {
+                $curLine = [int]$Matches[1]
+                $inHunk = $true
+                continue
+            }
+            if (-not $inHunk -or $skipFile) { continue }
+            if ($ln.StartsWith('+')) {
+                $body = $ln.Substring(1)
+                $tag = Find-LeftoverTag $body
+                if ($tag -and $leftoverHits.Count -lt 10) {
+                    $leftoverHits.Add("${curFile}:${curLine}:${tag}")
+                }
+                $curLine++
+            }
+        }
+
+        foreach ($u in @(Sort-Ordinal $untracked)) {
+            if ($leftoverHits.Count -ge 10) { break }
+            if (-not $u -or $u -match '^\.b3/autodev(/|$)' -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or ($u -match '\.md$')) { continue }
+            $full = Join-Path $RepoRoot ($u -replace '/', '\')
+            if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+            $lno = 0
+            foreach ($fl in @(Get-Content -LiteralPath $full -ErrorAction SilentlyContinue)) {
+                $lno++
+                $tag = Find-LeftoverTag ([string]$fl)
+                if ($tag -and $leftoverHits.Count -lt 10) {
+                    $leftoverHits.Add("${u}:${lno}:${tag}")
+                }
+            }
+        }
+
+        $obsoleteHits = New-Object System.Collections.Generic.List[string]
+        foreach ($tok in $obsoletesList) {
+            $normTok = Normalize-PathValue $tok
+            $existsPath = $false
+            if ($normTok) {
+                $existsPath = Test-Path -LiteralPath (Join-Path $RepoRoot ($normTok -replace '/', '\'))
+            }
+            $ErrorActionPreference = 'Continue'
+            try {
+                $grepOut = & git -C $RepoRoot grep -l -F -- $tok -- . ':(exclude).b3/autodev' 2>$null
+                $grepCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($grepCode -gt 1) {
+                Fail "MECHANICAL_FAIL: git grep failed for obsolete '$tok'" 1
+            }
+            $grepCount = 0
+            if ($grepCode -eq 0) {
+                $grepCount = @($grepOut | Where-Object { ([string]$_).Trim() }).Count
+            }
+            if ($existsPath -and $grepCount -gt 0) {
+                $obsoleteHits.Add("${tok}(exists+${grepCount}f)")
+            } elseif ($existsPath) {
+                $obsoleteHits.Add("${tok}(exists)")
+            } elseif ($grepCount -gt 0) {
+                $obsoleteHits.Add("${tok}(${grepCount}f)")
+            }
+        }
+
+        $scOut = if ($scopeCreep.Count -gt 0) { (Sort-Ordinal $scopeCreep.ToArray()) -join ',' } else { 'none' }
+        $loOut = if ($leftoverHits.Count -gt 0) { $leftoverHits -join ',' } else { 'none' }
+        $obOut = if ($obsoleteHits.Count -gt 0) { (Sort-Ordinal $obsoleteHits.ToArray()) -join ',' } else { 'none' }
+
+        Write-Output "scope_creep=$scOut"
+        Write-Output "leftovers=$loOut"
+        Write-Output "obsolete_hits=$obOut"
+        if ($scOut -eq 'none' -and $loOut -eq 'none' -and $obOut -eq 'none') {
+            Write-Output 'MECHANICAL_OK'
+            exit 0
+        }
+        Write-Output 'MECHANICAL_FINDINGS'
+        exit 2
+    }
+
+    'check-wave' {
+        if (-not $WaveSpecs -or -not $WaveSpecs.Trim()) { Fail 'WAVE_FAIL: missing -WaveSpecs' 1 }
+        $taskOrder = New-Object System.Collections.Generic.List[string]
+        $taskPaths = @{}
+        $totalPaths = 0
+
+        foreach ($entry in ($WaveSpecs -split ';')) {
+            $trimEntry = $entry.Trim()
+            if (-not $trimEntry) { continue }
+            $eqIdx = $trimEntry.IndexOf('=')
+            if ($eqIdx -lt 0) { Fail "WAVE_FAIL: invalid entry '$trimEntry' (expected TaskId=path1,path2)" 1 }
+            $tid = $trimEntry.Substring(0, $eqIdx).Trim()
+            $rawCsv = $trimEntry.Substring($eqIdx + 1)
+            if (-not $tid) { Fail "WAVE_FAIL: empty task id in '$trimEntry'" 1 }
+            if ($taskPaths.ContainsKey($tid)) { Fail "WAVE_FAIL: duplicate task id '$tid'" 1 }
+            $paths = @(Split-CsvList $rawCsv -AsPaths)
+            if ($paths.Count -lt 1) { Fail "WAVE_FAIL: task '$tid' has no owned paths" 1 }
+            $taskOrder.Add($tid)
+            $taskPaths[$tid] = $paths
+            $totalPaths += $paths.Count
+        }
+        if ($taskOrder.Count -lt 1) { Fail 'WAVE_FAIL: no tasks in -WaveSpecs' 1 }
+
+        $conflicts = New-Object System.Collections.Generic.List[string]
+        for ($i = 0; $i -lt $taskOrder.Count; $i++) {
+            for ($j = $i + 1; $j -lt $taskOrder.Count; $j++) {
+                $ti = $taskOrder[$i]
+                $tj = $taskOrder[$j]
+                foreach ($pi in $taskPaths[$ti]) {
+                    foreach ($pj in $taskPaths[$tj]) {
+                        if ($pi -eq $pj) {
+                            $conflicts.Add("${pi}(${ti},${tj})")
+                        } elseif ($pi -eq '.' -or $pj -eq '.' -or $pi.StartsWith("$pj/") -or $pj.StartsWith("$pi/")) {
+                            $conflicts.Add("${pi}<->${pj}(${ti},${tj})")
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($conflicts.Count -gt 0) {
+            $sortedConflicts = (Sort-Ordinal $conflicts.ToArray()) -join ', '
+            Fail "WAVE_CONFLICT: $sortedConflicts" 2
+        }
+        Write-Output "WAVE_OK: disjoint ($($taskOrder.Count) tasks, $totalPaths paths)"
         exit 0
     }
 

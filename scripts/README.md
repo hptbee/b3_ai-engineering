@@ -21,6 +21,8 @@ Repository tooling, deterministic `/autodev` & `/review-loop` guard helpers, con
 | `precommit` | `0` `PRECOMMIT_OK`, `1` fail | Confirms non-empty staged diff, zero `.b3/autodev/` staged, and every staged path is in `AllowedPaths` |
 | `snapshot` | `0` SHA, `1` error | Runs `git stash create` (fallback `HEAD`) without modifying working tree or stash list |
 | `diff-scope` | `0` summary, `2` `EMPTY_DIFF`, `1` error | Rename-safe (`--no-renames`), excludes `.b3/autodev/`, `IgnoreDirtyPaths`, and lockfile/generated noise; outputs `size_class` (`NOISE_ONLY`\|`SMALL`\|`MEDIUM`\|`LARGE`\|`VERY_LARGE`), `files`, `lines`, `review_files`, `noise_files`, plus `delta_files` when `-PrevSha`/`--prev-sha` is supplied |
+| `mechanical-check` | `0` `MECHANICAL_OK`, `2` `MECHANICAL_FINDINGS`, `1` error | Deterministic pre-review audit (`0 LLM tokens`): checks `scope_creep` against `AllowedPaths`, added-line code `leftovers` (`debugger`, `.only(`, `@ts-ignore`, `eslint-disable`, empty `TODO`/`FIXME`), and remaining `obsolete_hits` |
+| `check-wave` | `0` `WAVE_OK`, `2` `WAVE_CONFLICT`, `1` error | Validates pairwise exact + prefix path disjointness across parallel wave tasks (`T002=a,b;T003=c,d`) |
 | `new-run` | `0` `<run_id>`, `1` error | Allocates `.b3/autodev/runs/<YYYYMMDD-HHMM>-<slug>/` (with `-2` collision suffix) and writes `.b3/autodev/CURRENT` |
 | `resolve-run` | `0` path, `1` `NO_ACTIVE_RUN`/error | Resolves `.b3/autodev/runs/<id>` from `-RunId`/`--run-id` or `CURRENT` (with legacy `.b3/autodev` fallback) |
 | `list-runs` | `0` list | Lists runs newest-first with `[<run_status>]` and `*` marker on `CURRENT` |

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /autodev and /review-loop (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | new-run | resolve-run | list-runs | prune
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune
 set -euo pipefail
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|new-run|resolve-run|list-runs|prune [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune [options]" >&2
   exit 1
 fi
 shift
@@ -114,6 +114,22 @@ is_noise_file() {
     *.min.js|*.min.css|*.snap|*.Designer.cs|*.g.cs|*.map) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+find_leftover_tag() {
+  local LC_ALL=C
+  local ln="$1"
+  if [[ "$ln" =~ (^|[^a-zA-Z0-9_])debugger([^a-zA-Z0-9_]|$) ]]; then
+    printf 'debugger'
+  elif [[ "$ln" =~ \.only\( ]]; then
+    printf '.only('
+  elif [[ "$ln" == *"@ts-ignore"* ]]; then
+    printf '@ts-ignore'
+  elif [[ "$ln" == *"eslint-disable"* ]]; then
+    printf 'eslint-disable'
+  elif [[ "$ln" =~ (^|[^a-zA-Z0-9_])(TODO|FIXME)[[:space:]]*:?[[:space:]]*$ ]]; then
+    printf 'empty-todo'
+  fi
 }
 
 case "$CMD" in
@@ -456,6 +472,255 @@ case "$CMD" in
     if $HAS_PREV; then
       printf 'delta_files=%s\n' "$DF_OUT"
     fi
+    ;;
+
+  mechanical-check)
+    REPO_ROOT="."
+    BASE_SHA=""
+    ALLOWED=""
+    IGNORE_DIRTY=""
+    OBSOLETES=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
+        --allowed-paths) ALLOWED="${2:-}"; shift 2 ;;
+        --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
+        --obsoletes) OBSOLETES="${2:-}"; shift 2 ;;
+        *) echo "MECHANICAL_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    [[ -n "$BASE_SHA" ]] || { echo "MECHANICAL_FAIL: missing --base-sha"; exit 1; }
+
+    ALLOWED_ARR=()
+    while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
+    IGNORE_ARR=()
+    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+    OBS_ARR=()
+    while IFS= read -r tok; do [[ -n "$tok" ]] && OBS_ARR+=("$tok"); done < <(split_csv_lines "$OBSOLETES" false)
+
+    CH_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff --name-only failed"; exit 1; }
+    UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "MECHANICAL_FAIL: git ls-files failed"; exit 1; }
+
+    ALL_CHANGED=()
+    while IFS= read -r line; do
+      p="$(norm_path "$line")"
+      [[ -z "$p" ]] && continue
+      [[ "$p" == ".b3/autodev" || "$p" == ".b3/autodev/"* ]] && continue
+      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
+      ALL_CHANGED+=("$p")
+    done < <(printf '%s\n%s\n' "$CH_OUT" "$UN_OUT")
+
+    SCOPE_CREEP=()
+    if [[ ${#ALLOWED_ARR[@]} -gt 0 && ${#ALL_CHANGED[@]} -gt 0 ]]; then
+      for p in "${ALL_CHANGED[@]}"; do
+        if ! path_in_list "$p" "${ALLOWED_ARR[@]}"; then
+          SCOPE_CREEP+=("$p")
+        fi
+      done
+    fi
+
+    DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff -U0 failed"; exit 1; }
+    LEFTOVER_HITS=()
+    CUR_FILE=""
+    CUR_LINE=0
+    SKIP_FILE=true
+    IN_HUNK=false
+    while IFS= read -r ln; do
+      ln="${ln%$'\r'}"
+      if [[ "$ln" == "diff --git "* ]]; then
+        CUR_FILE=""
+        SKIP_FILE=true
+        IN_HUNK=false
+        continue
+      fi
+      if ! $IN_HUNK && [[ "$ln" == "+++ "* ]]; then
+        if [[ "$ln" == "+++ /dev/null" ]]; then
+          CUR_FILE=""
+          SKIP_FILE=true
+        else
+          cand="${ln#+++ }"
+          cand="${cand#b/}"
+          CUR_FILE="$(norm_path "$cand")"
+          SKIP_FILE=false
+          if [[ -z "$CUR_FILE" || "$CUR_FILE" == ".b3/autodev" || "$CUR_FILE" == ".b3/autodev/"* || "$CUR_FILE" == *.md ]]; then
+            SKIP_FILE=true
+          elif is_noise_file "$CUR_FILE"; then
+            SKIP_FILE=true
+          elif [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$CUR_FILE" "${IGNORE_ARR[@]}"; then
+            SKIP_FILE=true
+          fi
+        fi
+        continue
+      fi
+      if [[ "$ln" =~ ^@@\ -[0-9,]+\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
+        CUR_LINE="${BASH_REMATCH[1]}"
+        IN_HUNK=true
+        continue
+      fi
+      if ! $IN_HUNK || $SKIP_FILE; then continue; fi
+      if [[ "$ln" == "+"* ]]; then
+        body="${ln#+}"
+        tag="$(find_leftover_tag "$body")"
+        if [[ -n "$tag" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
+          LEFTOVER_HITS+=("${CUR_FILE}:${CUR_LINE}:${tag}")
+        fi
+        CUR_LINE=$((CUR_LINE + 1))
+      fi
+    done <<< "$DIFF_U0"
+
+    UN_SORTED=()
+    while IFS= read -r line; do
+      p="$(norm_path "$line")"
+      [[ -n "$p" ]] && UN_SORTED+=("$p")
+    done < <(printf '%s\n' "$UN_OUT" | LC_ALL=C sort -u)
+
+    if [[ ${#UN_SORTED[@]} -gt 0 ]]; then
+      for u in "${UN_SORTED[@]}"; do
+        [[ ${#LEFTOVER_HITS[@]} -ge 10 ]] && break
+        [[ "$u" == ".b3/autodev" || "$u" == ".b3/autodev/"* || "$u" == *.md ]] && continue
+        is_noise_file "$u" && continue
+        if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$u" "${IGNORE_ARR[@]}"; then continue; fi
+        [[ -f "${REPO_ROOT}/${u}" ]] || continue
+        lno=0
+        while IFS= read -r fl || [[ -n "$fl" ]]; do
+          lno=$((lno + 1))
+          fl="${fl%$'\r'}"
+          tag="$(find_leftover_tag "$fl")"
+          if [[ -n "$tag" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
+            LEFTOVER_HITS+=("${u}:${lno}:${tag}")
+          fi
+        done < "${REPO_ROOT}/${u}"
+      done
+    fi
+
+    OBS_HITS=()
+    if [[ ${#OBS_ARR[@]} -gt 0 ]]; then
+      for tok in "${OBS_ARR[@]}"; do
+        norm_tok="$(norm_path "$tok")"
+        exists_path=false
+        if [[ -n "$norm_tok" && -e "${REPO_ROOT}/${norm_tok}" ]]; then
+          exists_path=true
+        fi
+        set +e
+        grep_out="$(git -C "$REPO_ROOT" grep -l -F -- "$tok" -- . ':(exclude).b3/autodev' 2>/dev/null)"
+        grep_code=$?
+        set -e
+        if [[ "$grep_code" -gt 1 ]]; then
+          echo "MECHANICAL_FAIL: git grep failed for obsolete '$tok'"
+          exit 1
+        fi
+        grep_count=0
+        if [[ "$grep_code" -eq 0 && -n "$grep_out" ]]; then
+          grep_count="$(printf '%s\n' "$grep_out" | wc -l | tr -d ' ')"
+        fi
+        if $exists_path && [[ "$grep_count" -gt 0 ]]; then
+          OBS_HITS+=("${tok}(exists+${grep_count}f)")
+        elif $exists_path; then
+          OBS_HITS+=("${tok}(exists)")
+        elif [[ "$grep_count" -gt 0 ]]; then
+          OBS_HITS+=("${tok}(${grep_count}f)")
+        fi
+      done
+    fi
+
+    SC_OUT="none"
+    if [[ ${#SCOPE_CREEP[@]} -gt 0 ]]; then
+      SC_OUT="$(printf '%s\n' "${SCOPE_CREEP[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    fi
+    LO_OUT="none"
+    if [[ ${#LEFTOVER_HITS[@]} -gt 0 ]]; then
+      LO_OUT="$(IFS=','; echo "${LEFTOVER_HITS[*]}")"
+    fi
+    OB_OUT="none"
+    if [[ ${#OBS_HITS[@]} -gt 0 ]]; then
+      OB_OUT="$(printf '%s\n' "${OBS_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    fi
+
+    printf 'scope_creep=%s\nleftovers=%s\nobsolete_hits=%s\n' "$SC_OUT" "$LO_OUT" "$OB_OUT"
+    if [[ "$SC_OUT" == "none" && "$LO_OUT" == "none" && "$OB_OUT" == "none" ]]; then
+      echo "MECHANICAL_OK"
+      exit 0
+    fi
+    echo "MECHANICAL_FINDINGS"
+    exit 2
+    ;;
+
+  check-wave)
+    WAVE_SPECS=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --wave-specs) WAVE_SPECS="${2:-}"; shift 2 ;;
+        *) echo "WAVE_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    WAVE_SPECS="$(trim_str "$WAVE_SPECS")"
+    [[ -n "$WAVE_SPECS" ]] || { echo "WAVE_FAIL: missing --wave-specs"; exit 1; }
+
+    TASK_IDS=()
+    TASK_PATHS_PACKED=()
+    TOTAL_PATHS=0
+    IFS=';' read -ra ENTRIES <<< "$WAVE_SPECS"
+    if [[ ${#ENTRIES[@]} -gt 0 ]]; then
+      for entry in "${ENTRIES[@]}"; do
+        trim_e="$(trim_str "$entry")"
+        [[ -z "$trim_e" ]] && continue
+        if [[ "$trim_e" != *"="* ]]; then
+          echo "WAVE_FAIL: invalid entry '$trim_e' (expected TaskId=path1,path2)"
+          exit 1
+        fi
+        tid="$(trim_str "${trim_e%%=*}")"
+        raw_csv="${trim_e#*=}"
+        [[ -n "$tid" ]] || { echo "WAVE_FAIL: empty task id in '$trim_e'"; exit 1; }
+        if [[ ${#TASK_IDS[@]} -gt 0 ]]; then
+          for prev_t in "${TASK_IDS[@]}"; do
+            if [[ "$prev_t" == "$tid" ]]; then
+              echo "WAVE_FAIL: duplicate task id '$tid'"
+              exit 1
+            fi
+          done
+        fi
+        p_arr=()
+        while IFS= read -r p; do [[ -n "$p" ]] && p_arr+=("$p"); done < <(split_csv_lines "$raw_csv" true | LC_ALL=C sort -u)
+        if [[ ${#p_arr[@]} -lt 1 ]]; then
+          echo "WAVE_FAIL: task '$tid' has no owned paths"
+          exit 1
+        fi
+        TASK_IDS+=("$tid")
+        packed="$(printf '%s\n' "${p_arr[@]}" | paste -sd '|' -)"
+        TASK_PATHS_PACKED+=("$packed")
+        TOTAL_PATHS=$((TOTAL_PATHS + ${#p_arr[@]}))
+      done
+    fi
+    [[ ${#TASK_IDS[@]} -gt 0 ]] || { echo "WAVE_FAIL: no tasks in --wave-specs"; exit 1; }
+
+    CONFLICTS=()
+    n_tasks="${#TASK_IDS[@]}"
+    for ((i = 0; i < n_tasks; i++)); do
+      for ((j = i + 1; j < n_tasks; j++)); do
+        ti="${TASK_IDS[$i]}"
+        tj="${TASK_IDS[$j]}"
+        IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
+        IFS='|' read -ra pj_arr <<< "${TASK_PATHS_PACKED[$j]}"
+        for pi in "${pi_arr[@]}"; do
+          for pj in "${pj_arr[@]}"; do
+            if [[ "$pi" == "$pj" ]]; then
+              CONFLICTS+=("${pi}(${ti},${tj})")
+            elif [[ "$pi" == "." || "$pj" == "." || "$pi" == "$pj/"* || "$pj" == "$pi/"* ]]; then
+              CONFLICTS+=("${pi}<->${pj}(${ti},${tj})")
+            fi
+          done
+        done
+      done
+    done
+
+    if [[ ${#CONFLICTS[@]} -gt 0 ]]; then
+      C_STR="$(printf '%s\n' "${CONFLICTS[@]}" | LC_ALL=C sort -u | awk 'NR>1{printf ", "} {printf "%s", $0}')"
+      echo "WAVE_CONFLICT: ${C_STR}"
+      exit 2
+    fi
+    printf 'WAVE_OK: disjoint (%d tasks, %d paths)\n' "$n_tasks" "$TOTAL_PATHS"
+    exit 0
     ;;
 
   new-run)
