@@ -85,11 +85,20 @@ try {
     Set-Content (Join-Path $badDir 'travlog.verify') "schema=b3-verify-v1`ntask_id=t1`nscope=scoped`nhead_sha=$headSha`ntree_hash=$treeSha`nrelevant_paths=src/a.ts`nexit_code=0`nstatus=PASS`ncommand=echo ok`nlog_path=../escape.log`ntimestamp_utc=2026-11-22T10:00:00Z`n"
     Set-Content (Join-Path $badDir 'abslog.verify') "schema=b3-verify-v1`ntask_id=t1`nscope=scoped`nhead_sha=$headSha`ntree_hash=$treeSha`nrelevant_paths=src/a.ts`nexit_code=0`nstatus=PASS`ncommand=echo ok`nlog_path=/etc/passwd`ntimestamp_utc=2026-11-22T10:00:00Z`n"
 
+    $outJuncDir = Join-Path $sandbox 'outside-logs'
+    New-Item -ItemType Directory -Path $outJuncDir | Out-Null
+    Set-Content (Join-Path $outJuncDir 'secret.log') "outside secret`n"
+    $juncPath = Join-Path $badDir 'extlink'
+    & cmd /c mklink /J $juncPath $outJuncDir | Out-Null
+    $juncExit = $LASTEXITCODE
+    Set-Content (Join-Path $badDir 'junclog.verify') "schema=b3-verify-v1`ntask_id=t1`nscope=scoped`nhead_sha=$headSha`ntree_hash=$treeSha`nrelevant_paths=src/a.ts`nexit_code=0`nstatus=PASS`ncommand=echo ok`nlog_path=.b3/ship/verify/extlink/secret.log`ntimestamp_utc=2026-11-22T10:00:00Z`n"
+
     $psNoCmd = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/nocmd.verify')
     $psBadTs = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/badts.verify')
     $psMissLog = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/misslog.verify')
     $psTravLog = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/travlog.verify')
     $psAbsLog = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/abslog.verify')
+    $psJuncLog = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/junclog.verify')
 
     $provShOk = $true
     if ($hasBash) {
@@ -99,23 +108,27 @@ try {
         $shMissLog = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1Posix' --receipt-path '.b3/ship/verify/misslog.verify'"
         $shTravLog = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1Posix' --receipt-path '.b3/ship/verify/travlog.verify'"
         $shAbsLog = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1Posix' --receipt-path '.b3/ship/verify/abslog.verify'"
+        $shJuncLog = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1Posix' --receipt-path '.b3/ship/verify/junclog.verify'"
         $provShOk = ($shSeed.Code -eq 0) -and ($shSeed.Text -match 'VERIFY_VALID:') -and
                     ($shNoCmd.Code -eq 1) -and ($shNoCmd.Text -match "VERIFY_CORRUPT: missing field 'command'") -and
                     ($shBadTs.Code -eq 1) -and ($shBadTs.Text -match 'VERIFY_CORRUPT: invalid timestamp_utc') -and
                     ($shMissLog.Code -eq 1) -and ($shMissLog.Text -match 'VERIFY_CORRUPT: missing log_path') -and
                     ($shTravLog.Code -eq 1) -and ($shTravLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and
-                    ($shAbsLog.Code -eq 1) -and ($shAbsLog.Text -match 'VERIFY_CORRUPT: invalid log_path')
+                    ($shAbsLog.Code -eq 1) -and ($shAbsLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and
+                    ($shJuncLog.Code -eq 1) -and ($shJuncLog.Text -match 'VERIFY_CORRUPT: invalid log_path')
     }
+    if (Test-Path -LiteralPath $juncPath) { [IO.Directory]::Delete($juncPath) }
 
-    if ($seed.Code -eq 0 -and $seedCheckPs.Code -eq 0 -and
+    if ($seed.Code -eq 0 -and $seedCheckPs.Code -eq 0 -and $juncExit -eq 0 -and
         $psNoCmd.Code -eq 1 -and ($psNoCmd.Text -match "VERIFY_CORRUPT: missing field 'command'") -and
         $psBadTs.Code -eq 1 -and ($psBadTs.Text -match 'VERIFY_CORRUPT: invalid timestamp_utc') -and
         $psMissLog.Code -eq 1 -and ($psMissLog.Text -match 'VERIFY_CORRUPT: missing log_path') -and
         $psTravLog.Code -eq 1 -and ($psTravLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and
-        $psAbsLog.Code -eq 1 -and ($psAbsLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and $provShOk) {
+        $psAbsLog.Code -eq 1 -and ($psAbsLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and
+        $psJuncLog.Code -eq 1 -and ($psJuncLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and $provShOk) {
         Pass 'standalone-verify-provenance'
     } else {
-        FailCheck 'standalone-verify-provenance' "seed=$($seed.Code) psNoCmd=$($psNoCmd.Text) psBadTs=$($psBadTs.Text) psMiss=$($psMissLog.Text) psTrav=$($psTravLog.Text) psAbs=$($psAbsLog.Text) shOk=$provShOk"
+        FailCheck 'standalone-verify-provenance' "seed=$($seed.Code) juncExit=$juncExit psNoCmd=$($psNoCmd.Text) psBadTs=$($psBadTs.Text) psMiss=$($psMissLog.Text) psTrav=$($psTravLog.Text) psAbs=$($psAbsLog.Text) psJunc=$($psJuncLog.Text) shOk=$provShOk"
     }
 
     # --- 2. standalone-verify-cmd-and-scope ---

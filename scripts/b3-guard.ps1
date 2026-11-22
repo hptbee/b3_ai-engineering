@@ -474,6 +474,26 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
         if (-not $logSlash.StartsWith("$rootSlash/", [System.StringComparison]::OrdinalIgnoreCase)) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
         }
+        $segCur = $Root
+        foreach ($seg in (($lpSlash -replace '^\./', '') -split '/')) {
+            if (-not $seg -or $seg -eq '.') { continue }
+            $segCur = Join-Path $segCur $seg
+            if (Test-Path -LiteralPath $segCur) {
+                try {
+                    $attrs = [IO.File]::GetAttributes($segCur)
+                    if (($attrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+                    }
+                } catch {}
+            } else {
+                try {
+                    $item = Get-Item -LiteralPath $segCur -Force -ErrorAction SilentlyContinue
+                    if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+                    }
+                } catch {}
+            }
+        }
         if (-not (Test-Path -LiteralPath $logFull -PathType Leaf)) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: missing log_path' }
         }

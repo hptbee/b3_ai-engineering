@@ -492,6 +492,22 @@ run_verify_check() {
       return 1
     fi
     full_log="$(resolve_target_path "$root" "$lp_slash")"
+    local rem="${lp_slash#./}" seg_cur="$root" seg
+    while [[ -n "$rem" ]]; do
+      if [[ "$rem" == */* ]]; then
+        seg="${rem%%/*}"
+        rem="${rem#*/}"
+      else
+        seg="$rem"
+        rem=""
+      fi
+      [[ -z "$seg" || "$seg" == "." ]] && continue
+      seg_cur="${seg_cur}/${seg}"
+      if [[ -L "$seg_cur" ]]; then
+        _VR_MSG="VERIFY_CORRUPT: invalid log_path"
+        return 1
+      fi
+    done
     canon_root="$(cd "$root" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_root=""
     canon_root="$(norm_path "$canon_root")"
     if [[ -n "$canon_root" ]]; then
