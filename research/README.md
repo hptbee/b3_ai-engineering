@@ -10,7 +10,7 @@ Phase 1 (foundations) and **Phase 2 Tracks A/B** (domain research) are complete 
 | Track A | Frontend: React, TS, Next.js, UI/a11y | ✓ research only |
 | Track B | Backend: Node, API, auth, security | ✓ research only |
 | Track C | Adapters + eval fixtures | ✓ `adapters/`, `evals/`, `scripts/` |
-| Synthesis | Mine/adapt skills into B3 | ✓ decision-008 + `.cursor/skills/` |
+| Synthesis | Mine/adapt skills into B3 | ✓ decision-008 + `skills/` (canonical core) |
 | Validation v1 | Real-task matrix, activation, composition | ✓ `research/validation/` |
 
 ## Lifecycle (this repo)
@@ -150,7 +150,8 @@ Organized by architectural concern (not by repository):
 | [decision-006-frontend-skills.md](decisions/decision-006-frontend-skills.md) | **ADAPT** split frontend skills; reject Vercel bulk copy |
 | [decision-007-backend-skills.md](decisions/decision-007-backend-skills.md) | **ADAPT** layered backend security skills |
 | [decision-008-skill-synthesis.md](decisions/decision-008-skill-synthesis.md) | **ADAPT** mined skills into B3; reject catalogs |
-| [decision-009-cursor-native-layout.md](decisions/decision-009-cursor-native-layout.md) | **ADAPT** Cursor-native discovery paths; portable meaning (amends 002 location) |
+| [decision-009-cursor-native-layout.md](decisions/decision-009-cursor-native-layout.md) | **ADAPT** Cursor-native discovery paths; portable meaning (superseded by decision-013) |
+| [decisions/README.md](decisions/README.md) (`decision-010`..`decision-016`) | Post-synthesis ADRs: `/b3-ship` lifecycle, product attach, hardening, 4-host layout, waves/guards, evidence gates, and standalone commands |
 
 ## Rejected
 
@@ -195,7 +196,7 @@ Status as of the catalog after decision-008/009 (do not re-run synthesis as if i
 
 1. **Keep** the portable core and Cursor-native discovery paths — research validates them.
 2. **Do not** import skill aggregators or commit duplicate Codex/Claude skill trees here.
-3. **Domain skills** from decisions 006–007 are **present** (see `.cursor/skills/README.md`) with trigger fixtures. Do not grow the catalog until real-task lessons or capability evals exist.
+3. **Domain skills** from decisions 006–007 are **present** (see [`../skills/README.md`](../skills/README.md)) with trigger fixtures. Do not grow the catalog until real-task lessons or capability evals exist.
 4. **Eval work:** E1+E2 fixtures shipped; schema check `scripts/validate-evals.sh`. E3 automated runner and E4 capability benchmarks remain **deferred** (decision-005).
 5. **Review-loop orchestration v1 is present** (`review-loop/strategy.md`): independence, finding validation, cap, stagnation. Not a host plugin and not a full OCR pipeline. Product-repo runs and subagent isolation remain **NOT VERIFIED**.
 6. **Adapters:** path matrix + `sync-skills.sh`. Cursor `.mdc` activation files are **present** (five files under `.cursor/rules/`). Codex/Claude export and adapter CI remain deferred.
@@ -223,21 +224,23 @@ Status as of the catalog after decision-008/009 (do not re-run synthesis as if i
 ## Next (after synthesis and layout)
 
 1. **Use the system on a real product change**; promote 1–3 lessons into `knowledge/` (do not scrape `stable/`).
-2. **Exercise `/review-loop` on a product PR**; record host isolation (reviewer vs fixer) under `research/validation/`.
+2. **Exercise `/b3-review-loop` on a product PR**; record host isolation (reviewer vs fixer) under `research/validation/`.
 3. **Cursor UX check** (slash commands, rule injection, subagent dispatch) — still **NOT VERIFIED** in-repo (`cursor-host-v3.md`).
 4. **Eval hygiene:** remaining rule fixtures (`engineering-principles`, `portability`); optional description-judge. E3 runner still deferred.
 5. **Capability evals** and extra reviewer agents — only after repeated real-task evidence.
 6. **Owner profile** when Tùng records it (`profiles/` is not invented for symmetry).
 
-## Track C deliverables (outside research/)
+## Track C initial baseline (outside `research/`)
+
+Initial Phase 1 / Track C counts (`169` fixtures across Cursor/Codex/Claude). For current 4-host adapters (including Antigravity) and the `262` eval fixtures + CLI validators, see [`../adapters/README.md`](../adapters/README.md), [`../evals/README.md`](../evals/README.md), and [`../scripts/README.md`](../scripts/README.md).
 
 | Artifact | Location |
 | --- | --- |
 | Host path matrix | `adapters/README.md` |
-| Per-host mapping | `adapters/{cursor,codex,claude}/README.md` |
-| Skill symlink script | `adapters/sync-skills.sh` |
-| Skill trigger fixtures | `evals/skills/**` (148 YAML cases as of this status pass) |
-| Review-loop scenarios | `evals/review-loop/**` (15 YAML cases) |
+| Per-host mapping | `adapters/{cursor,codex,claude,antigravity}/README.md` |
+| Skill symlink script | `adapters/sync-skills.{ps1,sh}` |
+| Skill trigger fixtures | `evals/skills/**` (148 initial YAML cases) |
+| Review-loop scenarios | `evals/review-loop/**` (15 initial YAML cases) |
 | Rule samples | `evals/rules/**` (6 YAML cases) |
 | Fixture validator | `scripts/validate-evals.sh` |
 

@@ -1,0 +1,9 @@
+id: cmd-debug-001
+artifact: skills/engineering/debugging/SKILL.md
+intent: /b3-debug isolates the explicit broken invariant, tests one cheapest hypothesis, and sweeps confirmed sibling sites inside scope
+scenario: |
+  Failure traces to a missing null guard on one API handler after root-cause reproduction
+  Agent patches only one endpoint without naming the broken invariant or checking sibling handlers for the same invariant violation
+expected_outcome: FAIL
+failure_mode: incomplete-bug-class-sweep
+notes: Sweep sibling entry points strictly supported by the same broken invariant without speculative repo-wide scans

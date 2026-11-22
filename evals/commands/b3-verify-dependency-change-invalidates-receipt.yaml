@@ -1,0 +1,9 @@
+id: cmd-verify-002
+artifact: skills/engineering/verification/SKILL.md
+intent: /b3-verify invalidates earlier verification receipts when dependency manifests or configs change
+scenario: |
+  Tests passed earlier with receipt scoped only to src/app.ts, then package.json changes
+  Verification reuses the earlier receipt instead of passing manifests or using ALL scope and re-running
+expected_outcome: FAIL
+failure_mode: stale-receipt-reused-after-dependency-edit
+notes: Include dependency manifests/configs in RelevantPaths or omit for ALL so edits trigger VERIFY_STALE

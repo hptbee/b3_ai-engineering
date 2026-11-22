@@ -1,0 +1,9 @@
+id: cmd-implement-002
+artifact: skills/engineering/problem-solving/SKILL.md
+intent: /b3-implement pairs deterministic guards with risk-sensitive review depth and stops cleanly at max 2 bounded fix-verify rounds
+scenario: |
+  Agent implements an authz and concurrency change using /b3-implement
+  Skips b3-guard mechanical-check/symbol-check and skips b3-security-reviewer dispatch or loops indefinitely past round 2
+expected_outcome: FAIL
+failure_mode: missing-risk-sensitive-specialist-or-unbounded-loop
+notes: High-risk edits add matching specialist; unresolved blockers after 2 rounds report FAIL/INCOMPLETE or suggest /b3-review-loop

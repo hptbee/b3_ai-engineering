@@ -27,15 +27,16 @@ Near miss: “add unit tests for this module” → testing/implementation work,
 
 ## Procedure
 
-1. **Name the claim** in one sentence (what is supposed to be true).
-2. **Name the evidence** that would confirm it (command, probe, screenshot of behavior, log, official check).
-3. **Run or obtain that evidence.** Record the command or action and the observed result.
-4. **Map result to outcome:**
-   - evidence produced and supports the claim → `PASS`
-   - evidence produced and contradicts the claim → `FAIL`
-   - evidence missing, tool failed, skipped, timed out, or environment cannot run it → `UNKNOWN / INCOMPLETE`
-5. **After a fix**, re-run the evidence that would have caught the issue. State what was re-run.
-6. **Do not upgrade** incomplete checks to PASS because the code “looks right”. A “it’s faster” claim without before/after measurement is INCOMPLETE, not PASS.
+1. **Name the claim & scope** in one sentence (exact behavior + acceptance criteria / paths).
+2. **Name the evidence** that confirms it (command, probe, test scope, and relevant dependency manifests/configs).
+3. **Run & record provenance:** execute cleanly via `scripts/b3-guard.{ps1,sh} verify-run` (writes reusable `b3-verify-v1` receipt at `.b3/ship/verify/<slug>.verify` capturing `HEAD`, `tree_hash`, `command`, `exit_code`, `log_path`, `timestamp_utc`) or direct tool execution when CLI guards are unavailable. Include dependency manifests/lockfiles/configs in `-RelevantPaths` (or omit for `ALL`) so dep/config changes invalidate stale receipts.
+4. **Validate before reusing evidence:** never trust an agent-written receipt or log summary without running `b3-guard verify-check -ExpectedCmd ... -RelevantPaths ...` (`VERIFY_VALID` exit `0`). On untrusted provenance, `VERIFY_STALE`, `VERIFY_MISMATCH`, `VERIFY_SCOPE_MISMATCH`, or `VERIFY_CORRUPT`, re-run checks on the current working tree.
+5. **Map result to outcome:**
+   - executed evidence supports claim on current tree → `PASS`
+   - executed evidence contradicts claim → `FAIL`
+   - evidence missing/untrusted, tool failed, skipped, timed out, or wrong env → `UNKNOWN / INCOMPLETE`
+6. **After a fix**, re-run the evidence that would have caught the issue against current tree (`verify-run` / `verify-check`).
+7. **Report compactly:** claim, source revision (`HEAD` + `tree_hash`/receipt path), command/probe, exit code, scope/AC coverage, log ref, and outcome (naming any skipped/timed-out/unavailable checks). Do **not** upgrade incomplete/unmeasured speed or correctness claims to `PASS`.
 
 ## Progressive disclosure
 

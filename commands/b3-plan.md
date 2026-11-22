@@ -5,7 +5,7 @@ description: Produce an implementation plan without writing product code. Use wh
 
 # b3-plan
 
-**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and produce an implementation plan; do not write product code unless the user also asked to implement.
+**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and produce a scoped, dependency-aware implementation plan; keep small edits lightweight and stay plan-only unless implementation was explicitly requested.
 
 **Skill:** `{B3_HOME}/skills/engineering/planning/SKILL.md`
 

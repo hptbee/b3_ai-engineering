@@ -30,7 +30,8 @@ param(
     [switch]$AllowMassDelete,
     [string]$WaveReads = '',
     [string]$ExpectedBaseSha = '',
-    [string]$ExpectedRoot = ''
+    [string]$ExpectedRoot = '',
+    [string]$ExpectedCmd = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -411,7 +412,7 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
     }
 }
 
-function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPaths) {
+function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPaths, [string]$ExpectedCmdArg = '', [string]$ReqRelPathsArg = '') {
     $trimArg = $ReceiptArg.Trim()
     if (-not $trimArg) {
         return @{ Code = 1; Message = 'VERIFY_MISSING: empty receipt path' }
@@ -439,7 +440,7 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
         $kv[$k] = $v
     }
 
-    foreach ($reqKey in @('schema', 'task_id', 'scope', 'head_sha', 'tree_hash', 'relevant_paths', 'exit_code', 'status')) {
+    foreach ($reqKey in @('schema', 'task_id', 'scope', 'head_sha', 'tree_hash', 'relevant_paths', 'exit_code', 'status', 'command', 'log_path', 'timestamp_utc')) {
         if (-not $kv.ContainsKey($reqKey) -or -not $kv[$reqKey]) {
             return @{ Code = 1; Message = "VERIFY_CORRUPT: missing field '$reqKey'" }
         }
@@ -459,6 +460,44 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
     if ($kv['status'] -cnotin @('PASS', 'FAIL')) {
         return @{ Code = 1; Message = "VERIFY_CORRUPT: invalid status '$($kv['status'])'" }
     }
+    if ($kv['timestamp_utc'] -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$') {
+        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid timestamp_utc' }
+    }
+    if ($kv['log_path'] -cne 'none') {
+        $lpSlash = $kv['log_path'].Trim() -replace '\\', '/'
+        if (-not $lpSlash -or $lpSlash -eq '.' -or $lpSlash.StartsWith('/') -or $lpSlash.StartsWith('~') -or ($lpSlash -match '^[A-Za-z]:') -or ($lpSlash -match '(^|/)\.\.(/|$)')) {
+            return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+        }
+        $rootSlash = ($Root -replace '\\', '/').TrimEnd('/')
+        $logFull = Resolve-TargetPath $Root $lpSlash
+        $logSlash = ($logFull -replace '\\', '/')
+        if (-not $logSlash.StartsWith("$rootSlash/", [System.StringComparison]::OrdinalIgnoreCase)) {
+            return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+        }
+        $segCur = $Root
+        foreach ($seg in (($lpSlash -replace '^\./', '') -split '/')) {
+            if (-not $seg -or $seg -eq '.') { continue }
+            $segCur = Join-Path $segCur $seg
+            if (Test-Path -LiteralPath $segCur) {
+                try {
+                    $attrs = [IO.File]::GetAttributes($segCur)
+                    if (($attrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+                    }
+                } catch {}
+            } else {
+                try {
+                    $item = Get-Item -LiteralPath $segCur -Force -ErrorAction SilentlyContinue
+                    if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+                    }
+                } catch {}
+            }
+        }
+        if (-not (Test-Path -LiteralPath $logFull -PathType Leaf)) {
+            return @{ Code = 1; Message = 'VERIFY_CORRUPT: missing log_path' }
+        }
+    }
 
     if ([int]$kv['exit_code'] -ne 0 -or $kv['status'] -cne 'PASS') {
         return @{ Code = 1; Message = "VERIFY_FAILED_RECEIPT: exit=$($kv['exit_code']) status=$($kv['status'])" }
@@ -470,6 +509,28 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
         $validRel = @($relSpec | Where-Object { $_ -and ($_ -notmatch '^\.b3/(ship|autodev)(/|$)') })
         if ($validRel.Count -lt 1 -or $validRel.Count -ne $relSpec.Count) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid relevant_paths' }
+        }
+    }
+
+    if ($ExpectedCmdArg -and $ExpectedCmdArg.Trim()) {
+        $normExpected = ($ExpectedCmdArg -replace '[\r\n]+', ' ').Trim()
+        if ($kv['command'] -cne $normExpected) {
+            return @{ Code = 1; Message = 'VERIFY_MISMATCH: command mismatch' }
+        }
+    }
+
+    if ($ReqRelPathsArg -and $ReqRelPathsArg.Trim()) {
+        $reqSpec = @(Split-CsvList $ReqRelPathsArg -AsPaths)
+        $validReq = @($reqSpec | Where-Object { $_ -and ($_ -notmatch '^\.b3/(ship|autodev)(/|$)') })
+        if ($validReq.Count -lt 1) {
+            return @{ Code = 1; Message = 'VERIFY_CHECK_FAIL: invalid relevant_paths' }
+        }
+        if ($kv['relevant_paths'] -cne 'ALL') {
+            $uncovered = @($validReq | Where-Object { -not (Test-PathMatch $_ $relSpec) })
+            if ($uncovered.Count -gt 0) {
+                $sortedUnc = (Sort-Ordinal $uncovered) -join ','
+                return @{ Code = 1; Message = "VERIFY_SCOPE_MISMATCH: uncovered path ($sortedUnc)" }
+            }
         }
     }
 
@@ -1516,7 +1577,7 @@ switch ($Command) {
 
     'verify-check' {
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
-        $res = Test-VerifyReceipt $RepoRoot $ReceiptPath $ignored
+        $res = Test-VerifyReceipt $RepoRoot $ReceiptPath $ignored $ExpectedCmd $RelevantPaths
         Write-Output $res.Message
         exit $res.Code
     }

@@ -32,6 +32,8 @@ while IFS= read -r -d '' f; do
     require_key "$f" "expected_outcome"
   elif [[ "$f" == *"/workflows/"* ]]; then
     require_key "$f" "expected_outcome"
+  elif [[ "$f" == *"/commands/"* ]]; then
+    require_key "$f" "expected_outcome"
   elif [[ "$f" == *"/rules/"* ]]; then
     require_key "$f" "expected_outcome"
   fi

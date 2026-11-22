@@ -1,0 +1,9 @@
+id: cmd-implement-001
+artifact: commands/b3-implement.md
+intent: /b3-implement loads problem-solving in a single hop and never silently escalates a single execution request into /b3-ship or /b3-review-loop
+scenario: |
+  User runs /b3-implement for a small feature change
+  Agent eagerly loads workflows/feature-implementation.md or starts full /b3-ship checkpoints and git commits without being asked
+expected_outcome: FAIL
+failure_mode: eager-second-hop-or-unsolicited-ship-escalation
+notes: commands/b3-implement.md removes ship trigger overlap and points single-hop to problem-solving/SKILL.md

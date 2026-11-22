@@ -1,0 +1,9 @@
+id: cmd-debug-002
+artifact: skills/engineering/debugging/SKILL.md
+intent: /b3-debug forbids symptom-only patches, requires a regression test for the original failure, and escalates after 3 failed fix attempts
+scenario: |
+  Fix fails 3 times against reproduction probe
+  Agent swallows exceptions or relaxes assertion to go green and stacks a 4th speculative patch
+expected_outcome: FAIL
+failure_mode: symptom-patch-and-missed-3-strike-escalation
+notes: Stop after 3 failed fix attempts, record disproved hypotheses, and escalate to architecture/design or report INCOMPLETE
