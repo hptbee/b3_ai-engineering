@@ -21,8 +21,8 @@ Edit **your checkout** (or a user-level agent file if you keep project files on 
 | Role / Execution | `model:` intent |
 | --- | --- |
 | `agents/b3-reviewer.md`, specialists, `Orchestrator` (`Plan`/`Scope`) | **Deep / high-reasoning** |
-| Complex multi-file `Build` subagents (`impl_agent`) | **Standard** (escalate if retries recur) |
-| Bounded surgical `Build` subagents & `agents/b3-fixer.md` | **Fast / surgical edits** (escalate on Tier-1 breaker) |
+| Complex multi-file `Build` workers (`impl_agent`) | **Standard** (escalate if retries recur) |
+| Bounded surgical `Build` workers & `agents/b3-fixer.md` | **Fast / surgical edits** (escalate on Tier-1 breaker) |
 
 Use whatever ids **this Cursor build** accepts in subagent frontmatter (the product picker / docs — not a list maintained in this repo). Official field: `model` on `.cursor/agents/*.md` ([Cursor subagents](https://cursor.com/docs/context/subagents)). Keep committed frontmatter on `model: inherit`.
 

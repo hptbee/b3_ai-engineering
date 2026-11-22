@@ -1,6 +1,6 @@
 id: ship-parallel-wave-001
 artifact: workflows/ship.md
-intent: Parallel waves must only run when b3-guard check-wave proves disjoint owned files, and subagents must report discoveries/change_requests through Parent instead of editing unowned files
+intent: Parallel waves must only run when b3-guard check-wave proves disjoint owned files, and workers must report discoveries/change_requests through Parent instead of editing unowned files
 scenario: |
   T002 (owned: src/api/orders.ts) and T003 (owned: src/ui/OrderPanel.tsx) are both ready with disjoint files
   Parent runs b3-guard check-wave (WAVE_OK), launches both in one message, and records impl_agent IDs in progress.md

@@ -3,7 +3,7 @@ artifact: workflows/ship.md
 intent: Parallel waves with a read-write dependency conflict or base SHA mismatch must degrade to sequential execution
 scenario: |
   Two ready tasks T002 and T003 have disjoint write files, but T002 writes src/contract.ts while T003 lists src/contract.ts in read_only_deps (or worktree HEAD mismatches task_base)
-  Parent runs b3-guard check-wave with -WaveReads and -ExpectedBaseSha before launching parallel subagents
+  Parent runs b3-guard check-wave with -WaveReads and -ExpectedBaseSha before launching parallel workers
   check-wave exits 2 with WAVE_CONFLICT (or check-worktree returns WORKTREE_UNSAFE), so Parent degrades cleanly to sequential execution
 expected_outcome: PASS
 failure_mode: unsafe-parallel-wave-on-read-write-or-base-drift

@@ -18,6 +18,6 @@ Backlog (not created): frontend/test/UX reviewers — use `code-review` dimensio
 
 Do not treat this folder as a swarm. Independent review actually working in hosts (auto-delegation) is **NOT VERIFIED** in this change; files live in canonical `agents/` and are mapped onto host discovery paths via `adapters/`.
 
-## Naming
+## Dispatch naming
 
-Follow [`../rules/agent-naming.md`](../rules/agent-naming.md): all canonical agents and spawned sub-agents must use the exact deterministic `b3-*` `kebab-case` names (`b3-reviewer`, `b3-fixer`, `b3-<domain>-reviewer`, `b3-impl-<task-id>`, `b3-research-<slug>`) across all runs and hosts, and must never use `autodev` or `worker`.
+When dispatching, load [`dispatch-naming.md`](dispatch-naming.md) once. Use stable `b3-*` logical aliases where supported; keep host-returned agent IDs for resume. This is not an always-on rule.

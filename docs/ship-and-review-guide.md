@@ -32,7 +32,7 @@ flowchart TD
 
     WaveCheck{"2+ ready tasks?"}
     WaveCheck -->|"Yes"| GuardWave["b3-guard check-wave (-WaveReads, -ExpectedBaseSha) + check-worktree"]
-    GuardWave -->|"WAVE_OK"| Parallel["Build Parallel Wave (2-3 subagents; save impl_agent in progress.md)"]
+    GuardWave -->|"WAVE_OK"| Parallel["Build Parallel Wave (2-3 workers; save impl_agent in progress.md)"]
     GuardWave -->|"WAVE_CONFLICT / BASE_MISMATCH"| SeqImpl["Build Single Task (sequential degrade)"]
     WaveCheck -->|"No"| SeqImpl
 
@@ -61,28 +61,30 @@ flowchart TD
 
 ## 2. Parallel Disjoint Wave, Hub-and-Spoke & Prompt-Cache Resume
 
-Subagents never talk directly to each other and never edit `read_only_deps` or shared contracts. Parent acts as the sole Hub, records `impl_agent` IDs in `progress.md`, keeps Reviewers strictly independent, captures `snapshot` lazily only when fixes are needed, and **resumes the owning `impl_agent`** with delta findings to preserve subagent prompt cache.
+Subagent logical aliases are described in [`../agents/dispatch-naming.md`](../agents/dispatch-naming.md) and are only requested when the host supports custom spawn names. Host-returned IDs remain authoritative for resume.
+
+Workers never talk directly to each other and never edit `read_only_deps` or shared contracts. Parent acts as the sole Hub, records `impl_agent` IDs in `progress.md`, keeps Reviewers strictly independent, captures `snapshot` lazily only when fixes are needed, and **resumes the owning `impl_agent`** with delta findings to preserve worker prompt cache.
 
 ```mermaid
 sequenceDiagram
     participant P as Parent Orchestrator
     participant G as b3-guard CLI (0 tok)
-    participant S2 as b3-impl-t002 (impl_agent_2)
-    participant S3 as b3-impl-t003 (impl_agent_3)
+    participant W2 as b3-impl-t002 (logical alias)
+    participant W3 as b3-impl-t003 (logical alias)
     participant R as Fresh Independent Reviewer
 
     P->>G: check-wave (T002=api/orders.ts, T003=ui/OrderPanel.tsx)
     G-->>P: WAVE_OK: disjoint (2 tasks, 2 paths)
 
     par Launch T002
-        P->>S2: Brief (paths + verbatim contract + scoped Verify)
+        P->>W2: Brief (paths + verbatim contract + scoped Verify)
     and Launch T003
-        P->>S3: Brief (paths + verbatim contract + scoped Verify)
+        P->>W3: Brief (paths + verbatim contract + scoped Verify)
     end
-    Note over P: Record impl_agent_2 and impl_agent_3 in progress.md
+    Note over P: Store host-returned impl_agent IDs in progress.md
 
-    S2-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
-    S3-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
+    W2-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
+    W3-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
 
     P->>G: diff-scope + mechanical-check
     G-->>P: MECHANICAL_OK (scope_creep=none, leftovers=none, obsolete_hits=none)
@@ -93,8 +95,8 @@ sequenceDiagram
     P->>G: Lazy snapshot (capture pre_fix_object only because blocking findings exist)
     G-->>P: pre_fix_object SHA
 
-    P->>S2: Resume impl_agent_2 with R001 delta only (warm prompt cache)
-    S2-->>P: <=20 lines (R001 bug-class sweep + verification exit 0)
+    P->>W2: Resume impl_agent_2 with R001 delta only (warm prompt cache)
+    W2-->>P: <=20 lines (R001 bug-class sweep + verification exit 0)
 
     P->>G: diff-scope --prev-sha pre_fix_object + mechanical-check
     G-->>P: delta_files=api/orders.ts and MECHANICAL_OK
@@ -128,12 +130,12 @@ flowchart TD
     Gate -->|"Yes"| Pass2["PASS"]
     Gate -->|"No"| Breaker{"2-Tier Circuit Breaker?"}
 
-    Breaker -->|"Same finding survives 2 rounds"| ResetSubagent["Tier 1: Brief/Subagent stuck -> rewrite brief or spawn fresh b3-fixer (drop impl_agent)"]
+    Breaker -->|"Same finding survives 2 rounds"| ResetWorker["Tier 1: Brief/Worker stuck -> rewrite brief or spawn fresh Fixer (drop impl_agent)"]
     Breaker -->|"Same bug_class 2 consecutive rounds"| Redesign["Tier 2: Design flaw -> stop patching, return to Scope / Design"]
     Breaker -->|"Flat/rising blockers or cap reached"| Stuck["STUCK / INCOMPLETE (or FAIL)"]
     Breaker -->|"Converging"| Snap["Capture prev_sha (b3-guard snapshot) + update state.md"]
 
-    ResetSubagent --> Snap
+    ResetWorker --> Snap
     Snap --> Fix["Fix: Resume impl_agent or dispatch standalone b3-fixer (bug-class sweep in scope + verify-run; <= 20 lines)"]
     Fix --> LoopBack["Loop to diff-scope --prev-sha prev_sha"]
     LoopBack --> Scope
