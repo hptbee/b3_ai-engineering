@@ -68,11 +68,12 @@ sequenceDiagram
     participant W3 as Worker T003 (impl_agent_3)
     participant R as Fresh Independent Reviewer
 
-    P->>G: check-wave (T002=api/orders.ts; T003=ui/OrderPanel.tsx)
+    P->>G: check-wave (T002=api/orders.ts, T003=ui/OrderPanel.tsx)
     G-->>P: WAVE_OK: disjoint (2 tasks, 2 paths)
 
-    par Launch Wave in ONE tool turn (no polling)
+    par Launch T002
         P->>W2: Brief (paths + verbatim contract + scoped VERIFY)
+    and Launch T003
         P->>W3: Brief (paths + verbatim contract + scoped VERIFY)
     end
     Note over P: Record impl_agent_2 and impl_agent_3 in progress.md
@@ -84,19 +85,19 @@ sequenceDiagram
     G-->>P: MECHANICAL_OK (scope_creep=none, leftovers=none, obsolete_hits=none)
 
     P->>R: Independent review (base_sha, review_files, active findings only)
-    R-->>P: <=25 lines (Verdict: BLOCKING_FINDINGS — R001 in api/orders.ts)
+    R-->>P: <=25 lines (Verdict: BLOCKING_FINDINGS - R001 in api/orders.ts)
 
     P->>W2: Resume impl_agent_2 with R001 delta only (warm prompt cache)
     W2-->>P: <=20 lines (R001 bug-class sweep + verification exit 0)
 
     P->>G: diff-scope --prev-sha pre_fix_object + mechanical-check
-    G-->>P: delta_files=api/orders.ts | MECHANICAL_OK
+    G-->>P: delta_files=api/orders.ts and MECHANICAL_OK
 
     P->>R: Fresh Reviewer Pass 2 (delta_files + callers + residue)
     R-->>P: <=25 lines (Verdict: NO_BLOCKING_FINDINGS)
 
-    P->>G: precommit (T002 AllowedPaths) -> commit T002
-    P->>G: precommit (T003 AllowedPaths) -> commit T003
+    P->>G: precommit (T002 AllowedPaths) then commit T002
+    P->>G: precommit (T003 AllowedPaths) then commit T003
 ```
 
 ---
