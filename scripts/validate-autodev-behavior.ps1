@@ -681,19 +681,24 @@ try {
         }
     }
     $copiedCmdRelLinks = @()
+    $copiedCmdMissingB3Home = @()
     foreach ($cmdFile in @(Get-ChildItem (Join-Path $root 'commands') -Filter '*.md' -File | Where-Object { $_.Name -notin @('README.md', 'autodev.md') })) {
-        if ((Get-Content -LiteralPath $cmdFile.FullName -Raw) -match '\]\(\.\./') {
+        $cmdText = Get-Content -LiteralPath $cmdFile.FullName -Raw
+        if ($cmdText -match '\]\(\.\./') {
             $copiedCmdRelLinks += $cmdFile.Name
+        }
+        if ($cmdText -notmatch '\bB3_HOME\b') {
+            $copiedCmdMissingB3Home += $cmdFile.Name
         }
     }
     $cmdRlText = Get-Content -LiteralPath (Join-Path $root 'commands\review-loop.md') -Raw
     $cmdRevText = Get-Content -LiteralPath (Join-Path $root 'commands\review.md') -Raw
     $refLinkPattern = '\]\([^)]*review-loop/(spec|sizing|findings|models)\.md\)'
     $eagerSpec = ($cmdRlText -match $refLinkPattern) -or ($cmdRevText -match $refLinkPattern) -or ($wfMain -match $refLinkPattern) -or ($wfMain -match 'sizing\.md')
-    if ($hopViolations.Count -eq 0 -and (-not $eagerSpec) -and $copiedCmdRelLinks.Count -eq 0) {
+    if ($hopViolations.Count -eq 0 -and (-not $eagerSpec) -and $copiedCmdRelLinks.Count -eq 0 -and $copiedCmdMissingB3Home.Count -eq 0) {
         Pass 'context-single-hop-no-eager-spec'
     } else {
-        FailCheck 'context-single-hop-no-eager-spec' "hops=$($hopViolations.Count) eagerSpec=$eagerSpec copiedRelLinks=$($copiedCmdRelLinks -join ',')"
+        FailCheck 'context-single-hop-no-eager-spec' "hops=$($hopViolations.Count) eagerSpec=$eagerSpec copiedRelLinks=$($copiedCmdRelLinks -join ',') missingB3Home=$($copiedCmdMissingB3Home -join ',')"
     }
 
     $ctxOut = (& powershell -NoProfile -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot $root -Strict) -join "`n"

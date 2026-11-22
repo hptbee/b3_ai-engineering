@@ -5,8 +5,8 @@ description: Treat a named claim as a verification problem. Run evidence. Label 
 
 # verify
 
-**Action now:** treat a named claim as a verification problem. Run evidence. Label PASS / FAIL / INCOMPLETE.
+**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo), treat a named claim as a verification problem, run evidence, and label PASS / FAIL / INCOMPLETE.
 
-**Skill:** `skills/engineering/verification/SKILL.md`
+**Skill:** `{B3_HOME}/skills/engineering/verification/SKILL.md`
 
-**Rule:** `rules/verification.md`
+**Rule:** `{B3_HOME}/rules/verification.md`

@@ -50,7 +50,7 @@ Writes `.b3/home`, thin `AGENTS.md` (when missing), `.b3/autodev/` + `.agents/sk
 
 ## Command and role routing
 
-- `autodev` on Codex is `$autodev` (`adapters/command-skills/autodev/SKILL.md`), installed as `.agents/skills/autodev`. It points at `commands/autodev.md` and `workflows/autonomous-development.md` without duplicating the procedure.
+- `autodev` on Codex is `$autodev` (`adapters/command-skills/autodev/SKILL.md`), installed as `.agents/skills/autodev`. It routes directly in 1 hop to `{B3_HOME}/workflows/autonomous-development.md` without an intermediate `commands/autodev.md` hop or duplicating the procedure.
 - For review-loop delegation, pass `agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, `architecture-reviewer.md`, or `performance-reviewer.md` to an isolated delegated agent when available. Parent remains orchestrator.
 
 ## Thin by design

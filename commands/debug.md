@@ -5,10 +5,10 @@ description: Investigate root cause of a failure before patching. Use when a bug
 
 # debug
 
-**Action now:** investigate root cause of a failure before patching.
+**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and investigate root cause of a failure before patching.
 
-**Skill:** `skills/engineering/debugging/SKILL.md`
+**Skill:** `{B3_HOME}/skills/engineering/debugging/SKILL.md`
 
-Then `skills/engineering/verification/SKILL.md` after a fix.
+Then `{B3_HOME}/skills/engineering/verification/SKILL.md` after a fix.
 
 Do not skip to implement-from-guess.
