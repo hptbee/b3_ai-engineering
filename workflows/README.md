@@ -7,7 +7,7 @@ Workflows are multi-step orchestration. They answer: **in what order should thin
 | Workflow | Sequence |
 | --- | --- |
 | [`feature-implementation.md`](feature-implementation.md) | `Scope → Plan → Build → Verify → Review → Fix → Verify` |
-| [`ship.md`](ship.md) | `Preflight → Plan → [Scope → Gate → Build → Verify → Guard → Review → Fix → Commit] → Finalize` |
+| [`ship.md`](ship.md) | `Preflight → Plan → [Scope → Build → Verify → Review → Commit] → Finalize` |
 
 Progressive-disclosure references for `/ship` (opened only on template creation or `resume`):
 - [`references/ship-templates.md`](references/ship-templates.md) — `master-plan.md` (`Shared contracts`), `progress.md` (`impl_agent`), and `approach/T00N.md` schemas

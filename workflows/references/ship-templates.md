@@ -53,7 +53,7 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 - plan_version: 1
 - branch: <branch>
 - run_base_sha: <SHA>
-- baseline_status: <PASS | FAIL(detail) | NOT_RUN(reason)>
+- baseline_status: <PASS | FAIL(detail) | NOT_RUN(verify_green)>
 - initial_dirty_paths: <csv paths or none>
 - current_task: T001
 - current_task_base_sha: <SHA>
@@ -78,14 +78,8 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 - reuse:
 - obsoletes:
 - inspected:
-- current_desired:
 - files:
-- functions:
-- contracts: none
-- data_flow:
-- edge_cases:
 - changes:
-- tests:
 - verification:
 
 ## Blockers

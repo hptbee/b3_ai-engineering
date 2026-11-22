@@ -8,7 +8,7 @@ description: >
 
 # ship
 
-**Action now:** run the full lifecycle (`Preflight → Plan → [Scope → Gate → Build → Verify → Guard → Review → Fix → Commit] → Finalize`) until `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`. Do not stop after Plan or between ready tasks — continue in this session.
+**Action now:** run the full lifecycle (`Preflight → Plan → [Scope → Build → Verify → Review → Commit] → Finalize`) until `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`. Do not stop after Plan or between ready tasks — continue in this session.
 
 1. Resolve `B3_HOME` (first match containing `workflows/ship.md`: `B3_HOME` env, product `.b3/home`, or this repo; else `BLOCKED`). Never copy B3 `skills/` into the product repo.
 2. **Single-hop load:** open and follow `{B3_HOME}/workflows/ship.md` directly (do not waste a hop reading `commands/ship.md`).

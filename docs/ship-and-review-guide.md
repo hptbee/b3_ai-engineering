@@ -9,7 +9,7 @@ Architecture, execution flow, and context-optimization reference for `/ship`, `/
 
 ## 1. `/ship` End-to-End Lifecycle
 
-Unified step flow: `Preflight → Plan → [Scope → Gate → Build → Verify → Guard → Review → Fix → Commit] → Finalize`.
+Core 7-step flow: `Preflight → Plan → [Scope → Build → Verify → Review → Commit] → Finalize`.
 
 ```mermaid
 flowchart TD
@@ -18,14 +18,13 @@ flowchart TD
     Resolve -->|"resume / unfinished run"| Resume["Scenario C: ship-resume.md (reconcile checkpoints vs Git)"]
     Resolve -->|"New requirement / plan"| NewRun["b3-guard new-run (.b3/ship/runs/run_id + CURRENT)"]
 
-    NewRun --> PreFlight["Preflight: record initial_dirty_paths + run baseline checks"]
+    NewRun --> PreFlight["Preflight: initial_dirty_paths + checks (baseline non-blocking or on-demand)"]
     PreFlight --> Plan["Plan (master-plan.md): Invariants, AC1..ACn, Verbatim Shared Contracts"]
     Plan --> ReadyCheck["Select Ready Tasks (pending + all depends_on completed)"]
     Resume --> ReadyCheck
 
-    ReadyCheck --> Scope["Scope (JIT per task): split files vs read_only_deps, reuse, obsoletes"]
-    Scope --> Gate["Gate (Readiness Gate: readiness ready + task_spec_fingerprint)"]
-    Gate --> PreReview{"depth == detailed?"}
+    ReadyCheck --> Scope["Scope (JIT per task): files vs read_only_deps + Readiness Gate"]
+    Scope --> PreReview{"depth == detailed?"}
     PreReview -->|"Yes"| DesignRev["1-Pass Pre-code Review (design-only): architecture (contrarian) + security"]
     DesignRev -->|"CONFIRMED flaw"| Scope
     DesignRev -->|"Clean"| WaveCheck
@@ -34,31 +33,35 @@ flowchart TD
     WaveCheck{"2+ ready tasks?"}
     WaveCheck -->|"Yes"| GuardWave["b3-guard check-wave (verify disjoint OWNED FILES)"]
     GuardWave -->|"WAVE_OK"| Parallel["Build Parallel Wave (2-3 workers; save impl_agent in progress.md)"]
-    GuardWave -->|"WAVE_CONFLICT"| SeqImpl["Build Single Task + Scoped Verify"]
+    GuardWave -->|"WAVE_CONFLICT"| SeqImpl["Build Single Task"]
     WaveCheck -->|"No"| SeqImpl
 
-    Parallel --> Hub["Parent Hub Relay: merge discoveries & change_requests + repo checks"]
-    SeqImpl --> Snap["b3-guard snapshot (capture pre_fix_object)"]
-    Hub --> Snap
+    Parallel --> Hub["Parent Hub Relay: merge discoveries & change_requests + scoped Verify"]
+    SeqImpl --> TaskVerify["Verify: run scoped tests (probe baseline on-demand only if red)"]
+    Hub --> TaskVerify
 
-    Snap --> Mech["Guard (0-Token CLI): diff-scope + mechanical-check (scope_creep, leftovers, obsoletes)"]
+    TaskVerify --> Mech["Review step - 0-Token Guard: diff-scope + mechanical-check"]
     Mech -->|"Exit 2: Findings"| FixMech["Fix mechanical findings first"]
     FixMech --> Mech
-    Mech -->|"MECHANICAL_OK"| ReviewTier["Review & Fix (inline+SMALL: 1 reviewer; else review-loop/strategy.md)"]
+    Mech -->|"MECHANICAL_OK"| ReviewTier["Review pass (inline+SMALL: 1 reviewer; else review-loop/strategy.md)"]
+    ReviewTier -->|"Blocking CONFIRMED"| LazySnap["Lazy b3-guard snapshot (pre_fix_object) -> Fix -> delta Review"]
+    LazySnap --> ReviewTier
+    ReviewTier -->|"Pass"| PreCommit["Commit (sequential b3-guard precommit + git commit + collapse approach to 1 line)"]
 
-    ReviewTier --> PreCommit["Commit (sequential b3-guard precommit + git commit)"]
-    PreCommit --> Collapse["Collapse T00N approach to 1 line + mark completed in progress.md"]
-    Collapse --> MoreTasks{"More ready tasks?"}
+    PreCommit --> MoreTasks{"More ready tasks?"}
     MoreTasks -->|"Yes"| ReadyCheck
-    MoreTasks -->|"No"| FinalVer["Finalize: full checks + Cross-Cutting review (run_base_sha..HEAD)"]
+    MoreTasks -->|"No"| MultiTask{"2+ completed tasks?"}
+    MultiTask -->|"Yes"| FinalVer["Finalize: full checks + Cross-Cutting review (run_base_sha..HEAD)"]
+    MultiTask -->|"No (1 task)"| FinalChecksOnly["Finalize: full checks only (skip duplicate review)"]
     FinalVer --> Outcome["Set run_status: PASS | FAIL | INCOMPLETE | BLOCKED"]
+    FinalChecksOnly --> Outcome
 ```
 
 ---
 
 ## 2. Parallel Disjoint Wave, Hub-and-Spoke & Prompt-Cache Resume
 
-Workers never talk directly to each other and never edit `read_only_deps` or shared contracts. Parent acts as the sole Hub, records `impl_agent` IDs in `progress.md`, keeps Reviewers strictly independent, and **resumes the owning `impl_agent`** with delta findings to preserve worker prompt cache.
+Workers never talk directly to each other and never edit `read_only_deps` or shared contracts. Parent acts as the sole Hub, records `impl_agent` IDs in `progress.md`, keeps Reviewers strictly independent, captures `snapshot` lazily only when fixes are needed, and **resumes the owning `impl_agent`** with delta findings to preserve worker prompt cache.
 
 ```mermaid
 sequenceDiagram
@@ -81,11 +84,14 @@ sequenceDiagram
     W2-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
     W3-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
 
-    P->>G: snapshot (pre_fix_object) + diff-scope + mechanical-check
+    P->>G: diff-scope + mechanical-check
     G-->>P: MECHANICAL_OK (scope_creep=none, leftovers=none, obsolete_hits=none)
 
     P->>R: Independent review (base_sha, review_files, active findings only)
     R-->>P: <=25 lines (Verdict: BLOCKING_FINDINGS - R001 in api/orders.ts)
+
+    P->>G: Lazy snapshot (capture pre_fix_object only because blocking findings exist)
+    G-->>P: pre_fix_object SHA
 
     P->>W2: Resume impl_agent_2 with R001 delta only (warm prompt cache)
     W2-->>P: <=20 lines (R001 bug-class sweep + verification exit 0)
