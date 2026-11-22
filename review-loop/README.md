@@ -2,10 +2,10 @@
 
 | Piece | File | Runtime load |
 | --- | --- | --- |
-| Procedure | [`strategy.md`](strategy.md) | **Load on `/review-loop` and `/ship` Review** (self-sufficient at runtime) |
+| Procedure | [`strategy.md`](strategy.md) | **Load on `/b3-review-loop` and `/b3-ship` Review** (self-sufficient at runtime) |
 | Contract / Sizing / Slots | [`spec.md`](spec.md), [`sizing.md`](sizing.md), [`models.md`](models.md) | **Reference only** — do not load on normal runs unless disambiguating an edge case |
 | Two-model (Cursor) | [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md) | Optional host `model:` override |
-| Invoke / Roles | `commands/review-loop.md`, `agents/*.md` | Entry command & isolated subagent roles |
+| Invoke / Roles | `commands/b3-review-loop.md`, `agents/*.md` | Entry command & isolated subagent roles |
 
 **Context discipline:**
 1. Load `strategy.md` only; sizing thresholds, status aliases, Iteration 2+ `--prev-sha` delta rules, `impl_agent` resume, and 2-tier circuit breaker are inlined there.

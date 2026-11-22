@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic helper checks for /ship and /review-loop (not an orchestrator or runner).
+# Deterministic helper checks for /b3-ship and /b3-review-loop (not an orchestrator or runner).
 # Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune
 set -euo pipefail
 

@@ -21,8 +21,8 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $fx 'commands') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fx 'agents') | Out-Null
     Set-Content (Join-Path $fx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Set-Content (Join-Path $fx 'commands\plan.md') '# plan'
-    Set-Content (Join-Path $fx 'agents\reviewer.md') '# reviewer'
+    Set-Content (Join-Path $fx 'commands\b3-plan.md') '# b3-plan'
+    Set-Content (Join-Path $fx 'agents\b3-reviewer.md') '# b3-reviewer'
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fx 'adapters\sync-skills.ps1')
 
     $empty = Join-Path $fx '.agents\skills'
@@ -56,8 +56,8 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $fxCur 'commands') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fxCur 'agents') | Out-Null
     Set-Content (Join-Path $fxCur 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Set-Content (Join-Path $fxCur 'commands\plan.md') '# plan'
-    Set-Content (Join-Path $fxCur 'agents\reviewer.md') '# reviewer'
+    Set-Content (Join-Path $fxCur 'commands\b3-plan.md') '# b3-plan'
+    Set-Content (Join-Path $fxCur 'agents\b3-reviewer.md') '# b3-reviewer'
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCur 'adapters\sync-skills.ps1')
     & powershell -NoProfile -File (Join-Path $fxCur 'adapters\sync-skills.ps1') -HostName cursor | Out-Null
     $curSyncExit = $LASTEXITCODE
@@ -72,7 +72,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $fxCl 'skills\eng\demo') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fxCl 'agents') | Out-Null
     Set-Content (Join-Path $fxCl 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Set-Content (Join-Path $fxCl 'agents\reviewer.md') '# reviewer'
+    Set-Content (Join-Path $fxCl 'agents\b3-reviewer.md') '# b3-reviewer'
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCl 'adapters\sync-skills.ps1')
     & powershell -NoProfile -File (Join-Path $fxCl 'adapters\sync-skills.ps1') -HostName claude | Out-Null
     $clSyncExit = $LASTEXITCODE
@@ -111,7 +111,7 @@ try {
     if ($LASTEXITCODE -ne 0) { FailCheck 'install-product' "exit $LASTEXITCODE" }
     else {
         $homePath = (Get-Content (Join-Path $product '.b3\home') -Raw).Trim()
-        $cmd = Join-Path $product '.cursor\commands\ship.md'
+        $cmd = Join-Path $product '.cursor\commands\b3-ship.md'
         $copiedSkills = Test-Path (Join-Path $product '.cursor\skills')
         $gi = Get-Content (Join-Path $product '.gitignore') -Raw
         $giOk = ($gi -match '(?m)^\s*\.b3/ship/\s*$') -or ($gi -match '(?m)^\s*\.b3/\s*$')
@@ -135,9 +135,9 @@ try {
             if ($after -match 'custom ship') { Pass 'install-refuse-overwrite-command' }
             else { FailCheck 'install-refuse-overwrite-command' 'file was changed' }
         } else {
-            FailCheck 'install-refuse-overwrite-command' 'exit 0 overwrote custom ship.md'
+            FailCheck 'install-refuse-overwrite-command' 'exit 0 overwrote custom b3-ship.md'
         }
-        Copy-Item (Join-Path $root 'commands\ship.md') $cmd -Force
+        Copy-Item (Join-Path $root 'commands\b3-ship.md') $cmd -Force
 
         & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $product -B3Home $root -HostName codex
         if ($LASTEXITCODE -ne 0) { FailCheck 'install-product-codex' "exit $LASTEXITCODE" }
@@ -145,7 +145,7 @@ try {
             $agentsLink = Join-Path $product '.agents\skills'
             $item = Get-Item -LiteralPath $agentsLink -Force
             $isTreeLink = $item.LinkType -in @('Junction', 'SymbolicLink')
-            $shipOk = Test-Path (Join-Path $agentsLink 'ship\SKILL.md')
+            $shipOk = Test-Path (Join-Path $agentsLink 'b3-ship\SKILL.md')
             $planningOk = Test-Path (Join-Path $agentsLink 'planning\SKILL.md')
             $skillN = @(Get-ChildItem -LiteralPath $agentsLink -Directory -Force -ErrorAction SilentlyContinue).Count
             $giCodex = Get-Content (Join-Path $product '.gitignore') -Raw
@@ -228,7 +228,7 @@ try {
     if ($inlineOk) { Pass 'inline-template-fields' }
     else { FailCheck 'inline-template-fields' 'progress template missing required lean inline fields' }
 
-    # Simulated Git freshness (not a live /ship agent). Named-file change vs unrelated change.
+    # Simulated Git freshness (not a live /b3-ship agent). Named-file change vs unrelated change.
     $fresh = Join-Path $sandbox 'freshness'
     New-Item -ItemType Directory -Path $fresh | Out-Null
     Push-Location $fresh
@@ -323,7 +323,7 @@ try {
         $agItem = Get-Item -LiteralPath $agSkillsDir -Force
         $agIsTreeLink = $agItem.LinkType -in @('Junction', 'SymbolicLink')
         $agSkillDirs = @(Get-ChildItem -LiteralPath $agSkillsDir -Directory -Force -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') })
-        $agShipOk = Test-Path (Join-Path $agSkillsDir 'ship\SKILL.md')
+        $agShipOk = Test-Path (Join-Path $agSkillsDir 'b3-ship\SKILL.md')
         $agPlanningOk = Test-Path (Join-Path $agSkillsDir 'planning\SKILL.md')
         & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $agProduct -B3Home $root -HostName antigravity | Out-Null
         $agIdemOk = ($LASTEXITCODE -eq 0)
@@ -360,10 +360,10 @@ try {
         $clSkillDirs = @(Get-ChildItem -LiteralPath $clSkillsDir -Directory -Force -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') })
         $clAgentsLinkItem = Get-Item -LiteralPath (Join-Path $clProduct '.claude\agents') -Force -ErrorAction SilentlyContinue
         $clAgentsIsLink = $clAgentsLinkItem -and ($clAgentsLinkItem.LinkType -in @('Junction', 'SymbolicLink') -or (($clAgentsLinkItem.Attributes.ToString()) -match 'ReparsePoint'))
-        $clAgentsOk = $clAgentsIsLink -and (Test-Path (Join-Path $clProduct '.claude\agents\reviewer.md'))
-        $clShipItem = Get-Item -LiteralPath (Join-Path $clSkillsDir 'ship') -Force -ErrorAction SilentlyContinue
+        $clAgentsOk = $clAgentsIsLink -and (Test-Path (Join-Path $clProduct '.claude\agents\b3-reviewer.md'))
+        $clShipItem = Get-Item -LiteralPath (Join-Path $clSkillsDir 'b3-ship') -Force -ErrorAction SilentlyContinue
         $clShipIsLink = $clShipItem -and ($clShipItem.LinkType -in @('Junction', 'SymbolicLink') -or (($clShipItem.Attributes.ToString()) -match 'ReparsePoint'))
-        $clShipOk = $clShipIsLink -and (Test-Path (Join-Path $clSkillsDir 'ship\SKILL.md'))
+        $clShipOk = $clShipIsLink -and (Test-Path (Join-Path $clSkillsDir 'b3-ship\SKILL.md'))
         & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $clProduct -B3Home $root -HostName claude | Out-Null
         $clIdemOk = ($LASTEXITCODE -eq 0)
         if (($clHomePath -eq $root) -and $clMdOk -and $clAgentsMd -and $clGiOk -and (-not $clIsTreeLink) -and ($clSkillDirs.Count -ge 30) -and $clAgentsOk -and $clShipOk -and $clIdemOk) {
@@ -410,7 +410,7 @@ try {
         $pSkillsOk = ($pSkillDirs.Count -ge 30)
 
         $pAgentsDir = Join-Path $pluginOut 'agents'
-        $roAgents = @('reviewer.md', 'security-reviewer.md', 'architecture-reviewer.md', 'performance-reviewer.md')
+        $roAgents = @('b3-reviewer.md', 'b3-security-reviewer.md', 'b3-architecture-reviewer.md', 'b3-performance-reviewer.md')
         $agentsOk = $true
         foreach ($ro in $roAgents) {
             $ap = Join-Path $pAgentsDir $ro
@@ -420,12 +420,12 @@ try {
                 $agentsOk = $false
                 break
             }
-            if ($ro -eq 'performance-reviewer.md' -and ($at -notmatch 'Independent check for material performance risks')) {
+            if ($ro -eq 'b3-performance-reviewer.md' -and ($at -notmatch 'Independent check for material performance risks')) {
                 $agentsOk = $false
                 break
             }
         }
-        $fixerPath = Join-Path $pAgentsDir 'fixer.md'
+        $fixerPath = Join-Path $pAgentsDir 'b3-fixer.md'
         if (-not (Test-Path -LiteralPath $fixerPath)) { $agentsOk = $false }
         else {
             $ft = Get-Content -LiteralPath $fixerPath -Raw
@@ -833,8 +833,8 @@ try {
             $copiedCmdMissingB3Home += $cmdFile.Name
         }
     }
-    $cmdRlText = Get-Content -LiteralPath (Join-Path $root 'commands\review-loop.md') -Raw
-    $cmdRevText = Get-Content -LiteralPath (Join-Path $root 'commands\review.md') -Raw
+    $cmdRlText = Get-Content -LiteralPath (Join-Path $root 'commands\b3-review-loop.md') -Raw
+    $cmdRevText = Get-Content -LiteralPath (Join-Path $root 'commands\b3-review.md') -Raw
     $refLinkPattern = '\]\([^)]*review-loop/(spec|sizing|models)\.md\)'
     $eagerSpec = ($cmdRlText -match $refLinkPattern) -or ($cmdRevText -match $refLinkPattern) -or ($wfMain -match $refLinkPattern) -or ($wfMain -match 'sizing\.md')
     $specLeaks = @()
@@ -849,7 +849,7 @@ try {
         }
     }
     $prodAgentsText = Get-Content -LiteralPath (Join-Path $root 'adapters\product-agents.md') -Raw
-    $prodAgentsTwoHop = ($prodAgentsText -match 'commands/ship\.md')
+    $prodAgentsTwoHop = ($prodAgentsText -match 'commands/b3-ship\.md')
     if ($hopViolations.Count -eq 0 -and (-not $eagerSpec) -and $copiedCmdRelLinks.Count -eq 0 -and $copiedCmdMissingB3Home.Count -eq 0 -and $specLeaks.Count -eq 0 -and (-not $prodAgentsTwoHop)) {
         Pass 'context-single-hop-no-eager-spec'
     } else {

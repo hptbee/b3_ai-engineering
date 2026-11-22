@@ -2,7 +2,7 @@ id: ship-story-001
 artifact: workflows/ship.md
 intent: A user story with no plan must produce a master plan and continue into implementation
 scenario: |
-  User: /ship Implement role-based access control
+  User: /b3-ship Implement role-based access control
   No active master-plan.md exists under .b3/ship/runs/
   Agent writes the plan, then stops and asks the user to run implement
 expected_outcome: FAIL

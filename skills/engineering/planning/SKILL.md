@@ -23,7 +23,7 @@ Adapted from Superpowers writing-plans (file map, bite-sized tasks, no placehold
 - One localized bug with known cause → `debugging`
 - User said implement now on a tiny change → `problem-solving`
 - Pattern mining → `research-engineering-patterns`
-- Per-task implementation approach inside `/ship` → `workflows/ship.md` `Scope` & `Gate` (not a second master plan)
+- Per-task implementation approach inside `/b3-ship` → `workflows/ship.md` `Scope` & `Gate` (not a second master plan)
 
 Near miss: “is this architecture sound?” with no implementation yet → this skill plus `architecture/simplest-correct`.
 
@@ -41,7 +41,7 @@ Near miss: “is this architecture sound?” with no implementation yet → this
 
 - Execution: `skills/engineering/problem-solving/SKILL.md`
 - Workflow: `workflows/feature-implementation.md`
-- Autonomous lifecycle: `/ship` Scenario A/B uses this skill for the one master plan. Per-task approach is `workflows/ship.md` `Scope` (`problem-solving` + `Gate`). Do not load this skill again on a ready task.
+- Autonomous lifecycle: `/b3-ship` Scenario A/B uses this skill for the one master plan. Per-task approach is `workflows/ship.md` `Scope` (`problem-solving` + `Gate`). Do not load this skill again on a ready task.
 
 ## Verification
 

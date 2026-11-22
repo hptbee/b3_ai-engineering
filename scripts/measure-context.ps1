@@ -81,7 +81,7 @@ $alwaysOnBytes = $agentsBytes + $rulesBytes + $fmTotalBytes
 
 $wfShipBytes = Get-FileBytes 'workflows/ship.md'
 if ($wfShipBytes -gt 9500) { $warnings.Add("workflows/ship.md ($wfShipBytes B > 9500 B)") }
-$shipCoreBytes = $wfShipBytes + (Get-FileBytes 'commands/ship.md')
+$shipCoreBytes = $wfShipBytes + (Get-FileBytes 'commands/b3-ship.md')
 
 $shipRefsBytes = (Get-FileBytes 'workflows/references/ship-templates.md') + (Get-FileBytes 'workflows/references/ship-resume.md')
 if ($shipRefsBytes -gt 6000) { $warnings.Add("workflows/references/ship-{templates,resume}.md ($shipRefsBytes B > 6000 B)") }
@@ -90,7 +90,7 @@ $rlStrategyBytes = Get-FileBytes 'review-loop/strategy.md'
 if ($rlStrategyBytes -gt 5400) { $warnings.Add("review-loop/strategy.md ($rlStrategyBytes B > 5400 B)") }
 
 $crSkillBytes = Get-FileBytes 'skills/engineering/code-review/SKILL.md'
-$rlOpBytes = $rlStrategyBytes + (Get-FileBytes 'commands/review-loop.md') + (Get-FileBytes 'agents/reviewer.md') + $crSkillBytes
+$rlOpBytes = $rlStrategyBytes + (Get-FileBytes 'commands/b3-review-loop.md') + (Get-FileBytes 'agents/b3-reviewer.md') + $crSkillBytes
 $rlAllBytes = 0
 foreach ($f in @('spec.md', 'strategy.md', 'sizing.md', 'models.md')) {
     $rlAllBytes += Get-FileBytes "review-loop/$f"
@@ -104,7 +104,7 @@ if ($agentRolesBytes -gt 8500) { $warnings.Add("agents/*.md roles ($agentRolesBy
 
 Write-Output "=== B3 Context Budget Report ==="
 Write-Output ("always_on_total   : {0,6} B (~{1,4} tok)  [AGENTS.md={2} B, rules={3} B, {4} skill frontmatters={5} B]" -f $alwaysOnBytes, (Est-Tokens $alwaysOnBytes), $agentsBytes, $rulesBytes, $skillFiles.Count, $fmTotalBytes)
-Write-Output ("ship_core_load    : {0,6} B (~{1,4} tok)  [ship.md={2} B + commands/ship.md]" -f $shipCoreBytes, (Est-Tokens $shipCoreBytes), $wfShipBytes)
+Write-Output ("ship_core_load    : {0,6} B (~{1,4} tok)  [ship.md={2} B + commands/b3-ship.md]" -f $shipCoreBytes, (Est-Tokens $shipCoreBytes), $wfShipBytes)
 Write-Output ("ship_refs_load    : {0,6} B (~{1,4} tok)  [ship-templates.md + ship-resume.md]" -f $shipRefsBytes, (Est-Tokens $shipRefsBytes))
 Write-Output ("review_loop_op    : {0,6} B (~{1,4} tok)  [strategy={2} B + cmd + reviewer + code-review/SKILL.md={3} B]" -f $rlOpBytes, (Est-Tokens $rlOpBytes), $rlStrategyBytes, $crSkillBytes)
 Write-Output ("review_loop_all   : {0,6} B (~{1,4} tok)  [spec+strategy+sizing+models (reference-only)]" -f $rlAllBytes, (Est-Tokens $rlAllBytes))

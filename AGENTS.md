@@ -8,11 +8,11 @@ Personal AI Engineering System with a **host-neutral canonical core** (`rules/`,
 | --- | --- | --- |
 | Always-on constraints | `AGENTS.md`; `rules/*.md` | Every session |
 | Methods | `skills/<category>/<name>/SKILL.md` | Description-driven or explicit invocation |
-| User actions | `commands/*.md` (and `adapters/command-skills/`) | `/plan` `/implement` `/debug` `/review` `/verify` `/review-loop` `/ship` |
-| Isolated roles | `agents/*.md` | Reviewer, fixer, security, architecture, performance reviewers |
+| User actions | `commands/*.md` (and `adapters/command-skills/`) | `/b3-plan` `/b3-implement` `/b3-debug` `/b3-review` `/b3-verify` `/b3-review-loop` `/b3-ship` |
+| Isolated roles | `agents/*.md` | `b3-reviewer`, `b3-fixer`, `b3-security-reviewer`, `b3-architecture-reviewer`, `b3-performance-reviewer` |
 | Default sequence | `workflows/feature-implementation.md` | Single-stage feature work |
-| Full lifecycle | `workflows/ship.md` | `/ship`: preflight through build, verify, review, commit, resume |
-| Review loop | `review-loop/strategy.md` (`spec.md` contract) | `/review-loop` |
+| Full lifecycle | `workflows/ship.md` | `/b3-ship`: preflight through build, verify, review, commit, resume |
+| Review loop | `review-loop/strategy.md` (`spec.md` contract) | `/b3-review-loop` |
 | Docs / Provenance / Evals | `docs/`, `research/`, `evals/` | Definitions, external intake, system fixtures |
 | Personal context / Adapters | `knowledge/personal/`, `adapters/` | Background (never overrides rules); host wiring |
 

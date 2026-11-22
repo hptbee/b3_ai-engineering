@@ -9,7 +9,7 @@
 | `AGENTS.md` | Native workspace rule (auto-loaded from repo root) |
 | `rules/*.md` | Referenced via `AGENTS.md` in-repo, or generated into plugin `rules/AGENTS.md` (plain Markdown, no frontmatter, `< 24 KB`) |
 | `skills/` | Committed `.agents/skills.json` (1-level category entries) in this repo; flattened `.agents/skills/<name>` junctions/symlinks in product repos (`install-product -HostName antigravity`), or inside plugin `skills/<name>` |
-| `commands/` + `adapters/command-skills/` | Exposed as skills via `adapters/command-skills/` (`ship`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`) or natural prompt intent |
+| `commands/` + `adapters/command-skills/` | Exposed as skills via `adapters/command-skills/` (`b3-ship`, `b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`) or natural prompt intent |
 | `agents/*.md` | Generated into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, explicit least-privilege `tools:`), or dynamically delegated via `define_subagent` / `invoke_subagent` |
 
 ## Capability classification
@@ -20,7 +20,7 @@
 | `.agents/skills.json` (`entries`) | One-level discovery over categorized `skills/*` and `adapters/command-skills` without duplicate copies | SUPPORTED |
 | `.agents/skills/<name>/SKILL.md` | Flattened skill discovery in product repos | SUPPORTED |
 | Global plugin (`~/.gemini/config/plugins/b3-ai-engineering/`) | Machine-wide bundle of rules, skills, and isolated subagents (`plugin.json`, `rules/AGENTS.md`, `skills/`, `agents/`) | SUPPORTED |
-| Subagents (`agents/<name>.md` or dynamic `define_subagent`) | Review-loop isolation (`reviewer`, `fixer`, specialists) | SUPPORTED BY ANTIGRAVITY; B3 runtime isolation `UNKNOWN / INCOMPLETE` |
+| Subagents (`agents/<name>.md` or dynamic `define_subagent`) | Review-loop isolation (`b3-reviewer`, `b3-fixer`, specialists) | SUPPORTED BY ANTIGRAVITY; B3 runtime isolation `UNKNOWN / INCOMPLETE` |
 | Hooks (`hooks.json`), MCP (`mcp_config.json`) | Not required to preserve B3 meaning | SUPPORTED BUT UNNECESSARY FOR B3 |
 | Runtime skill & plugin discovery in fresh session | Live end-to-end activation evidence | `UNKNOWN / INCOMPLETE` |
 
@@ -30,8 +30,8 @@ When generating plugin agents from `agents/*.md`, `model:` and `readonly:` are m
 
 | B3 role | Source `readonly` | Antigravity `tools` |
 | --- | --- | --- |
-| `reviewer`, `security-reviewer`, `architecture-reviewer`, `performance-reviewer` | `true` | `[read_file]` |
-| `fixer` | `false` | `[read_file, edit_file, write_file, run_command, manage_task]` |
+| `b3-reviewer`, `b3-security-reviewer`, `b3-architecture-reviewer`, `b3-performance-reviewer` | `true` | `[read_file]` |
+| `b3-fixer` | `false` | `[read_file, edit_file, write_file, run_command, manage_task]` |
 
 ## Setup modes
 
@@ -75,7 +75,7 @@ Attach B3 to a separate product repository without copying `skills/` into it:
 ./adapters/install-product.sh --product-root /path/to/your-product --host antigravity
 ```
 
-This writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `.b3/ship/` + `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `ship`).
+This writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `.b3/ship/` + `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `b3-ship`).
 
 > **Cursor coexistence:** If Cursor also opens that same product repository, do **not** create `.agents/skills` in the product repo (Cursor cross-loads `.agents/skills` and can duplicate skills). Instead, attach the product with `-HostName cursor` (or `--host cursor`) and install the **global Antigravity plugin** below.
 

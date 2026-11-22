@@ -1,5 +1,0 @@
-id: agent-performance-reviewer-footer
-artifact: agents/performance-reviewer.md
-intent: Must stay quiet on copy-only PRs
-input: "Review this PR that only changes the footer copyright year."
-expected_bucket: should-not-trigger

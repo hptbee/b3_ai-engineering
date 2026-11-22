@@ -1,13 +1,13 @@
 # Ship & Review Visual Guide
 
-Architecture, execution flow, and context-optimization reference for `/ship`, `/review-loop`, and standalone `/review`.
+Architecture, execution flow, and context-optimization reference for `/b3-ship`, `/b3-review-loop`, and standalone `/b3-review`.
 
 > [!NOTE]
 > This guide is human-facing documentation (`0` runtime LLM tokens). Canonical agent procedures stay in [`../workflows/ship.md`](../workflows/ship.md), [`../review-loop/strategy.md`](../review-loop/strategy.md), and [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md).
 
 ---
 
-## 1. `/ship` End-to-End Lifecycle
+## 1. `/b3-ship` End-to-End Lifecycle
 
 Core 7-step flow: `Preflight → Plan → [Scope → Build → Verify → Review → Commit] → Finalize`.
 
@@ -108,13 +108,13 @@ sequenceDiagram
 
 ---
 
-## 3. `/review-loop` Convergence & 2-Tier Circuit Breaker
+## 3. `/b3-review-loop` Convergence & 2-Tier Circuit Breaker
 
 [`../review-loop/strategy.md`](../review-loop/strategy.md) is self-sufficient at runtime (skipping `spec.md`, `sizing.md`, and `models.md` on normal runs to save ~13 KB per invocation).
 
 ```mermaid
 flowchart TD
-    Start["/review-loop or /ship Review"] --> Scope["Guard (0-Token CLI): diff-scope + mechanical-check"]
+    Start["/b3-review-loop or /b3-ship Review"] --> Scope["Guard (0-Token CLI): diff-scope + mechanical-check"]
     Scope -->|"EMPTY_DIFF"| Incomplete["UNKNOWN / INCOMPLETE"]
     Scope -->|"Exit 2: mechanical"| FixMech["Fix scope_creep / leftovers / obsoletes"]
     FixMech --> Scope
@@ -141,13 +141,13 @@ flowchart TD
 
 ---
 
-## 4. Standalone `/review` — 3-Mode Flow (Local, GitHub PR & Safe Posting)
+## 4. Standalone `/b3-review` — 3-Mode Flow (Local, GitHub PR & Safe Posting)
 
-Standalone `/review` ([`../commands/review.md`](../commands/review.md), [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md)) routes into 3 explicit modes and only loads [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md) when a GitHub PR or PR comment is involved (`0` extra bytes on local reviews).
+Standalone `/b3-review` ([`../commands/b3-review.md`](../commands/b3-review.md), [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md)) routes into 3 explicit modes and only loads [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md) when a GitHub PR or PR comment is involved (`0` extra bytes on local reviews).
 
 ```mermaid
 flowchart TD
-    Inv["/review [target]"] --> Mode{"Target Mode?"}
+    Inv["/b3-review [target]"] --> Mode{"Target Mode?"}
 
     Mode -->|"Local (default)"| AutoBase["b3-guard diff-scope (auto base: dirty WT -> HEAD; clean branch -> merge-base)"]
     AutoBase --> LocalMech["b3-guard mechanical-check (0 tokens)"]
@@ -197,9 +197,9 @@ All byte caps are measured in **canonical LF UTF-8 bytes** (identical across Win
 | `AGENTS.md` | `<= 3,600 B` | Always-on universal repository map |
 | Individual `SKILL.md` | `<= 4,000 B` | Keeps every skill compact and focused |
 | Individual skill frontmatter | `<= 280 B` | Prevents always-on skill-index bloat |
-| `workflows/ship.md` | `<= 9,500 B` | Core `/ship` orchestrator prompt |
-| `ship_refs_load` (`templates` + `resume`) | `<= 6,000 B` | On-demand `/ship` progressive-disclosure refs |
-| `review-loop/strategy.md` | `<= 5,400 B` | Self-sufficient runtime `/review-loop` prompt |
+| `workflows/ship.md` | `<= 9,500 B` | Core `/b3-ship` orchestrator prompt |
+| `ship_refs_load` (`templates` + `resume`) | `<= 6,000 B` | On-demand `/b3-ship` progressive-disclosure refs |
+| `review-loop/strategy.md` | `<= 5,400 B` | Self-sufficient runtime `/b3-review-loop` prompt |
 | `agents_roles_total` (5 runtime roles) | `<= 8,500 B` | Compact subagent role specs with strict reply caps |
 
 ---
@@ -208,17 +208,17 @@ All byte caps are measured in **canonical LF UTF-8 bytes** (identical across Win
 
 Hệ thống tách biệt tầng **suy luận sâu (Deep / high-reasoning)** và tầng **thực thi phẫu thuật (Fast / surgical coding)** theo hướng host-neutral (chi tiết contract tại [`../review-loop/models.md`](../review-loop/models.md)):
 
-| Tầng | Vai trò trong `/ship` & `/review-loop` | Lý do & Bảo vệ chất lượng |
+| Tầng | Vai trò trong `/b3-ship` & `/b3-review-loop` | Lý do & Bảo vệ chất lượng |
 | --- | --- | --- |
-| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), `Reviewer`, `architecture-reviewer`, `security-reviewer`, `performance-reviewer` | Giữ nguyên chất lượng thiết kế, invariant, hợp đồng API và phát hiện bug độc lập |
-| **Fast / surgical coding** | `Build` worker (`impl_agent` sau `Gate`), `Fixer` (nhận `file:line` + `bug_class`) | Giảm chi phí/latency khi sửa code có phạm vi rõ ràng; được bảo vệ bởi `0`-token CLI `mechanical-check`, test thực thi (`Verify`) và **Deep** `Reviewer` độc lập |
+| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Giữ nguyên chất lượng thiết kế, invariant, hợp đồng API và phát hiện bug độc lập |
+| **Fast / surgical coding** | `Build` worker (`impl_agent` sau `Gate`), `b3-fixer` (nhận `file:line` + `bug_class`) | Giảm chi phí/latency khi sửa code có phạm vi rõ ràng; được bảo vệ bởi `0`-token CLI `mechanical-check`, test thực thi (`Verify`) và **Deep** `b3-reviewer` độc lập |
 
 ---
 
 ## Related canonical documents
 
-- Core `/ship` procedure: [`../workflows/ship.md`](../workflows/ship.md)
-- Core `/review-loop` procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md)
-- Core `/review` skill & GitHub PR ref: [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md), [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md)
+- Core `/b3-ship` procedure: [`../workflows/ship.md`](../workflows/ship.md)
+- Core `/b3-review-loop` procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md)
+- Core `/b3-review` skill & GitHub PR ref: [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md), [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md)
 - Deterministic CLI reference: [`../scripts/README.md`](../scripts/README.md)
 - Architecture decisions: [`../research/decisions/decision-012-autodev-v2-hardening.md`](../research/decisions/decision-012-autodev-v2-hardening.md), [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md), [`../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md`](../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md)

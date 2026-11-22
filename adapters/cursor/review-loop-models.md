@@ -4,13 +4,13 @@ Host-only note. Portable slots: [`../../review-loop/models.md`](../../review-loo
 
 ## Default (committed)
 
-`agents/reviewer.md` and `agents/fixer.md` (exposed to Cursor via `.cursor/agents`) use:
+`agents/b3-reviewer.md` and `agents/b3-fixer.md` (exposed to Cursor via `.cursor/agents`) use:
 
 ```yaml
 model: inherit
 ```
 
-Reviewer also has `readonly: true`. Orchestrator is the parent `/review-loop` session.
+Reviewer also has `readonly: true`. Orchestrator is the parent `/b3-review-loop` session.
 
 `inherit` = same model as the parent. If Cursor does not isolate subagents, the orchestrator **hat-changes**: review pass with no edits, fix pass with no loop outcome.
 
@@ -20,12 +20,12 @@ Edit **your checkout** (or a user-level agent file if you keep project files on 
 
 | File | `model:` intent |
 | --- | --- |
-| `agents/reviewer.md` | Deeper / stronger judgment |
-| `agents/fixer.md` | Faster / surgical edits |
+| `agents/b3-reviewer.md` | Deeper / stronger judgment |
+| `agents/b3-fixer.md` | Faster / surgical edits |
 
 Use whatever ids **this Cursor build** accepts in subagent frontmatter (the product picker / docs — not a list maintained in this repo). Official field: `model` on `.cursor/agents/*.md` ([Cursor subagents](https://cursor.com/docs/context/subagents)).
 
-Leave `security-reviewer.md` and `architecture-reviewer.md` on `inherit` unless you also want those isolated.
+Leave `b3-security-reviewer.md` and `b3-architecture-reviewer.md` on `inherit` unless you also want those isolated.
 
 ## What not to do
 
@@ -35,4 +35,4 @@ Leave `security-reviewer.md` and `architecture-reviewer.md` on `inherit` unless 
 
 ## Check
 
-After changing `model:`, start a new Agent chat and run `/review-loop`. Confirm the parent dispatches the two agents rather than reviewing and patching in one turn. Subagent auto-delegation remains **NOT VERIFIED** as a product-wide claim (`research/validation/cursor-host-v3.md`).
+After changing `model:`, start a new Agent chat and run `/b3-review-loop`. Confirm the parent dispatches the two agents rather than reviewing and patching in one turn. Subagent auto-delegation remains **NOT VERIFIED** as a product-wide claim (`research/validation/cursor-host-v3.md`).

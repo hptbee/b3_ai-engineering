@@ -12,7 +12,7 @@
 | `commands/` | Unified with skills via `adapters/command-skills/` in `.claude/skills/<name>` (Claude Code treats slash commands as skills — no duplicate `.claude/commands` link) |
 | `agents/*.md` | Gitignored `.claude/agents` → `agents/` |
 
-Review-loop roles: `reviewer` (no edits), `fixer` (no PASS), plus specialists. Optional `model:` overrides stay host-configured (`review-loop/models.md`). Orchestrator remains the parent conversation.
+Review-loop roles: `b3-reviewer` (no edits), `b3-fixer` (no PASS), plus specialists. Optional `model:` overrides stay host-configured (`review-loop/models.md`). Orchestrator remains the parent conversation.
 
 ## Setup
 
@@ -46,7 +46,7 @@ Root `CLAUDE.md` works on fresh clone. Create the local gitignored `.claude/skil
 ./adapters/install-product.sh --product-root /path/to/product --host claude
 ```
 
-Writes `.b3/home`, `AGENTS.md` and thin `CLAUDE.md` (`@AGENTS.md`, when missing), `.b3/ship/` + `.claude/skills` + `.claude/agents` in `.gitignore`, flattened `.claude/skills/<name>` junctions/symlinks (including `ship`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`), and `.claude/agents` → `{B3_HOME}/agents`.
+Writes `.b3/home`, `AGENTS.md` and thin `CLAUDE.md` (`@AGENTS.md`, when missing), `.b3/ship/` + `.claude/skills` + `.claude/agents` in `.gitignore`, flattened `.claude/skills/<name>` junctions/symlinks (including `b3-ship`, `b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`), and `.claude/agents` → `{B3_HOME}/agents`.
 
 ## Thin by design
 

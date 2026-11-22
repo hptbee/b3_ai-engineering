@@ -1,0 +1,7 @@
+id: agent-performance-reviewer-cqrs
+artifact: agents/b3-performance-reviewer.md
+intent: Extra layers without a named requirement is b3-architecture-reviewer
+input: "This two-module app added an event bus and CQRS on day one. Review the architecture."
+expected_bucket: near-miss
+preferred_skill: b3-architecture-reviewer
+notes: simplest-correct / b3-architecture-reviewer; not b3-performance-reviewer

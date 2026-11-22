@@ -4,7 +4,7 @@ Cursor discovers **commands**, **agents**, and **rules** from this repo’s `.cu
 
 1. **User-level skills** (recommended, once per machine): junction/symlink  
    `%USERPROFILE%\.cursor\skills\b3-ai-engineering` → `{B3_HOME}\skills`
-2. **`B3_HOME`**: read `.b3/home` or set env `B3_HOME` to your `b3_ai-engineering` clone. `/ship` and agents load procedures from there.
+2. **`B3_HOME`**: read `.b3/home` or set env `B3_HOME` to your `b3_ai-engineering` clone. `/b3-ship` and agents load procedures from there.
 
 Re-run attach after upgrading B3:
 

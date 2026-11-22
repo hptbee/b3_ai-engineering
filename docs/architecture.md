@@ -158,13 +158,13 @@ Example:
 
 A workflow orchestrates skills, commands, and agents across multiple steps. It does not replace a skill; it sequences them.
 
-**Present (default sequence + full lifecycle).** See [`../workflows/README.md`](../workflows/README.md). Independent review is `review-loop/` + `commands/review-loop.md`, not a separate workflow file.
+**Present (default sequence + full lifecycle).** See [`../workflows/README.md`](../workflows/README.md). Independent review is `review-loop/` + `commands/b3-review-loop.md`, not a separate workflow file.
 
 Example:
 
 > Workflow: feature implementation (`Scope → Plan → Build → Verify → Review → Fix → Verify`).
 
-The default product sequence is `workflows/feature-implementation.md`. One-shot lifecycle through commits and resume is `workflows/ship.md` (`commands/ship.md`).
+The default product sequence is `workflows/feature-implementation.md`. One-shot lifecycle through commits and resume is `workflows/ship.md` (`commands/b3-ship.md`).
 
 ## Review Loop
 
@@ -172,7 +172,7 @@ The default product sequence is `workflows/feature-implementation.md`. One-shot 
 
 The review loop is independent checking plus iterative correction. It is stricter than a single code-review skill: it has scope, iteration limits, stagnation detection, a finding lifecycle, and a ban on treating tool failure as success.
 
-**Present (orchestration).** Spec: [`../review-loop/spec.md`](../review-loop/spec.md). Procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md). Trigger: `commands/review-loop.md`. This is agent procedure, not a host plugin or eval runner.
+**Present (orchestration).** Spec: [`../review-loop/spec.md`](../review-loop/spec.md). Procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md). Trigger: `commands/b3-review-loop.md`. This is agent procedure, not a host plugin or eval runner.
 
 Example:
 

@@ -9,7 +9,7 @@
 | `AGENTS.md` | Primary operating file; merged chain subject to ~32 KiB default cap |
 | `rules/*.md` | Referenced from `AGENTS.md` — do not duplicate prose |
 | `skills/` | Exposed through gitignored flattened `.agents/skills/<name>` via [`../sync-skills.ps1`](../sync-skills.ps1) / [`../sync-skills.sh`](../sync-skills.sh) |
-| `commands/` + `adapters/command-skills/` | Exposed as `$ship`, `$plan`, `$implement`, `$debug`, `$review`, `$verify`, `$review-loop` in `.agents/skills/<name>` + prompt routing |
+| `commands/` + `adapters/command-skills/` | Exposed as `$b3-ship`, `$b3-plan`, `$b3-implement`, `$b3-debug`, `$b3-review`, `$b3-verify`, `$b3-review-loop` in `.agents/skills/<name>` + prompt routing |
 | `agents/*.md` | Role prompt source for delegated reviewer/fixer/security/architecture/performance work |
 
 Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in skill bodies.
@@ -46,12 +46,12 @@ Create the local gitignored flattened `.agents/skills/<name>` index (core `skill
 ./adapters/install-product.sh --product-root /path/to/product --host codex
 ```
 
-Writes `.b3/home`, thin `AGENTS.md` (when missing), `.b3/ship/` + `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `ship`).
+Writes `.b3/home`, thin `AGENTS.md` (when missing), `.b3/ship/` + `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `b3-ship`).
 
 ## Command and role routing
 
-- `ship` on Codex is `$ship` (`adapters/command-skills/ship/SKILL.md`), installed as `.agents/skills/ship`. It routes directly in 1 hop to `{B3_HOME}/workflows/ship.md` without an intermediate `commands/ship.md` hop or duplicating the procedure.
-- For review-loop delegation, pass `agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, `architecture-reviewer.md`, or `performance-reviewer.md` to an isolated delegated agent when available. Parent remains orchestrator.
+- `b3-ship` on Codex is `$b3-ship` (`adapters/command-skills/b3-ship/SKILL.md`), installed as `.agents/skills/b3-ship`. It routes directly in 1 hop to `{B3_HOME}/workflows/ship.md` without an intermediate `commands/b3-ship.md` hop or duplicating the procedure.
+- For review-loop delegation, pass `agents/b3-reviewer.md`, `b3-fixer.md`, `b3-security-reviewer.md`, `b3-architecture-reviewer.md`, or `b3-performance-reviewer.md` to an isolated delegated agent when available. Parent remains orchestrator.
 
 ## Thin by design
 

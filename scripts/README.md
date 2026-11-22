@@ -1,13 +1,13 @@
 # Scripts
 
-Repository tooling, deterministic `/ship` & `/review-loop` guard helpers, context-budget measurement, and validation suites (`research/decisions/decision-010-autonomous-development.md`).
+Repository tooling, deterministic `/b3-ship` & `/b3-review-loop` guard helpers, context-budget measurement, and validation suites (`research/decisions/decision-010-autonomous-development.md`).
 
 ## Tooling inventory
 
 | Script | Purpose | Usage |
 | --- | --- | --- |
-| [`b3-guard.ps1`](b3-guard.ps1) / [`b3-guard.sh`](b3-guard.sh) | Deterministic `/ship`, `/review`, & `/review-loop` helpers | `.\scripts\b3-guard.ps1 <cmd> ...` / `./scripts/b3-guard.sh <cmd> ...` |
-| [`measure-context.ps1`](measure-context.ps1) / [`measure-context.sh`](measure-context.sh) | Measure always-on, `/ship`, `/review-loop`, and subagent static context bytes/tokens (`-Strict` / `--strict` exits 1 on cap violation) | `.\scripts\measure-context.ps1 -Strict` / `./scripts/measure-context.sh --strict` |
+| [`b3-guard.ps1`](b3-guard.ps1) / [`b3-guard.sh`](b3-guard.sh) | Deterministic `/b3-ship`, `/b3-review`, & `/b3-review-loop` helpers | `.\scripts\b3-guard.ps1 <cmd> ...` / `./scripts/b3-guard.sh <cmd> ...` |
+| [`measure-context.ps1`](measure-context.ps1) / [`measure-context.sh`](measure-context.sh) | Measure always-on, `/b3-ship`, `/b3-review-loop`, and subagent static context bytes/tokens (`-Strict` / `--strict` exits 1 on cap violation) | `.\scripts\measure-context.ps1 -Strict` / `./scripts/measure-context.sh --strict` |
 | [`validate-ship-behavior.ps1`](validate-ship-behavior.ps1) | End-to-end sandbox behavioral checks for 4-host `sync-skills`, `install-product`, Antigravity plugin, workflow recipes, `b3-guard`, and strict context budget | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-ship-behavior.ps1` |
 | [`smoke-ship-product.ps1`](smoke-ship-product.ps1) | Isolated Git product-repo smoke test (attach pointer, run-scoped checkpoints, task commits, interrupt/resume ancestry, residue fix) | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\smoke-ship-product.ps1` |
 | [`validate-evals.sh`](validate-evals.sh) | Verify required YAML keys and confirm every `artifact:` path exists on disk | `./scripts/validate-evals.sh` |

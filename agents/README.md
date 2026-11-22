@@ -6,11 +6,11 @@ Canonical role definitions live here (`agents/`). Cursor maps them via `.cursor/
 
 | Agent | Mandate | Why not a skill only |
 | --- | --- | --- |
-| [`reviewer.md`](reviewer.md) | One independent review pass; no edits | Isolation from the fixer |
-| [`fixer.md`](fixer.md) | Validate then minimal fix + verification; no PASS | Isolation from the reviewer |
-| [`security-reviewer.md`](security-reviewer.md) | Authn/z, trust boundaries | Isolation from implementer (decision-004) |
-| [`architecture-reviewer.md`](architecture-reviewer.md) | Boundaries, unjustified complexity | Isolation from the author of the design |
-| [`performance-reviewer.md`](performance-reviewer.md) | Material perf risks/regressions; evidence before optimize | Isolation on **hot-path** diffs only |
+| [`b3-reviewer.md`](b3-reviewer.md) | One independent review pass; no edits | Isolation from the fixer |
+| [`b3-fixer.md`](b3-fixer.md) | Validate then minimal fix + verification; no PASS | Isolation from the reviewer |
+| [`b3-security-reviewer.md`](b3-security-reviewer.md) | Authn/z, trust boundaries | Isolation from implementer (decision-004) |
+| [`b3-architecture-reviewer.md`](b3-architecture-reviewer.md) | Boundaries, unjustified complexity | Isolation from the author of the design |
+| [`b3-performance-reviewer.md`](b3-performance-reviewer.md) | Material perf risks/regressions; evidence before optimize | Isolation on **hot-path** diffs only |
 
 Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`, domain performance skills). Model slots: `review-loop/models.md`. Committed default is `model: inherit` on these files. Two-model Cursor setup: `adapters/cursor/review-loop-models.md`.
 

@@ -1,6 +1,6 @@
 # Orchestrator procedure
 
-**Trigger:** `commands/review-loop.md` (or `/ship` `Review`). Run **Guard → Review → Fix → Verify → fresh Review** until gate, non-convergence, or cap. Never yield after pass 1.
+**Trigger:** `commands/b3-review-loop.md` (or `/b3-ship` `Review`). Run **Guard → Review → Fix → Verify → fresh Review** until gate, non-convergence, or cap. Never yield after pass 1.
 
 You are the **orchestrator**: never review+fix in one pass, merge findings, and **alone** declare `PASS` / `FAIL` / `STUCK` / `INCOMPLETE`. **Context rule:** self-sufficient at runtime — skip [`spec.md`](spec.md), [`sizing.md`](sizing.md), [`models.md`](models.md) unless disambiguating an edge case.
 
@@ -8,14 +8,14 @@ You are the **orchestrator**: never review+fix in one pass, merge findings, and 
 
 | Role | Artifact |
 | --- | --- |
-| Review (1 pass) | `agents/reviewer.md` → `skills/engineering/code-review/SKILL.md` |
-| Specialists | `agents/{security,architecture,performance}-reviewer.md` (`performance` hot-path only) |
-| Fix & Verify | `agents/fixer.md` + `skills/engineering/verification/SKILL.md` |
+| Review (1 pass) | `agents/b3-reviewer.md` → `skills/engineering/code-review/SKILL.md` |
+| Specialists | `agents/b3-{security,architecture,performance}-reviewer.md` (`performance` hot-path only) |
+| Fix & Verify | `agents/b3-fixer.md` + `skills/engineering/verification/SKILL.md` |
 
 - With subagents: **always** dispatch a fresh independent Reviewer (distinct from `impl_agent`; read-only specialists may run in parallel). For Fix passes, **resume the owning `impl_agent`** with delta findings (preserving prompt cache); spawn a fresh Fixer only for unowned files or circuit-breaker resets. Without subagents: strict hat-change and log the limit.
 - **Parent → Subagent:** pass `{base_sha}`, `review_files` (+ `delta_files` on Iter 2+), `approach/T00N.md` path, **active (`OPEN` / unverified `FIXED`) findings only**, and `closed:` IDs. Never paste file bodies or full `findings.md`.
 - **Reply caps:** Reviewer ≤ **25 lines** (`Verdict` + `id | sev | conf | status | location | 1-line issue | evidence_ref` + checked/skipped dimensions; no echoed code). Fixer ≤ **20 lines** (`finding_id (bug_class) -> files_touched -> verification_cmd (exit + 1-line)`; 1 line on green, ≤ 35 failing lines on red or log to `{RUN_DIR}/logs/`).
-- **Performance routing:** dispatch `performance-reviewer` **only** on render/animation loops (`useFrame`/Three.js), large lists/hot serialization, EF/SQL N+1/pagination, caching/concurrency/event-loop blocking, or latency-sensitive endpoints (skip copy/docs/CSS/trivial CRUD). Specialist passes count toward the 12-pass cap.
+- **Performance routing:** dispatch `b3-performance-reviewer` **only** on render/animation loops (`useFrame`/Three.js), large lists/hot serialization, EF/SQL N+1/pagination, caching/concurrency/event-loop blocking, or latency-sensitive endpoints (skip copy/docs/CSS/trivial CRUD). Specialist passes count toward the 12-pass cap.
 
 ## 0. Target, Guard, size & status
 

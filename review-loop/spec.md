@@ -4,7 +4,7 @@ The review loop is independent verification plus iterative correction. It answer
 
 This document is the specification. Orchestration: [`strategy.md`](strategy.md). A single pass of the `code-review` skill is not the loop.
 
-A single invocation of `commands/review-loop.md` runs **review → validate → fix → verify → fresh review** until a quality gate, non-convergence, or iteration limit. Do not require the user to re-trigger after each fix.
+A single invocation of `commands/b3-review-loop.md` runs **review → validate → fix → verify → fresh review** until a quality gate, non-convergence, or iteration limit. Do not require the user to re-trigger after each fix.
 
 ## Default sequence
 
@@ -27,7 +27,7 @@ A single invocation of `commands/review-loop.md` runs **review → validate → 
 
 Skip a review dimension only when it is out of scope **and** that skip is recorded. “Not relevant” without a reason is not a skip.
 
-The **performance** dimension is always in the general review (light). An extra `performance-reviewer` pass is **risk-based** — [`strategy.md`](strategy.md) routing — not every PR. SPECULATIVE performance items are not quality-gate blockers.
+The **performance** dimension is always in the general review (light). An extra `b3-performance-reviewer` pass is **risk-based** — [`strategy.md`](strategy.md) routing — not every PR. SPECULATIVE performance items are not quality-gate blockers.
 
 The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. This is not aesthetic cleanup or line-count reduction; only CONFIRMED redundancy becomes a fix requirement. Later loop passes pay special attention to residue introduced by earlier fix passes.
 
@@ -212,7 +212,7 @@ Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/VERIFIED statuses: [`st
 
 ## Independence
 
-Implementation and review should not be the same unchecked voice. Three slots: orchestrator (stop/PASS only), reviewer (no edits), fixer (edits + verify, no loop outcome). Optional `security-reviewer` / `architecture-reviewer`. Hosts may assign different models in **host agent config** only (`models.md`) — not in this spec.
+Implementation and review should not be the same unchecked voice. Three slots: orchestrator (stop/PASS only), reviewer (no edits), fixer (edits + verify, no loop outcome). Optional `b3-security-reviewer` / `b3-architecture-reviewer`. Hosts may assign different models in **host agent config** only (`models.md`) — not in this spec.
 
 ## Verification inside the loop
 

@@ -40,7 +40,7 @@ PRODUCT_ROOT="$(cd "$PRODUCT_ROOT" && pwd)"
 
 WORKFLOW="${B3_HOME}/workflows/ship.md"
 COMMANDS_SRC="${B3_HOME}/commands"
-TEMPLATE="${COMMANDS_SRC}/ship.md"
+TEMPLATE="${COMMANDS_SRC}/b3-ship.md"
 CURSOR_README_TEMPLATE="${SCRIPT_DIR}/product-cursor-readme.md"
 AGENTS_MD_TEMPLATE="${SCRIPT_DIR}/product-agents.md"
 CLAUDE_MD_TEMPLATE="${SCRIPT_DIR}/product-claude.md"
@@ -55,7 +55,7 @@ CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
 }
 
 PRODUCT_SKILLS="${PRODUCT_ROOT}/.cursor/skills"
-COMMAND_DEST="${PRODUCT_ROOT}/.cursor/commands/ship.md"
+COMMAND_DEST="${PRODUCT_ROOT}/.cursor/commands/b3-ship.md"
 HOME_DEST="${PRODUCT_ROOT}/.b3/home"
 AGENTS_DEST="${PRODUCT_ROOT}/.agents/skills"
 CLAUDE_SKILLS_DEST="${PRODUCT_ROOT}/.claude/skills"
@@ -212,7 +212,7 @@ if $DRY_RUN; then
     for src in "$COMMANDS_SRC"/*.md; do
       [[ -f "$src" ]] || continue
       base="$(basename "$src")"
-      [[ "$base" == "README.md" || "$base" == "ship.md" ]] && continue
+      [[ "$base" == "README.md" || "$base" == "b3-ship.md" ]] && continue
       [[ -f "${PRODUCT_ROOT}/.cursor/commands/${base}" ]] || echo "dry-run: copy command $base"
     done
   fi
@@ -250,7 +250,7 @@ if [[ -d "$COMMANDS_SRC" ]]; then
   for src in "$COMMANDS_SRC"/*.md; do
     [[ -f "$src" ]] || continue
     base="$(basename "$src")"
-    [[ "$base" == "README.md" || "$base" == "ship.md" ]] && continue
+    [[ "$base" == "README.md" || "$base" == "b3-ship.md" ]] && continue
     dest="${PRODUCT_ROOT}/.cursor/commands/${base}"
     [[ -f "$dest" ]] || cp "$src" "$dest"
   done
@@ -281,7 +281,7 @@ echo "gitignore.b3=$IGNORE_PLAN"
 echo "gitignore.skills=$SKILL_IGNORE_PLAN"
 echo "host=$HOST_NAME"
 case "$HOST_NAME" in
-  codex) echo "skills=$AGENTS_DEST (flattened symlinks + \$ship; gitignored, not copied)" ;;
+  codex) echo "skills=$AGENTS_DEST (flattened symlinks + \$b3-ship; gitignored, not copied)" ;;
   antigravity) echo "skills=$AGENTS_DEST (flattened symlinks + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.sh if Cursor also opens this repo)" ;;
   claude) echo "skills=$CLAUDE_SKILLS_DEST (flattened symlinks + command skills) + $CLAUDE_AGENTS_DEST -> $AGENTS_SRC (gitignored, not copied)" ;;
   cursor) echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS_SRC (not copied into product)" ;;

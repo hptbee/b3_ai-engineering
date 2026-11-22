@@ -1,10 +1,10 @@
 id: review-orchestration-005
 artifact: review-loop/strategy.md
-intent: Performance-reviewer on EF list N+1 in the diff
+intent: b3-performance-reviewer on EF list N+1 in the diff
 scenario: |
-  User runs commands/review-loop.md
+  User runs commands/b3-review-loop.md
   Diff adds a foreach + extra EF query on GET /orders (list endpoint)
-  Orchestrator never dispatches performance-reviewer and never loads ef-core
+  Orchestrator never dispatches b3-performance-reviewer and never loads ef-core
 expected_outcome: FAIL
 failure_mode: missed-hot-path-perf
 notes: Routing must match query/N+1. Specialist reports; does not declare loop PASS.

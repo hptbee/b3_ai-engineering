@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measure static context footprint (canonical LF UTF-8 bytes) for B3 always-on, /ship, /review-loop, and subagent roles.
+# Measure static context footprint (canonical LF UTF-8 bytes) for B3 always-on, /b3-ship, /b3-review-loop, and subagent roles.
 # Usage: ./scripts/measure-context.sh [--repo-root DIR] [--strict]
 set -euo pipefail
 
@@ -80,7 +80,7 @@ done < <(find "${REPO_ROOT}/skills" "${REPO_ROOT}/adapters/command-skills" -name
 ALWAYS_ON=$((AGENTS_B + RULES_B + FM_TOTAL))
 WF_SHIP_B="$(file_bytes "workflows/ship.md")"
 [[ "$WF_SHIP_B" -gt 9500 ]] && WARNINGS+=("workflows/ship.md (${WF_SHIP_B} B > 9500 B)")
-SHIP_CORE=$((WF_SHIP_B + $(file_bytes "commands/ship.md")))
+SHIP_CORE=$((WF_SHIP_B + $(file_bytes "commands/b3-ship.md")))
 
 SHIP_REFS=$(($(file_bytes "workflows/references/ship-templates.md") + $(file_bytes "workflows/references/ship-resume.md")))
 [[ "$SHIP_REFS" -gt 6000 ]] && WARNINGS+=("workflows/references/ship-{templates,resume}.md (${SHIP_REFS} B > 6000 B)")
@@ -88,7 +88,7 @@ SHIP_REFS=$(($(file_bytes "workflows/references/ship-templates.md") + $(file_byt
 RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
 [[ "$RL_STRAT_B" -gt 5400 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5400 B)")
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
-RL_OP=$((RL_STRAT_B + $(file_bytes "commands/review-loop.md") + $(file_bytes "agents/reviewer.md") + CR_SKILL_B))
+RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + $(file_bytes "agents/b3-reviewer.md") + CR_SKILL_B))
 RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md")))
 
 AGENT_ROLES_B=0
@@ -102,7 +102,7 @@ done
 
 echo "=== B3 Context Budget Report ==="
 printf "always_on_total   : %6d B (~%4d tok)  [AGENTS.md=%d B, rules=%d B, %d skill frontmatters=%d B]\n" "$ALWAYS_ON" "$(est_tok "$ALWAYS_ON")" "$AGENTS_B" "$RULES_B" "$SKILL_COUNT" "$FM_TOTAL"
-printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/ship.md]\n" "$SHIP_CORE" "$(est_tok "$SHIP_CORE")" "$WF_SHIP_B"
+printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/b3-ship.md]\n" "$SHIP_CORE" "$(est_tok "$SHIP_CORE")" "$WF_SHIP_B"
 printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.md]\n" "$SHIP_REFS" "$(est_tok "$SHIP_REFS")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer + code-review/SKILL.md=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$CR_SKILL_B"
 printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"

@@ -78,8 +78,8 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 | Layer | Status |
 | --- | --- |
 | Research and domain synthesis | **Present** |
-| Review-loop spec and orchestrator procedure | **Present** — [`../review-loop/spec.md`](../review-loop/spec.md), [`../review-loop/strategy.md`](../review-loop/strategy.md), [`commands/review-loop.md`](../commands/review-loop.md). Agent procedure, not a host plugin. Default inner-loop cap is 5 (`strategy.md`). |
-| Ship lifecycle (`/ship`) | **Present** — [`../workflows/ship.md`](../workflows/ship.md), [`commands/ship.md`](../commands/ship.md). Session orchestrator, not a runner. Slash UX and other-host runtime are **NOT VERIFIED**. |
+| Review-loop spec and orchestrator procedure | **Present** — [`../review-loop/spec.md`](../review-loop/spec.md), [`../review-loop/strategy.md`](../review-loop/strategy.md), [`commands/b3-review-loop.md`](../commands/b3-review-loop.md). Agent procedure, not a host plugin. Default inner-loop cap is 5 (`strategy.md`). |
+| Ship lifecycle (`/b3-ship`) | **Present** — [`../workflows/ship.md`](../workflows/ship.md), [`commands/b3-ship.md`](../commands/b3-ship.md). Session orchestrator, not a runner. Slash UX and other-host runtime are **NOT VERIFIED**. |
 | Review-loop on a real product PR / host subagent isolation | **NOT VERIFIED** — tabletop only: [`../research/validation/review-loop-results.md`](../research/validation/review-loop-results.md) |
 | Knowledge after lessons | **Minimal** — [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md); no `stable/` or `volatile/` yet |
 

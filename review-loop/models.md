@@ -2,7 +2,7 @@
 
 Portable contract. This file does **not** name vendor models. Hosts differ (Cursor, Codex, Claude Code, Antigravity). Where to set `model:` is host config, not this spec.
 
-## Three slots (`/review-loop`)
+## Three slots (`/b3-review-loop`)
 
 | Slot | Default | Responsibility | Must not |
 | --- | --- | --- | --- |
@@ -12,13 +12,13 @@ Portable contract. This file does **not** name vendor models. Hosts differ (Curs
 
 Only the **orchestrator** declares `PASS`, `INCOMPLETE`, `STUCK`, or STOP. Reviewer and Fixer return work products (findings, diffs, verification evidence).
 
-## Cost-Preserving Quality Tiering (`/ship` & `/review-loop`)
+## Cost-Preserving Quality Tiering (`/b3-ship` & `/b3-review-loop`)
 
 When the host supports per-agent or per-subagent model selection, split reasoning vs execution without lowering quality:
 
 | Tier | Roles | Why this tier | Guardrails |
 | --- | --- | --- | --- |
-| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), `Reviewer`, `architecture-reviewer`, `security-reviewer`, `performance-reviewer` | Architecture, invariants, contract design, and independent defect detection require full reasoning depth | Never dilute `Plan`, `Scope`, or `Reviewer` onto a weaker tier |
+| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Architecture, invariants, contract design, and independent defect detection require full reasoning depth | Never dilute `Plan`, `Scope`, or `Reviewer` onto a weaker tier |
 | **Fast / surgical coding** | `Build` worker (`impl_agent`), `Fixer` | Bounded edits with concrete `approach/T00N.md` (after `Gate`) or `file:line` + `bug_class` | Protected by `0`-token CLI `mechanical-check`, executed `Verify` tests, and independent **Deep** `Reviewer` |
 
 Do not put vendor model IDs in `spec.md`, `strategy.md`, skills, or this file. Configure them in host agent files (e.g., Cursor `agents/*.md` `model:` field — see [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md)).

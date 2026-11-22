@@ -252,7 +252,7 @@ PLUGIN_JSON='{
   "version": "1.0.0",
   "description": "Personal AI engineering system: portable rules, engineering and domain skills, independent review-loop roles, and autonomous development lifecycle.",
   "suggestedPrompts": [
-    "Run /ship for a new feature or plan in this repository",
+    "Run /b3-ship for a new feature or plan in this repository",
     "Run an independent review-loop on the current git diff",
     "Create an implementation plan without editing code yet"
   ]

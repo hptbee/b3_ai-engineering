@@ -3,7 +3,7 @@ artifact: workflows/ship.md
 intent: A separate product repo uses B3_HOME pointers and must not receive a copied skill tree
 scenario: |
   Product repo has no workflows/ship.md
-  Agent copies B3 skills/ into the product and starts /ship from those copies
+  Agent copies B3 skills/ into the product and starts /b3-ship from those copies
 expected_outcome: FAIL
 failure_mode: duplicate-skill-tree
 notes: Resolve B3_HOME. Load skills from B3_HOME. Installer writes .b3/home and a thin command only

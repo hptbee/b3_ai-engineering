@@ -13,7 +13,7 @@ Links: [`feature-implementation.md`](feature-implementation.md), [`../review-loo
 ## Context, hosts & B3 roots
 
 - **Use:** full lifecycle, `resume [<run_id>]`, `status [<run_id>|--all]`. **Not for:** single plan/implement/debug/review/review-loop/verify. Overrides `planning`/`problem-solving` stops (`docs/precedence.md`).
-- **Hosts:** Cursor (`/ship`), Codex (`$ship`), Antigravity (`ship`), Claude (`/ship`). Resume needs re-invocation.
+- **Hosts:** Cursor (`/b3-ship`), Codex (`$b3-ship`), Antigravity (`b3-ship`), Claude (`/b3-ship`). Resume needs re-invocation.
 - **Roots:** `PRODUCT_ROOT` = git root; `B3_HOME` = first dir with `workflows/ship.md` (this repo, `B3_HOME` env, `{PRODUCT_ROOT}/.b3/home`; else `BLOCKED`). Load skills/rules/agents from `B3_HOME`; checkpoints/commits stay in `PRODUCT_ROOT`; never copy `skills/`.
 
 ## State & checkpoint git policy
@@ -28,7 +28,7 @@ Under `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (1-line `<run_id>`, `YYYYMMDD-HHMM-<
 ## Input & Preflight
 
 1. `status [<run_id>|--all]` → `list-runs` on `--all`; else `resolve-run` + Git report, no edits.
-2. `resume [<run_id>]`, or bare `/ship` when `run_status != PASS` → **Scenario C** ([`references/ship-resume.md`](references/ship-resume.md); write `<run_id>` to `CURRENT`).
+2. `resume [<run_id>]`, or bare `/b3-ship` when `run_status != PASS` → **Scenario C** ([`references/ship-resume.md`](references/ship-resume.md); write `<run_id>` to `CURRENT`).
 3. No requirement and no unfinished checkpoint → ask what to build (`BLOCKED`).
 4. Plan/requirement/bug/refactor → `b3-guard new-run` (updates `CURRENT`), then **Scenario B** (plan) or **Scenario A** (`debugging`/`refactoring`).
 
@@ -50,7 +50,7 @@ Skip `planning`; use `skills/engineering/problem-solving/SKILL.md`:
 2. **Depth:** `inline` (`progress.md` lean, small), `notes` (`approach/T00N.md`, multi-file), `detailed` (`approach/T00N.md`, API/schema/auth/migration/prod/new layer/`>=4`-task contracts; fill `write_paths:` for `>=2` stores+invalidation, `io_budget:` for query/render loops, stateful/race/auth `edge_cases:`).
 3. **Evidence-based refinement:** if >1 commit, narrow task, add unused `T00N` slices, chain `depends_on`, retarget dependents, bump `version`/`plan_id`/`plan_version`, log under `Plan changes`, continue Scope.
 4. **Implementation Readiness Gate:** start `readiness: draft`; Empty template headings are not evidence. Set `readiness: ready` only when `inspected`, `files` (or new-file intent), `watched_paths`, `reuse`, `obsoletes`, `changes`, `verification`, `task_spec_fingerprint` (`b3-guard fingerprint`) are filled; record `approach_at_sha` (`git rev-parse HEAD`). Else `INCOMPLETE`.
-5. **Pre-code Review (`detailed` only — no Debate):** run `architecture-reviewer.md` (`design-only`, contrarian) + `security-reviewer.md` (`design-only`) for auth/untrusted input/race/abuse (no diff). On `CONFIRMED` flaw: revise, reset `readiness: draft`, **re-run the Implementation Readiness Gate** before `Build`.
+5. **Pre-code Review (`detailed` only — no Debate):** run `b3-architecture-reviewer.md` (`design-only`, contrarian) + `b3-security-reviewer.md` (`design-only`) for auth/untrusted input/race/abuse (no diff). On `CONFIRMED` flaw: revise, reset `readiness: draft`, **re-run the Implementation Readiness Gate** before `Build`.
 
 ### Build (Parallel Waves) & Verify
 
@@ -60,7 +60,7 @@ Skip `planning`; use `skills/engineering/problem-solving/SKILL.md`:
 ### Review (Guard → Reviewer → Fix) & Commit
 
 1. **Guard (0 tokens):** run `b3-guard diff-scope` (`-BaseSha {task_base}`, `-PrevSha {pre_fix_object}` Iter 2+; fallback: `git diff --name-only {task_base}`, `git diff --cached --name-only`, `git ls-files --others --exclude-standard`) + `b3-guard mechanical-check` (`-BaseSha`, `-AllowedPaths`, `-Obsoletes`), excluding `.b3/ship/`, unchanged `initial_dirty_paths`, noise. Never `HEAD~1`. Fix `exit 2` hits first.
-2. **Reviewer & Fix (Risk-tiered + lazy snapshot):** `inline`+`SMALL` diff (no auth/contract/schema/hot-path) → 1 fresh `reviewer.md` pass (escalate on blocker). Else [`../review-loop/strategy.md`](../review-loop/strategy.md). Capture `pre_fix_object` (`b3-guard snapshot`) **only if Review finds blocking `CONFIRMED` items and before `Fix`** (skip Pass-1 clean); resume `impl_agent` with bug-class sweep + 2-tier breaker (log hat-change if unisolated).
+2. **Reviewer & Fix (Risk-tiered + lazy snapshot):** `inline`+`SMALL` diff (no auth/contract/schema/hot-path) → 1 fresh `b3-reviewer.md` pass (escalate on blocker). Else [`../review-loop/strategy.md`](../review-loop/strategy.md). Capture `pre_fix_object` (`b3-guard snapshot`) **only if Review finds blocking `CONFIRMED` items and before `Fix`** (skip Pass-1 clean); resume `impl_agent` with bug-class sweep + 2-tier breaker (log hat-change if unisolated).
 3. **Commit:** require passing ACs, executed checks, 0 blocking `CONFIRMED`, diff in declared `files`/`tests`, no residue (`INCOMPLETE` missing evidence; `FAIL` red check/defect; `BLOCKED` overlapping `initial_dirty_paths`/user decision). Commit sequentially: `b3-guard precommit`, commit once (no `--no-verify`/amend/reset/push/merge/deploy), record SHA + `completed`, collapse `T00N`, start next task/wave.
 
 ## Finalize & Outcomes

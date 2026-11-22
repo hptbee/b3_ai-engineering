@@ -1,4 +1,4 @@
-﻿# Isolated product-repo smoke for /ship Git/checkpoint/resume contracts.
+﻿# Isolated product-repo smoke for /b3-ship Git/checkpoint/resume contracts.
 # This is not a Cursor slash-command test and not a Codex/Claude runtime test.
 # Usage: powershell -File scripts/smoke-ship-product.ps1
 $ErrorActionPreference = 'Stop'
@@ -24,7 +24,7 @@ try {
     if ($LASTEXITCODE -ne 0) { Fail 'install-product' }
     $b3HomePath = (Get-Content .b3\home -Raw).Trim()
     if ($b3HomePath -ne $root) { Fail "B3_HOME mismatch: $b3HomePath" }
-    if (-not (Test-Path .cursor\commands\ship.md)) { Fail 'missing ship command pointer' }
+    if (-not (Test-Path .cursor\commands\b3-ship.md)) { Fail 'missing b3-ship command pointer' }
     if (Test-Path .cursor\skills) { Fail 'installer copied skills' }
 
     git add .gitignore .b3/home AGENTS.md .cursor/README.md .cursor/commands
@@ -179,7 +179,7 @@ module.exports = { greet, greetAlias };
     Write-Output "final=$final"
     Write-Output "log="
     Write-Output $range
-    Write-Output 'classification: Git/checkpoint/resume/install contracts VERIFIED in an isolated repo. Host /ship slash UX NOT VERIFIED. Independent reviewer subagent NOT used (hat-change residue removal only).'
+    Write-Output 'classification: Git/checkpoint/resume/install contracts VERIFIED in an isolated repo. Host /b3-ship slash UX NOT VERIFIED. Independent reviewer subagent NOT used (hat-change residue removal only).'
 }
 finally {
     Pop-Location
