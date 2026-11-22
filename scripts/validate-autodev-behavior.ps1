@@ -562,15 +562,34 @@ try {
     $dsOut = (& $guardScript diff-scope -RepoRoot $guardRepo -BaseSha $dsHead -PrevSha $dsPrev -IgnoreDirtyPaths 'docs/note.md') -join "`n"
     $dsExit = $LASTEXITCODE
     Pop-Location
+
+    $autoRepo = Join-Path $sandbox 'diff-scope-auto'
+    New-Item -ItemType Directory -Path $autoRepo | Out-Null
+    Push-Location $autoRepo
+    git init -q -b main
+    git config user.email 'autodev-test@example.com'
+    git config user.name 'Autodev Test'
+    Set-Content base.js 'exports.base = 1'
+    git add base.js
+    git commit -qm 'main base'
+    git checkout -qb feat/auto-base
+    Set-Content feat.js 'exports.feat = 2'
+    git add feat.js
+    git commit -qm 'feature commit'
+    $dsAuto = (& $guardScript diff-scope -RepoRoot $autoRepo) -join "`n"
+    $dsAutoExit = $LASTEXITCODE
+    Pop-Location
+
     if ($dsEmptyExit -eq 2 -and $dsEmpty -match 'EMPTY_DIFF' -and
         $dsNoiseExit -eq 0 -and $dsNoise -match 'size_class=NOISE_ONLY' -and
         $dsExit -eq 0 -and $dsOut -match 'size_class=SMALL' -and
         ($dsOut -notmatch '=>') -and $dsOut -match 'src/renamed\.js' -and
         $dsOut -match 'noise_files=package-lock\.json' -and
-        $dsOut -match 'delta_files=src/extra\.js' -and ($dsOut -notmatch 'docs/note\.md')) {
+        $dsOut -match 'delta_files=src/extra\.js' -and ($dsOut -notmatch 'docs/note\.md') -and
+        $dsAutoExit -eq 0 -and $dsAuto -match 'size_class=SMALL' -and $dsAuto -match 'review_files=feat\.js') {
         Pass 'guard-diff-scope'
     } else {
-        FailCheck 'guard-diff-scope' "empty=(${dsEmptyExit}:$dsEmpty) noise=(${dsNoiseExit}:$dsNoise) out=(${dsExit}:$dsOut)"
+        FailCheck 'guard-diff-scope' "empty=(${dsEmptyExit}:$dsEmpty) noise=(${dsNoiseExit}:$dsNoise) out=(${dsExit}:$dsOut) auto=(${dsAutoExit}:$dsAuto)"
     }
 
     $runRepo = Join-Path $sandbox 'run-scoped-repo'

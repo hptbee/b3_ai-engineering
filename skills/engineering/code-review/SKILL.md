@@ -8,21 +8,24 @@ description: >
 
 # Code review
 
-Produce one honest review pass on a defined change. Iterative orchestration lives in `review-loop/strategy.md` (do **not** load `review-loop/spec.md` on routine passes).
+Produce one honest review pass on a defined change. Iterative loops use `review-loop/strategy.md` (never load `review-loop/spec.md` on routine passes).
 
 ## When to use / not use
 
 - **Use:** reviewing a PR, diff, or recent edits with separate severity, confidence, and evidence.
 - **Do not use:** implementing features (`problem-solving`), external pattern mining (`research-engineering-patterns`), running a multi-iteration loop without `review-loop/strategy.md`, or specialist deep dives (`security-reviewer`, `architecture-reviewer`, hot-path `performance-reviewer`).
 
-Near miss: “write tests for this PR” → implementation + verification. “Is this safe to ship?” → this skill + executed verification evidence.
+Near miss: “write tests” → implementation + verification. “Safe to ship?” → this skill + executed verification.
 
 ## Procedure
 
-1. **Scope** — establish in/out target (on Iteration 2+ with `delta_files`, inspect `delta_files` + affected boundary callers first); empty/wrong target → `UNKNOWN / INCOMPLETE`.
-2. **Understand** — read scoped diff and surrounding contracts; restate intent without inventing requirements.
-3. **Review** — check architecture, correctness, security, tests, maintainability, plus (skip any dimension only with a recorded reason):
-   - **Performance (every pass, light):** classify as **CONFIRMED** (measured/reproduced), **EVIDENCED RISK** (known hot-path defect in diff: N+1, `useFrame`+`setState`, sync CPU on request), or **SPECULATIVE** (non-blocking). Load smallest stack perf skill only if matched; route `agents/performance-reviewer.md` on hot paths only.
-   - **Simplification / residue (every pass):** ask *“Given the final implementation and current requirements, is all of this code still necessary?”* Open [`references/residue-checklist.md`](references/residue-checklist.md) only when classifying non-obvious residue. Only **CONFIRMED REDUNDANCY** is blocking; leave `LIKELY REDUNDANT` / `UNKNOWN` non-blocking and accept `INTENTIONAL COMPLEXITY`. Never refactor unrelated code.
-4. **Record & consolidate** — use fields `id` (`R001`…), `severity` (`critical`/`high`/`medium`/`low`), `confidence` (`high`/`medium`/`low`), `status` (`CONFIRMED`/`SPECULATIVE`), `category` (`correctness`/`security`/`performance`/`architecture`/`simplification`/`maintainability`/`testing`/`reliability`/`ux`), `location`, `description`, `evidence`, `verification`. Require concrete evidence for `CONFIRMED`; merge duplicates; output compactly without echoing code blocks (if 0 findings, still list checked/skipped dimensions).
-5. **Verification boundary** — name checks/probes; never claim they passed unless executed (`verification` skill). Tool failure → `UNKNOWN / INCOMPLETE`.
+1. **Scope** — establish target (Iteration 2+ with `delta_files`: inspect `delta_files` + boundary callers first); empty/wrong target → `UNKNOWN / INCOMPLETE`:
+   - **Local (default):** run `scripts/autodev-guard.{ps1,sh} diff-scope` (auto-resolves `HEAD` when dirty or `origin/main`/`main` merge-base when clean; filters noise; `NOISE_ONLY` + green checks = `PASS`) and `mechanical-check` (`0 LLM tokens`).
+   - **GitHub PR (`#<id>` / URL):** open [`references/github-pr-review.md`](references/github-pr-review.md) — `gh pr view --json ...` and filter noise before pulling diffs.
+   - **Post to PR:** follow [`references/github-pr-review.md`](references/github-pr-review.md) gates + `--body-file` / `gh api .../reviews --input` (`COMMENT` default, `CONFIRMED` only, user-confirmed).
+2. **Understand** — read scoped diff and contracts; restate intent without inventing requirements.
+3. **Review** — check architecture, correctness, security, tests, maintainability, plus (skip any dimension only with recorded reason):
+   - **Performance (light):** classify **CONFIRMED** (measured), **EVIDENCED RISK** (known hot-path defect: N+1, `useFrame`+`setState`, sync CPU on request), or **SPECULATIVE** (non-blocking). Load smallest stack perf skill if matched; route `agents/performance-reviewer.md` on hot paths only.
+   - **Simplification / residue:** ask *“Is all of this code still necessary?”* Open [`references/residue-checklist.md`](references/residue-checklist.md) for non-obvious residue. Only **CONFIRMED REDUNDANCY** blocks; leave `LIKELY REDUNDANT` / `UNKNOWN` non-blocking; accept `INTENTIONAL COMPLEXITY`. Never refactor unrelated code.
+4. **Record & consolidate** — use `id` (`R001`…), `severity` (`critical`/`high`/`medium`/`low`), `confidence` (`high`/`medium`/`low`), `status` (`CONFIRMED`/`SPECULATIVE`), `category` (`correctness`/`security`/`performance`/`architecture`/`simplification`/`maintainability`/`testing`/`reliability`/`ux`), `location`, `description`, `evidence`, `verification`. Require concrete evidence for `CONFIRMED`; merge duplicates; stay compact (if 0 findings, list checked/skipped dimensions).
+5. **Verification boundary** — name checks; never claim passed unless executed (`verification`). Tool failure → `UNKNOWN / INCOMPLETE`.

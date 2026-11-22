@@ -153,6 +153,59 @@ function Find-LeftoverTag([string]$Line) {
     return $null
 }
 
+function Resolve-AutoBaseSha([string]$Root, [string[]]$IgnoredPaths) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $diffOut = & git -C $Root diff --no-renames --name-only HEAD 2>$null
+        $diffCode = $LASTEXITCODE
+        $unOut = & git -C $Root ls-files --others --exclude-standard 2>$null
+        $unCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($diffCode -eq 0) {
+        foreach ($row in @($diffOut)) {
+            if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
+            $p = Normalize-PathValue ([string]$row)
+            if ($p) { $candidates.Add($p) }
+        }
+    }
+    if ($unCode -eq 0) {
+        foreach ($row in @($unOut)) {
+            if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
+            $p = Normalize-PathValue ([string]$row)
+            if ($p) { $candidates.Add($p) }
+        }
+    }
+    foreach ($p in $candidates) {
+        if ($p -match '^\.b3/autodev(/|$)') { continue }
+        if ($IgnoredPaths -and (Test-PathMatch $p $IgnoredPaths)) { continue }
+        return 'HEAD'
+    }
+
+    $ErrorActionPreference = 'Continue'
+    try {
+        $headSha = (& git -C $Root rev-parse HEAD 2>$null | Out-String).Trim()
+        $headCode = $LASTEXITCODE
+        if ($headCode -eq 0 -and $headSha) {
+            foreach ($ref in @('origin/HEAD', 'origin/main', 'origin/master', 'main', 'master')) {
+                & git -C $Root rev-parse --verify --quiet $ref 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $mb = (& git -C $Root merge-base $ref HEAD 2>$null | Out-String).Trim()
+                    if ($LASTEXITCODE -eq 0 -and $mb -and $mb -ne $headSha) {
+                        return $mb
+                    }
+                }
+            }
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    return 'HEAD'
+}
+
 switch ($Command) {
     'fingerprint' {
         $trimmedScope = $Scope.Trim()
@@ -293,13 +346,16 @@ switch ($Command) {
     }
 
     'diff-scope' {
-        if (-not $BaseSha) { Fail 'DIFF_SCOPE_FAIL: missing -BaseSha' 1 }
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $resolvedBase = $BaseSha.Trim()
+        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+            $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
+        }
 
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
-            $numstat = & git -C $RepoRoot diff --no-renames --numstat $BaseSha 2>&1
+            $numstat = & git -C $RepoRoot diff --no-renames --numstat $resolvedBase 2>&1
             $nsCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prev
@@ -400,15 +456,18 @@ switch ($Command) {
     }
 
     'mechanical-check' {
-        if (-not $BaseSha) { Fail 'MECHANICAL_FAIL: missing -BaseSha' 1 }
         $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
         $obsoletesList = @(Split-CsvList $Obsoletes)
+        $resolvedBase = $BaseSha.Trim()
+        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+            $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
+        }
 
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
-            $changedRaw = & git -C $RepoRoot diff --no-renames --name-only $BaseSha 2>&1
+            $changedRaw = & git -C $RepoRoot diff --no-renames --name-only $resolvedBase 2>&1
             $chCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prev
@@ -440,7 +499,7 @@ switch ($Command) {
         $leftoverHits = New-Object System.Collections.Generic.List[string]
         $ErrorActionPreference = 'Continue'
         try {
-            $diffLines = & git -C $RepoRoot diff --no-renames -U0 $BaseSha 2>&1
+            $diffLines = & git -C $RepoRoot diff --no-renames -U0 $resolvedBase 2>&1
             $dlCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prev

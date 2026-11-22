@@ -132,6 +132,38 @@ find_leftover_tag() {
   fi
 }
 
+resolve_auto_base_sha() {
+  local root="$1"
+  shift
+  local -a ignored=("$@")
+  local diff_out un_out line p
+  diff_out="$(git -C "$root" diff --no-renames --name-only HEAD 2>/dev/null || true)"
+  un_out="$(git -C "$root" ls-files --others --exclude-standard 2>/dev/null || true)"
+  while IFS= read -r line; do
+    p="$(norm_path "$line")"
+    [[ -z "$p" ]] && continue
+    [[ "$p" == ".b3/autodev" || "$p" == ".b3/autodev/"* ]] && continue
+    if [[ ${#ignored[@]} -gt 0 ]] && path_in_list "$p" "${ignored[@]}"; then continue; fi
+    printf '%s' "HEAD"
+    return 0
+  done < <(printf '%s\n%s\n' "$diff_out" "$un_out")
+
+  local head_sha ref mb
+  head_sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$head_sha" ]]; then
+    for ref in origin/HEAD origin/main origin/master main master; do
+      if git -C "$root" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
+        mb="$(git -C "$root" merge-base "$ref" HEAD 2>/dev/null || true)"
+        if [[ -n "$mb" && "$mb" != "$head_sha" ]]; then
+          printf '%s' "$mb"
+          return 0
+        fi
+      fi
+    done
+  fi
+  printf '%s' "HEAD"
+}
+
 case "$CMD" in
   fingerprint)
     DEPENDS_ON=""
@@ -373,10 +405,17 @@ case "$CMD" in
         *) echo "DIFF_SCOPE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
-    [[ -n "$BASE_SHA" ]] || { echo "DIFF_SCOPE_FAIL: missing --base-sha"; exit 1; }
-
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+
+    BASE_SHA="$(trim_str "$BASE_SHA")"
+    if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
+      if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
+      else
+        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
+      fi
+    fi
 
     NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
     UNTRACKED_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "DIFF_SCOPE_FAIL: git ls-files failed"; exit 1; }
@@ -490,14 +529,21 @@ case "$CMD" in
         *) echo "MECHANICAL_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
-    [[ -n "$BASE_SHA" ]] || { echo "MECHANICAL_FAIL: missing --base-sha"; exit 1; }
-
     ALLOWED_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
     OBS_ARR=()
     while IFS= read -r tok; do [[ -n "$tok" ]] && OBS_ARR+=("$tok"); done < <(split_csv_lines "$OBSOLETES" false)
+
+    BASE_SHA="$(trim_str "$BASE_SHA")"
+    if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
+      if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
+      else
+        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
+      fi
+    fi
 
     CH_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff --name-only failed"; exit 1; }
     UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "MECHANICAL_FAIL: git ls-files failed"; exit 1; }
