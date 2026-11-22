@@ -40,7 +40,7 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Plan changes
 ```
 
-**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 verifiable commit/task; assign hotspots (`package.json`, `.csproj`, `index.ts`, migrations, shared contracts) to 1 foundational task committed first; bump `version` + log under `Plan changes` when scope changes (never weaken ACs/drop requirements without user → `BLOCKED`).
+**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 verifiable commit/task; put hotspots (manifests, index, migrations, contracts) in task 1; scope change → bump `version` + log in `Plan changes` (never weaken ACs/requirements without user → `BLOCKED`).
 
 ## 2. Progress & inline approach (`{RUN_DIR}/progress.md`)
 
@@ -108,11 +108,12 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Files and functions
 ## Contracts
 ## Data flow
-## Edge cases
+## Edge cases / failure_matrix
 ## Changes
 ## Tests
 ## Verification
 ## Architecture
 ```
 
-**Conditional `detailed` fields:** `write_paths:` required when persisting/caching in `>= 2` stores (+ cache invalidation rule); `io_budget:` required on list/query endpoints, DB queries, or render loops; `edge_cases:` must state crash/retry/timeout/double-submit/auth outcomes when stateful/async/auth surfaces apply.
+**Risk-Adaptive (`detailed`):** fill ONLY when triggers apply (`n/a` else): `failure_matrix` (crash/retry/idempotency/timeout/partial-fail/race/timezone/auth), `write_paths:` (`>=2` stores+invalidation), `io_budget:` (query/render loops).
+**Context Packet:** stable prefix (role+immutable task/contract for prompt cache) + volatile suffix (`delta_files`, active findings, verify receipt); never paste full files/logs.

@@ -14,12 +14,16 @@ Only the **orchestrator** declares `PASS`, `INCOMPLETE`, `STUCK`, or STOP. Revie
 
 ## Cost-Preserving Quality Tiering (`/b3-ship` & `/b3-review-loop`)
 
-When the host supports per-agent or per-subagent model selection, split reasoning vs execution without lowering quality:
+When the host supports per-agent or per-subagent model selection, split reasoning vs execution across 4 portable tiers without lowering quality (optimize total verified-task cost, never per-call price alone):
 
-| Tier | Roles | Why this tier | Guardrails |
+| Tier | Roles / Tasks | Why this tier | Guardrails |
 | --- | --- | --- | --- |
-| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Architecture, invariants, contract design, and independent defect detection require full reasoning depth | Never dilute `Plan`, `Scope`, or `Reviewer` onto a weaker tier |
-| **Fast / surgical coding** | `Build` worker (`impl_agent`), `Fixer` | Bounded edits with concrete `approach/T00N.md` (after `Gate`) or `file:line` + `bug_class` | Protected by `0`-token CLI `mechanical-check`, executed `Verify` tests, and independent **Deep** `Reviewer` |
+| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), hard debugging, `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Architecture, invariants, contract design, and independent defect detection require full reasoning depth | Never dilute `Plan`, `Scope`, or `Reviewer` onto a weaker tier |
+| **Standard execution** | Complex multi-file implementation, shared-contract integration, substantial refactoring | Stronger state/invariant tracking avoids multi-round verify retries on non-trivial builds | Pair with concrete `approach/T00N.md`, `verify-run`, and **Deep** independent review |
+| **Fast execution** | Bounded `inline`/`notes` coding, small surgical `Fixer` edits, routine tests, docs | Fast edits when `files`, `line`, `bug_class`, and contracts are already pinned | Protected by `verify-run`, `mechanical-check`/`symbol-check`, and **Deep** `Reviewer` |
+| **Deterministic (0-token)** | `b3-guard` (`diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`check`, `check-wave`, `check-worktree`, `precommit`), Git, lint, builds | Deterministic scripts establish structural facts faster and with zero hallucination | Never replace deterministic CLI verification with LLM self-report |
+
+**Cost-Aware Escalation:** start bounded coding/fixes on **Fast**, multi-file/complex implementation on **Standard** (when host supports a middle tier), and **escalate one tier up** on repeated `verify-run` failures or when the **2-Tier Circuit Breaker** (`review-loop/strategy.md` §1.4) fires.
 
 Do not put vendor model IDs in `spec.md`, `strategy.md`, skills, or this file. Configure them in host agent files (e.g., Cursor `agents/*.md` `model:` field — see [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md)).
 

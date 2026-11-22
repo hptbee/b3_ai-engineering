@@ -15,7 +15,7 @@ readonly: false
 
 **Must / Must not:**
 1. Fix only valid, in-scope `CONFIRMED` items (`review-loop/strategy.md` §1). Mark invalid items `REJECTED` with a reason.
-2. **Bug-class sweep & replacement:** state 1-line broken invariant per finding, sweep sibling sites of the same bug class strictly inside `OWNED FILES`/`DIFF SCOPE` (report unowned sites; never expand scope), add/update a behavior test when applicable, and delete replaced/renamed symbols once unused.
+2. **Bug-class sweep & replacement:** state 1-line broken invariant per finding, sweep sibling sites of the same bug class strictly inside `OWNED FILES`/`DIFF SCOPE` (report unowned sites; never expand scope), add/update a behavior test when applicable, delete replaced/renamed symbols, and confirm no obsolete code remains and verification passes on current tree.
 3. For simplification findings: act **only** on `CONFIRMED REDUNDANCY` (prove redundancy → remove smallest scope → run affected checks). Leave `LIKELY REDUNDANT` / `INTENTIONAL COMPLEXITY` / `UNKNOWN` untouched with reason.
 4. Map every edit to a finding ID; no unrelated refactors or formatting sweeps.
 5. Mark `FIXED` after editing and `VERIFIED` only when executed verification passes.

@@ -14,18 +14,17 @@ Reviewer also has `readonly: true`. Orchestrator is the parent `/b3-review-loop`
 
 `inherit` = same model as the parent. If Cursor does not isolate subagents, the orchestrator **hat-changes**: review pass with no edits, fix pass with no loop outcome.
 
-## Optional two-model
+## Optional tiered model routing
 
-Edit **your checkout** (or a user-level agent file if you keep project files on `inherit`):
+Edit **your checkout** (or a user-level agent file if you keep project files on `inherit`; never commit vendor model IDs):
 
-| File | `model:` intent |
+| Role / Execution | `model:` intent |
 | --- | --- |
-| `agents/b3-reviewer.md` | Deeper / stronger judgment |
-| `agents/b3-fixer.md` | Faster / surgical edits |
+| `agents/b3-reviewer.md`, specialists, `Orchestrator` (`Plan`/`Scope`) | **Deep / high-reasoning** |
+| Complex multi-file `Build` workers (`impl_agent`) | **Standard** (escalate if retries recur) |
+| Bounded surgical `Build` workers & `agents/b3-fixer.md` | **Fast / surgical edits** (escalate on Tier-1 breaker) |
 
-Use whatever ids **this Cursor build** accepts in subagent frontmatter (the product picker / docs — not a list maintained in this repo). Official field: `model` on `.cursor/agents/*.md` ([Cursor subagents](https://cursor.com/docs/context/subagents)).
-
-Leave `b3-security-reviewer.md` and `b3-architecture-reviewer.md` on `inherit` unless you also want those isolated.
+Use whatever ids **this Cursor build** accepts in subagent frontmatter (the product picker / docs — not a list maintained in this repo). Official field: `model` on `.cursor/agents/*.md` ([Cursor subagents](https://cursor.com/docs/context/subagents)). Keep committed frontmatter on `model: inherit`.
 
 ## What not to do
 

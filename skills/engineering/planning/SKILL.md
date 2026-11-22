@@ -34,7 +34,7 @@ Near miss: “is this architecture sound?” with no implementation yet → this
 3. **List risks** (auth, data, perf, a11y, 3D resources) and which skill applies.
 4. **Tasks:** smallest units that are independently verifiable. Fold scaffolding into the task that needs it.
 5. **Each task:** intent, files, verification command or probe. No “add error handling later”.
-6. **Self-check:** every spec item has a task; names/types consistent; simplest approach that meets requirements (`architecture/simplest-correct`).
+6. **Readiness Check:** confirm every acceptance criterion is observable/testable & mapped to a verification check, contradictions or missing dependencies are flagged before coding, reusable existing code was checked, and the design is the simplest sound fit (`architecture/simplest-correct`).
 7. **Stop.** Do not start coding unless the user asked to execute.
 
 ## Progressive disclosure
