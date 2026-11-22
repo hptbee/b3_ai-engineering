@@ -1,0 +1,11 @@
+id: ship-jit-resume-001
+artifact: workflows/ship.md
+intent: Resume reuses a passing task approach instead of writing a new master plan
+scenario: |
+  T002 is in_progress, readiness ready, approach/T002.md exists
+  task_base is an ancestor of HEAD
+  Named files still exist
+  Agent discards the approach, rewrites master-plan.md, and re-decomposes all tasks
+expected_outcome: FAIL
+failure_mode: replan-on-resume
+notes: Scenario C reuses a fresh approach (plan_version match, named files unchanged since approach_at_sha). One master plan. Continue into Implement when the gate already passed

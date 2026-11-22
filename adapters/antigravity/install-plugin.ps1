@@ -143,7 +143,7 @@ if (-not $PluginRoot) {
     $PluginRoot = Join-Path $userHome '.gemini\config\plugins\b3-ai-engineering'
 }
 
-$workflowPath = Join-Path $B3Home 'workflows\autonomous-development.md'
+$workflowPath = Join-Path $B3Home 'workflows\ship.md'
 $skillsSrc = Join-Path $B3Home 'skills'
 $cmdSkillsSrc = Join-Path $B3Home 'adapters\command-skills'
 $rulesDir = Join-Path $B3Home 'rules'
@@ -188,7 +188,7 @@ $rulesHeader = @"
 
 Generated from B3_HOME: ``$b3HomeForward`` (do not edit here).
 Resolve B3_HOME from ``B3_HOME`` env, product ``.b3/home``, or ``$b3HomeForward``.
-Precedence: ``$b3HomeForward/docs/precedence.md``. Autodev: ``$b3HomeForward/workflows/autonomous-development.md``. Review loop: ``$b3HomeForward/review-loop/strategy.md``.
+Precedence: ``$b3HomeForward/docs/precedence.md``. Ship: ``$b3HomeForward/workflows/ship.md``. Review loop: ``$b3HomeForward/review-loop/strategy.md``.
 "@
 $rulesParts = New-Object System.Collections.Generic.List[string]
 $rulesParts.Add($rulesHeader.Trim())
@@ -248,7 +248,7 @@ $pluginJson = @'
   "version": "1.0.0",
   "description": "Personal AI engineering system: portable rules, engineering and domain skills, independent review-loop roles, and autonomous development lifecycle.",
   "suggestedPrompts": [
-    "Run autodev for a new feature or plan in this repository",
+    "Run /ship for a new feature or plan in this repository",
     "Run an independent review-loop on the current git diff",
     "Create an implementation plan without editing code yet"
   ]

@@ -20,7 +20,7 @@ Near miss: “write tests” → implementation + verification. “Safe to ship?
 ## Procedure
 
 1. **Scope** — establish target (Iteration 2+ with `delta_files`: inspect `delta_files` + boundary callers first); empty/wrong target → `UNKNOWN / INCOMPLETE`:
-   - **Local (default):** run `scripts/autodev-guard.{ps1,sh} diff-scope` (auto-resolves `HEAD` when dirty or `origin/main`/`main` merge-base when clean; filters noise; `NOISE_ONLY` + green checks = `PASS`) and `mechanical-check` (`0 LLM tokens`).
+   - **Local (default):** run `scripts/b3-guard.{ps1,sh} diff-scope` (auto-resolves `HEAD` when dirty or `origin/main`/`main` merge-base when clean; filters noise; `NOISE_ONLY` + green checks = `PASS`) and `mechanical-check` (`0 LLM tokens`).
    - **GitHub PR (`#<id>` / URL):** open [`references/github-pr-review.md`](references/github-pr-review.md) — `gh pr view --json ...` and filter noise before pulling diffs.
    - **Post to PR:** follow [`references/github-pr-review.md`](references/github-pr-review.md) gates + `--body-file` / `gh api .../reviews --input` (`COMMENT` default, `CONFIRMED` only, user-confirmed).
 2. **Understand** — read scoped diff and contracts; restate intent without inventing requirements.

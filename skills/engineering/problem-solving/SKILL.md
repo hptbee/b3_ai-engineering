@@ -11,7 +11,7 @@ description: >
 Default engineering loop for this system:
 
 ```text
-Understand → Plan → Implement → Verify → Review → Fix → Re-verify
+Scope → Plan → Build → Verify → Review → Fix → Verify
 ```
 
 ## When to use
@@ -28,17 +28,17 @@ Understand → Plan → Implement → Verify → Review → Fix → Re-verify
 - Pure knowledge questions with no change
 - Running the full independent review loop after work is already implemented → `review-loop/strategy.md` (specified; not a substitute for this skill’s lighter review step)
 
-Near miss: “is this design sound?” with no code change yet → stay in Understand/Plan; do not skip to Implement.
+Near miss: “is this design sound?” with no code change yet → stay in Scope/Plan; do not skip to Build.
 
 ## Procedure
 
-1. **Understand**  
-   Restate the problem, the current behavior, the desired behavior, and constraints. Read the relevant code and failure evidence. If understanding is incomplete, stop and gather; do not guess a root cause.
+1. **Scope**  
+   Restate the problem, current behavior, desired behavior, and constraints. Read the relevant code and failure evidence. If understanding is incomplete, stop and gather; do not guess a root cause.
 
 2. **Plan**  
-   Write a short plan: approach, files likely touched, risks, and how success will be verified. Prefer the smallest change. Call out open questions. Inside `/autodev`, this step is the workflow Implementation Readiness Gate: inspect code first, then persist by **depth** (`inline` / `notes` / `detailed`). Do not skip it. Do not stop for the user after it.
+   Write a short plan: approach, files likely touched, risks, and how success will be verified. Prefer the smallest change. Call out open questions. Inside `/ship`, this step is `Scope` + `Gate` (Implementation Readiness Gate): inspect code first, then persist by **depth** (`inline` / `notes` / `detailed`). Do not skip it. Do not stop for the user after it.
 
-3. **Implement**  
+3. **Build**  
    Execute the plan. Do not silently expand scope. If the plan is wrong, update the plan, then continue.
 
 4. **Verify**  
@@ -50,7 +50,7 @@ Near miss: “is this design sound?” with no code change yet → stay in Under
 6. **Fix**  
    Address confirmed findings (and high-confidence issues still `INVESTIGATING` if they block the success condition). For simplification findings, remove only CONFIRMED redundancy; preserve intentional complexity. Map each fix to a finding.
 
-7. **Re-verify**  
+7. **Verify (re-run)**  
    Re-run the checks that matter. Then stop or escalate.
 
 ## Progressive disclosure

@@ -32,7 +32,7 @@ Do **not** also activate `.agents/skills` or `.claude/skills` in the same checko
 
 ### Separate product repository
 
-Run [`../install-product.ps1`](../install-product.ps1) (or `.sh`) with `-HostName cursor` / `--host cursor`. That writes `.b3/home`, `AGENTS.md` (when missing), `.cursor/commands/*.md`, and `.gitignore` `.b3/autodev/`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
+Run [`../install-product.ps1`](../install-product.ps1) (or `.sh`) with `-HostName cursor` / `--host cursor`. That writes `.b3/home`, `AGENTS.md` (when missing), `.cursor/commands/*.md`, and `.gitignore` `.b3/ship/`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
 
 ```powershell
 # Windows

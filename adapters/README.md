@@ -9,7 +9,7 @@ Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.a
 | Host | Rules / context | Skills | Commands | Subagents |
 | --- | --- | --- | --- | --- |
 | **Cursor** | `AGENTS.md` + committed `.cursor/rules/*.mdc` (`@rules/*.md`) | Gitignored `.cursor/skills` → `skills/` (or `~/.cursor/skills/b3-ai-engineering` in products) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
-| **Codex** | `AGENTS.md` | Gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`) | `adapters/command-skills/` (`$autodev`, `$plan`, …) + prompt routing | Delegated role prompts from `agents/*.md` |
+| **Codex** | `AGENTS.md` | Gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`) | `adapters/command-skills/` (`$ship`, `$plan`, …) + prompt routing | Delegated role prompts from `agents/*.md` |
 | **Claude Code** | Committed `CLAUDE.md` (`@AGENTS.md`) | Gitignored flattened `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`) | Unified with skills (`adapters/command-skills/` via `.claude/skills/<name>`) | Gitignored `.claude/agents` → `agents/` |
 | **Antigravity** | `AGENTS.md` (or plugin `rules/AGENTS.md`) | Committed `.agents/skills.json` (in-repo), flattened `.agents/skills/<name>` (product), or plugin `skills/` | `adapters/command-skills/` via `.agents/skills.json` / plugin | Generated plugin `agents/*.md` (`subagent: true`, explicit `tools:`) or dynamic `define_subagent` |
 
@@ -64,7 +64,7 @@ B3 drives work in a separate product repository without copying `skills/`:
 ./adapters/install-product.sh --product-root /path/to/product --host antigravity
 ```
 
-Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md`, and `.b3/autodev/` in `.gitignore`. Host specifics:
+Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md`, and `.b3/ship/` in `.gitignore`. Host specifics:
 - **cursor:** refuses existing `.agents/skills` or `.claude/skills`; writes `.cursor/README.md`.
 - **codex / antigravity:** writes gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`).
 - **claude:** writes thin `CLAUDE.md` (`@AGENTS.md`, when missing), gitignored flattened `.claude/skills/<name>`, and gitignored `.claude/agents` → `{B3_HOME}/agents`.

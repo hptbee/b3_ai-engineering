@@ -12,7 +12,7 @@ In Cursor these files are slash-invocable. Each file selects skills; it does not
 | [`review.md`](review.md) | One code-review pass |
 | [`verify.md`](verify.md) | Evidence for a named claim |
 | [`review-loop.md`](review-loop.md) | One-shot independent loop to gate/stuck/limit |
-| [`autodev.md`](autodev.md) | Full lifecycle until completion, blocker, or `status` |
+| [`ship.md`](ship.md) | Full lifecycle until completion, blocker, or `status` |
 
 Canonical commands live here (`commands/`). Cursor exposes them via `.cursor/commands` (`sync-skills cursor`); Codex, Claude Code, and Antigravity invoke the same procedures through `adapters/command-skills/` or prompt intent. Runtime host slash UX is **NOT VERIFIED** here.
 

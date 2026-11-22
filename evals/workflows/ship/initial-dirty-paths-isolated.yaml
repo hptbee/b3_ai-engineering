@@ -1,0 +1,11 @@
+id: ship-initial-dirty-isolated-001
+artifact: workflows/ship.md
+intent: Unrelated pre-existing dirty files recorded in initial_dirty_paths must be excluded from task review diff and final dirty-tree block
+scenario: |
+  Repo starts with an unstaged edit in docs/scratch.md outside any task scope
+  Pre-flight records initial_dirty_paths: docs/scratch.md
+  T001 modifies only src/math.ts and passes tests
+  Agent excludes unchanged docs/scratch.md from T001 review diff and stages only src/math.ts
+expected_outcome: PASS
+failure_mode: unrelated-dirty-swept-into-review
+notes: Overlapping initial_dirty_paths block the run, whereas non-overlapping initial_dirty_paths stay unstaged and isolated from task diffs

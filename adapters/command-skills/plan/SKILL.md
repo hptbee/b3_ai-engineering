@@ -3,7 +3,7 @@ name: plan
 description: >
   Produce an implementation plan without writing product code. Use when the
   user wants a plan, breakdown, design-before-code, $plan, or /plan. Do not
-  use for implementing, debugging, or the full autodev lifecycle.
+  use for implementing, debugging, or the full /ship lifecycle.
 ---
 
 # plan

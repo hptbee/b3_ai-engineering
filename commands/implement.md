@@ -11,6 +11,6 @@ description: Execute a plan or specified change using the default engineering lo
 
 Load the smallest domain skill that matches the stack (React, Node, ASP.NET, Three.js, etc.).
 
-Sequence: `{B3_HOME}/workflows/feature-implementation.md`. Do not run the full review loop unless asked (`commands/review-loop.md`).
+Sequence: `{B3_HOME}/workflows/feature-implementation.md` (`Scope → Plan → Build → Verify → Review → Fix → Verify`). Do not run the full review loop unless asked (`commands/review-loop.md`).
 
-A lifecycle that plans, implements, reviews, commits, and continues is `commands/autodev.md`. This command stays one execution request.
+A lifecycle that plans, implements, reviews, commits, and continues is `commands/ship.md`. This command stays one execution request.

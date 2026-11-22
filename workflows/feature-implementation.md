@@ -3,24 +3,24 @@
 Default product-work sequence. Does not replace skills. Does not replace `review-loop/strategy.md`.
 
 ```text
-Understand → Plan → Implement → Verify → Review → Fix → Re-verify
+Scope → Plan → Build → Verify → Review → Fix → Verify
 ```
 
 | Step | Use |
 | --- | --- |
-| Understand | Read code and constraints |
+| Scope | Read code, callers, and constraints |
 | Plan | `skills/engineering/planning` when multi-step; else a short plan in-place |
-| Implement | `problem-solving` + smallest domain skill |
+| Build | `problem-solving` + smallest domain skill |
 | Verify | `verification` |
 | Review | `code-review` (one pass: correctness, security, performance, simplification/residue check) |
-| Fix / Re-verify | map fixes to findings; remove confirmed residue; run checks again |
+| Fix / Verify | Map fixes to findings; remove confirmed residue; run checks again |
 
-During the **Review** step, do not only ask "is it correct?" Also ask: *given the final implementation and current requirements, is all of this code still necessary?* Check whether intermediate implementation steps left behind temporary scaffolding, dead branches, or redundant state.
+During **Review**, do not only ask "is it correct?" Also ask: *given final requirements, is all of this code still necessary?* Check whether intermediate steps left temporary scaffolding, dead branches, or redundant state.
 
-Independent multi-iteration review: `commands/review-loop.md` → `review-loop/strategy.md`.
+Independent multi-iteration loop: `commands/review-loop.md` → `review-loop/strategy.md`.
 
-`/implement` uses the one-pass review in this file and does not start the review loop.
+`/implement` uses the one-pass review here and does not start the review loop.
 
-[`autonomous-development.md`](autonomous-development.md) uses the understand, plan, implement, and verify steps here. Per-task planning uses Just-in-Time `Analyze` plus the Implementation Readiness Gate in that file; post-code checking is risk-tiered (1 independent reviewer pass on small `inline` tasks unless a confirmed finding triggers the loop; full `review-loop` on `notes`/`detailed` tasks and cumulative final verification). It continues across ready tasks without stopping between the readiness gate and coding, or between tasks.
+[`ship.md`](ship.md) uses `Scope`, `Plan`, `Build`, and `Verify`. Per-task scoping uses Just-in-Time `Scope` plus `Gate` (Implementation Readiness Gate) in that file; post-code checking is risk-tiered (1 independent reviewer pass on small `inline` tasks unless a confirmed finding triggers the loop; full `review-loop` on `notes`/`detailed` tasks and `Finalize`). It continues across ready tasks without stopping between Gate and Build, or between tasks.
 
 Architecture choices: `simplest-correct` (strong rule `rules/simplest-correct.md`).

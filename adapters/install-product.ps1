@@ -23,8 +23,8 @@ $scriptRoot = $PSScriptRoot
 if (-not $B3Home) { $B3Home = Split-Path -Parent $scriptRoot }
 $B3Home = (Resolve-Path -LiteralPath $B3Home).Path
 $ProductRoot = (Resolve-Path -LiteralPath $ProductRoot).Path
-$workflow = Join-Path $B3Home 'workflows\autonomous-development.md'
-$template = Join-Path $scriptRoot 'product-autodev.md'
+$workflow = Join-Path $B3Home 'workflows\ship.md'
+$template = Join-Path $scriptRoot 'product-ship.md'
 $skills = Join-Path $B3Home 'skills'
 $b3Commands = Join-Path $B3Home 'commands'
 $b3Agents = Join-Path $B3Home 'agents'
@@ -37,7 +37,7 @@ if (@(Get-ChildItem -LiteralPath $skills -Recurse -Filter 'SKILL.md' -File -Erro
 }
 
 $productSkills = Join-Path $ProductRoot '.cursor\skills'
-$commandDest = Join-Path $ProductRoot '.cursor\commands\autodev.md'
+$commandDest = Join-Path $ProductRoot '.cursor\commands\ship.md'
 $homeDest = Join-Path $ProductRoot '.b3\home'
 $agentsDest = Join-Path $ProductRoot '.agents\skills'
 $claudeSkillsDest = Join-Path $ProductRoot '.claude\skills'
@@ -147,17 +147,17 @@ function Update-B3Gitignore([string]$Root) {
     $gi = Join-Path $Root '.gitignore'
     $block = @"
 
-# B3: commit .b3/home; keep autodev checkpoints local
-.b3/autodev/
+# B3: commit .b3/home; keep ship checkpoints local
+.b3/ship/
 "@
     if (-not (Test-Path -LiteralPath $gi)) {
         Set-Content -LiteralPath $gi -Value ($block.TrimStart() + "`n")
         return 'created'
     }
     $text = Get-Content -LiteralPath $gi -Raw
-    if ($text -match '(?m)^\s*\.b3/autodev/\s*$') { return 'present' }
+    if ($text -match '(?m)^\s*\.b3/ship/\s*$') { return 'present' }
     if ($text -match '(?m)^\s*\.b3/\s*$') {
-        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', '.b3/autodev/')
+        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', '.b3/ship/')
         Set-Content -LiteralPath $gi -Value $text -NoNewline
         return 'upgraded'
     }
@@ -210,12 +210,12 @@ if ($DryRun) {
         if (Test-Path -LiteralPath $claudeMdDest) { Write-Output "dry-run: keep existing $claudeMdDest" }
         elseif (Test-Path -LiteralPath $claudeMdTemplate) { Write-Output "dry-run: write $claudeMdDest from $claudeMdTemplate" }
     }
-    Write-Output "dry-run: gitignore .b3/autodev/ (see Update-B3Gitignore)"
+    Write-Output "dry-run: gitignore .b3/ship/ (see Update-B3Gitignore)"
     if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: gitignore .agents/skills" }
     if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills and .claude/agents" }
     if (Test-Path -LiteralPath $b3Commands) {
         Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File | ForEach-Object {
-            if ($_.Name -in @('README.md', 'autodev.md')) { return }
+            if ($_.Name -in @('README.md', 'ship.md')) { return }
             $dest = Join-Path (Join-Path $ProductRoot '.cursor\commands') $_.Name
             if (-not (Test-Path -LiteralPath $dest)) { Write-Output "dry-run: copy command $($_.Name)" }
         }
@@ -250,7 +250,7 @@ if ($HostName -eq 'claude' -and (-not (Test-Path -LiteralPath $claudeMdDest)) -a
 if (Test-Path -LiteralPath $b3Commands) {
     $cmdDir = Join-Path $ProductRoot '.cursor\commands'
     foreach ($src in Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File) {
-        if ($src.Name -in @('README.md', 'autodev.md')) { continue }
+        if ($src.Name -in @('README.md', 'ship.md')) { continue }
         $dest = Join-Path $cmdDir $src.Name
         if (-not (Test-Path -LiteralPath $dest)) {
             Copy-Item -LiteralPath $src.FullName -Destination $dest
@@ -280,7 +280,7 @@ Write-Output "gitignore.b3=$ignorePlan"
 Write-Output "gitignore.skills=$skillIgnorePlan"
 Write-Output "host=$HostName"
 if ($HostName -eq 'codex') {
-    Write-Output "skills=$agentsDest (flattened junctions + `$autodev; gitignored, not copied)"
+    Write-Output "skills=$agentsDest (flattened junctions + `$ship; gitignored, not copied)"
 } elseif ($HostName -eq 'antigravity') {
     Write-Output "skills=$agentsDest (flattened junctions + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.ps1 if Cursor also opens this repo)"
 } elseif ($HostName -eq 'claude') {

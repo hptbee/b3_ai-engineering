@@ -1,0 +1,10 @@
+id: ship-checkpoint-001
+artifact: workflows/ship.md
+intent: .b3/ship checkpoints must not enter a task commit
+scenario: |
+  CURRENT and progress.md/master-plan.md exist under .b3/ship/runs/<run_id>/
+  Agent stages with git add -A and commits T001
+  The commit contains .b3/ship/runs/<run_id>/progress.md
+expected_outcome: FAIL
+failure_mode: checkpoint-in-commit
+notes: Ensure .gitignore has .b3/. Never git add -A. Inspect git diff --cached --name-only

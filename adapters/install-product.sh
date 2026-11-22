@@ -38,8 +38,8 @@ else
 fi
 PRODUCT_ROOT="$(cd "$PRODUCT_ROOT" && pwd)"
 
-WORKFLOW="${B3_HOME}/workflows/autonomous-development.md"
-TEMPLATE="${SCRIPT_DIR}/product-autodev.md"
+WORKFLOW="${B3_HOME}/workflows/ship.md"
+TEMPLATE="${SCRIPT_DIR}/product-ship.md"
 CURSOR_README_TEMPLATE="${SCRIPT_DIR}/product-cursor-readme.md"
 AGENTS_MD_TEMPLATE="${SCRIPT_DIR}/product-agents.md"
 CLAUDE_MD_TEMPLATE="${SCRIPT_DIR}/product-claude.md"
@@ -55,7 +55,7 @@ CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
 }
 
 PRODUCT_SKILLS="${PRODUCT_ROOT}/.cursor/skills"
-COMMAND_DEST="${PRODUCT_ROOT}/.cursor/commands/autodev.md"
+COMMAND_DEST="${PRODUCT_ROOT}/.cursor/commands/ship.md"
 HOME_DEST="${PRODUCT_ROOT}/.b3/home"
 AGENTS_DEST="${PRODUCT_ROOT}/.agents/skills"
 CLAUDE_SKILLS_DEST="${PRODUCT_ROOT}/.claude/skills"
@@ -145,21 +145,21 @@ install_flat_skills() {
 update_b3_gitignore() {
   local gi="${PRODUCT_ROOT}/.gitignore"
   if [[ ! -f "$gi" ]]; then
-    printf '# B3: commit .b3/home; keep autodev checkpoints local\n.b3/autodev/\n' > "$gi"
+    printf '# B3: commit .b3/home; keep ship checkpoints local\n.b3/ship/\n' > "$gi"
     echo "created"
     return
   fi
-  if grep -Eq '^[[:space:]]*\.b3/autodev/[[:space:]]*$' "$gi"; then
+  if grep -Eq '^[[:space:]]*\.b3/ship/[[:space:]]*$' "$gi"; then
     echo "present"
     return
   fi
   if grep -Eq '^[[:space:]]*\.b3/[[:space:]]*$' "$gi"; then
     local tmp="${gi}.b3tmp"
-    sed 's|^[[:space:]]*\.b3/[[:space:]]*$|.b3/autodev/|' "$gi" > "$tmp" && mv "$tmp" "$gi"
+    sed 's|^[[:space:]]*\.b3/[[:space:]]*$|.b3/ship/|' "$gi" > "$tmp" && mv "$tmp" "$gi"
     echo "upgraded"
     return
   fi
-  printf '\n# B3: commit .b3/home; keep autodev checkpoints local\n.b3/autodev/\n' >> "$gi"
+  printf '\n# B3: commit .b3/home; keep ship checkpoints local\n.b3/ship/\n' >> "$gi"
   echo "appended"
 }
 
@@ -207,12 +207,12 @@ if $DRY_RUN; then
     if [[ -f "$CLAUDE_MD_DEST" ]]; then echo "dry-run: keep existing $CLAUDE_MD_DEST"
     elif [[ -f "$CLAUDE_MD_TEMPLATE" ]]; then echo "dry-run: write $CLAUDE_MD_DEST from $CLAUDE_MD_TEMPLATE"; fi
   fi
-  echo "dry-run: gitignore .b3/autodev/"
+  echo "dry-run: gitignore .b3/ship/"
   if [[ -d "$COMMANDS_SRC" ]]; then
     for src in "$COMMANDS_SRC"/*.md; do
       [[ -f "$src" ]] || continue
       base="$(basename "$src")"
-      [[ "$base" == "README.md" || "$base" == "autodev.md" ]] && continue
+      [[ "$base" == "README.md" || "$base" == "ship.md" ]] && continue
       [[ -f "${PRODUCT_ROOT}/.cursor/commands/${base}" ]] || echo "dry-run: copy command $base"
     done
   fi
@@ -250,7 +250,7 @@ if [[ -d "$COMMANDS_SRC" ]]; then
   for src in "$COMMANDS_SRC"/*.md; do
     [[ -f "$src" ]] || continue
     base="$(basename "$src")"
-    [[ "$base" == "README.md" || "$base" == "autodev.md" ]] && continue
+    [[ "$base" == "README.md" || "$base" == "ship.md" ]] && continue
     dest="${PRODUCT_ROOT}/.cursor/commands/${base}"
     [[ -f "$dest" ]] || cp "$src" "$dest"
   done
@@ -281,7 +281,7 @@ echo "gitignore.b3=$IGNORE_PLAN"
 echo "gitignore.skills=$SKILL_IGNORE_PLAN"
 echo "host=$HOST_NAME"
 case "$HOST_NAME" in
-  codex) echo "skills=$AGENTS_DEST (flattened symlinks + \$autodev; gitignored, not copied)" ;;
+  codex) echo "skills=$AGENTS_DEST (flattened symlinks + \$ship; gitignored, not copied)" ;;
   antigravity) echo "skills=$AGENTS_DEST (flattened symlinks + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.sh if Cursor also opens this repo)" ;;
   claude) echo "skills=$CLAUDE_SKILLS_DEST (flattened symlinks + command skills) + $CLAUDE_AGENTS_DEST -> $AGENTS_SRC (gitignored, not copied)" ;;
   cursor) echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS_SRC (not copied into product)" ;;

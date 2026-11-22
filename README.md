@@ -15,7 +15,7 @@ b3-ai-engineering/
 ├── skills/                   Canonical skills (Agent Skills SKILL.md)
 ├── commands/                 Canonical user-facing / actions
 ├── agents/                   Canonical reviewer / fixer subagent specs
-├── workflows/                Default product sequence & /autodev lifecycle
+├── workflows/                Default product sequence & /ship lifecycle
 ├── review-loop/              Spec + orchestration procedure
 ├── knowledge/                Reusable internal knowledge
 ├── research/                 Provenance & architecture decisions
@@ -73,7 +73,7 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 ./adapters/install-product.sh --product-root /path/to/your-product --host cursor
 ```
 
-The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md` (including `autodev.md`), and `.b3/autodev/` in `.gitignore`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
+The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md` (including `ship.md`), and `.b3/ship/` in `.gitignore`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
 
 ```powershell
 # Windows — replace the target with your B3 clone
@@ -102,7 +102,7 @@ ln -sfn /path/to/b3_ai-engineering/skills ~/.cursor/skills/b3-ai-engineering
 ./adapters/sync-skills.sh --verify codex
 ```
 
-**Separate product repo:** Use `install-product` with `-HostName codex` / `--host codex`. That writes `.b3/home`, a thin `AGENTS.md` if missing, and a gitignored flattened `.agents/skills/<name>` index so Codex can invoke `$autodev` (and `$plan`, `$implement`, …).
+**Separate product repo:** Use `install-product` with `-HostName codex` / `--host codex`. That writes `.b3/home`, a thin `AGENTS.md` if missing, and a gitignored flattened `.agents/skills/<name>` index so Codex can invoke `$ship` (and `$plan`, `$implement`, …).
 
 ### Claude Code
 
@@ -176,14 +176,14 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Review & review loop
 
-- **Single-pass `/review`** ([`commands/review.md`](commands/review.md) / [`skills/engineering/code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): supports **3 modes** — **local diff/branch** (auto-resolving `HEAD` or `origin/main`/`main` merge-base via `autodev-guard diff-scope` + `mechanical-check`), **GitHub PR (`#<id>` / URL)** with noise filtering before pulling diffs, and **optional PR commenting/inline reviews** (`--body-file` / `gh api .../reviews --input`, `COMMENT` default, `CONFIRMED` findings only) via progressive-disclosure [`skills/engineering/code-review/references/github-pr-review.md`](skills/engineering/code-review/references/github-pr-review.md).
+- **Single-pass `/review`** ([`commands/review.md`](commands/review.md) / [`skills/engineering/code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): supports **3 modes** — **local diff/branch** (auto-resolving `HEAD` or `origin/main`/`main` merge-base via `b3-guard diff-scope` + `mechanical-check`), **GitHub PR (`#<id>` / URL)** with noise filtering before pulling diffs, and **optional PR commenting/inline reviews** (`--body-file` / `gh api .../reviews --input`, `COMMENT` default, `CONFIRMED` findings only) via progressive-disclosure [`skills/engineering/code-review/references/github-pr-review.md`](skills/engineering/code-review/references/github-pr-review.md).
 - **Iterative `/review-loop`** ([`commands/review-loop.md`](commands/review-loop.md)): runtime-self-sufficient [`review-loop/strategy.md`](review-loop/strategy.md) (skips `spec.md`/`sizing.md`/`findings.md`/`models.md` on normal runs), 0-token `diff-scope` + `mechanical-check`, Iteration 2+ `--prev-sha` `delta_files`, `impl_agent` prompt-cache resume, bug-class sweep, and 2-tier circuit breaker. Normative reference: [`review-loop/spec.md`](review-loop/spec.md).
 
-## Autonomous development
+## Full lifecycle (`/ship`)
 
-One invocation runs pre-flight baseline checks, planning (with verbatim shared contracts), JIT task analysis, single-task or disjoint **Parallel Waves** (`autodev-guard check-wave`, `impl_agent` tracking, Hub-and-Spoke `discoveries`/`change_requests`), 0-token `mechanical-check`, risk-tiered independent review, sequential atomic commits, and Git-verified resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md) (progressive-disclosure templates & resume under `workflows/references/`). Guard CLI: [`scripts/README.md`](scripts/README.md). Command: [`commands/autodev.md`](commands/autodev.md) (1-hop `adapters/command-skills/autodev/SKILL.md` for skill-based hosts). Run-scoped checkpoints live under `.b3/autodev/runs/<run_id>/` via 1-line `.b3/autodev/CURRENT` (gitignored).
+One invocation runs `Preflight → Plan → [Scope → Gate → Build → Verify → Guard → Review → Fix → Commit] → Finalize` (with verbatim shared contracts, disjoint **Parallel Waves** via `b3-guard check-wave`, `impl_agent` tracking, Hub-and-Spoke `discoveries`/`change_requests`, 0-token `mechanical-check`, risk-tiered independent review, sequential atomic commits, and Git-verified resume). Procedure: [`workflows/ship.md`](workflows/ship.md) (progressive-disclosure templates & resume under `workflows/references/`). Guard CLI: [`scripts/README.md`](scripts/README.md). Command: [`commands/ship.md`](commands/ship.md) (1-hop `adapters/command-skills/ship/SKILL.md` for skill-based hosts). Run-scoped checkpoints live under `.b3/ship/runs/<run_id>/` via 1-line `.b3/ship/CURRENT` (gitignored).
 
-**Visual diagrams & walkthrough:** [`docs/autodev-and-review-guide.md`](docs/autodev-and-review-guide.md) (Mermaid flowcharts & sequence diagrams for `/autodev`, Parallel Waves, `/review-loop`, and 3-mode `/review`).
+**Visual diagrams & walkthrough:** [`docs/ship-and-review-guide.md`](docs/ship-and-review-guide.md) (Mermaid flowcharts & sequence diagrams for `/ship`, Parallel Waves, `/review-loop`, and 3-mode `/review`).
 
 ## Context budget & validation
 
@@ -221,7 +221,7 @@ Canonical core (rules/, skills/, commands/, agents/)
 | Commands, agents | Present (host-neutral canonical core) |
 | Eval fixtures | Present; runner deferred |
 | Review-loop orchestration | Present (agent procedure; host isolation **UNKNOWN / INCOMPLETE**) |
-| Autonomous development | Present as workflow + `commands/autodev.md` + `adapters/command-skills/autodev/` |
+| Full lifecycle (`/ship`) | Present as workflow + `commands/ship.md` + `adapters/command-skills/ship/` |
 | Knowledge after lessons | Minimal (`knowledge/personal/` only) |
 | Profile files | Not created (`knowledge/personal/` holds background) |
 | Cursor / Codex / Claude / Antigravity adapters | Present (`sync-skills`, `install-product`, Antigravity plugin); live runtime host discovery **UNKNOWN / INCOMPLETE** |

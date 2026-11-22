@@ -26,7 +26,7 @@ if [[ ! -d "$B3_HOME" ]]; then
 fi
 B3_HOME="$(cd "$B3_HOME" && pwd)"
 
-WORKFLOW="${B3_HOME}/workflows/autonomous-development.md"
+WORKFLOW="${B3_HOME}/workflows/ship.md"
 SKILLS_SRC="${B3_HOME}/skills"
 CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
 RULES_DIR="${B3_HOME}/rules"
@@ -182,7 +182,7 @@ RULES_CONTENT="# B3 AI Engineering Rules
 
 Generated from B3_HOME: \`${B3_HOME}\` (do not edit here).
 Resolve B3_HOME from \`B3_HOME\` env, product \`.b3/home\`, or \`${B3_HOME}\`.
-Precedence: \`${B3_HOME}/docs/precedence.md\`. Autodev: \`${B3_HOME}/workflows/autonomous-development.md\`. Review loop: \`${B3_HOME}/review-loop/strategy.md\`."
+Precedence: \`${B3_HOME}/docs/precedence.md\`. Ship: \`${B3_HOME}/workflows/ship.md\`. Review loop: \`${B3_HOME}/review-loop/strategy.md\`."
 
 for rf in "${RULE_FILES[@]}"; do
   stripped="$(strip_frontmatter "$rf")"
@@ -252,7 +252,7 @@ PLUGIN_JSON='{
   "version": "1.0.0",
   "description": "Personal AI engineering system: portable rules, engineering and domain skills, independent review-loop roles, and autonomous development lifecycle.",
   "suggestedPrompts": [
-    "Run autodev for a new feature or plan in this repository",
+    "Run /ship for a new feature or plan in this repository",
     "Run an independent review-loop on the current git diff",
     "Create an implementation plan without editing code yet"
   ]

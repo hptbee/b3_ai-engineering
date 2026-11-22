@@ -38,5 +38,5 @@ venv/
 # Optional review-loop working log (keep TEMPLATE.md)
 review-loop/state/current.yaml
 
-# Autonomous-development checkpoints for a run in this system repo
+# /ship run checkpoints inside this system repo
 .b3/

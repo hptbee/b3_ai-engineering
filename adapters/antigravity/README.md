@@ -9,7 +9,7 @@
 | `AGENTS.md` | Native workspace rule (auto-loaded from repo root) |
 | `rules/*.md` | Referenced via `AGENTS.md` in-repo, or generated into plugin `rules/AGENTS.md` (plain Markdown, no frontmatter, `< 24 KB`) |
 | `skills/` | Committed `.agents/skills.json` (1-level category entries) in this repo; flattened `.agents/skills/<name>` junctions/symlinks in product repos (`install-product -HostName antigravity`), or inside plugin `skills/<name>` |
-| `commands/` + `adapters/command-skills/` | Exposed as skills via `adapters/command-skills/` (`autodev`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`) or natural prompt intent |
+| `commands/` + `adapters/command-skills/` | Exposed as skills via `adapters/command-skills/` (`ship`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`) or natural prompt intent |
 | `agents/*.md` | Generated into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, explicit least-privilege `tools:`), or dynamically delegated via `define_subagent` / `invoke_subagent` |
 
 ## Capability classification
@@ -75,7 +75,7 @@ Attach B3 to a separate product repository without copying `skills/` into it:
 ./adapters/install-product.sh --product-root /path/to/your-product --host antigravity
 ```
 
-This writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `.b3/autodev/` + `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `autodev`).
+This writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `.b3/ship/` + `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `ship`).
 
 > **Cursor coexistence:** If Cursor also opens that same product repository, do **not** create `.agents/skills` in the product repo (Cursor cross-loads `.agents/skills` and can duplicate skills). Instead, attach the product with `-HostName cursor` (or `--host cursor`) and install the **global Antigravity plugin** below.
 

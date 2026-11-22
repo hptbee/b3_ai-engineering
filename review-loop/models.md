@@ -12,14 +12,14 @@ Portable contract. This file does **not** name vendor models. Hosts differ (Curs
 
 Only the **orchestrator** declares `PASS`, `INCOMPLETE`, `STUCK`, or STOP. Reviewer and Fixer return work products (findings, diffs, verification evidence).
 
-## Cost-Preserving Quality Tiering (`/autodev` & `/review-loop`)
+## Cost-Preserving Quality Tiering (`/ship` & `/review-loop`)
 
 When the host supports per-agent or per-subagent model selection, split reasoning vs execution without lowering quality:
 
 | Tier | Roles | Why this tier | Guardrails |
 | --- | --- | --- | --- |
-| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Analyze`), `Reviewer`, `architecture-reviewer`, `security-reviewer`, `performance-reviewer` | Architecture, invariants, contract design, and independent defect detection require full reasoning depth | Never dilute `Plan`, `Analyze`, or `Reviewer` onto a weaker tier |
-| **Fast / surgical coding** | `Implement` worker (`impl_agent`), `Fixer` | Bounded edits with concrete `approach/T00N.md` (after `Implementation Readiness Gate`) or `file:line` + `bug_class` | Protected by `0`-token CLI `mechanical-check`, executed `VERIFY` tests, and independent **Deep** `Reviewer` |
+| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), `Reviewer`, `architecture-reviewer`, `security-reviewer`, `performance-reviewer` | Architecture, invariants, contract design, and independent defect detection require full reasoning depth | Never dilute `Plan`, `Scope`, or `Reviewer` onto a weaker tier |
+| **Fast / surgical coding** | `Build` worker (`impl_agent`), `Fixer` | Bounded edits with concrete `approach/T00N.md` (after `Gate`) or `file:line` + `bug_class` | Protected by `0`-token CLI `mechanical-check`, executed `Verify` tests, and independent **Deep** `Reviewer` |
 
 Do not put vendor model IDs in `spec.md`, `strategy.md`, skills, or this file. Configure them in host agent files (e.g., Cursor `agents/*.md` `model:` field — see [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md)).
 

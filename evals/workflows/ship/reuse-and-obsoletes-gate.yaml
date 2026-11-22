@@ -1,0 +1,10 @@
+id: ship-reuse-obsoletes-gate-001
+artifact: workflows/ship.md
+intent: Implementation Readiness Gate must reject readiness ready when reuse or obsoletes is empty
+scenario: |
+  T001 approach has non-empty inspected, files, watched_paths, changes, verification, and task_spec_fingerprint
+  reuse and obsoletes fields are left blank in progress.md
+  Agent marks readiness: ready and starts editing product code
+expected_outcome: INCOMPLETE
+failure_mode: missing-shift-left-reuse-obsoletes
+notes: Gate requires explicit reuse and obsoletes (or none when verified) before coding so duplicate helpers and legacy residue are prevented up front

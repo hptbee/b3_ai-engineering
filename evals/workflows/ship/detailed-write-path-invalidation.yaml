@@ -1,0 +1,10 @@
+id: ship-detailed-write-path-001
+artifact: workflows/ship.md
+intent: Detailed task writing an entity to multiple stores must document write_paths and cache invalidation before readiness ready
+scenario: |
+  T003 updates a user profile in PostgreSQL and caches it in Redis across two write endpoints
+  T003 approach is depth: detailed with write_paths: n/a and no cache invalidation plan
+  Agent sets readiness: ready and starts Implement
+expected_outcome: INCOMPLETE
+failure_mode: missing-write-path-invalidation
+notes: Conditional detailed risk fields require write_paths and invalidation rules whenever >= 2 stores/caches hold the entity

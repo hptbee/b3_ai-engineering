@@ -24,8 +24,8 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
      git fetch origin <baseRefName>
      git fetch origin pull/<id>/head
      mb=$(git merge-base origin/<baseRefName> FETCH_HEAD)
-     ./scripts/autodev-guard.sh diff-scope --base-sha "$mb" --target-ref FETCH_HEAD
-     ./scripts/autodev-guard.sh mechanical-check --base-sha "$mb" --target-ref FETCH_HEAD
+     ./scripts/b3-guard.sh diff-scope --base-sha "$mb" --target-ref FETCH_HEAD
+     ./scripts/b3-guard.sh mechanical-check --base-sha "$mb" --target-ref FETCH_HEAD
      git diff "$mb"...FETCH_HEAD -- <review_files>
      ```
    - **Outside local clone:** fetch diffs for non-noise `review_files` only via `gh api`:

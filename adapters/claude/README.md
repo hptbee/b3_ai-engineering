@@ -46,7 +46,7 @@ Root `CLAUDE.md` works on fresh clone. Create the local gitignored `.claude/skil
 ./adapters/install-product.sh --product-root /path/to/product --host claude
 ```
 
-Writes `.b3/home`, `AGENTS.md` and thin `CLAUDE.md` (`@AGENTS.md`, when missing), `.b3/autodev/` + `.claude/skills` + `.claude/agents` in `.gitignore`, flattened `.claude/skills/<name>` junctions/symlinks (including `autodev`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`), and `.claude/agents` → `{B3_HOME}/agents`.
+Writes `.b3/home`, `AGENTS.md` and thin `CLAUDE.md` (`@AGENTS.md`, when missing), `.b3/ship/` + `.claude/skills` + `.claude/agents` in `.gitignore`, flattened `.claude/skills/<name>` junctions/symlinks (including `ship`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`), and `.claude/agents` → `{B3_HOME}/agents`.
 
 ## Thin by design
 
