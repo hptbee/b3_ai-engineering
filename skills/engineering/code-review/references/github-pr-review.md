@@ -19,9 +19,10 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
 3. Filter out noise files before fetching/reading diffs:
    `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `packages.lock.json`, `Cargo.lock`, `poetry.lock`, `*.min.*`, `*.snap`, `*.Designer.cs`, `*.g.cs`, `*.map`.
 4. Choose diff source:
-   - **Inside local clone (preferred):** fetch both base branch and PR head, compute merge-base, run deterministic guards with `--target-ref FETCH_HEAD` (`-TargetRef FETCH_HEAD` in PowerShell), then diff only `review_files`:
+   - **Inside local clone (preferred):** fetch base branch and PR head separately (so `FETCH_HEAD` unambiguously points to PR head), compute merge-base, run deterministic guards with `--target-ref FETCH_HEAD` (`-TargetRef FETCH_HEAD` in PowerShell), then diff only `review_files`:
      ```sh
-     git fetch origin <baseRefName> pull/<id>/head
+     git fetch origin <baseRefName>
+     git fetch origin pull/<id>/head
      mb=$(git merge-base origin/<baseRefName> FETCH_HEAD)
      ./scripts/autodev-guard.sh diff-scope --base-sha "$mb" --target-ref FETCH_HEAD
      ./scripts/autodev-guard.sh mechanical-check --base-sha "$mb" --target-ref FETCH_HEAD
@@ -29,7 +30,7 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
      ```
    - **Outside local clone:** fetch diffs for non-noise `review_files` only via `gh api`:
      ```sh
-     gh api repos/{owner}/{repo}/pulls/<id>/files --jq '.[] | select(.filename | test("(^|/)(package-lock\\.json|pnpm-lock\\.yaml|yarn\\.lock|bun\\.lockb|packages\\.lock\\.json|Cargo\\.lock|poetry\\.lock)$|\\.(min\\.(js|css)|snap|Designer\\.cs|g\\.cs|map)$") | not) | {filename, status, patch}'
+     gh api --paginate repos/{owner}/{repo}/pulls/<id>/files --jq '.[] | select(.filename | test("(^|/)(package-lock\\.json|pnpm-lock\\.yaml|yarn\\.lock|bun\\.lockb|packages\\.lock\\.json|Cargo\\.lock|poetry\\.lock)$|\\.(min\\.(js|css)|snap|Designer\\.cs|g\\.cs|map)$") | not) | {filename, status, patch}'
      ```
 
 ## 2. Posting review / comments to GitHub PR

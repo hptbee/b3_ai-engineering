@@ -489,7 +489,7 @@ switch ($Command) {
         $sizeClass = if ($fileCount -eq 0) { 'NOISE_ONLY' }
             elseif ($fileCount -le 8 -and $totalLines -le 300) { 'SMALL' }
             elseif ($fileCount -le 20 -and $totalLines -le 800) { 'MEDIUM' }
-            elseif ($fileCount -le 50 -and $totalLines -le 2000) { 'LARGE' }
+            elseif ($fileCount -lt 50 -and $totalLines -lt 2000) { 'LARGE' }
             else { 'VERY_LARGE' }
 
         $rfOut = if ($reviewFiles.Count -gt 0) { (Sort-Ordinal $reviewFiles.ToArray()) -join ',' } else { 'none' }

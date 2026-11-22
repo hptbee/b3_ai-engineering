@@ -753,6 +753,68 @@ try {
         FailCheck 'guard-check-wave' "ok=(${wOkExit}:$wOk) bad=(${wBadExit}:$wBad)"
     }
 
+    # --- guard-size-boundary: <50 files and <2000 lines = LARGE; >=50 or >=2000 = VERY_LARGE ---
+    $sbRepo = Join-Path $sandbox 'size-boundary-repo'
+    New-Item -ItemType Directory -Path $sbRepo | Out-Null
+    Push-Location $sbRepo
+    git init -q
+    git config user.email 'autodev-test@example.com'
+    git config user.name 'Autodev Test'
+    Set-Content README.md 'init'
+    git add README.md
+    git commit -qm 'init'
+    New-Item -ItemType Directory -Path src | Out-Null
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $bigPath = Join-Path $sbRepo 'src\big.ts'
+    [IO.File]::WriteAllText($bigPath, ("export const x = 1;`n" * 1999), $utf8NoBom)
+    $sb1999 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb1999Exit = $LASTEXITCODE
+    [IO.File]::WriteAllText($bigPath, ("export const x = 1;`n" * 2000), $utf8NoBom)
+    $sb2000 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb2000Exit = $LASTEXITCODE
+    Remove-Item -LiteralPath $bigPath -Force
+
+    1..49 | ForEach-Object {
+        [IO.File]::WriteAllText((Join-Path $sbRepo "src\f$_.ts"), "export const v$_ = $_;`n", $utf8NoBom)
+    }
+    $sb49 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb49Exit = $LASTEXITCODE
+    [IO.File]::WriteAllText((Join-Path $sbRepo 'src\f50.ts'), "export const v50 = 50;`n", $utf8NoBom)
+    $sb50 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb50Exit = $LASTEXITCODE
+
+    $sbShOk = $true
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/autodev-guard.sh'
+        $sbRepoPosix = $sbRepo -replace '\\', '/'
+        $sh50 = (& $gitBash -c "'$guardShPosix' diff-scope --repo-root '$sbRepoPosix' --base-sha HEAD") -join "`n"
+        $sh50Exit = $LASTEXITCODE
+        Remove-Item -LiteralPath (Join-Path $sbRepo 'src\f50.ts') -Force
+        $sh49 = (& $gitBash -c "'$guardShPosix' diff-scope --repo-root '$sbRepoPosix' --base-sha HEAD") -join "`n"
+        $sh49Exit = $LASTEXITCODE
+        Remove-Item -LiteralPath (Join-Path $sbRepo 'src') -Recurse -Force
+        New-Item -ItemType Directory -Path (Join-Path $sbRepo 'src') | Out-Null
+        [IO.File]::WriteAllText($bigPath, ("export const x = 1;`n" * 2000), $utf8NoBom)
+        $sh2000 = (& $gitBash -c "'$guardShPosix' diff-scope --repo-root '$sbRepoPosix' --base-sha HEAD") -join "`n"
+        $sh2000Exit = $LASTEXITCODE
+        [IO.File]::WriteAllText($bigPath, ("export const x = 1;`n" * 1999), $utf8NoBom)
+        $sh1999 = (& $gitBash -c "'$guardShPosix' diff-scope --repo-root '$sbRepoPosix' --base-sha HEAD") -join "`n"
+        $sh1999Exit = $LASTEXITCODE
+        $sbShOk = ($sh50Exit -eq 0) -and ($sh50 -match 'size_class=VERY_LARGE') -and ($sh50 -match 'files=50') -and
+                  ($sh49Exit -eq 0) -and ($sh49 -match 'size_class=LARGE') -and ($sh49 -match 'files=49') -and
+                  ($sh2000Exit -eq 0) -and ($sh2000 -match 'size_class=VERY_LARGE') -and ($sh2000 -match 'lines=2000') -and
+                  ($sh1999Exit -eq 0) -and ($sh1999 -match 'size_class=LARGE') -and ($sh1999 -match 'lines=1999')
+    }
+    Pop-Location
+    if ($sb1999Exit -eq 0 -and ($sb1999 -match 'size_class=LARGE') -and ($sb1999 -match 'lines=1999') -and
+        $sb2000Exit -eq 0 -and ($sb2000 -match 'size_class=VERY_LARGE') -and ($sb2000 -match 'lines=2000') -and
+        $sb49Exit -eq 0 -and ($sb49 -match 'size_class=LARGE') -and ($sb49 -match 'files=49') -and
+        $sb50Exit -eq 0 -and ($sb50 -match 'size_class=VERY_LARGE') -and ($sb50 -match 'files=50') -and $sbShOk) {
+        Pass 'guard-size-boundary'
+    } else {
+        FailCheck 'guard-size-boundary' "1999=(${sb1999Exit}:$sb1999) 2000=(${sb2000Exit}:$sb2000) 49=(${sb49Exit}:$sb49) 50=(${sb50Exit}:$sb50) shOk=$sbShOk"
+    }
+
     $hopViolations = @()
     foreach ($cs in @(Get-ChildItem (Join-Path $root 'adapters\command-skills') -Recurse -Filter 'SKILL.md' -File)) {
         $csText = Get-Content -LiteralPath $cs.FullName -Raw

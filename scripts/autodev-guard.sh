@@ -549,7 +549,7 @@ case "$CMD" in
       SIZE_CLASS="SMALL"
     elif [[ "$FILE_COUNT" -le 20 && "$TOTAL_LINES" -le 800 ]]; then
       SIZE_CLASS="MEDIUM"
-    elif [[ "$FILE_COUNT" -le 50 && "$TOTAL_LINES" -le 2000 ]]; then
+    elif [[ "$FILE_COUNT" -lt 50 && "$TOTAL_LINES" -lt 2000 ]]; then
       SIZE_CLASS="LARGE"
     else
       SIZE_CLASS="VERY_LARGE"
