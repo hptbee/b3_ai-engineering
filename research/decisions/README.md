@@ -19,3 +19,4 @@ Each record: ADOPT / ADAPT / REJECT / DEFER with rationale and consequences.
 | [decision-011-product-repo-attach.md](decision-011-product-repo-attach.md) | Thin B3 pointer in product repos; no skill copy |
 | [decision-012-autodev-v2-hardening.md](decision-012-autodev-v2-hardening.md) | Autodev v2: progressive disclosure, shift-left residue/risk checks, tiered review, deterministic guard |
 | [decision-013-host-neutral-multi-host-layout.md](decision-013-host-neutral-multi-host-layout.md) | Host-neutral canonical core + symmetric 4-host adapters (supersedes 009) |
+| [decision-014-autodev-parallel-waves-and-mechanical-pass.md](decision-014-autodev-parallel-waves-and-mechanical-pass.md) | Parallel disjoint waves, `impl_agent` cache resume, CLI mechanical pass, bug-class sweep, 2-tier circuit breaker |

@@ -628,6 +628,51 @@ try {
         FailCheck 'guard-prune-safe' "exit=$pruneExit p1Kept=$p1Kept p2Removed=$p2Removed p3Kept=$p3Kept p4Kept=$p4Kept out=$pruneOut"
     }
 
+    $mechRepo = Join-Path $sandbox 'mech-repo'
+    New-Item -ItemType Directory -Path $mechRepo | Out-Null
+    Push-Location $mechRepo
+    git init -q
+    git config user.email 'autodev-test@example.com'
+    git config user.name 'Autodev Test'
+    New-Item -ItemType Directory -Path src | Out-Null
+    Set-Content src\a.ts "export const a = 1;`nexport function oldFn() { return 1; }"
+    Set-Content src\b.ts "import { oldFn } from './a';`nexport const b = oldFn();"
+    Set-Content src\dead.ts "export const dead = 1;"
+    git add .
+    git commit -qm 'init'
+    $mBase = (git rev-parse HEAD).Trim()
+    Set-Content src\a.ts "export const a = 2;`nexport function oldFn() { return 2; }"
+    $mClean = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $mechRepo -BaseSha $mBase -AllowedPaths 'src/a.ts' -Obsoletes 'absentSym') -join "`n")
+    $mCleanExit = $LASTEXITCODE
+    $mkDbg = 'de' + 'bugger'
+    $mkTs = '@ts-' + 'ignore'
+    $mkOnly = '.on' + 'ly('
+    Set-Content src\a.ts "export const a = 2;`n${mkDbg};`n// ${mkTs}"
+    Set-Content src\unowned.ts "test${mkOnly}'x', () => {});"
+    $mBad = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $mechRepo -BaseSha $mBase -AllowedPaths 'src/a.ts' -Obsoletes 'src/dead.ts,oldFn') -join "`n")
+    $mBadExit = $LASTEXITCODE
+    Pop-Location
+    if ($mCleanExit -eq 0 -and $mClean -match 'MECHANICAL_OK' -and
+        $mBadExit -eq 2 -and $mBad -match 'scope_creep=src/unowned\.ts' -and
+        $mBad -match "src/a\.ts:2:${mkDbg}" -and $mBad -match "src/a\.ts:3:${mkTs}" -and
+        $mBad -match ('src/unowned\.ts:1:\.on' + 'ly\(') -and
+        $mBad -match 'oldFn\(1f\)' -and $mBad -match 'src/dead\.ts\(exists\)') {
+        Pass 'guard-mechanical-check'
+    } else {
+        FailCheck 'guard-mechanical-check' "clean=(${mCleanExit}:$mClean) bad=(${mBadExit}:$mBad)"
+    }
+
+    $wOk = ((& powershell -NoProfile -File $guardScript check-wave -WaveSpecs 'T002=src/api/a.ts,./src/api/a.ts;T003=src/ui/b.tsx') -join "`n")
+    $wOkExit = $LASTEXITCODE
+    $wBad = ((& powershell -NoProfile -File $guardScript check-wave -WaveSpecs 'T002=src/api,.;T003=src/api/orders.ts') -join "`n")
+    $wBadExit = $LASTEXITCODE
+    if ($wOkExit -eq 0 -and $wOk -match 'WAVE_OK: disjoint \(2 tasks, 2 paths\)' -and
+        $wBadExit -eq 2 -and $wBad -match 'WAVE_CONFLICT:' -and $wBad -match 'src/api<->src/api/orders\.ts' -and $wBad -match '\.<->src/api/orders\.ts') {
+        Pass 'guard-check-wave'
+    } else {
+        FailCheck 'guard-check-wave' "ok=(${wOkExit}:$wOk) bad=(${wBadExit}:$wBad)"
+    }
+
     $hopViolations = @()
     foreach ($cs in @(Get-ChildItem (Join-Path $root 'adapters\command-skills') -Recurse -Filter 'SKILL.md' -File)) {
         $csText = Get-Content -LiteralPath $cs.FullName -Raw

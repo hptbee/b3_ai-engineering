@@ -14,6 +14,8 @@ Schemas for [`../autonomous-development.md`](../autonomous-development.md). Acti
 ## Exclusions
 ## Invariants
 - INV1: <cross-task invariant>
+## Shared contracts
+- <none, or exact verbatim API/type/event block copied to dependent tasks>
 ## Technical context
 - canonical_checks: <CI / hook / manifest build+typecheck+lint+test commands>
 ## Architecture
@@ -38,7 +40,7 @@ Schemas for [`../autonomous-development.md`](../autonomous-development.md). Acti
 ## Plan changes
 ```
 
-**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; one independently verifiable commit per task; assign shared hotspots (`package.json`, `.csproj`, `index.ts`, migrations, shared contracts) to one foundational task committed first; bump `version` + log under `Plan changes` when tasks/scope change (never weaken criteria or drop requirements without user decision → `BLOCKED`).
+**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 verifiable commit/task; assign hotspots (`package.json`, `.csproj`, `index.ts`, migrations, shared contracts) to 1 foundational task committed first; bump `version` + log under `Plan changes` when scope changes (never weaken ACs/drop requirements without user → `BLOCKED`).
 
 ## 2. Progress & inline approach (`{RUN_DIR}/progress.md`)
 
@@ -60,9 +62,9 @@ Schemas for [`../autonomous-development.md`](../autonomous-development.md). Acti
 - updated: <ISO-8601>
 
 ## Tasks
-| id | status | task_base | commit | verification | review | depth | readiness |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| T001 | in_progress | | | | | | |
+| id | status | task_base | commit | verification | review | depth | readiness | impl_agent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| T001 | in_progress | | | | | | | |
 
 ## Approach
 ### T001
