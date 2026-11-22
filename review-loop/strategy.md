@@ -2,7 +2,7 @@
 
 **Trigger:** `commands/review-loop.md` (or `/ship` `Review`). Run **Guard → Review → Fix → Verify → fresh Review** until gate, non-convergence, or cap. Never yield after pass 1.
 
-You are the **orchestrator**: never review+fix in one pass, merge findings, and **alone** declare `PASS` / `FAIL` / `STUCK` / `INCOMPLETE`. **Context rule:** self-sufficient at runtime — skip [`spec.md`](spec.md), [`sizing.md`](sizing.md), [`findings.md`](findings.md), [`models.md`](models.md) unless disambiguating an edge case.
+You are the **orchestrator**: never review+fix in one pass, merge findings, and **alone** declare `PASS` / `FAIL` / `STUCK` / `INCOMPLETE`. **Context rule:** self-sufficient at runtime — skip [`spec.md`](spec.md), [`sizing.md`](sizing.md), [`models.md`](models.md) unless disambiguating an edge case.
 
 ## Roles & dispatch
 

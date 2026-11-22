@@ -18,7 +18,7 @@ Links: [`feature-implementation.md`](feature-implementation.md), [`../review-loo
 
 ## State & checkpoint git policy
 
-Under `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (1-line `<run_id>`, `YYYYMMDD-HHMM-<slug>`, no symlink) and `runs/<run_id>/` (`{RUN_DIR}` via `b3-guard resolve-run`: `master-plan.md`, `progress.md`, sole `findings.md` — never `review-loop/state/current.yaml` — optional `approach/T00N.md`, `logs/`).
+Under `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (1-line `<run_id>`, `YYYYMMDD-HHMM-<slug>`, no symlink) and `runs/<run_id>/` (`{RUN_DIR}` via `b3-guard resolve-run`: `master-plan.md`, `progress.md`, sole `findings.md`, optional `approach/T00N.md`, `logs/`).
 - **Token hygiene:** read `CURRENT` → `{RUN_DIR}/` directly; never scan `.b3/ship/runs/` except `status --all` (`list-runs`) or `prune` (keeps 10 `PASS`; never deletes `CURRENT`/non-`PASS`).
 1. Product repos ignore `.b3/ship/` (upgrade bare `.b3/` so `.b3/home` commits); this repo ignores `.b3/`.
 2. Never `git add .b3/ship/`, `git add -A`, or `git add .`; run `b3-guard precommit` before every commit.

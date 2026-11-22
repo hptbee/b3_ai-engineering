@@ -24,9 +24,9 @@ if (-not $B3Home) { $B3Home = Split-Path -Parent $scriptRoot }
 $B3Home = (Resolve-Path -LiteralPath $B3Home).Path
 $ProductRoot = (Resolve-Path -LiteralPath $ProductRoot).Path
 $workflow = Join-Path $B3Home 'workflows\ship.md'
-$template = Join-Path $scriptRoot 'product-ship.md'
-$skills = Join-Path $B3Home 'skills'
 $b3Commands = Join-Path $B3Home 'commands'
+$template = Join-Path $b3Commands 'ship.md'
+$skills = Join-Path $B3Home 'skills'
 $b3Agents = Join-Path $B3Home 'agents'
 $commandSkillsSrc = Join-Path $B3Home 'adapters\command-skills'
 

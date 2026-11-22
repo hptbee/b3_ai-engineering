@@ -166,19 +166,18 @@ resolve_auto_base_sha() {
 
 resolve_auto_base_for_target() {
   local root="$1"
-  local target="$2"
-  local target_commit_sha="$3"
+  local target_commit_sha="$2"
   local ref mb
   for ref in origin/HEAD origin/main origin/master main master HEAD; do
     if git -C "$root" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
-      mb="$(git -C "$root" merge-base "$ref" "$target" 2>/dev/null || true)"
+      mb="$(git -C "$root" merge-base "$ref" "$target_commit_sha" 2>/dev/null || true)"
       if [[ -n "$mb" && "$mb" != "$target_commit_sha" ]]; then
         printf '%s' "$mb"
         return 0
       fi
     fi
   done
-  printf '%s' "$target"
+  printf '%s' "$target_commit_sha"
 }
 
 case "$CMD" in
@@ -448,7 +447,7 @@ case "$CMD" in
     BASE_SHA="$(trim_str "$BASE_SHA")"
     if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
       if [[ -n "$TARGET_REF" ]]; then
-        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$TARGET_COMMIT_SHA")"
+        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
       elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
         BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
       else
@@ -607,7 +606,7 @@ case "$CMD" in
     BASE_SHA="$(trim_str "$BASE_SHA")"
     if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
       if [[ -n "$TARGET_REF" ]]; then
-        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$TARGET_COMMIT_SHA")"
+        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
       elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
         BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
       else

@@ -92,7 +92,7 @@ if ($rlStrategyBytes -gt 5400) { $warnings.Add("review-loop/strategy.md ($rlStra
 $crSkillBytes = Get-FileBytes 'skills/engineering/code-review/SKILL.md'
 $rlOpBytes = $rlStrategyBytes + (Get-FileBytes 'commands/review-loop.md') + (Get-FileBytes 'agents/reviewer.md') + $crSkillBytes
 $rlAllBytes = 0
-foreach ($f in @('spec.md', 'strategy.md', 'sizing.md', 'findings.md', 'models.md')) {
+foreach ($f in @('spec.md', 'strategy.md', 'sizing.md', 'models.md')) {
     $rlAllBytes += Get-FileBytes "review-loop/$f"
 }
 
@@ -107,7 +107,7 @@ Write-Output ("always_on_total   : {0,6} B (~{1,4} tok)  [AGENTS.md={2} B, rules
 Write-Output ("ship_core_load    : {0,6} B (~{1,4} tok)  [ship.md={2} B + commands/ship.md]" -f $shipCoreBytes, (Est-Tokens $shipCoreBytes), $wfShipBytes)
 Write-Output ("ship_refs_load    : {0,6} B (~{1,4} tok)  [ship-templates.md + ship-resume.md]" -f $shipRefsBytes, (Est-Tokens $shipRefsBytes))
 Write-Output ("review_loop_op    : {0,6} B (~{1,4} tok)  [strategy={2} B + cmd + reviewer + code-review/SKILL.md={3} B]" -f $rlOpBytes, (Est-Tokens $rlOpBytes), $rlStrategyBytes, $crSkillBytes)
-Write-Output ("review_loop_all   : {0,6} B (~{1,4} tok)  [spec+strategy+sizing+findings+models (reference-only)]" -f $rlAllBytes, (Est-Tokens $rlAllBytes))
+Write-Output ("review_loop_all   : {0,6} B (~{1,4} tok)  [spec+strategy+sizing+models (reference-only)]" -f $rlAllBytes, (Est-Tokens $rlAllBytes))
 Write-Output ("agents_roles_total: {0,6} B (~{1,4} tok)  [5 runtime subagent roles excl. README.md]" -f $agentRolesBytes, (Est-Tokens $agentRolesBytes))
 Write-Output ("max_skill_file    : {0,6} B  ({1})" -f $maxSkillBytes, $maxSkillFile)
 Write-Output ("max_frontmatter   : {0,6} B  ({1})" -f $maxFmBytes, $maxFmFile)

@@ -207,14 +207,14 @@ function Resolve-AutoBaseSha([string]$Root, [string[]]$IgnoredPaths) {
     return 'HEAD'
 }
 
-function Resolve-AutoBaseForTarget([string]$Root, [string]$Target, [string]$TargetCommitSha) {
+function Resolve-AutoBaseForTarget([string]$Root, [string]$TargetCommitSha) {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
         foreach ($ref in @('origin/HEAD', 'origin/main', 'origin/master', 'main', 'master', 'HEAD')) {
             & git -C $Root rev-parse --verify --quiet $ref 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
-                $mb = (& git -C $Root merge-base $ref $Target 2>$null | Out-String).Trim()
+                $mb = (& git -C $Root merge-base $ref $TargetCommitSha 2>$null | Out-String).Trim()
                 if ($LASTEXITCODE -eq 0 -and $mb -and $mb -ne $TargetCommitSha) {
                     return $mb
                 }
@@ -223,7 +223,7 @@ function Resolve-AutoBaseForTarget([string]$Root, [string]$Target, [string]$Targ
     } finally {
         $ErrorActionPreference = $prev
     }
-    return $Target
+    return $TargetCommitSha
 }
 
 switch ($Command) {
@@ -389,7 +389,7 @@ switch ($Command) {
         $resolvedBase = $BaseSha.Trim()
         if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
             if ($targetTrim) {
-                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha $targetCommitSha
+                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha
             } else {
                 $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
             }
@@ -531,7 +531,7 @@ switch ($Command) {
         $resolvedBase = $BaseSha.Trim()
         if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
             if ($targetTrim) {
-                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha $targetCommitSha
+                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha
             } else {
                 $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
             }

@@ -137,7 +137,7 @@ try {
         } else {
             FailCheck 'install-refuse-overwrite-command' 'exit 0 overwrote custom ship.md'
         }
-        Copy-Item (Join-Path $root 'adapters\product-ship.md') $cmd -Force
+        Copy-Item (Join-Path $root 'commands\ship.md') $cmd -Force
 
         & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $product -B3Home $root -HostName codex
         if ($LASTEXITCODE -ne 0) { FailCheck 'install-product-codex' "exit $LASTEXITCODE" }
@@ -824,7 +824,7 @@ try {
     }
     $copiedCmdRelLinks = @()
     $copiedCmdMissingB3Home = @()
-    foreach ($cmdFile in @(Get-ChildItem (Join-Path $root 'commands') -Filter '*.md' -File | Where-Object { $_.Name -notin @('README.md', 'ship.md') })) {
+    foreach ($cmdFile in @(Get-ChildItem (Join-Path $root 'commands') -Filter '*.md' -File | Where-Object { $_.Name -ne 'README.md' })) {
         $cmdText = Get-Content -LiteralPath $cmdFile.FullName -Raw
         if ($cmdText -match '\]\(\.\./') {
             $copiedCmdRelLinks += $cmdFile.Name
@@ -835,7 +835,7 @@ try {
     }
     $cmdRlText = Get-Content -LiteralPath (Join-Path $root 'commands\review-loop.md') -Raw
     $cmdRevText = Get-Content -LiteralPath (Join-Path $root 'commands\review.md') -Raw
-    $refLinkPattern = '\]\([^)]*review-loop/(spec|sizing|findings|models)\.md\)'
+    $refLinkPattern = '\]\([^)]*review-loop/(spec|sizing|models)\.md\)'
     $eagerSpec = ($cmdRlText -match $refLinkPattern) -or ($cmdRevText -match $refLinkPattern) -or ($wfMain -match $refLinkPattern) -or ($wfMain -match 'sizing\.md')
     $specLeaks = @()
     foreach ($dirName in @('skills', 'workflows')) {

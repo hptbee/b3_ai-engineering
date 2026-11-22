@@ -35,8 +35,5 @@ venv/
 .claude/agents
 .codex/skills
 
-# Optional review-loop working log (keep TEMPLATE.md)
-review-loop/state/current.yaml
-
 # /ship run checkpoints inside this system repo
 .b3/

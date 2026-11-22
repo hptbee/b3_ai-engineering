@@ -104,7 +104,7 @@ sequenceDiagram
 
 ## 3. `/review-loop` Convergence & 2-Tier Circuit Breaker
 
-[`../review-loop/strategy.md`](../review-loop/strategy.md) is self-sufficient at runtime (skipping `spec.md`, `sizing.md`, `findings.md`, and `models.md` on normal runs to save ~14 KB per invocation).
+[`../review-loop/strategy.md`](../review-loop/strategy.md) is self-sufficient at runtime (skipping `spec.md`, `sizing.md`, and `models.md` on normal runs to save ~13 KB per invocation).
 
 ```mermaid
 flowchart TD

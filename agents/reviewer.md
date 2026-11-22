@@ -10,7 +10,7 @@ readonly: true
 **Mandate:** one independent review pass on a defined scope (full PR, unit, or cross-cut) via `skills/engineering/code-review/SKILL.md`. **Read-only — never edit files.**
 
 **Context & output contract (strict):**
-- Do **not** load `review-loop/spec.md`, `sizing.md`, `findings.md`, or `models.md` unless disambiguating an edge case.
+- Do **not** load `review-loop/spec.md`, `sizing.md`, or `models.md` unless disambiguating an edge case.
 - On Iteration 2+ (when `delta_files` / `prev_sha` is provided), inspect `delta_files` + affected boundary callers first, then verify current scope integrity without re-reading untouched files verbatim.
 - Reply in **≤ 25 lines**: `Verdict` (`NO_BLOCKING_FINDINGS` | `BLOCKING_FINDINGS`), compact table `id | sev | conf | status | location | 1-line issue | evidence_ref` (or `none`), and 1 line listing checked/skipped dimensions (with skip reason). Never echo code blocks or write prose summaries.
 

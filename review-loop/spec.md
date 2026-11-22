@@ -208,7 +208,7 @@ When consolidating, drop stale items, merge duplicates, and carry evidence and `
 
 A scope passes when **critical = 0**, **high = 0**, **medium = 0**, and required build/tests are **PASS**. LOW/NIT may remain and must be listed. Missing tool evidence → `UNKNOWN / INCOMPLETE`, never PASS.
 
-Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/REOPENED aliases: [`findings.md`](findings.md).
+Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/VERIFIED statuses: [`strategy.md`](strategy.md) §0.3.
 
 ## Independence
 

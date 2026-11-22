@@ -177,7 +177,7 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 ## Review & review loop
 
 - **Single-pass `/review`** ([`commands/review.md`](commands/review.md) / [`skills/engineering/code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): supports **3 modes** — **local diff/branch** (auto-resolving `HEAD` or `origin/main`/`main` merge-base via `b3-guard diff-scope` + `mechanical-check`), **GitHub PR (`#<id>` / URL)** with noise filtering before pulling diffs, and **optional PR commenting/inline reviews** (`--body-file` / `gh api .../reviews --input`, `COMMENT` default, `CONFIRMED` findings only) via progressive-disclosure [`skills/engineering/code-review/references/github-pr-review.md`](skills/engineering/code-review/references/github-pr-review.md).
-- **Iterative `/review-loop`** ([`commands/review-loop.md`](commands/review-loop.md)): runtime-self-sufficient [`review-loop/strategy.md`](review-loop/strategy.md) (skips `spec.md`/`sizing.md`/`findings.md`/`models.md` on normal runs), 0-token `diff-scope` + `mechanical-check`, Iteration 2+ `--prev-sha` `delta_files`, `impl_agent` prompt-cache resume, bug-class sweep, and 2-tier circuit breaker. Normative reference: [`review-loop/spec.md`](review-loop/spec.md).
+- **Iterative `/review-loop`** ([`commands/review-loop.md`](commands/review-loop.md)): runtime-self-sufficient [`review-loop/strategy.md`](review-loop/strategy.md) (skips `spec.md`/`sizing.md`/`models.md` on normal runs), 0-token `diff-scope` + `mechanical-check`, Iteration 2+ `--prev-sha` `delta_files`, `impl_agent` prompt-cache resume, bug-class sweep, and 2-tier circuit breaker. Normative reference: [`review-loop/spec.md`](review-loop/spec.md).
 
 ## Full lifecycle (`/ship`)
 

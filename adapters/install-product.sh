@@ -39,12 +39,12 @@ fi
 PRODUCT_ROOT="$(cd "$PRODUCT_ROOT" && pwd)"
 
 WORKFLOW="${B3_HOME}/workflows/ship.md"
-TEMPLATE="${SCRIPT_DIR}/product-ship.md"
+COMMANDS_SRC="${B3_HOME}/commands"
+TEMPLATE="${COMMANDS_SRC}/ship.md"
 CURSOR_README_TEMPLATE="${SCRIPT_DIR}/product-cursor-readme.md"
 AGENTS_MD_TEMPLATE="${SCRIPT_DIR}/product-agents.md"
 CLAUDE_MD_TEMPLATE="${SCRIPT_DIR}/product-claude.md"
 SKILLS_SRC="${B3_HOME}/skills"
-COMMANDS_SRC="${B3_HOME}/commands"
 AGENTS_SRC="${B3_HOME}/agents"
 CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
 
