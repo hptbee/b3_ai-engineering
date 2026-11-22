@@ -174,13 +174,16 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 `research/` is intake plus `validation/` evidence. `knowledge/` is what the system knows. Skill `references/` are task aids. Method: [`docs/research-methodology.md`](docs/research-methodology.md). Evolution: [`docs/system-lifecycle.md`](docs/system-lifecycle.md). Lessons do **not** automatically become rules.
 
-## Review loop
+## Review & review loop
 
-Specified in [`review-loop/spec.md`](review-loop/spec.md). Orchestration: [`review-loop/strategy.md`](review-loop/strategy.md) (compact subagent handoffs, active-only findings slices, and `scripts/autodev-guard.{ps1,sh} diff-scope` noise filtering). Invoke: [`commands/review-loop.md`](commands/review-loop.md). Host model slots: `review-loop/models.md`.
+- **Single-pass `/review`** ([`commands/review.md`](commands/review.md) / [`skills/engineering/code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): supports **3 modes** — **local diff/branch** (auto-resolving `HEAD` or `origin/main`/`main` merge-base via `autodev-guard diff-scope` + `mechanical-check`), **GitHub PR (`#<id>` / URL)** with noise filtering before pulling diffs, and **optional PR commenting/inline reviews** (`--body-file` / `gh api .../reviews --input`, `COMMENT` default, `CONFIRMED` findings only) via progressive-disclosure [`skills/engineering/code-review/references/github-pr-review.md`](skills/engineering/code-review/references/github-pr-review.md).
+- **Iterative `/review-loop`** ([`commands/review-loop.md`](commands/review-loop.md)): runtime-self-sufficient [`review-loop/strategy.md`](review-loop/strategy.md) (skips `spec.md`/`sizing.md`/`findings.md`/`models.md` on normal runs), 0-token `diff-scope` + `mechanical-check`, Iteration 2+ `--prev-sha` `delta_files`, `impl_agent` prompt-cache resume, bug-class sweep, and 2-tier circuit breaker. Normative reference: [`review-loop/spec.md`](review-loop/spec.md).
 
 ## Autonomous development
 
-One invocation runs pre-flight baseline checks, planning, JIT task analysis, implementation, risk-tiered review, focused commits, and Git-verified resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md) (templates and resume reconciliation under `workflows/references/`). Guard helpers: [`scripts/README.md`](scripts/README.md). Command: [`commands/autodev.md`](commands/autodev.md) (and `adapters/command-skills/autodev/SKILL.md` for skill-based hosts). Checkpoints live in the repo under change at `.b3/autodev/` (gitignored). Product-repo setup: [Installation](#installation). A stopped session does not resume until the user invokes the workflow again.
+One invocation runs pre-flight baseline checks, planning (with verbatim shared contracts), JIT task analysis, single-task or disjoint **Parallel Waves** (`autodev-guard check-wave`, `impl_agent` tracking, Hub-and-Spoke `discoveries`/`change_requests`), 0-token `mechanical-check`, risk-tiered independent review, sequential atomic commits, and Git-verified resume. Procedure: [`workflows/autonomous-development.md`](workflows/autonomous-development.md) (progressive-disclosure templates & resume under `workflows/references/`). Guard CLI: [`scripts/README.md`](scripts/README.md). Command: [`commands/autodev.md`](commands/autodev.md) (1-hop `adapters/command-skills/autodev/SKILL.md` for skill-based hosts). Run-scoped checkpoints live under `.b3/autodev/runs/<run_id>/` via 1-line `.b3/autodev/CURRENT` (gitignored).
+
+**Visual diagrams & walkthrough:** [`docs/autodev-and-review-guide.md`](docs/autodev-and-review-guide.md) (Mermaid flowcharts & sequence diagrams for `/autodev`, Parallel Waves, `/review-loop`, and 3-mode `/review`).
 
 ## Context budget & validation
 
