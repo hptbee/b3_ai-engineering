@@ -26,6 +26,7 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
      mb=$(git merge-base origin/<baseRefName> FETCH_HEAD)
      ./scripts/b3-guard.sh diff-scope --base-sha "$mb" --target-ref FETCH_HEAD
      ./scripts/b3-guard.sh mechanical-check --base-sha "$mb" --target-ref FETCH_HEAD
+     ./scripts/b3-guard.sh symbol-check --base-sha "$mb" --target-ref FETCH_HEAD   # on rename/refactor/deletion
      git diff "$mb"...FETCH_HEAD -- <review_files>
      ```
    - **Outside local clone:** fetch diffs for non-noise `review_files` only via `gh api`:

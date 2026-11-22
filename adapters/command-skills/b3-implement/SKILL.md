@@ -8,6 +8,6 @@ description: >
 
 # b3-implement
 
-**Action now:** execute a plan or specified change as one execution request (not full `/b3-ship` or `/b3-review-loop` unless asked).
+**Action now:** execute a plan or specified change as one execution request (do **not** escalate into full `/b3-ship` or `/b3-review-loop` unless asked).
 
-Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo), open `{B3_HOME}/skills/engineering/problem-solving/SKILL.md` + the smallest matching stack skill (`skills/{frontend,backend,threejs,architecture}/*`), and follow `{B3_HOME}/workflows/feature-implementation.md`.
+Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and open `{B3_HOME}/skills/engineering/problem-solving/SKILL.md` + the smallest matching stack skill (`skills/{frontend,backend,threejs,architecture}/*`) directly (single-hop; skip `workflows/feature-implementation.md` on routine runs).

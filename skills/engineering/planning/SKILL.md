@@ -29,13 +29,15 @@ Near miss: “is this architecture sound?” with no implementation yet → this
 
 ## Procedure
 
-1. **Restate goal** in one sentence and success evidence (what will be run).
-2. **Map files** to create/modify; follow existing project layout.
-3. **List risks** (auth, data, perf, a11y, 3D resources) and which skill applies.
-4. **Tasks:** smallest units that are independently verifiable. Fold scaffolding into the task that needs it.
-5. **Each task:** intent, files, verification command or probe. No “add error handling later”.
-6. **Readiness Check:** confirm every acceptance criterion is observable/testable & mapped to a verification check, contradictions or missing dependencies are flagged before coding, reusable existing code was checked, and the design is the simplest sound fit (`architecture/simplest-correct`).
-7. **Stop.** Do not start coding unless the user asked to execute.
+1. **Restate goal & scope** in one sentence, naming explicit **in-scope / out-of-scope** bounds and top-level success evidence (command or probe).
+2. **Map files & reuse:** identify files/modules to create or modify following existing project conventions; check existing utilities/architecture first so no duplicate abstraction is invented.
+3. **Assess risks (risk-adaptive depth):** list security/authz, data consistency, perf, a11y, or 3D resource risks and matching domain skills.
+   - **Low-risk / localized:** keep the plan compact (files, ACs, tasks, checks).
+   - **High-risk trigger** (ambiguity, architecture/contract changes, authz boundaries, stateful/concurrency/retry logic, cache/write-path invalidation, cross-module deps): explicitly capture shared contracts/interfaces, failure modes, and write/invalidation paths before task breakdown.
+4. **Dependency-ordered tasks:** smallest units independently verifiable, ordered by dependencies (fold scaffolding into the task that needs it).
+5. **Each task:** intent, touched files/contracts, dependencies, testable acceptance criteria (`AC1..ACn`), and exact verification command or probe. Resolve decisions upfront — no `TBD`, implicit placeholders, or "add error handling later".
+6. **Readiness Check:** confirm every AC is observable/testable & mapped 1:1 to a check, reusable existing code was checked, contradictions/missing requirements/incomplete dependencies are flagged and asked before coding, and design is the simplest sound fit (`architecture/simplest-correct`).
+7. **Stop.** Do not write product code unless the user also asked to implement.
 
 ## Progressive disclosure
 

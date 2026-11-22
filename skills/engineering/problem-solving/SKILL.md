@@ -41,17 +41,19 @@ Near miss: “is this design sound?” with no code change yet → stay in Scope
 3. **Build**  
    Execute the plan. Do not silently expand scope. If the plan is wrong, update the plan, then continue.
 
-4. **Verify**  
-   Use the `verification` skill. No evidence → `UNKNOWN / INCOMPLETE`.
+4. **Verify**
+   Run executed verification (`verification`; `b3-guard verify-run` to `.b3/ship/verify/<slug>.verify` for non-trivial changes) on current `HEAD` + tree. Missing evidence → `UNKNOWN / INCOMPLETE`.
 
-5. **Review**  
-   Check the change against the plan, obvious failure modes (correctness, tests, security if in play), and **simplification / implementation residue** (did earlier attempts, intermediate fixes, or scaffolding leave behind dead branches, redundant state, or temporary workarounds?). This is not the full review loop.
+5. **Review (risk-sensitive)**
+   Run `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) first; check plan alignment, callers, tests, and `CONFIRMED` residue:
+   - **Low-risk:** 1 focused independent `b3-reviewer` pass if subagents exist (else self-review noting single-agent limit).
+   - **High-risk** (authz, data/schema, concurrency/state, hot perf, cross-module contracts): add matching `b3-{security,architecture,performance}-reviewer`. Not `/b3-review-loop` or `/b3-ship`.
 
-6. **Fix**  
-   Address confirmed findings (and high-confidence issues still `INVESTIGATING` if they block the success condition). For simplification findings, remove only CONFIRMED redundancy; preserve intentional complexity. Map each fix to a finding.
+6. **Fix**
+   Fix confirmed causes in scope, add regression tests, delete only `CONFIRMED` redundancy (`LIKELY REDUNDANT`/`INTENTIONAL COMPLEXITY` untouched); map each edit to a finding.
 
-7. **Verify (re-run)**  
-   Re-run the checks that matter. Then stop or escalate.
+7. **Verify (re-run)**
+   Re-run checks + fresh delta review if blockers existed (max 2 fix-verify rounds). Still blocked → `FAIL`/`INCOMPLETE` or suggest `/b3-review-loop` (never silently escalate).
 
 ## Progressive disclosure
 

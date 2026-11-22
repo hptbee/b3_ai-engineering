@@ -31,12 +31,12 @@ Near miss: “fix this bug” with a reproduction already in hand still **starts
 1. **Reproduce** with exact steps. If not reproducible, gather data — do not patch folklore.
 2. **Read the failure** (message, stack, logs) completely.
 3. **Check recent change** (diff, config, deps, environment).
-4. **Locate the broken boundary** (client/server, middleware/handler, query/app). Add a probe only if needed.
-5. **One hypothesis:** “X is the cause because Y.” Test the cheapest distinguishing check.
-6. **Fix the cause**, smallest change. No drive-by refactors.
-7. **Verify** with the `verification` skill (repro that used to fail, plus nearby tests).
+4. **Locate the broken boundary & invariant:** find the failing boundary (client/server, middleware/handler, query/app) and name the **explicit broken invariant** before changing code. Add a probe only if needed.
+5. **One hypothesis:** “X causes Y because invariant Z breaks.” Run the cheapest distinguishing check.
+6. **Fix cause + proportional bug-class sweep:** apply the smallest root-cause patch restoring the invariant. Inspect **affected callers and sibling entry points** strictly supported by the same broken invariant; fix confirmed sibling occurrences only within requested scope (no speculative repo-wide scans or drive-by refactors).
+7. **Verify & anti-symptom check:** add/update a **regression test** for the original failure (or exact repro probe if no harness exists), verify the invariant itself holds (not error-swallowing or relaxed assertions), and confirm via `verification` skill (`b3-guard verify-run` for non-trivial fixes).
 
-Stop after three failed fix attempts: re-investigate; consider architecture. Do not stack unrelated patches.
+Stop after **3 failed fix attempts**: record each disproved hypothesis + observed evidence, stop stacking patches, and escalate to architecture/design re-investigation or report `INCOMPLETE`/`BLOCKED`.
 
 ## Progressive disclosure
 
