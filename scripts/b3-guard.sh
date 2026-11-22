@@ -42,6 +42,13 @@ trim_str() {
   printf '%s' "$s"
 }
 
+normalize_cmd_str() {
+  local raw="$1"
+  local cleaned
+  cleaned="$(printf '%s' "$raw" | LC_ALL=C awk 'BEGIN{out=""} {gsub(/\r/, ""); if ($0 != "") out = (out == "" ? $0 : out " " $0)} END{printf "%s", out}')"
+  trim_str "$cleaned"
+}
+
 split_csv_lines() {
   local raw
   raw="$(trim_str "$1")"
@@ -387,6 +394,8 @@ run_verify_check() {
   local root="$1"
   local receipt_arg="$2"
   local ign_csv="$3"
+  local expected_cmd_arg="${4:-}"
+  local req_rel_arg="${5:-}"
   _VR_MSG=""
   _VR_REL_PATHS=""
   local trim_arg
@@ -403,7 +412,7 @@ run_verify_check() {
     return 1
   fi
 
-  local _v_schema="" _v_task_id="" _v_scope="" _v_head_sha="" _v_tree_hash="" _v_relevant_paths="" _v_exit_code="" _v_status=""
+  local _v_schema="" _v_task_id="" _v_scope="" _v_head_sha="" _v_tree_hash="" _v_relevant_paths="" _v_exit_code="" _v_status="" _v_command="" _v_log_path="" _v_timestamp_utc=""
   local _seen_keys="|"
   local raw_line ln k v
   while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
@@ -430,6 +439,9 @@ run_verify_check() {
       relevant_paths) _v_relevant_paths="$v" ;;
       exit_code) _v_exit_code="$v" ;;
       status) _v_status="$v" ;;
+      command) _v_command="$v" ;;
+      log_path) _v_log_path="$v" ;;
+      timestamp_utc) _v_timestamp_utc="$v" ;;
     esac
   done < "$full_receipt"
 
@@ -441,7 +453,11 @@ run_verify_check() {
   [[ -n "$_v_relevant_paths" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'relevant_paths'"; return 1; }
   [[ -n "$_v_exit_code" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'exit_code'"; return 1; }
   [[ -n "$_v_status" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'status'"; return 1; }
+  [[ -n "$_v_command" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'command'"; return 1; }
+  [[ -n "$_v_log_path" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'log_path'"; return 1; }
+  [[ -n "$_v_timestamp_utc" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'timestamp_utc'"; return 1; }
 
+  local LC_ALL=C
   if [[ "$_v_schema" != "b3-verify-v1" ]]; then
     _VR_MSG="VERIFY_CORRUPT: unsupported schema '$_v_schema'"
     return 1
@@ -462,6 +478,40 @@ run_verify_check() {
     _VR_MSG="VERIFY_CORRUPT: invalid status '$_v_status'"
     return 1
   fi
+  if [[ ! "$_v_timestamp_utc" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    _VR_MSG="VERIFY_CORRUPT: invalid timestamp_utc"
+    return 1
+  fi
+
+  if [[ "$_v_log_path" != "none" ]]; then
+    local lp_slash canon_root full_log log_dir canon_dir cr_low cd_low
+    lp_slash="${_v_log_path//\\//}"
+    lp_slash="$(trim_str "$lp_slash")"
+    if [[ -z "$lp_slash" || "$lp_slash" == "." || "$lp_slash" == /* || "$lp_slash" == ~* || "$lp_slash" =~ ^[A-Za-z]: || "$lp_slash" =~ (^|/)\.\.(/|$) ]]; then
+      _VR_MSG="VERIFY_CORRUPT: invalid log_path"
+      return 1
+    fi
+    full_log="$(resolve_target_path "$root" "$lp_slash")"
+    canon_root="$(cd "$root" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_root=""
+    canon_root="$(norm_path "$canon_root")"
+    if [[ -n "$canon_root" ]]; then
+      log_dir="$(dirname "$full_log")"
+      if [[ -d "$log_dir" ]]; then
+        canon_dir="$(cd "$log_dir" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_dir=""
+        canon_dir="$(norm_path "$canon_dir")"
+        cr_low="$(printf '%s' "$canon_root" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        cd_low="$(printf '%s' "$canon_dir" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        if [[ -z "$cd_low" || ( "$cd_low" != "$cr_low" && "$cd_low" != "$cr_low/"* ) ]]; then
+          _VR_MSG="VERIFY_CORRUPT: invalid log_path"
+          return 1
+        fi
+      fi
+    fi
+    if [[ ! -f "$full_log" ]]; then
+      _VR_MSG="VERIFY_CORRUPT: missing log_path"
+      return 1
+    fi
+  fi
 
   if [[ "$_v_exit_code" -ne 0 || "$_v_status" != "PASS" ]]; then
     _VR_MSG="VERIFY_FAILED_RECEIPT: exit=$_v_exit_code status=$_v_status"
@@ -469,8 +519,8 @@ run_verify_check() {
   fi
 
   local rel_for_fp=""
+  local -a rp_arr=()
   if [[ "$_v_relevant_paths" != "ALL" ]]; then
-    local -a rp_arr=()
     local rp
     while IFS= read -r rp; do [[ -n "$rp" ]] && rp_arr+=("$rp"); done < <(split_csv_lines "$_v_relevant_paths" true)
     if [[ ${#rp_arr[@]} -lt 1 ]]; then
@@ -484,6 +534,43 @@ run_verify_check() {
       fi
     done
     rel_for_fp="$_v_relevant_paths"
+  fi
+
+  if [[ -n "$(trim_str "$expected_cmd_arg")" ]]; then
+    local norm_exp
+    norm_exp="$(normalize_cmd_str "$expected_cmd_arg")"
+    if [[ "$_v_command" != "$norm_exp" ]]; then
+      _VR_MSG="VERIFY_MISMATCH: command mismatch"
+      return 1
+    fi
+  fi
+
+  if [[ -n "$(trim_str "$req_rel_arg")" ]]; then
+    local -a req_arr=()
+    local rq
+    while IFS= read -r rq; do
+      [[ -n "$rq" ]] || continue
+      is_checkpoint_dir "$rq" && continue
+      req_arr+=("$rq")
+    done < <(split_csv_lines "$req_rel_arg" true)
+    if [[ ${#req_arr[@]} -lt 1 ]]; then
+      _VR_MSG="VERIFY_CHECK_FAIL: invalid relevant_paths"
+      return 1
+    fi
+    if [[ "$_v_relevant_paths" != "ALL" ]]; then
+      local -a uncovered=()
+      for rq in "${req_arr[@]}"; do
+        if ! path_in_list "$rq" "${rp_arr[@]}"; then
+          uncovered+=("$rq")
+        fi
+      done
+      if [[ ${#uncovered[@]} -gt 0 ]]; then
+        local sorted_unc
+        sorted_unc="$(printf '%s\n' "${uncovered[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        _VR_MSG="VERIFY_SCOPE_MISMATCH: uncovered path ($sorted_unc)"
+        return 1
+      fi
+    fi
   fi
 
   local fp_out cur_head cur_tree cur_paths
@@ -1833,7 +1920,7 @@ case "$CMD" in
       LOG_DISP="$(repo_rel_path "$REPO_ROOT" "$FULL_LOG")"
     fi
 
-    SINGLE_CMD="$(trim_str "$(printf '%s' "$VERIFY_CMD" | LC_ALL=C tr '\r\n' '  ')")"
+    SINGLE_CMD="$(normalize_cmd_str "$VERIFY_CMD")"
     TS_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     RECEIPT_BODY="schema=b3-verify-v1
 task_id=${EFF_TASK}
@@ -1865,16 +1952,20 @@ timestamp_utc=${TS_UTC}
     REPO_ROOT="."
     RECEIPT_PATH=""
     IGNORE_DIRTY=""
+    EXPECTED_CMD=""
+    RELEVANT_PATHS=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --receipt-path) RECEIPT_PATH="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
+        --expected-cmd) EXPECTED_CMD="${2:-}"; shift 2 ;;
+        --relevant-paths) RELEVANT_PATHS="${2:-}"; shift 2 ;;
         *) echo "VERIFY_CHECK_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
     set +e
-    run_verify_check "$REPO_ROOT" "$RECEIPT_PATH" "$IGNORE_DIRTY"
+    run_verify_check "$REPO_ROOT" "$RECEIPT_PATH" "$IGNORE_DIRTY" "$EXPECTED_CMD" "$RELEVANT_PATHS"
     RC=$?
     set -e
     printf '%s\n' "$_VR_MSG"
