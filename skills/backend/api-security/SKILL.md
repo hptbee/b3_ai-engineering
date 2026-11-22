@@ -20,7 +20,7 @@ Map findings to OWASP API Top 10 2023 ids when claiming defects.
 
 - Event-loop / shutdown → `nodejs-runtime`
 - API pagination/error shape only → `api-design`
-- Independent full loop → `review-loop/spec.md` + `agents/security-reviewer.md`
+- Independent full loop → `review-loop/strategy.md` + `agents/security-reviewer.md`
 
 ## Procedure
 

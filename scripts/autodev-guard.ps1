@@ -10,6 +10,7 @@ param(
     [string]$TaskBaseSha = '',
     [string]$BaseSha = '',
     [string]$PrevSha = '',
+    [string]$TargetRef = '',
     [string]$WatchedPaths = '',
     [string]$OwnedFiles = '',
     [string]$IgnoreDirtyPaths = '',
@@ -206,6 +207,25 @@ function Resolve-AutoBaseSha([string]$Root, [string[]]$IgnoredPaths) {
     return 'HEAD'
 }
 
+function Resolve-AutoBaseForTarget([string]$Root, [string]$Target, [string]$TargetCommitSha) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        foreach ($ref in @('origin/HEAD', 'origin/main', 'origin/master', 'main', 'master', 'HEAD')) {
+            & git -C $Root rev-parse --verify --quiet $ref 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $mb = (& git -C $Root merge-base $ref $Target 2>$null | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0 -and $mb -and $mb -ne $TargetCommitSha) {
+                    return $mb
+                }
+            }
+        }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    return $Target
+}
+
 switch ($Command) {
     'fingerprint' {
         $trimmedScope = $Scope.Trim()
@@ -347,15 +367,41 @@ switch ($Command) {
 
     'diff-scope' {
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
-        $resolvedBase = $BaseSha.Trim()
-        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
-            $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
+        $targetTrim = $TargetRef.Trim()
+        $targetCommitSha = ''
+        $prev = $ErrorActionPreference
+        if ($targetTrim) {
+            if ($targetTrim.StartsWith('-')) {
+                Fail "DIFF_SCOPE_FAIL: invalid -TargetRef '$targetTrim'" 1
+            }
+            $ErrorActionPreference = 'Continue'
+            try {
+                $targetCommitSha = (& git -C $RepoRoot rev-parse --verify --quiet "${targetTrim}^{commit}" 2>$null | Out-String).Trim()
+                $trCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($trCode -ne 0 -or -not $targetCommitSha) {
+                Fail "DIFF_SCOPE_FAIL: invalid -TargetRef '$targetTrim'" 1
+            }
         }
 
-        $prev = $ErrorActionPreference
+        $resolvedBase = $BaseSha.Trim()
+        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+            if ($targetTrim) {
+                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha $targetCommitSha
+            } else {
+                $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
+            }
+        }
+
         $ErrorActionPreference = 'Continue'
         try {
-            $numstat = & git -C $RepoRoot diff --no-renames --numstat $resolvedBase 2>&1
+            if ($targetTrim) {
+                $numstat = & git -C $RepoRoot diff --no-renames --numstat $resolvedBase $targetCommitSha -- 2>&1
+            } else {
+                $numstat = & git -C $RepoRoot diff --no-renames --numstat $resolvedBase 2>&1
+            }
             $nsCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prev
@@ -364,7 +410,7 @@ switch ($Command) {
             Fail ("DIFF_SCOPE_FAIL: git diff --numstat failed: " + ($numstat | Out-String).Trim()) 1
         }
 
-        $untracked = @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard'))
+        $untracked = if ($targetTrim) { @() } else { @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')) }
         $reviewFiles = New-Object System.Collections.Generic.List[string]
         $noiseFiles = New-Object System.Collections.Generic.List[string]
         $totalLines = 0
@@ -407,7 +453,11 @@ switch ($Command) {
             $prevEap = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             try {
-                $deltaRawOut = & git -C $RepoRoot diff --no-renames --name-only $prevTrim 2>&1
+                if ($targetTrim) {
+                    $deltaRawOut = & git -C $RepoRoot diff --no-renames --name-only $prevTrim $targetCommitSha -- 2>&1
+                } else {
+                    $deltaRawOut = & git -C $RepoRoot diff --no-renames --name-only $prevTrim 2>&1
+                }
                 $deltaCode = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $prevEap
@@ -459,15 +509,41 @@ switch ($Command) {
         $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
         $obsoletesList = @(Split-CsvList $Obsoletes)
-        $resolvedBase = $BaseSha.Trim()
-        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
-            $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
+        $targetTrim = $TargetRef.Trim()
+        $targetCommitSha = ''
+        $prev = $ErrorActionPreference
+        if ($targetTrim) {
+            if ($targetTrim.StartsWith('-')) {
+                Fail "MECHANICAL_FAIL: invalid -TargetRef '$targetTrim'" 1
+            }
+            $ErrorActionPreference = 'Continue'
+            try {
+                $targetCommitSha = (& git -C $RepoRoot rev-parse --verify --quiet "${targetTrim}^{commit}" 2>$null | Out-String).Trim()
+                $trCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($trCode -ne 0 -or -not $targetCommitSha) {
+                Fail "MECHANICAL_FAIL: invalid -TargetRef '$targetTrim'" 1
+            }
         }
 
-        $prev = $ErrorActionPreference
+        $resolvedBase = $BaseSha.Trim()
+        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+            if ($targetTrim) {
+                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha $targetCommitSha
+            } else {
+                $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
+            }
+        }
+
         $ErrorActionPreference = 'Continue'
         try {
-            $changedRaw = & git -C $RepoRoot diff --no-renames --name-only $resolvedBase 2>&1
+            if ($targetTrim) {
+                $changedRaw = & git -C $RepoRoot diff --no-renames --name-only $resolvedBase $targetCommitSha -- 2>&1
+            } else {
+                $changedRaw = & git -C $RepoRoot diff --no-renames --name-only $resolvedBase 2>&1
+            }
             $chCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prev
@@ -475,7 +551,7 @@ switch ($Command) {
         if ($chCode -ne 0) {
             Fail ("MECHANICAL_FAIL: git diff --name-only failed: " + ($changedRaw | Out-String).Trim()) 1
         }
-        $untracked = @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard'))
+        $untracked = if ($targetTrim) { @() } else { @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')) }
 
         $allChanged = New-Object System.Collections.Generic.List[string]
         foreach ($row in @($changedRaw)) {
@@ -499,7 +575,11 @@ switch ($Command) {
         $leftoverHits = New-Object System.Collections.Generic.List[string]
         $ErrorActionPreference = 'Continue'
         try {
-            $diffLines = & git -C $RepoRoot diff --no-renames -U0 $resolvedBase 2>&1
+            if ($targetTrim) {
+                $diffLines = & git -C $RepoRoot diff --no-renames -U0 $resolvedBase $targetCommitSha -- 2>&1
+            } else {
+                $diffLines = & git -C $RepoRoot diff --no-renames -U0 $resolvedBase 2>&1
+            }
             $dlCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prev
@@ -569,11 +649,25 @@ switch ($Command) {
             $normTok = Normalize-PathValue $tok
             $existsPath = $false
             if ($normTok) {
-                $existsPath = Test-Path -LiteralPath (Join-Path $RepoRoot ($normTok -replace '/', '\'))
+                if ($targetTrim) {
+                    $ErrorActionPreference = 'Continue'
+                    try {
+                        & git -C $RepoRoot cat-file -e "${targetCommitSha}:${normTok}" 2>$null | Out-Null
+                        $existsPath = ($LASTEXITCODE -eq 0)
+                    } finally {
+                        $ErrorActionPreference = $prev
+                    }
+                } else {
+                    $existsPath = Test-Path -LiteralPath (Join-Path $RepoRoot ($normTok -replace '/', '\'))
+                }
             }
             $ErrorActionPreference = 'Continue'
             try {
-                $grepOut = & git -C $RepoRoot grep -l -F -- $tok -- . ':(exclude).b3/autodev' 2>$null
+                if ($targetTrim) {
+                    $grepOut = & git -C $RepoRoot grep -l -F -e $tok $targetCommitSha -- . ':(exclude).b3/autodev' 2>$null
+                } else {
+                    $grepOut = & git -C $RepoRoot grep -l -F -e $tok -- . ':(exclude).b3/autodev' 2>$null
+                }
                 $grepCode = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $prev

@@ -198,6 +198,17 @@ All byte caps are measured in **canonical LF UTF-8 bytes** (identical across Win
 
 ---
 
+## 6. Phân tầng Model tối ưu chi phí (Cost-Preserving Model Tiering)
+
+Hệ thống tách biệt tầng **suy luận sâu (Deep / high-reasoning)** và tầng **thực thi phẫu thuật (Fast / surgical coding)** theo hướng host-neutral (chi tiết contract tại [`../review-loop/models.md`](../review-loop/models.md)):
+
+| Tầng | Vai trò trong `/autodev` & `/review-loop` | Lý do & Bảo vệ chất lượng |
+| --- | --- | --- |
+| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Analyze`), `Reviewer`, `architecture-reviewer`, `security-reviewer`, `performance-reviewer` | Giữ nguyên chất lượng thiết kế, invariant, hợp đồng API và phát hiện bug độc lập |
+| **Fast / surgical coding** | `Implement` worker (`impl_agent` sau `Implementation Readiness Gate`), `Fixer` (nhận `file:line` + `bug_class`) | Giảm chi phí/latency khi sửa code có phạm vi rõ ràng; được bảo vệ bởi `0`-token CLI `mechanical-check`, test thực thi (`VERIFY`) và **Deep** `Reviewer` độc lập |
+
+---
+
 ## Related canonical documents
 
 - Core `/autodev` procedure: [`../workflows/autonomous-development.md`](../workflows/autonomous-development.md)

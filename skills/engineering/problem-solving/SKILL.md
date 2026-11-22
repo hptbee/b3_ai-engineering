@@ -26,7 +26,7 @@ Understand → Plan → Implement → Verify → Review → Fix → Re-verify
 - Failure with unknown cause, before a patch → `debugging`
 - “Research how other repos do X” → `research-engineering-patterns`
 - Pure knowledge questions with no change
-- Running the full independent review loop after work is already implemented → `review-loop/spec.md` (specified; not a substitute for this skill’s lighter review step)
+- Running the full independent review loop after work is already implemented → `review-loop/strategy.md` (specified; not a substitute for this skill’s lighter review step)
 
 Near miss: “is this design sound?” with no code change yet → stay in Understand/Plan; do not skip to Implement.
 
@@ -56,7 +56,7 @@ Near miss: “is this design sound?” with no code change yet → stay in Under
 ## Progressive disclosure
 
 - Constraints: `rules/engineering-principles.md`, `rules/verification.md`
-- Full independent loop (when that machinery exists): `review-loop/spec.md`
+- Full independent loop: `review-loop/strategy.md`
 - Review method: `skills/engineering/code-review/SKILL.md`
 
 ## Verification

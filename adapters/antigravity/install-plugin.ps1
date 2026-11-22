@@ -188,7 +188,7 @@ $rulesHeader = @"
 
 Generated from B3_HOME: ``$b3HomeForward`` (do not edit here).
 Resolve B3_HOME from ``B3_HOME`` env, product ``.b3/home``, or ``$b3HomeForward``.
-Precedence: ``$b3HomeForward/docs/precedence.md``. Autodev: ``$b3HomeForward/workflows/autonomous-development.md``. Review loop: ``$b3HomeForward/review-loop/spec.md``.
+Precedence: ``$b3HomeForward/docs/precedence.md``. Autodev: ``$b3HomeForward/workflows/autonomous-development.md``. Review loop: ``$b3HomeForward/review-loop/strategy.md``.
 "@
 $rulesParts = New-Object System.Collections.Generic.List[string]
 $rulesParts.Add($rulesHeader.Trim())

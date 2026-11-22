@@ -1,6 +1,6 @@
 # Feature implementation
 
-Default product-work sequence. Does not replace skills. Does not replace `review-loop/spec.md`.
+Default product-work sequence. Does not replace skills. Does not replace `review-loop/strategy.md`.
 
 ```text
 Understand → Plan → Implement → Verify → Review → Fix → Re-verify

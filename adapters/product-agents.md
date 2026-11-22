@@ -1,53 +1,27 @@
 # AGENTS.md
 
-This product repository is attached to B3. Do not copy B3 skills into this repo. Load the smallest relevant slice.
+Product repo attached to B3. Never copy B3 `skills/` here; load the smallest relevant slice.
 
-## Locate B3
+## Locate `B3_HOME`
 
-Resolve `B3_HOME` in this order. Stop at the first match that contains `workflows/autonomous-development.md`:
+Resolve `B3_HOME` in order; stop at the first dir containing `workflows/autonomous-development.md` (else stop):
+1. `B3_HOME` env var
+2. `.b3/home` at product git root (1 line, absolute path)
 
-1. Environment variable `B3_HOME`
-2. Product git root file `.b3/home` (one line, absolute path)
-
-If none match → stop. Do not invent a second procedure.
-
-## What to load
+## Locations & Invocations
 
 | Need | Location |
 | --- | --- |
-| Skills | Host local link (`.agents/skills/<name>/SKILL.md` for Codex/Antigravity, `.claude/skills/<name>/SKILL.md` for Claude Code, or user-level `~/.cursor/skills/b3-ai-engineering` for Cursor). Canonical source is `{B3_HOME}/skills`; do not edit through the link. |
-| Commands (Cursor slash) | This repo `.cursor/commands/` (sourced from `{B3_HOME}/commands/`) |
-| Rules | `{B3_HOME}/rules/*.md` |
-| Workflows | `{B3_HOME}/workflows/` |
-| Review loop | `{B3_HOME}/review-loop/` |
-| Isolated roles | `{B3_HOME}/agents/` (or `.claude/agents/` in Claude Code) |
+| Skills | `.agents/skills/<name>/SKILL.md` (Codex/AGY), `.claude/skills/<name>/SKILL.md` (Claude), `~/.cursor/skills/b3-ai-engineering` (Cursor). Source: `{B3_HOME}/skills` (no link edits). |
+| Rules / Workflows / Review / Roles | `{B3_HOME}/rules/*.md`, `{B3_HOME}/workflows/`, `{B3_HOME}/review-loop/`, `{B3_HOME}/agents/` (or `.claude/agents/`). |
+| Cursor commands / Checkpoints | `.cursor/commands/` (from `{B3_HOME}/commands/`); checkpoints in `.b3/autodev/` (gitignored). |
 
-Product files and Git commits stay in this repository. Checkpoints go under `.b3/autodev/` (gitignored).
+Hosts use `$<name>` (Codex), `/<name>` (Claude), or intent (AGY): `autodev`, `plan`, `implement`, `debug`, `review`, `verify`, `review-loop`.
+- On `/autodev`, `$autodev`, or `autodev`: **read and follow** `{B3_HOME}/workflows/autonomous-development.md` directly (do not stop after plan).
+- On `/review-loop` or `$review-loop`: **read and follow** `{B3_HOME}/review-loop/strategy.md` directly; delegate `{B3_HOME}/agents/{reviewer,fixer,security-reviewer,architecture-reviewer,performance-reviewer}.md` when isolated (parent owns `PASS`/`FAIL`/`UNKNOWN`/`INCOMPLETE`).
 
-## Codex, Claude Code, and Antigravity invocation
+## Constraints
 
-Skill-based hosts (**Codex**, **Claude Code**, **Antigravity**) invoke B3 commands through skills (Codex `$<name>` / `/skills`; Claude Code `/<name>` via `.claude/skills/<name>`; Antigravity skill activation or prompt intent):
-
-| Intent | Invoke |
-| --- | --- |
-| Autonomous lifecycle | `autodev` (`$autodev` / `/autodev`) |
-| Plan only | `plan` (`$plan` / `/plan`) |
-| Implement | `implement` (`$implement` / `/implement`) |
-| Debug | `debug` (`$debug` / `/debug`) |
-| Review | `review` (`$review` / `/review`) |
-| Verify | `verify` (`$verify` / `/verify`) |
-| Review loop | `review-loop` (`$review-loop` / `/review-loop`) |
-
-When the user says “autodev”, “run autodev”, `$autodev`, or `/autodev`, **read and follow** `{B3_HOME}/commands/autodev.md` (or the `autodev` skill), then `{B3_HOME}/workflows/autonomous-development.md`. Do not stop after the plan.
-
-For review-loop delegation, send `{B3_HOME}/agents/reviewer.md`, `fixer.md`, `security-reviewer.md`, `architecture-reviewer.md`, or `performance-reviewer.md` to an isolated agent when available. The parent owns `PASS`, `FAIL`, and `UNKNOWN / INCOMPLETE`.
-
-## Operating constraints
-
-1. Apply `{B3_HOME}/rules/` with the precedence stack; preferences do not silently win.
-2. Load the smallest relevant skill. Do not load every skill.
-3. Failed tool, missing evidence, empty named review target, or iteration limit → `UNKNOWN / INCOMPLETE`, not `PASS`.
-4. Do not copy `{B3_HOME}/skills` into this product.
-5. `.agents/skills` and `.claude/skills` are local installation indexes (one folder per skill), not second editable skill trees.
-
-Cursor also discovers `.agents/skills` and `.claude/skills`. If this checkout is opened in Cursor, skills may appear twice unless other discovery roots for the same tree are removed.
+1. Apply `{B3_HOME}/rules/` per precedence; preferences never silently override rules.
+2. Load only the smallest relevant skill; tool fail, missing evidence, empty target, or iter cap -> `UNKNOWN / INCOMPLETE`.
+3. `.agents/skills` & `.claude/skills` are local indexes, not editable trees (in Cursor, drop duplicate discovery roots).

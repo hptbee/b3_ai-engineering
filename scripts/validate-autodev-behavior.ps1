@@ -401,7 +401,8 @@ try {
             $rBytes = ([System.IO.File]::ReadAllBytes($rulesOutPath)).Length
             $noFm = -not ($rText.TrimStart() -match '^---')
             $hasAllRules = ($rText -match '# Engineering principles') -and ($rText -match '# Evidence and provenance') -and ($rText -match '# Portability') -and ($rText -match '# Simplest correct solution') -and ($rText -match '# Verification')
-            $rulesOk = $noFm -and ($rBytes -lt 24000) -and $hasAllRules
+            $hasStrategyRef = ($rText -match 'review-loop/strategy\.md') -and ($rText -notmatch 'review-loop/spec\.md')
+            $rulesOk = $noFm -and ($rBytes -lt 24000) -and $hasAllRules -and $hasStrategyRef
         }
 
         $pSkillsDir = Join-Path $pluginOut 'skills'
@@ -681,6 +682,66 @@ try {
         FailCheck 'guard-mechanical-check' "clean=(${mCleanExit}:$mClean) bad=(${mBadExit}:$mBad)"
     }
 
+    # --- -TargetRef / --target-ref tests (un-checked-out PR/branch commit with dirty+untracked WT) ---
+    $trRepo = Join-Path $sandbox 'target-ref-repo'
+    New-Item -ItemType Directory -Path $trRepo | Out-Null
+    Push-Location $trRepo
+    git init -q
+    git config user.email 'autodev-test@example.com'
+    git config user.name 'Autodev Test'
+    New-Item -ItemType Directory -Path src | Out-Null
+    Set-Content src\app.ts "export const v = 1;`nexport function legacyFn() { return 1; }"
+    Set-Content src\legacy.ts "export const legacy = 1;"
+    git add .
+    git commit -qm 'main init'
+    $trMain = (git rev-parse HEAD).Trim()
+    git branch -M main
+    git checkout -qb src
+    Set-Content src\app.ts "export const v = 2;`n${mkDbg};`nexport function newFn() { return 2; }"
+    git rm -q src/legacy.ts
+    Set-Content src\pr-only.ts "export const pr = 1;"
+    git add .
+    git commit -qm 'pr commit'
+    git checkout -q main
+    # Dirty + untracked local working tree must NOT pollute TargetRef checks
+    Set-Content src\app.ts "export const v = 999;"
+    Set-Content src\wt-untracked.ts "test${mkOnly}'wt', () => {});"
+
+    # Branch literally named 'src' collides with directory 'src/' unless resolved to SHA + '--'
+    $trDsOut = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $trRepo -TargetRef 'src') -join "`n")
+    $trDsExit = $LASTEXITCODE
+    $trMcOut = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $trRepo -TargetRef 'src' -AllowedPaths 'src/app.ts,src/pr-only.ts' -Obsoletes 'src/legacy.ts,legacyFn,newFn') -join "`n")
+    $trMcExit = $LASTEXITCODE
+    $trBadOut = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $trRepo -TargetRef 'nonexistent-ref-xyz') -join "`n")
+    $trBadExit = $LASTEXITCODE
+    $trDashOut = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $trRepo -TargetRef '--bad-flag') -join "`n")
+    $trDashExit = $LASTEXITCODE
+
+    $trShOk = $true
+    $gitBash = 'C:\Program Files\Git\bin\bash.exe'
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/autodev-guard.sh'
+        $trRepoPosix = $trRepo -replace '\\', '/'
+        $shDs = (& $gitBash -c "'$guardShPosix' diff-scope --repo-root '$trRepoPosix' --target-ref 'src'") -join "`n"
+        $shDsExit = $LASTEXITCODE
+        $shMc = (& $gitBash -c "'$guardShPosix' mechanical-check --repo-root '$trRepoPosix' --target-ref 'src' --allowed-paths 'src/app.ts,src/pr-only.ts' --obsoletes 'src/legacy.ts,legacyFn,newFn'") -join "`n"
+        $shMcExit = $LASTEXITCODE
+        $shDash = (& $gitBash -c "'$guardShPosix' mechanical-check --repo-root '$trRepoPosix' --target-ref '--bad-flag'") -join "`n"
+        $shDashExit = $LASTEXITCODE
+        $trShOk = ($shDsExit -eq 0) -and ($shDs -match 'review_files=src/app\.ts,src/legacy\.ts,src/pr-only\.ts') -and ($shDs -notmatch 'wt-untracked') -and
+                  ($shMcExit -eq 2) -and ($shMc -match 'scope_creep=src/legacy\.ts') -and ($shMc -match "src/app\.ts:2:${mkDbg}") -and ($shMc -match 'obsolete_hits=newFn\(1f\)') -and ($shMc -notmatch 'legacyFn') -and ($shMc -notmatch 'src/legacy\.ts\(exists') -and
+                  ($shDashExit -eq 1) -and ($shDash -match 'MECHANICAL_FAIL')
+    }
+    Pop-Location
+    if ($trDsExit -eq 0 -and ($trDsOut -match 'review_files=src/app\.ts,src/legacy\.ts,src/pr-only\.ts') -and ($trDsOut -notmatch 'wt-untracked') -and
+        $trMcExit -eq 2 -and ($trMcOut -match 'scope_creep=src/legacy\.ts') -and ($trMcOut -match "src/app\.ts:2:${mkDbg}") -and ($trMcOut -match 'obsolete_hits=newFn\(1f\)') -and ($trMcOut -notmatch 'legacyFn') -and ($trMcOut -notmatch 'src/legacy\.ts\(exists') -and
+        $trBadExit -eq 1 -and ($trBadOut -match 'DIFF_SCOPE_FAIL') -and
+        $trDashExit -eq 1 -and ($trDashOut -match 'DIFF_SCOPE_FAIL') -and $trShOk) {
+        Pass 'guard-target-ref'
+    } else {
+        FailCheck 'guard-target-ref' "ds=(${trDsExit}:$trDsOut) mc=(${trMcExit}:$trMcOut) bad=(${trBadExit}:$trBadOut) dash=(${trDashExit}:$trDashOut) shOk=$trShOk"
+    }
+
     $wOk = ((& powershell -NoProfile -File $guardScript check-wave -WaveSpecs 'T002=src/api/a.ts,./src/api/a.ts;T003=src/ui/b.tsx') -join "`n")
     $wOkExit = $LASTEXITCODE
     $wBad = ((& powershell -NoProfile -File $guardScript check-wave -WaveSpecs 'T002=src/api,.;T003=src/api/orders.ts') -join "`n")
@@ -714,10 +775,23 @@ try {
     $cmdRevText = Get-Content -LiteralPath (Join-Path $root 'commands\review.md') -Raw
     $refLinkPattern = '\]\([^)]*review-loop/(spec|sizing|findings|models)\.md\)'
     $eagerSpec = ($cmdRlText -match $refLinkPattern) -or ($cmdRevText -match $refLinkPattern) -or ($wfMain -match $refLinkPattern) -or ($wfMain -match 'sizing\.md')
-    if ($hopViolations.Count -eq 0 -and (-not $eagerSpec) -and $copiedCmdRelLinks.Count -eq 0 -and $copiedCmdMissingB3Home.Count -eq 0) {
+    $specLeaks = @()
+    foreach ($dirName in @('skills', 'workflows')) {
+        foreach ($f in @(Get-ChildItem (Join-Path $root $dirName) -Recurse -Filter '*.md' -File)) {
+            foreach ($line in @(Get-Content -LiteralPath $f.FullName)) {
+                if ($line -match 'review-loop/spec\.md' -and $line -notmatch '(?i)\b(do not|never|skip)\b') {
+                    $specLeaks += $f.FullName
+                    break
+                }
+            }
+        }
+    }
+    $prodAgentsText = Get-Content -LiteralPath (Join-Path $root 'adapters\product-agents.md') -Raw
+    $prodAgentsTwoHop = ($prodAgentsText -match 'commands/autodev\.md')
+    if ($hopViolations.Count -eq 0 -and (-not $eagerSpec) -and $copiedCmdRelLinks.Count -eq 0 -and $copiedCmdMissingB3Home.Count -eq 0 -and $specLeaks.Count -eq 0 -and (-not $prodAgentsTwoHop)) {
         Pass 'context-single-hop-no-eager-spec'
     } else {
-        FailCheck 'context-single-hop-no-eager-spec' "hops=$($hopViolations.Count) eagerSpec=$eagerSpec copiedRelLinks=$($copiedCmdRelLinks -join ',') missingB3Home=$($copiedCmdMissingB3Home -join ',')"
+        FailCheck 'context-single-hop-no-eager-spec' "hops=$($hopViolations.Count) eagerSpec=$eagerSpec copiedRelLinks=$($copiedCmdRelLinks -join ',') missingB3Home=$($copiedCmdMissingB3Home -join ',') specLeaks=$($specLeaks -join ',') prodAgentsTwoHop=$prodAgentsTwoHop"
     }
 
     $ctxOut = (& powershell -NoProfile -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot $root -Strict) -join "`n"

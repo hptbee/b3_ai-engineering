@@ -164,6 +164,23 @@ resolve_auto_base_sha() {
   printf '%s' "HEAD"
 }
 
+resolve_auto_base_for_target() {
+  local root="$1"
+  local target="$2"
+  local target_commit_sha="$3"
+  local ref mb
+  for ref in origin/HEAD origin/main origin/master main master HEAD; do
+    if git -C "$root" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
+      mb="$(git -C "$root" merge-base "$ref" "$target" 2>/dev/null || true)"
+      if [[ -n "$mb" && "$mb" != "$target_commit_sha" ]]; then
+        printf '%s' "$mb"
+        return 0
+      fi
+    fi
+  done
+  printf '%s' "$target"
+}
+
 case "$CMD" in
   fingerprint)
     DEPENDS_ON=""
@@ -395,12 +412,14 @@ case "$CMD" in
     REPO_ROOT="."
     BASE_SHA=""
     PREV_SHA=""
+    TARGET_REF=""
     IGNORE_DIRTY=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
         --prev-sha) PREV_SHA="${2:-}"; shift 2 ;;
+        --target-ref) TARGET_REF="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         *) echo "DIFF_SCOPE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
@@ -408,17 +427,42 @@ case "$CMD" in
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
 
+    TARGET_REF="$(trim_str "$TARGET_REF")"
+    TARGET_COMMIT_SHA=""
+    if [[ -n "$TARGET_REF" ]]; then
+      if [[ "$TARGET_REF" == -* ]]; then
+        echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+      if ! TARGET_COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" 2>/dev/null)"; then
+        echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+      TARGET_COMMIT_SHA="$(trim_str "$TARGET_COMMIT_SHA")"
+      if [[ -z "$TARGET_COMMIT_SHA" ]]; then
+        echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+    fi
+
     BASE_SHA="$(trim_str "$BASE_SHA")"
     if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
-      if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+      if [[ -n "$TARGET_REF" ]]; then
+        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$TARGET_COMMIT_SHA")"
+      elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
         BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
       else
         BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
       fi
     fi
 
-    NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
-    UNTRACKED_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "DIFF_SCOPE_FAIL: git ls-files failed"; exit 1; }
+    if [[ -n "$TARGET_REF" ]]; then
+      NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
+      UNTRACKED_OUT=""
+    else
+      NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
+      UNTRACKED_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "DIFF_SCOPE_FAIL: git ls-files failed"; exit 1; }
+    fi
 
     REVIEW_ARR=()
     NOISE_ARR=()
@@ -462,7 +506,11 @@ case "$CMD" in
     DF_OUT="none"
     if [[ -n "$PREV_SHA" ]]; then
       HAS_PREV=true
-      DELTA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed"; exit 1; }
+      if [[ -n "$TARGET_REF" ]]; then
+        DELTA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed"; exit 1; }
+      else
+        DELTA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed"; exit 1; }
+      fi
       DELTA_ARR=()
       while IFS= read -r line; do
         p="$(norm_path "$line")"
@@ -516,6 +564,7 @@ case "$CMD" in
   mechanical-check)
     REPO_ROOT="."
     BASE_SHA=""
+    TARGET_REF=""
     ALLOWED=""
     IGNORE_DIRTY=""
     OBSOLETES=""
@@ -523,6 +572,7 @@ case "$CMD" in
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
+        --target-ref) TARGET_REF="${2:-}"; shift 2 ;;
         --allowed-paths) ALLOWED="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         --obsoletes) OBSOLETES="${2:-}"; shift 2 ;;
@@ -536,17 +586,42 @@ case "$CMD" in
     OBS_ARR=()
     while IFS= read -r tok; do [[ -n "$tok" ]] && OBS_ARR+=("$tok"); done < <(split_csv_lines "$OBSOLETES" false)
 
+    TARGET_REF="$(trim_str "$TARGET_REF")"
+    TARGET_COMMIT_SHA=""
+    if [[ -n "$TARGET_REF" ]]; then
+      if [[ "$TARGET_REF" == -* ]]; then
+        echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+      if ! TARGET_COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" 2>/dev/null)"; then
+        echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+      TARGET_COMMIT_SHA="$(trim_str "$TARGET_COMMIT_SHA")"
+      if [[ -z "$TARGET_COMMIT_SHA" ]]; then
+        echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+    fi
+
     BASE_SHA="$(trim_str "$BASE_SHA")"
     if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
-      if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+      if [[ -n "$TARGET_REF" ]]; then
+        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$TARGET_COMMIT_SHA")"
+      elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
         BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
       else
         BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
       fi
     fi
 
-    CH_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff --name-only failed"; exit 1; }
-    UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "MECHANICAL_FAIL: git ls-files failed"; exit 1; }
+    if [[ -n "$TARGET_REF" ]]; then
+      CH_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "MECHANICAL_FAIL: git diff --name-only failed"; exit 1; }
+      UN_OUT=""
+    else
+      CH_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff --name-only failed"; exit 1; }
+      UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "MECHANICAL_FAIL: git ls-files failed"; exit 1; }
+    fi
 
     ALL_CHANGED=()
     while IFS= read -r line; do
@@ -566,7 +641,11 @@ case "$CMD" in
       done
     fi
 
-    DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff -U0 failed"; exit 1; }
+    if [[ -n "$TARGET_REF" ]]; then
+      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "MECHANICAL_FAIL: git diff -U0 failed"; exit 1; }
+    else
+      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff -U0 failed"; exit 1; }
+    fi
     LEFTOVER_HITS=()
     CUR_FILE=""
     CUR_LINE=0
@@ -645,11 +724,21 @@ case "$CMD" in
       for tok in "${OBS_ARR[@]}"; do
         norm_tok="$(norm_path "$tok")"
         exists_path=false
-        if [[ -n "$norm_tok" && -e "${REPO_ROOT}/${norm_tok}" ]]; then
-          exists_path=true
+        if [[ -n "$norm_tok" ]]; then
+          if [[ -n "$TARGET_REF" ]]; then
+            if git -C "$REPO_ROOT" cat-file -e "${TARGET_COMMIT_SHA}:${norm_tok}" 2>/dev/null; then
+              exists_path=true
+            fi
+          elif [[ -e "${REPO_ROOT}/${norm_tok}" ]]; then
+            exists_path=true
+          fi
         fi
         set +e
-        grep_out="$(git -C "$REPO_ROOT" grep -l -F -- "$tok" -- . ':(exclude).b3/autodev' 2>/dev/null)"
+        if [[ -n "$TARGET_REF" ]]; then
+          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/autodev' 2>/dev/null)"
+        else
+          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" -- . ':(exclude).b3/autodev' 2>/dev/null)"
+        fi
         grep_code=$?
         set -e
         if [[ "$grep_code" -gt 1 ]]; then

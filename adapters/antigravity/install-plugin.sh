@@ -182,7 +182,7 @@ RULES_CONTENT="# B3 AI Engineering Rules
 
 Generated from B3_HOME: \`${B3_HOME}\` (do not edit here).
 Resolve B3_HOME from \`B3_HOME\` env, product \`.b3/home\`, or \`${B3_HOME}\`.
-Precedence: \`${B3_HOME}/docs/precedence.md\`. Autodev: \`${B3_HOME}/workflows/autonomous-development.md\`. Review loop: \`${B3_HOME}/review-loop/spec.md\`."
+Precedence: \`${B3_HOME}/docs/precedence.md\`. Autodev: \`${B3_HOME}/workflows/autonomous-development.md\`. Review loop: \`${B3_HOME}/review-loop/strategy.md\`."
 
 for rf in "${RULE_FILES[@]}"; do
   stripped="$(strip_frontmatter "$rf")"

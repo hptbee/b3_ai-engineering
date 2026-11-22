@@ -4,8 +4,8 @@ Reconcile [`../autonomous-development.md`](../autonomous-development.md) checkpo
 
 ## 1. Load checkpoint & verify Git identity
 
-1. Resolve `{RUN_DIR}` via `scripts/autodev-guard.{ps1,sh} resolve-run` (from explicit `<run_id>`, `.b3/autodev/CURRENT`, or legacy `.b3/autodev/progress.md` fallback when `CURRENT` is absent). If explicit `<run_id>` was given and resolves, write `<run_id>` to `.b3/autodev/CURRENT`. Never scan sibling dirs under `.b3/autodev/runs/`.
-2. Read `{RUN_DIR}/master-plan.md`, `progress.md`, `findings.md` (if present), and `approach/*.md` (if present).
+1. Resolve `{RUN_DIR}` via `scripts/autodev-guard.{ps1,sh} resolve-run` (explicit `<run_id>`, `.b3/autodev/CURRENT`, or legacy `.b3/autodev/progress.md`). Write explicit `<run_id>` to `CURRENT`. Never scan sibling dirs under `.b3/autodev/runs/`.
+2. Read `{RUN_DIR}/master-plan.md`, `progress.md`, active (`OPEN`/unverified `FIXED`) items in `findings.md` (if present), and `approach/T00N.md` **only** for `in_progress` or next ready `pending` tasks — **never** load `approach/*.md` of `completed` tasks.
 3. Verify `B3_HOME`, `PRODUCT_ROOT`, `plan_id`, and `branch`: if `progress.md` mismatches current `plan_id`, `b3_home`, or active Git branch → `BLOCKED`.
 
 ## 2. Verify completed & in-progress tasks
@@ -17,8 +17,8 @@ Reconcile [`../autonomous-development.md`](../autonomous-development.md) checkpo
 
 Reuse a `ready` approach **only** when:
 - Master-plan `version` == approach `plan_version`
-- Recomputed `task_spec_fingerprint` (`autodev-guard fingerprint`) == stored fingerprint
-- `HEAD` descends from `task_base`, and `watched_paths` exist (or are explicit new-file intents)
+- Recomputed `task_spec_fingerprint` (`autodev-guard fingerprint`) == stored
+- `HEAD` descends from `task_base`; `watched_paths` exist (or new-file intent)
 - `scripts/autodev-guard.{ps1,sh} check-freshness` returns **`FRESH`**
 
 Equivalent Git dirty-set check (excluding `.b3/autodev/` and unchanged `initial_dirty_paths`):
@@ -31,7 +31,7 @@ git ls-files --others --exclude-standard
 ```
 
 - `git diff --name-only {approach_at_sha} HEAD` checks commits only; `git diff --name-only {approach_at_sha}` includes the working tree against that tree.
-- Any committed change in `watched_paths`, or any uncommitted change in `read_only_deps` (`watched_paths` minus `files`), is **stale** → re-run `Analyze` for **this task only** (uncommitted edits in owned `files` are kept in-progress work, not stale). Missing freshness fields also require re-running `Analyze`.
+- Committed changes in `watched_paths` or uncommitted changes in `read_only_deps` (`watched_paths` minus `files`) are **stale** → re-run `Analyze` for **this task only** (uncommitted edits in `files` are kept, not stale). Missing freshness fields also require re-running `Analyze`.
 
 ## 4. Continue ready work
 
