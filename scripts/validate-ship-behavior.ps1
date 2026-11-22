@@ -815,6 +815,333 @@ try {
         FailCheck 'guard-size-boundary' "1999=(${sb1999Exit}:$sb1999) 2000=(${sb2000Exit}:$sb2000) 49=(${sb49Exit}:$sb49) 50=(${sb50Exit}:$sb50) shOk=$sbShOk"
     }
 
+    # --- guard-verify-receipt (dual shell: PASS, stale, precommit + partial/scope guards, fail, corrupt, scoped paths) ---
+    $vrRepo = Join-Path $sandbox 'vr-repo'
+    New-Item -ItemType Directory -Path $vrRepo | Out-Null
+    Push-Location $vrRepo
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    New-Item -ItemType Directory -Path src | Out-Null
+    Set-Content src\a.ts 'export const a = 1;'
+    Set-Content src\other.ts 'export const o = 1;'
+    Set-Content src\extra.ts 'export const e = 1;'
+    git add .; git commit -qm 'init'
+    Set-Content src\a.ts 'export const a = 2;'
+    $rec = '.b3/ship/runs/r1/evidence/T001.verify'
+    $vrPass = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-ok' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
+    $vrPassExit = $LASTEXITCODE
+    $vcValid = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcValidExit = $LASTEXITCODE
+    # Scoped RelevantPaths ignores unrelated edit
+    Set-Content src\other.ts 'export const o = 2;'
+    $vcUnrel = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcUnrelExit = $LASTEXITCODE
+    # Staging verified file passes precommit -RequireVerifyReceipt
+    git add src\a.ts
+    $pcVrOk = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcVrOkExit = $LASTEXITCODE
+    # Partial staging (index != WT while receipt matches WT) fails precommit
+    Set-Content src\a.ts 'export const a = 3;'
+    $vrPass2 = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-2' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
+    $vrPass2Exit = $LASTEXITCODE
+    $pcPartial = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcPartialExit = $LASTEXITCODE
+    # Sync index & test out-of-receipt-scope staged path
+    git add src\a.ts
+    Set-Content src\extra.ts 'export const e = 2;'
+    git add src\extra.ts
+    $pcOutScope = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts,src/extra.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcOutScopeExit = $LASTEXITCODE
+    git reset -q HEAD src\extra.ts
+    git checkout -- src\extra.ts
+    # Editing relevant file invalidates receipt -> VERIFY_STALE (exit 2) + blocks precommit
+    Set-Content src\a.ts 'export const a = 4;'
+    $vcStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcStaleExit = $LASTEXITCODE
+    git add src\a.ts
+    $pcVrStale = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcVrStaleExit = $LASTEXITCODE
+    # Failing verify command writes FAIL receipt + log
+    $recFail = '.b3/ship/runs/r1/evidence/T002.verify'
+    $vrFail = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'Write-Output "bad-check"; exit 3' -ReceiptPath $recFail -TaskId T002) -join "`n")
+    $vrFailExit = $LASTEXITCODE
+    $vcFail = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $recFail) -join "`n")
+    $vcFailExit = $LASTEXITCODE
+    $failLogExists = Test-Path -LiteralPath (Join-Path $vrRepo "$recFail.log") -PathType Leaf
+    # Corrupt & missing receipt
+    $recCorrupt = Join-Path $vrRepo '.b3\ship\runs\r1\evidence\bad.verify'
+    Set-Content $recCorrupt "schema=b3-verify-v1`nstatus=PASS"
+    $vcCorrupt = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/bad.verify') -join "`n")
+    $vcCorruptExit = $LASTEXITCODE
+    $vcMissing = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/none.verify') -join "`n")
+    $vcMissingExit = $LASTEXITCODE
+
+    $vrShOk = $true
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+        $vrRepoPosix = $vrRepo -replace '\\', '/'
+        $shRec = '.b3/ship/runs/r1/evidence/sh.verify'
+        $shPass = (& $gitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd 'echo sh-ok' --receipt-path '$shRec' --task-id T003 --relevant-paths 'src/a.ts'") -join "`n"
+        $shPassExit = $LASTEXITCODE
+        # Cross-shell verification: .ps1 verify-check validates .sh receipt and produces identical tree hash
+        $psOfSh = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $shRec) -join "`n")
+        $psOfShExit = $LASTEXITCODE
+        $shPcOk = (& $gitBash -c "'$guardShPosix' precommit --repo-root '$vrRepoPosix' --allowed-paths 'src/a.ts' --require-verify-receipt '$shRec'") -join "`n"
+        $shPcOkExit = $LASTEXITCODE
+        Set-Content src\a.ts 'export const a = 5;'
+        $shStale = (& $gitBash -c "'$guardShPosix' verify-check --repo-root '$vrRepoPosix' --receipt-path '$shRec'") -join "`n"
+        $shStaleExit = $LASTEXITCODE
+        $shFail = (& $gitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd 'echo sh-err; exit 4' --receipt-path '.b3/ship/runs/r1/evidence/shfail.verify' --task-id T004") -join "`n"
+        $shFailExit = $LASTEXITCODE
+        $shCorrupt = (& $gitBash -c "'$guardShPosix' verify-check --repo-root '$vrRepoPosix' --receipt-path '.b3/ship/runs/r1/evidence/bad.verify'") -join "`n"
+        $shCorruptExit = $LASTEXITCODE
+        $vrShOk = ($shPassExit -eq 0) -and ($shPass -match 'VERIFY_PASS:') -and
+                  ($psOfShExit -eq 0) -and ($psOfSh -match 'VERIFY_VALID:') -and
+                  ($shPcOkExit -eq 0) -and ($shPcOk -eq 'PRECOMMIT_OK') -and
+                  ($shStaleExit -eq 2) -and ($shStale -match 'VERIFY_STALE:') -and
+                  ($shFailExit -eq 1) -and ($shFail -match 'VERIFY_FAIL:') -and
+                  ($shCorruptExit -eq 1) -and ($shCorrupt -match 'VERIFY_CORRUPT:')
+    }
+    Pop-Location
+    if ($vrPassExit -eq 0 -and ($vrPass -match 'VERIFY_PASS:') -and
+        $vcValidExit -eq 0 -and ($vcValid -match 'VERIFY_VALID:') -and
+        $vcUnrelExit -eq 0 -and ($vcUnrel -match 'VERIFY_VALID:') -and
+        $pcVrOkExit -eq 0 -and $pcVrOk -eq 'PRECOMMIT_OK' -and
+        $vrPass2Exit -eq 0 -and $pcPartialExit -eq 1 -and ($pcPartial -match 'staged content differs') -and
+        $pcOutScopeExit -eq 1 -and ($pcOutScope -match 'outside receipt scope') -and
+        $vcStaleExit -eq 2 -and ($vcStale -match 'VERIFY_STALE:') -and
+        $pcVrStaleExit -eq 1 -and ($pcVrStale -match 'VERIFY_STALE:') -and
+        $vrFailExit -eq 1 -and ($vrFail -match 'VERIFY_FAIL:') -and $failLogExists -and
+        $vcFailExit -eq 1 -and ($vcFail -match 'VERIFY_FAILED_RECEIPT:') -and
+        $vcCorruptExit -eq 1 -and ($vcCorrupt -match 'VERIFY_CORRUPT:') -and
+        $vcMissingExit -eq 1 -and ($vcMissing -match 'VERIFY_MISSING:') -and $vrShOk) {
+        Pass 'guard-verify-receipt'
+    } else {
+        FailCheck 'guard-verify-receipt' "vrPass=(${vrPassExit}:$vrPass) vcValid=(${vcValidExit}:$vcValid) pcVrOk=(${pcVrOkExit}:$pcVrOk) pcPartial=(${pcPartialExit}:$pcPartial) pcOut=(${pcOutScopeExit}:$pcOutScope) stale=(${vcStaleExit}:$vcStale) vrFail=(${vrFailExit}:$vrFail) vcCorrupt=(${vcCorruptExit}:$vcCorrupt) shOk=$vrShOk"
+    }
+
+    # --- guard-safety-tripwires (secrets, destructive SQL non-test vs test, mass delete + AllowMassDelete, MERGE_HEAD) ---
+    $stRepo = Join-Path $sandbox 'safety-repo'
+    New-Item -ItemType Directory -Path $stRepo | Out-Null
+    Push-Location $stRepo
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    New-Item -ItemType Directory -Path config,migrations,tests | Out-Null
+    1..10 | ForEach-Object { Set-Content "f$_.ts" "export const n$_ = $_;" }
+    git add .; git commit -qm 'init'
+    $stBase = (git rev-parse HEAD).Trim()
+    1..10 | ForEach-Object { Remove-Item "f$_.ts" }
+    Set-Content config\.env 'TOKEN=abc'
+    Set-Content config\.env.example 'TOKEN=placeholder'
+    Set-Content migrations\001.sql 'DROP TABLE users;'
+    Set-Content tests\db.test.ts 'const sql = "DROP TABLE users;";'
+    $stOut = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $stRepo -BaseSha $stBase) -join "`n")
+    $stExit = $LASTEXITCODE
+    $stAllowMd = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $stRepo -BaseSha $stBase -AllowMassDelete) -join "`n")
+    $stAllowMdExit = $LASTEXITCODE
+    # precommit blocks dir-prefix allow for secret, allows exact secret match, and blocks mid-merge
+    git reset -q
+    git add config\.env
+    $pcSecDir = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
+    $pcSecDirExit = $LASTEXITCODE
+    $pcSecExact = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config/.env') -join "`n")
+    $pcSecExactExit = $LASTEXITCODE
+    git reset -q
+    git add config\.env.example
+    $pcExOk = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
+    $pcExOkExit = $LASTEXITCODE
+    Set-Content .git\MERGE_HEAD $stBase
+    $pcMerge = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
+    $pcMergeExit = $LASTEXITCODE
+    Remove-Item .git\MERGE_HEAD -Force
+
+    $stShOk = $true
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+        $stRepoPosix = $stRepo -replace '\\', '/'
+        $shSt = (& $gitBash -c "'$guardShPosix' mechanical-check --repo-root '$stRepoPosix' --base-sha '$stBase'") -join "`n"
+        $shStExit = $LASTEXITCODE
+        $shStMd = (& $gitBash -c "'$guardShPosix' mechanical-check --repo-root '$stRepoPosix' --base-sha '$stBase' --allow-mass-delete") -join "`n"
+        $shStMdExit = $LASTEXITCODE
+        git reset -q; git add config\.env
+        $shSecDir = (& $gitBash -c "'$guardShPosix' precommit --repo-root '$stRepoPosix' --allowed-paths 'config'") -join "`n"
+        $shSecDirExit = $LASTEXITCODE
+        $shSecExact = (& $gitBash -c "'$guardShPosix' precommit --repo-root '$stRepoPosix' --allowed-paths 'config/.env'") -join "`n"
+        $shSecExactExit = $LASTEXITCODE
+        Set-Content .git\MERGE_HEAD $stBase
+        $shMerge = (& $gitBash -c "'$guardShPosix' precommit --repo-root '$stRepoPosix' --allowed-paths 'config/.env'") -join "`n"
+        $shMergeExit = $LASTEXITCODE
+        Remove-Item .git\MERGE_HEAD -Force
+        $stShOk = ($shStExit -eq 2) -and ($shSt -match 'secret_path:config/\.env') -and ($shSt -match 'destructive_sql:migrations/001\.sql:1') -and ($shSt -match 'mass_delete:10f') -and ($shSt -notmatch 'tests/db\.test\.ts') -and
+                  ($shStMdExit -eq 2) -and ($shStMd -notmatch 'mass_delete') -and
+                  ($shSecDirExit -eq 1) -and ($shSecDir -match 'secret path staged without exact allow') -and
+                  ($shSecExactExit -eq 0) -and ($shSecExact -eq 'PRECOMMIT_OK') -and
+                  ($shMergeExit -eq 1) -and ($shMerge -match 'git operation in progress \(MERGE_HEAD\)')
+    }
+    Pop-Location
+    if ($stExit -eq 2 -and ($stOut -match 'secret_path:config/\.env') -and ($stOut -match 'destructive_sql:migrations/001\.sql:1') -and ($stOut -match 'mass_delete:10f') -and ($stOut -notmatch 'tests/db\.test\.ts') -and
+        $stAllowMdExit -eq 2 -and ($stAllowMd -notmatch 'mass_delete') -and
+        $pcSecDirExit -eq 1 -and ($pcSecDir -match 'secret path staged without exact allow') -and
+        $pcSecExactExit -eq 0 -and $pcSecExact -eq 'PRECOMMIT_OK' -and
+        $pcExOkExit -eq 0 -and $pcExOk -eq 'PRECOMMIT_OK' -and
+        $pcMergeExit -eq 1 -and ($pcMerge -match 'git operation in progress \(MERGE_HEAD\)') -and $stShOk) {
+        Pass 'guard-safety-tripwires'
+    } else {
+        FailCheck 'guard-safety-tripwires' "st=(${stExit}:$stOut) allowMd=(${stAllowMdExit}:$stAllowMd) secDir=(${pcSecDirExit}:$pcSecDir) secEx=(${pcSecExactExit}:$pcSecExact) exOk=(${pcExOkExit}:$pcExOk) merge=(${pcMergeExit}:$pcMerge) shOk=$stShOk"
+    }
+
+    # --- guard-symbol-check (dangling refs, internal orphan, exported public API tolerance) ---
+    $syRepo = Join-Path $sandbox 'sym-repo'
+    New-Item -ItemType Directory -Path $syRepo | Out-Null
+    Push-Location $syRepo
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    New-Item -ItemType Directory -Path src | Out-Null
+    Set-Content src\lib.ts "export function oldUsed() { return 1; }`nexport function keepFn() { return 2; }"
+    Set-Content src\caller.ts "import { oldUsed } from './lib';`nexport const res = oldUsed();"
+    git add .; git commit -qm 'init'
+    $syBase = (git rev-parse HEAD).Trim()
+    Set-Content src\lib.ts "export function keepFn() { return 2; }`nfunction internalDead() { return 3; }`nexport function publicApi() { return 4; }"
+    $syBad = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $syRepo -BaseSha $syBase) -join "`n")
+    $syBadExit = $LASTEXITCODE
+    $syShOk = $true
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+        $syRepoPosix = $syRepo -replace '\\', '/'
+        $shSyBad = (& $gitBash -c "'$guardShPosix' symbol-check --repo-root '$syRepoPosix' --base-sha '$syBase'") -join "`n"
+        $shSyBadExit = $LASTEXITCODE
+        $syShOk = ($shSyBadExit -eq 2) -and ($shSyBad -match 'dangling_refs=oldUsed\(1f\)') -and ($shSyBad -match 'orphan_internal=src/lib\.ts:internalDead') -and ($shSyBad -notmatch 'orphan_internal=.*publicApi')
+    }
+    # Clean caller + remove internalDead, keep unreferenced export function publicApi -> SYMBOL_OK
+    Set-Content src\caller.ts "export const res = 1;"
+    Set-Content src\lib.ts "export function keepFn() { return 2; }`nexport function publicApi() { return 4; }"
+    $syClean = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $syRepo -BaseSha $syBase) -join "`n")
+    $syCleanExit = $LASTEXITCODE
+    if (Test-Path -LiteralPath $gitBash) {
+        $shSyClean = (& $gitBash -c "'$guardShPosix' symbol-check --repo-root '$syRepoPosix' --base-sha '$syBase'") -join "`n"
+        $shSyCleanExit = $LASTEXITCODE
+        $syShOk = $syShOk -and ($shSyCleanExit -eq 0) -and ($shSyClean -match 'SYMBOL_OK')
+    }
+    Pop-Location
+    if ($syBadExit -eq 2 -and ($syBad -match 'dangling_refs=oldUsed\(1f\)') -and ($syBad -match 'orphan_internal=src/lib\.ts:internalDead') -and ($syBad -notmatch 'orphan_internal=.*publicApi') -and
+        $syCleanExit -eq 0 -and ($syClean -match 'SYMBOL_OK') -and $syShOk) {
+        Pass 'guard-symbol-check'
+    } else {
+        FailCheck 'guard-symbol-check' "bad=(${syBadExit}:$syBad) clean=(${syCleanExit}:$syClean) shOk=$syShOk"
+    }
+
+    # --- guard-wave-rw-and-worktree (WaveReads, ExpectedBaseSha, linked worktree, wrong root/head/MERGE_HEAD) ---
+    $wtMain = Join-Path $sandbox 'wt-main'
+    $wtOther = Join-Path $sandbox 'wt-other'
+    $wtLinked = Join-Path $sandbox 'wt-linked'
+    New-Item -ItemType Directory -Path $wtMain, $wtOther | Out-Null
+    Push-Location $wtMain
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    New-Item -ItemType Directory -Path src | Out-Null
+    Set-Content src\a.ts 'export const a = 1;'
+    Set-Content src\b.ts 'export const b = 1;'
+    git add .; git commit -qm 'init'
+    $wtHead = (git rev-parse HEAD).Trim()
+    git worktree add -q -b wt-branch $wtLinked $wtHead 2>$null
+    Pop-Location
+    Push-Location $wtOther
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    Set-Content r.txt 'other'; git add .; git commit -qm 'other'
+    Pop-Location
+
+    $cwRw = ((& powershell -NoProfile -File $guardScript check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -WaveReads 'T1=src/b.ts;T2=none' -ExpectedBaseSha $wtHead) -join "`n")
+    $cwRwExit = $LASTEXITCODE
+    $cwBaseBad = ((& powershell -NoProfile -File $guardScript check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -ExpectedBaseSha ('0' * 40)) -join "`n")
+    $cwBaseBadExit = $LASTEXITCODE
+    $cwDisjoint = ((& powershell -NoProfile -File $guardScript check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -WaveReads 'T1=src/c.ts;T2=src/d.ts' -ExpectedBaseSha $wtHead) -join "`n")
+    $cwDisjointExit = $LASTEXITCODE
+    $wtOk = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtLinked -ExpectedRoot $wtMain -ExpectedBaseSha $wtHead) -join "`n")
+    $wtOkExit = $LASTEXITCODE
+    $wtWrongRoot = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtOther -ExpectedRoot $wtMain) -join "`n")
+    $wtWrongRootExit = $LASTEXITCODE
+    $wtWrongBase = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtMain -ExpectedBaseSha ('0' * 40)) -join "`n")
+    $wtWrongBaseExit = $LASTEXITCODE
+    Set-Content (Join-Path $wtMain '.git\MERGE_HEAD') $wtHead
+    $wtMidOp = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtMain) -join "`n")
+    $wtMidOpExit = $LASTEXITCODE
+    Remove-Item (Join-Path $wtMain '.git\MERGE_HEAD') -Force
+
+    $wtShOk = $true
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+        $wmPosix = $wtMain -replace '\\', '/'
+        $wlPosix = $wtLinked -replace '\\', '/'
+        $woPosix = $wtOther -replace '\\', '/'
+        $shRw = (& $gitBash -c "'$guardShPosix' check-wave --repo-root '$wmPosix' --wave-specs 'T1=src/a.ts;T2=src/b.ts' --wave-reads 'T1=src/b.ts;T2=none' --expected-base-sha '$wtHead'") -join "`n"
+        $shRwExit = $LASTEXITCODE
+        $shBaseBad = (& $gitBash -c "'$guardShPosix' check-wave --repo-root '$wmPosix' --wave-specs 'T1=src/a.ts;T2=src/b.ts' --expected-base-sha '0000000000000000000000000000000000000000'") -join "`n"
+        $shBaseBadExit = $LASTEXITCODE
+        $shWtOk = (& $gitBash -c "'$guardShPosix' check-worktree --repo-root '$wlPosix' --expected-root '$wmPosix' --expected-base-sha '$wtHead'") -join "`n"
+        $shWtOkExit = $LASTEXITCODE
+        $shWtWrong = (& $gitBash -c "'$guardShPosix' check-worktree --repo-root '$woPosix' --expected-root '$wmPosix'") -join "`n"
+        $shWtWrongExit = $LASTEXITCODE
+        $wtShOk = ($shRwExit -eq 2) -and ($shRw -match 'WAVE_CONFLICT: rw:src/b\.ts\(T2->T1\)') -and
+                  ($shBaseBadExit -eq 2) -and ($shBaseBad -match 'WAVE_BASE_MISMATCH:') -and
+                  ($shWtOkExit -eq 0) -and ($shWtOk -match 'WORKTREE_OK:') -and
+                  ($shWtWrongExit -eq 2) -and ($shWtWrong -match 'WORKTREE_UNSAFE: root_mismatch')
+    }
+    Push-Location $wtMain; git worktree remove -f $wtLinked 2>$null; Pop-Location
+    if ($cwRwExit -eq 2 -and ($cwRw -match 'WAVE_CONFLICT: rw:src/b\.ts\(T2->T1\)') -and
+        $cwBaseBadExit -eq 2 -and ($cwBaseBad -match 'WAVE_BASE_MISMATCH:') -and
+        $cwDisjointExit -eq 0 -and ($cwDisjoint -match 'WAVE_OK:') -and
+        $wtOkExit -eq 0 -and ($wtOk -match 'WORKTREE_OK:') -and
+        $wtWrongRootExit -eq 2 -and ($wtWrongRoot -match 'WORKTREE_UNSAFE: root_mismatch') -and
+        $wtWrongBaseExit -eq 2 -and ($wtWrongBase -match 'WORKTREE_UNSAFE: base_mismatch') -and
+        $wtMidOpExit -eq 2 -and ($wtMidOp -match 'WORKTREE_UNSAFE: git_op_in_progress') -and $wtShOk) {
+        Pass 'guard-wave-rw-and-worktree'
+    } else {
+        FailCheck 'guard-wave-rw-and-worktree' "rw=(${cwRwExit}:$cwRw) base=(${cwBaseBadExit}:$cwBaseBad) wtOk=(${wtOkExit}:$wtOk) wrongRoot=(${wtWrongRootExit}:$wtWrongRoot) wrongBase=(${wtWrongBaseExit}:$wtWrongBase) mid=(${wtMidOpExit}:$wtMidOp) shOk=$wtShOk"
+    }
+
+    # --- guard-legacy-autodev-fallback (.b3/autodev CURRENT + progress.md + precommit block) ---
+    $adRepo1 = Join-Path $sandbox 'ad-cur-repo'
+    $adRepo2 = Join-Path $sandbox 'ad-prog-repo'
+    New-Item -ItemType Directory -Path (Join-Path $adRepo1 '.b3\autodev\runs\20261121-0100-old') | Out-Null
+    Set-Content (Join-Path $adRepo1 '.b3\autodev\CURRENT') "20261121-0100-old`n"
+    Set-Content (Join-Path $adRepo1 '.b3\autodev\runs\20261121-0100-old\progress.md') "- run_status: running`n"
+    New-Item -ItemType Directory -Path (Join-Path $adRepo2 '.b3\autodev') | Out-Null
+    Set-Content (Join-Path $adRepo2 '.b3\autodev\progress.md') "- run_status: paused`n"
+    Push-Location $adRepo2
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    Set-Content app.ts 'export const x = 1;'
+    git add app.ts; git commit -qm 'init'
+    git add -f .b3\autodev\progress.md
+    $adPc = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $adRepo2 -AllowedPaths 'app.ts') -join "`n")
+    $adPcExit = $LASTEXITCODE
+    Pop-Location
+    $adRes1 = ((& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $adRepo1) -join "`n").Trim()
+    $adRes1Exit = $LASTEXITCODE
+    $adList1 = ((& powershell -NoProfile -File $guardScript list-runs -RepoRoot $adRepo1) -join "`n")
+    $adRes2 = ((& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $adRepo2) -join "`n").Trim()
+    $adRes2Exit = $LASTEXITCODE
+    $adShOk = $true
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+        $ad1Posix = $adRepo1 -replace '\\', '/'
+        $ad2Posix = $adRepo2 -replace '\\', '/'
+        $shAd1 = (& $gitBash -c "'$guardShPosix' resolve-run --repo-root '$ad1Posix'") -join "`n"
+        $shAd1Exit = $LASTEXITCODE
+        $shAdList = (& $gitBash -c "'$guardShPosix' list-runs --repo-root '$ad1Posix'") -join "`n"
+        $shAd2 = (& $gitBash -c "'$guardShPosix' resolve-run --repo-root '$ad2Posix'") -join "`n"
+        $shAd2Exit = $LASTEXITCODE
+        $shAdPc = (& $gitBash -c "'$guardShPosix' precommit --repo-root '$ad2Posix' --allowed-paths 'app.ts'") -join "`n"
+        $shAdPcExit = $LASTEXITCODE
+        $adShOk = ($shAd1Exit -eq 0) -and ($shAd1 -eq '.b3/autodev/runs/20261121-0100-old') -and
+                  ($shAdList -match '\(legacy-autodev\)') -and
+                  ($shAd2Exit -eq 0) -and ($shAd2 -eq '.b3/autodev') -and
+                  ($shAdPcExit -eq 1) -and ($shAdPc -match 'checkpoint staged')
+    }
+    if ($adRes1Exit -eq 0 -and $adRes1 -eq '.b3/autodev/runs/20261121-0100-old' -and
+        ($adList1 -match '\(legacy-autodev\)') -and
+        $adRes2Exit -eq 0 -and $adRes2 -eq '.b3/autodev' -and
+        $adPcExit -eq 1 -and ($adPc -match 'checkpoint staged') -and $adShOk) {
+        Pass 'guard-legacy-autodev-fallback'
+    } else {
+        FailCheck 'guard-legacy-autodev-fallback' "res1=(${adRes1Exit}:$adRes1) res2=(${adRes2Exit}:$adRes2) pc=(${adPcExit}:$adPc) shOk=$adShOk"
+    }
+
     $hopViolations = @()
     foreach ($cs in @(Get-ChildItem (Join-Path $root 'adapters\command-skills') -Recurse -Filter 'SKILL.md' -File)) {
         $csText = Get-Content -LiteralPath $cs.FullName -Raw

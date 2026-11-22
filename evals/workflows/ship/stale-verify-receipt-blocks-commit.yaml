@@ -1,0 +1,10 @@
+id: ship-stale-verify-receipt-001
+artifact: workflows/ship.md
+intent: Stale or mismatched verification receipts must block precommit instead of allowing unverified code to be committed
+scenario: |
+  Agent runs verify-run and produces a valid PASS receipt for src/a.ts
+  Before Commit, an edit modifies src/a.ts (or stages partial Index != WT or stages src/b.ts outside receipt scope) without re-running Verify
+  Agent invokes b3-guard precommit with -RequireVerifyReceipt pointing to T001.verify
+expected_outcome: FAIL
+failure_mode: fake-pass-commit-on-stale-or-unverified-diff
+notes: Re-running b3-guard verify-run on the current working tree before staging resolves the stale receipt gate
