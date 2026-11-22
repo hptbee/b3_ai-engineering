@@ -88,7 +88,9 @@ SHIP_REFS=$(($(file_bytes "workflows/references/ship-templates.md") + $(file_byt
 RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
 [[ "$RL_STRAT_B" -gt 5400 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5400 B)")
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
-RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + $(file_bytes "agents/b3-reviewer.md") + CR_SKILL_B))
+REV_AGENT_B="$(file_bytes "agents/b3-reviewer.md")"
+REV_DELTA_B=$((REV_AGENT_B + CR_SKILL_B))
+RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + REV_AGENT_B + CR_SKILL_B))
 RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md")))
 
 AGENT_ROLES_B=0
@@ -105,6 +107,7 @@ printf "always_on_total   : %6d B (~%4d tok)  [AGENTS.md=%d B, rules=%d B, %d sk
 printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/b3-ship.md]\n" "$SHIP_CORE" "$(est_tok "$SHIP_CORE")" "$WF_SHIP_B"
 printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.md]\n" "$SHIP_REFS" "$(est_tok "$SHIP_REFS")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer + code-review/SKILL.md=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$CR_SKILL_B"
+printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md + code-review/SKILL.md]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"
 printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
 printf "agents_roles_total: %6d B (~%4d tok)  [5 runtime subagent roles excl. README.md]\n" "$AGENT_ROLES_B" "$(est_tok "$AGENT_ROLES_B")"
 printf "max_skill_file    : %6d B  (%s)\n" "$MAX_SKILL" "$MAX_SKILL_FILE"

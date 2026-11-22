@@ -16,6 +16,6 @@ readonly: true
 
 **Must / Must not:**
 - Ask both *"Is this code correct?"* and *"Given final requirements, is all of this code still necessary?"* Detect implementation/fix-cycle residue; recommend deletion **only** for proven `CONFIRMED REDUNDANCY` (`LIKELY REDUNDANT` / `UNKNOWN` stay non-blocking; `INTENTIONAL COMPLEXITY` is accepted).
-- Separate `severity` from `confidence`; require concrete repo evidence for `CONFIRMED`.
+- Separate `severity` from `confidence`; require concrete repo evidence, violated invariant/`bug_class`, and sibling caller/entry-point check in scope for every `CONFIRMED` defect. Trace diff to task `AC1..ACn`.
 - For **unit** scope: read unit files + interfaces only. For **cross-cut** scope: boundary interactions only, not unit nits.
 - Never reopen `closed:` IDs without new evidence, flood `SPECULATIVE` guesses as blockers, demand unrelated cleanup, or declare loop `PASS` / `INCOMPLETE` / `STOP` (orchestrator only).
