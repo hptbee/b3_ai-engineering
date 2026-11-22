@@ -867,6 +867,23 @@ try {
     $vcFail = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $recFail) -join "`n")
     $vcFailExit = $LASTEXITCODE
     $failLogExists = Test-Path -LiteralPath (Join-Path $vrRepo "$recFail.log") -PathType Leaf
+    # >64KB failing output (no SIGPIPE 141, exit strictly 1, full log, capped output), trailing # comment, root '.' path match, and git rm --cached partial mismatch
+    $recBig = '.b3/ship/runs/r1/evidence/big.verify'
+    $vrBig = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd '1..1500 | ForEach-Object { 10001..10010 -join 9 }; exit 2' -ReceiptPath $recBig) -join "`n")
+    $vrBigExit = $LASTEXITCODE
+    $vrComment = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo ok # trailing' -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify' -RelevantPaths '.') -join "`n")
+    $vrCommentExit = $LASTEXITCODE
+    $vcDotOk = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
+    $vcDotOkExit = $LASTEXITCODE
+    Set-Content src\other.ts 'export const o = 99;'
+    $vcDotStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
+    $vcDotStaleExit = $LASTEXITCODE
+    $pcDotOk = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths '.') -join "`n")
+    $pcDotOkExit = $LASTEXITCODE
+    git rm -q --cached src\extra.ts
+    $pcRmCached = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths '.' -RequireVerifyReceipt '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
+    $pcRmCachedExit = $LASTEXITCODE
+    git add src\extra.ts
     # Corrupt & missing receipt
     $recCorrupt = Join-Path $vrRepo '.b3\ship\runs\r1\evidence\bad.verify'
     Set-Content $recCorrupt "schema=b3-verify-v1`nstatus=PASS"
@@ -880,16 +897,23 @@ try {
         $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
         $vrRepoPosix = $vrRepo -replace '\\', '/'
         $shRec = '.b3/ship/runs/r1/evidence/sh.verify'
-        $shPass = (& $gitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd 'echo sh-ok' --receipt-path '$shRec' --task-id T003 --relevant-paths 'src/a.ts'") -join "`n"
+        $shPass = (& $gitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd 'echo sh-ok # sh-comment' --receipt-path '$shRec' --task-id T003 --relevant-paths 'src/a.ts'") -join "`n"
         $shPassExit = $LASTEXITCODE
         # Cross-shell verification: .ps1 verify-check validates .sh receipt and produces identical tree hash
         $psOfSh = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $shRec) -join "`n")
         $psOfShExit = $LASTEXITCODE
         $shPcOk = (& $gitBash -c "'$guardShPosix' precommit --repo-root '$vrRepoPosix' --allowed-paths 'src/a.ts' --require-verify-receipt '$shRec'") -join "`n"
         $shPcOkExit = $LASTEXITCODE
+        $shDot = (& $gitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd 'echo dot-ok' --receipt-path '.b3/ship/runs/r1/evidence/shdot.verify' --relevant-paths '.'") -join "`n"
+        $shDotExit = $LASTEXITCODE
+        $shBigCmd = 'seq 1 15000; exit 2'
+        $shBig = (& $gitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd '$shBigCmd' --receipt-path '.b3/ship/runs/r1/evidence/shbig.verify'") -join "`n"
+        $shBigExit = $LASTEXITCODE
         Set-Content src\a.ts 'export const a = 5;'
         $shStale = (& $gitBash -c "'$guardShPosix' verify-check --repo-root '$vrRepoPosix' --receipt-path '$shRec'") -join "`n"
         $shStaleExit = $LASTEXITCODE
+        $shDotStale = (& $gitBash -c "'$guardShPosix' verify-check --repo-root '$vrRepoPosix' --receipt-path '.b3/ship/runs/r1/evidence/shdot.verify'") -join "`n"
+        $shDotStaleExit = $LASTEXITCODE
         $shFail = (& $gitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd 'echo sh-err; exit 4' --receipt-path '.b3/ship/runs/r1/evidence/shfail.verify' --task-id T004") -join "`n"
         $shFailExit = $LASTEXITCODE
         $shCorrupt = (& $gitBash -c "'$guardShPosix' verify-check --repo-root '$vrRepoPosix' --receipt-path '.b3/ship/runs/r1/evidence/bad.verify'") -join "`n"
@@ -897,7 +921,10 @@ try {
         $vrShOk = ($shPassExit -eq 0) -and ($shPass -match 'VERIFY_PASS:') -and
                   ($psOfShExit -eq 0) -and ($psOfSh -match 'VERIFY_VALID:') -and
                   ($shPcOkExit -eq 0) -and ($shPcOk -eq 'PRECOMMIT_OK') -and
+                  ($shDotExit -eq 0) -and ($shDot -match 'VERIFY_PASS:') -and
+                  ($shBigExit -eq 1) -and ($shBig -match 'VERIFY_FAIL: exit=2 ') -and
                   ($shStaleExit -eq 2) -and ($shStale -match 'VERIFY_STALE:') -and
+                  ($shDotStaleExit -eq 2) -and ($shDotStale -match 'VERIFY_STALE:') -and
                   ($shFailExit -eq 1) -and ($shFail -match 'VERIFY_FAIL:') -and
                   ($shCorruptExit -eq 1) -and ($shCorrupt -match 'VERIFY_CORRUPT:')
     }
@@ -911,12 +938,15 @@ try {
         $vcStaleExit -eq 2 -and ($vcStale -match 'VERIFY_STALE:') -and
         $pcVrStaleExit -eq 1 -and ($pcVrStale -match 'VERIFY_STALE:') -and
         $vrFailExit -eq 1 -and ($vrFail -match 'VERIFY_FAIL:') -and $failLogExists -and
+        $vrBigExit -eq 1 -and ($vrBig -match 'VERIFY_FAIL: exit=2 ') -and
+        $vrCommentExit -eq 0 -and $vcDotOkExit -eq 0 -and $vcDotStaleExit -eq 2 -and
+        $pcDotOkExit -eq 0 -and $pcRmCachedExit -eq 1 -and ($pcRmCached -match 'staged content differs') -and
         $vcFailExit -eq 1 -and ($vcFail -match 'VERIFY_FAILED_RECEIPT:') -and
         $vcCorruptExit -eq 1 -and ($vcCorrupt -match 'VERIFY_CORRUPT:') -and
         $vcMissingExit -eq 1 -and ($vcMissing -match 'VERIFY_MISSING:') -and $vrShOk) {
         Pass 'guard-verify-receipt'
     } else {
-        FailCheck 'guard-verify-receipt' "vrPass=(${vrPassExit}:$vrPass) vcValid=(${vcValidExit}:$vcValid) pcVrOk=(${pcVrOkExit}:$pcVrOk) pcPartial=(${pcPartialExit}:$pcPartial) pcOut=(${pcOutScopeExit}:$pcOutScope) stale=(${vcStaleExit}:$vcStale) vrFail=(${vrFailExit}:$vrFail) vcCorrupt=(${vcCorruptExit}:$vcCorrupt) shOk=$vrShOk"
+        FailCheck 'guard-verify-receipt' "vrPass=(${vrPassExit}:$vrPass) vrBig=(${vrBigExit}:$vrBig) vrCmt=(${vrCommentExit}:$vrComment) vcDot=(${vcDotOkExit}/${vcDotStaleExit}) pcRm=(${pcRmCachedExit}:$pcRmCached) stale=(${vcStaleExit}:$vcStale) shOk=$vrShOk"
     }
 
     # --- guard-safety-tripwires (secrets, destructive SQL non-test vs test, mass delete + AllowMassDelete, MERGE_HEAD) ---
@@ -931,8 +961,9 @@ try {
     1..10 | ForEach-Object { Remove-Item "f$_.ts" }
     Set-Content config\.env 'TOKEN=abc'
     Set-Content config\.env.example 'TOKEN=placeholder'
-    Set-Content migrations\001.sql 'DROP TABLE users;'
-    Set-Content tests\db.test.ts 'const sql = "DROP TABLE users;";'
+    $mkDropSql = 'DROP ' + 'TABLE users;'
+    Set-Content migrations\001.sql $mkDropSql
+    Set-Content tests\db.test.ts "const sql = `"$mkDropSql`";"
     $stOut = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $stRepo -BaseSha $stBase) -join "`n")
     $stExit = $LASTEXITCODE
     $stAllowMd = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $stRepo -BaseSha $stBase -AllowMassDelete) -join "`n")

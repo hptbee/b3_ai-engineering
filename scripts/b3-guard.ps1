@@ -68,7 +68,9 @@ function Split-CsvList([string]$Csv, [switch]$AsPaths) {
 }
 
 function Test-PathMatch([string]$Candidate, [string[]]$Patterns) {
+    if (-not $Candidate) { return $false }
     foreach ($p in $Patterns) {
+        if ($p -eq '.') { return $true }
         if ($Candidate -eq $p) { return $true }
         if ($p -and $Candidate.StartsWith("$p/")) { return $true }
     }
@@ -1441,7 +1443,15 @@ switch ($Command) {
         $fullReceipt = Resolve-TargetPath $RepoRoot $ReceiptPath
         $receiptRel = Get-RepoRelativePath $RepoRoot $fullReceipt
 
-        $wrapper = "`$global:LASTEXITCODE = 0`n& { $VerifyCmd }`nif (-not `$?) { if (`$LASTEXITCODE -and `$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE } else { exit 1 } }`nif (`$LASTEXITCODE -and `$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nexit 0"
+        $psExe = $null
+        try {
+            $procPath = (Get-Process -Id $PID -ErrorAction SilentlyContinue).Path
+            if ($procPath -and ($procPath -match '(powershell|pwsh)(\.exe)?$')) { $psExe = $procPath }
+        } catch {}
+        if (-not $psExe) {
+            $psExe = if (Get-Command powershell -ErrorAction SilentlyContinue) { 'powershell' } else { 'pwsh' }
+        }
+        $wrapper = "`$global:LASTEXITCODE = 0`n& {`n$VerifyCmd`n}`nif (-not `$?) { if (`$LASTEXITCODE -and `$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE } else { exit 1 } }`nif (`$LASTEXITCODE -and `$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nexit 0"
         $encCmd = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wrapper))
 
         $outLines = New-Object System.Collections.Generic.List[string]
@@ -1449,7 +1459,7 @@ switch ($Command) {
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
-            $rawOut = & powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encCmd 2>&1
+            $rawOut = & $psExe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encCmd 2>&1
             $cmdExit = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prevEap

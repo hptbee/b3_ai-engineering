@@ -67,10 +67,11 @@ split_csv_lines() {
 path_in_list() {
   local candidate="$1"
   shift
+  [[ -n "$candidate" ]] || return 1
   local pat
   for pat in "$@"; do
     [[ -z "$pat" ]] && continue
-    if [[ "$candidate" == "$pat" || "$candidate" == "$pat/"* ]]; then
+    if [[ "$pat" == "." || "$candidate" == "$pat" || "$candidate" == "$pat/"* ]]; then
       return 0
     fi
   done
@@ -555,17 +556,17 @@ extract_symbol_decl_ext() {
       re_js1='^[[:space:]]*(export[[:space:]]+)?(default[[:space:]]+)?(async[[:space:]]+)?(function|class|interface|type)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
       re_js2='^[[:space:]]*(export[[:space:]]+)?(const|let)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})[[:space:]]*=[[:space:]]*(async[[:space:]]+)?(\([^)]*\)[[:space:]]*=>|function([^a-zA-Z0-9_]|$))'
       if [[ "$line_body" =~ $re_js1 ]]; then
-        [[ -n "${BASH_REMATCH[1]}" ]] && is_exp="1"
-        sym_name="${BASH_REMATCH[5]}"
+        [[ -n "${BASH_REMATCH[1]:-}" ]] && is_exp="1"
+        sym_name="${BASH_REMATCH[5]:-}"
       elif [[ "$line_body" =~ $re_js2 ]]; then
-        [[ -n "${BASH_REMATCH[1]}" ]] && is_exp="1"
-        sym_name="${BASH_REMATCH[3]}"
+        [[ -n "${BASH_REMATCH[1]:-}" ]] && is_exp="1"
+        sym_name="${BASH_REMATCH[3]:-}"
       fi
       ;;
     .py)
       re_py='^[[:space:]]*(async[[:space:]]+)?(def|class)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
       if [[ "$line_body" =~ $re_py ]]; then
-        sym_name="${BASH_REMATCH[3]}"
+        sym_name="${BASH_REMATCH[3]:-}"
         [[ "${sym_name:0:1}" != "_" ]] && is_exp="1"
       fi
       ;;
@@ -573,35 +574,35 @@ extract_symbol_decl_ext() {
       re_go1='^func[[:space:]]+(\([^)]+\)[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]{2,})[[:space:]]*\('
       re_go2='^type[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})[[:space:]]+'
       if [[ "$line_body" =~ $re_go1 ]]; then
-        sym_name="${BASH_REMATCH[2]}"
+        sym_name="${BASH_REMATCH[2]:-}"
         [[ "${sym_name:0:1}" =~ ^[A-Z]$ ]] && is_exp="1"
       elif [[ "$line_body" =~ $re_go2 ]]; then
-        sym_name="${BASH_REMATCH[1]}"
+        sym_name="${BASH_REMATCH[1]:-}"
         [[ "${sym_name:0:1}" =~ ^[A-Z]$ ]] && is_exp="1"
       fi
       ;;
     .cs|.java)
       re_cs='^[[:space:]]*(public|private|internal|protected)[[:space:]]+((static|async|virtual|override|sealed|abstract)[[:space:]]+)*(class|interface|struct|record|enum)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
       if [[ "$line_body" =~ $re_cs ]]; then
-        sym_name="${BASH_REMATCH[5]}"
-        [[ "${BASH_REMATCH[1]}" == "public" ]] && is_exp="1"
+        sym_name="${BASH_REMATCH[5]:-}"
+        [[ "${BASH_REMATCH[1]:-}" == "public" ]] && is_exp="1"
       fi
       ;;
     .rs)
       re_rs='^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?(fn|struct|enum|trait)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
       if [[ "$line_body" =~ $re_rs ]]; then
-        [[ -n "${BASH_REMATCH[1]}" ]] && is_exp="1"
-        sym_name="${BASH_REMATCH[5]}"
+        [[ -n "${BASH_REMATCH[1]:-}" ]] && is_exp="1"
+        sym_name="${BASH_REMATCH[5]:-}"
       fi
       ;;
     .ps1|.sh)
       re_ps1='^[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_-]{2,})'
       re_sh2='^([A-Za-z_][A-Za-z0-9_]{2,})\(\)[[:space:]]*[{]'
       if [[ "$line_body" =~ $re_ps1 ]]; then
-        sym_name="${BASH_REMATCH[1]}"
+        sym_name="${BASH_REMATCH[1]:-}"
         is_exp="0"
       elif [[ "$ext" == ".sh" && "$line_body" =~ $re_sh2 ]]; then
-        sym_name="${BASH_REMATCH[1]}"
+        sym_name="${BASH_REMATCH[1]:-}"
         is_exp="0"
       fi
       ;;
@@ -625,7 +626,7 @@ resolve_canonical_git_common_dir() {
   fi
   if [[ -d "$gd" ]]; then
     local abs
-    abs="$(cd "$gd" && (pwd -W 2>/dev/null || pwd))"
+    abs="$(cd "$gd" && (pwd -W 2>/dev/null || pwd -P))"
     norm_path "$abs"
   else
     norm_path "$gd"
@@ -1855,7 +1856,7 @@ timestamp_utc=${TS_UTC}
       exit 0
     fi
     printf 'VERIFY_FAIL: exit=%s tree=%s receipt=%s log=%s\n' "$CMD_EXIT" "$SHORT_TREE" "$RECEIPT_REL" "$LOG_DISP"
-    LC_ALL=C tr -d '\r' < "$OUT_TMP" | head -n 35
+    LC_ALL=C awk 'NR <= 35 { sub(/\r$/, ""); print } NR == 35 { exit }' "$OUT_TMP"
     rm -f "$OUT_TMP"
     exit 1
     ;;
