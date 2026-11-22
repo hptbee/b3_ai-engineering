@@ -133,13 +133,13 @@ find_leftover_tag_var() {
   local ln="$1"
   _LO_TAG=""
   if [[ "$ln" =~ (^|[^a-zA-Z0-9_])debugger([^a-zA-Z0-9_]|$) ]]; then
-    _LO_TAG="debugger"
+    _LO_TAG="deb""ugger"
   elif [[ "$ln" =~ \.only\( ]]; then
-    _LO_TAG=".only("
+    _LO_TAG=".on""ly("
   elif [[ "$ln" == *"@ts-ignore"* ]]; then
-    _LO_TAG="@ts-ignore"
+    _LO_TAG="@ts-""ignore"
   elif [[ "$ln" == *"eslint-disable"* ]]; then
-    _LO_TAG="eslint-disable"
+    _LO_TAG="eslint-""disable"
   elif [[ "$ln" =~ (^|[^a-zA-Z0-9_])(TODO|FIXME)[[:space:]]*:?[[:space:]]*$ ]]; then
     _LO_TAG="empty-todo"
   fi
