@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /b3-ship and /b3-review-loop (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree
 set -euo pipefail
 
 _CLEANUP_FILES=()
@@ -16,7 +16,7 @@ trap _cleanup_tmp EXIT
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree [options]" >&2
   exit 1
 fi
 shift
@@ -127,20 +127,26 @@ is_noise_file() {
   esac
 }
 
-find_leftover_tag() {
+find_leftover_tag_var() {
   local LC_ALL=C
   local ln="$1"
+  _LO_TAG=""
   if [[ "$ln" =~ (^|[^a-zA-Z0-9_])debugger([^a-zA-Z0-9_]|$) ]]; then
-    printf 'debugger'
+    _LO_TAG="debugger"
   elif [[ "$ln" =~ \.only\( ]]; then
-    printf '.only('
+    _LO_TAG=".only("
   elif [[ "$ln" == *"@ts-ignore"* ]]; then
-    printf '@ts-ignore'
+    _LO_TAG="@ts-ignore"
   elif [[ "$ln" == *"eslint-disable"* ]]; then
-    printf 'eslint-disable'
+    _LO_TAG="eslint-disable"
   elif [[ "$ln" =~ (^|[^a-zA-Z0-9_])(TODO|FIXME)[[:space:]]*:?[[:space:]]*$ ]]; then
-    printf 'empty-todo'
+    _LO_TAG="empty-todo"
   fi
+}
+
+find_leftover_tag() {
+  find_leftover_tag_var "$1"
+  [[ -n "$_LO_TAG" ]] && printf '%s' "$_LO_TAG"
 }
 
 resolve_auto_base_sha() {
@@ -498,6 +504,143 @@ run_verify_check() {
   _VR_MSG="VERIFY_VALID: task=$_v_task_id scope=$_v_scope tree=${_v_tree_hash:0:12}"
   _VR_REL_PATHS="$_v_relevant_paths"
   return 0
+}
+
+is_test_path() {
+  local low
+  low="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$low" =~ (^|/)(tests?|__tests__)/|\.(test|spec)\. ]]
+}
+
+is_code_path() {
+  local low
+  low="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$low" =~ \.(js|jsx|ts|tsx|mjs|cjs|py|go|cs|java|rs|ps1|sh)$ ]]
+}
+
+has_destructive_sql() {
+  case "$1" in
+    *[Dd][Rr][Oo][Pp]*|*[Tt][Rr][Uu][Nn][Cc][Aa][Tt][Ee]*) ;;
+    *) return 1 ;;
+  esac
+  local low
+  low="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$low" =~ (^|[^a-z0-9_])(drop[[:space:]]+table|drop[[:space:]]+database|truncate[[:space:]]+table)([^a-z0-9_]|$) ]]
+}
+
+is_skip_symbol() {
+  case "$1" in
+    main|init|constructor|render|setup|teardown|default|handler|index|test|describe) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+get_code_ext_lower() {
+  local low
+  low="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$low" =~ (\.[a-z0-9]+)$ ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+
+extract_symbol_decl_ext() {
+  local LC_ALL=C
+  local ext="$1"
+  local line_body="$2"
+  local sym_name=""
+  local is_exp="0"
+
+  local re_js1 re_js2 re_py re_go1 re_go2 re_cs re_rs re_ps1 re_sh2
+  case "$ext" in
+    .js|.jsx|.ts|.tsx|.mjs|.cjs)
+      re_js1='^[[:space:]]*(export[[:space:]]+)?(default[[:space:]]+)?(async[[:space:]]+)?(function|class|interface|type)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
+      re_js2='^[[:space:]]*(export[[:space:]]+)?(const|let)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})[[:space:]]*=[[:space:]]*(async[[:space:]]+)?(\([^)]*\)[[:space:]]*=>|function([^a-zA-Z0-9_]|$))'
+      if [[ "$line_body" =~ $re_js1 ]]; then
+        [[ -n "${BASH_REMATCH[1]}" ]] && is_exp="1"
+        sym_name="${BASH_REMATCH[5]}"
+      elif [[ "$line_body" =~ $re_js2 ]]; then
+        [[ -n "${BASH_REMATCH[1]}" ]] && is_exp="1"
+        sym_name="${BASH_REMATCH[3]}"
+      fi
+      ;;
+    .py)
+      re_py='^[[:space:]]*(async[[:space:]]+)?(def|class)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
+      if [[ "$line_body" =~ $re_py ]]; then
+        sym_name="${BASH_REMATCH[3]}"
+        [[ "${sym_name:0:1}" != "_" ]] && is_exp="1"
+      fi
+      ;;
+    .go)
+      re_go1='^func[[:space:]]+(\([^)]+\)[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]{2,})[[:space:]]*\('
+      re_go2='^type[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})[[:space:]]+'
+      if [[ "$line_body" =~ $re_go1 ]]; then
+        sym_name="${BASH_REMATCH[2]}"
+        [[ "${sym_name:0:1}" =~ ^[A-Z]$ ]] && is_exp="1"
+      elif [[ "$line_body" =~ $re_go2 ]]; then
+        sym_name="${BASH_REMATCH[1]}"
+        [[ "${sym_name:0:1}" =~ ^[A-Z]$ ]] && is_exp="1"
+      fi
+      ;;
+    .cs|.java)
+      re_cs='^[[:space:]]*(public|private|internal|protected)[[:space:]]+((static|async|virtual|override|sealed|abstract)[[:space:]]+)*(class|interface|struct|record|enum)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
+      if [[ "$line_body" =~ $re_cs ]]; then
+        sym_name="${BASH_REMATCH[5]}"
+        [[ "${BASH_REMATCH[1]}" == "public" ]] && is_exp="1"
+      fi
+      ;;
+    .rs)
+      re_rs='^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?(async[[:space:]]+)?(fn|struct|enum|trait)[[:space:]]+([A-Za-z_][A-Za-z0-9_]{2,})'
+      if [[ "$line_body" =~ $re_rs ]]; then
+        [[ -n "${BASH_REMATCH[1]}" ]] && is_exp="1"
+        sym_name="${BASH_REMATCH[5]}"
+      fi
+      ;;
+    .ps1|.sh)
+      re_ps1='^[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_-]{2,})'
+      re_sh2='^([A-Za-z_][A-Za-z0-9_]{2,})\(\)[[:space:]]*[{]'
+      if [[ "$line_body" =~ $re_ps1 ]]; then
+        sym_name="${BASH_REMATCH[1]}"
+        is_exp="0"
+      elif [[ "$ext" == ".sh" && "$line_body" =~ $re_sh2 ]]; then
+        sym_name="${BASH_REMATCH[1]}"
+        is_exp="0"
+      fi
+      ;;
+  esac
+
+  [[ -n "$sym_name" ]] || return 1
+  if is_skip_symbol "$sym_name"; then return 1; fi
+  _SYM_NAME="$sym_name"
+  _SYM_EXP="$is_exp"
+  return 0
+}
+
+resolve_canonical_git_common_dir() {
+  local dir="$1"
+  local gd
+  gd="$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null || true)"
+  gd="$(trim_str "$gd")"
+  [[ -n "$gd" ]] || return 1
+  if [[ "$gd" != /* && ! "$gd" =~ ^[A-Za-z]: ]]; then
+    gd="${dir}/${gd}"
+  fi
+  if [[ -d "$gd" ]]; then
+    local abs
+    abs="$(cd "$gd" && (pwd -W 2>/dev/null || pwd))"
+    norm_path "$abs"
+  else
+    norm_path "$gd"
+  fi
+}
+
+paths_equal_fs() {
+  local a b
+  a="$(norm_path "$1")"
+  b="$(norm_path "$2")"
+  if [[ "$a" =~ ^[A-Za-z]: || "$b" =~ ^[A-Za-z]: ]]; then
+    a="$(printf '%s' "$a" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    b="$(printf '%s' "$b" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
+  [[ "$a" == "$b" ]]
 }
 
 case "$CMD" in
@@ -961,6 +1104,7 @@ case "$CMD" in
     ALLOWED=""
     IGNORE_DIRTY=""
     OBSOLETES=""
+    ALLOW_MASS_DELETE=false
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
@@ -969,6 +1113,7 @@ case "$CMD" in
         --allowed-paths) ALLOWED="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         --obsoletes) OBSOLETES="${2:-}"; shift 2 ;;
+        --allow-mass-delete) ALLOW_MASS_DELETE=true; shift ;;
         *) echo "MECHANICAL_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
@@ -1020,7 +1165,7 @@ case "$CMD" in
     while IFS= read -r line; do
       p="$(norm_path "$line")"
       [[ -z "$p" ]] && continue
-      [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+      is_checkpoint_dir "$p" && continue
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
       ALL_CHANGED+=("$p")
     done < <(printf '%s\n%s\n' "$CH_OUT" "$UN_OUT")
@@ -1034,6 +1179,16 @@ case "$CMD" in
       done
     fi
 
+    SAFETY_HITS=()
+    if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
+      for p in "${ALL_CHANGED[@]}"; do
+        if is_secret_path "$p"; then
+          SAFETY_HITS+=("secret_path:${p}")
+        fi
+      done
+    fi
+    SQL_HIT_COUNT=0
+
     if [[ -n "$TARGET_REF" ]]; then
       DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "MECHANICAL_FAIL: git diff -U0 failed"; exit 1; }
     else
@@ -1043,12 +1198,14 @@ case "$CMD" in
     CUR_FILE=""
     CUR_LINE=0
     SKIP_FILE=true
+    CUR_IS_TEST=false
     IN_HUNK=false
     while IFS= read -r ln; do
       ln="${ln%$'\r'}"
       if [[ "$ln" == "diff --git "* ]]; then
         CUR_FILE=""
         SKIP_FILE=true
+        CUR_IS_TEST=false
         IN_HUNK=false
         continue
       fi
@@ -1056,17 +1213,23 @@ case "$CMD" in
         if [[ "$ln" == "+++ /dev/null" ]]; then
           CUR_FILE=""
           SKIP_FILE=true
+          CUR_IS_TEST=false
         else
           cand="${ln#+++ }"
           cand="${cand#b/}"
           CUR_FILE="$(norm_path "$cand")"
           SKIP_FILE=false
-          if [[ -z "$CUR_FILE" || "$CUR_FILE" == ".b3/ship" || "$CUR_FILE" == ".b3/ship/"* || "$CUR_FILE" == *.md ]]; then
+          if [[ -z "$CUR_FILE" ]] || is_checkpoint_dir "$CUR_FILE" || [[ "$CUR_FILE" == *.md ]]; then
             SKIP_FILE=true
           elif is_noise_file "$CUR_FILE"; then
             SKIP_FILE=true
           elif [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$CUR_FILE" "${IGNORE_ARR[@]}"; then
             SKIP_FILE=true
+          fi
+          if ! $SKIP_FILE && is_test_path "$CUR_FILE"; then
+            CUR_IS_TEST=true
+          else
+            CUR_IS_TEST=false
           fi
         fi
         continue
@@ -1079,9 +1242,13 @@ case "$CMD" in
       if ! $IN_HUNK || $SKIP_FILE; then continue; fi
       if [[ "$ln" == "+"* ]]; then
         body="${ln#+}"
-        tag="$(find_leftover_tag "$body")"
-        if [[ -n "$tag" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
-          LEFTOVER_HITS+=("${CUR_FILE}:${CUR_LINE}:${tag}")
+        find_leftover_tag_var "$body"
+        if [[ -n "$_LO_TAG" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
+          LEFTOVER_HITS+=("${CUR_FILE}:${CUR_LINE}:${_LO_TAG}")
+        fi
+        if ! $CUR_IS_TEST && has_destructive_sql "$body" && [[ $SQL_HIT_COUNT -lt 10 ]]; then
+          SAFETY_HITS+=("destructive_sql:${CUR_FILE}:${CUR_LINE}")
+          SQL_HIT_COUNT=$((SQL_HIT_COUNT + 1))
         fi
         CUR_LINE=$((CUR_LINE + 1))
       fi
@@ -1095,21 +1262,49 @@ case "$CMD" in
 
     if [[ ${#UN_SORTED[@]} -gt 0 ]]; then
       for u in "${UN_SORTED[@]}"; do
-        [[ ${#LEFTOVER_HITS[@]} -ge 10 ]] && break
-        [[ "$u" == ".b3/ship" || "$u" == ".b3/ship/"* || "$u" == *.md ]] && continue
+        if [[ ${#LEFTOVER_HITS[@]} -ge 10 && $SQL_HIT_COUNT -ge 10 ]]; then break; fi
+        if is_checkpoint_dir "$u" || [[ "$u" == *.md ]]; then continue; fi
         is_noise_file "$u" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$u" "${IGNORE_ARR[@]}"; then continue; fi
         [[ -f "${REPO_ROOT}/${u}" ]] || continue
+        u_is_test=false
+        is_test_path "$u" && u_is_test=true
         lno=0
         while IFS= read -r fl || [[ -n "$fl" ]]; do
           lno=$((lno + 1))
           fl="${fl%$'\r'}"
-          tag="$(find_leftover_tag "$fl")"
-          if [[ -n "$tag" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
-            LEFTOVER_HITS+=("${u}:${lno}:${tag}")
+          find_leftover_tag_var "$fl"
+          if [[ -n "$_LO_TAG" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
+            LEFTOVER_HITS+=("${u}:${lno}:${_LO_TAG}")
+          fi
+          if ! $u_is_test && has_destructive_sql "$fl" && [[ $SQL_HIT_COUNT -lt 10 ]]; then
+            SAFETY_HITS+=("destructive_sql:${u}:${lno}")
+            SQL_HIT_COUNT=$((SQL_HIT_COUNT + 1))
           fi
         done < "${REPO_ROOT}/${u}"
       done
+    fi
+
+    if [[ -n "$TARGET_REF" ]]; then
+      DEL_OUT="$(git -C "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed"; exit 1; }
+    else
+      DEL_OUT="$(git -C "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed"; exit 1; }
+    fi
+    DEL_ARR=()
+    while IFS= read -r line; do
+      dp="$(norm_path "$line")"
+      [[ -n "$dp" ]] || continue
+      is_checkpoint_dir "$dp" && continue
+      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$dp" "${IGNORE_ARR[@]}"; then continue; fi
+      is_noise_file "$dp" && continue
+      DEL_ARR+=("$dp")
+    done <<< "$DEL_OUT"
+    DEL_COUNT=0
+    if [[ ${#DEL_ARR[@]} -gt 0 ]]; then
+      DEL_COUNT="$(printf '%s\n' "${DEL_ARR[@]}" | LC_ALL=C sort -u | wc -l | tr -d ' ')"
+    fi
+    if [[ $DEL_COUNT -ge 10 ]] && ! $ALLOW_MASS_DELETE; then
+      SAFETY_HITS+=("mass_delete:${DEL_COUNT}f")
     fi
 
     OBS_HITS=()
@@ -1164,9 +1359,13 @@ case "$CMD" in
     if [[ ${#OBS_HITS[@]} -gt 0 ]]; then
       OB_OUT="$(printf '%s\n' "${OBS_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
     fi
+    SF_OUT="none"
+    if [[ ${#SAFETY_HITS[@]} -gt 0 ]]; then
+      SF_OUT="$(printf '%s\n' "${SAFETY_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    fi
 
-    printf 'scope_creep=%s\nleftovers=%s\nobsolete_hits=%s\n' "$SC_OUT" "$LO_OUT" "$OB_OUT"
-    if [[ "$SC_OUT" == "none" && "$LO_OUT" == "none" && "$OB_OUT" == "none" ]]; then
+    printf 'scope_creep=%s\nleftovers=%s\nobsolete_hits=%s\nsafety_hits=%s\n' "$SC_OUT" "$LO_OUT" "$OB_OUT" "$SF_OUT"
+    if [[ "$SC_OUT" == "none" && "$LO_OUT" == "none" && "$OB_OUT" == "none" && "$SF_OUT" == "none" ]]; then
       echo "MECHANICAL_OK"
       exit 0
     fi
@@ -1175,15 +1374,40 @@ case "$CMD" in
     ;;
 
   check-wave)
+    REPO_ROOT="."
     WAVE_SPECS=""
+    WAVE_READS=""
+    EXPECTED_BASE_SHA=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --wave-specs) WAVE_SPECS="${2:-}"; shift 2 ;;
+        --wave-reads) WAVE_READS="${2:-}"; shift 2 ;;
+        --expected-base-sha) EXPECTED_BASE_SHA="${2:-}"; shift 2 ;;
         *) echo "WAVE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
     WAVE_SPECS="$(trim_str "$WAVE_SPECS")"
     [[ -n "$WAVE_SPECS" ]] || { echo "WAVE_FAIL: missing --wave-specs"; exit 1; }
+
+    EXPECTED_BASE_SHA="$(trim_str "$EXPECTED_BASE_SHA")"
+    if [[ -n "$EXPECTED_BASE_SHA" ]]; then
+      MID_OP="$(check_git_mid_operation "$REPO_ROOT")"
+      if [[ -n "$MID_OP" ]]; then
+        echo "WAVE_BASE_MISMATCH: git_op_in_progress($MID_OP)"
+        exit 2
+      fi
+      ACT_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+      ACT_HEAD="$(trim_str "$ACT_HEAD")"
+      if [[ -z "$ACT_HEAD" ]]; then
+        echo "WAVE_BASE_MISMATCH: git rev-parse HEAD failed"
+        exit 2
+      fi
+      if [[ "$ACT_HEAD" != "$EXPECTED_BASE_SHA" ]]; then
+        echo "WAVE_BASE_MISMATCH: expected=${EXPECTED_BASE_SHA} actual=${ACT_HEAD}"
+        exit 2
+      fi
+    fi
 
     TASK_IDS=()
     TASK_PATHS_PACKED=()
@@ -1222,6 +1446,43 @@ case "$CMD" in
     fi
     [[ ${#TASK_IDS[@]} -gt 0 ]] || { echo "WAVE_FAIL: no tasks in --wave-specs"; exit 1; }
 
+    READ_IDS=()
+    READ_PATHS_PACKED=()
+    WAVE_READS="$(trim_str "$WAVE_READS")"
+    if [[ -n "$WAVE_READS" ]]; then
+      IFS=';' read -ra RENTRIES <<< "$WAVE_READS"
+      if [[ ${#RENTRIES[@]} -gt 0 ]]; then
+        for entry in "${RENTRIES[@]}"; do
+          trim_e="$(trim_str "$entry")"
+          [[ -z "$trim_e" ]] && continue
+          if [[ "$trim_e" != *"="* ]]; then
+            echo "WAVE_FAIL: invalid WaveReads entry '$trim_e' (expected TaskId=path1,path2)"
+            exit 1
+          fi
+          rtid="$(trim_str "${trim_e%%=*}")"
+          rcsv="${trim_e#*=}"
+          [[ -n "$rtid" ]] || { echo "WAVE_FAIL: empty task id in WaveReads '$trim_e'"; exit 1; }
+          if [[ ${#READ_IDS[@]} -gt 0 ]]; then
+            for prev_rt in "${READ_IDS[@]}"; do
+              if [[ "$prev_rt" == "$rtid" ]]; then
+                echo "WAVE_FAIL: duplicate task id '$rtid' in WaveReads"
+                exit 1
+              fi
+            done
+          fi
+          r_arr=()
+          while IFS= read -r rp; do [[ -n "$rp" ]] && r_arr+=("$rp"); done < <(split_csv_lines "$rcsv" true | LC_ALL=C sort -u)
+          READ_IDS+=("$rtid")
+          if [[ ${#r_arr[@]} -gt 0 ]]; then
+            rpacked="$(printf '%s\n' "${r_arr[@]}" | paste -sd '|' -)"
+          else
+            rpacked=""
+          fi
+          READ_PATHS_PACKED+=("$rpacked")
+        done
+      fi
+    fi
+
     CONFLICTS=()
     n_tasks="${#TASK_IDS[@]}"
     for ((i = 0; i < n_tasks; i++)); do
@@ -1241,6 +1502,29 @@ case "$CMD" in
         done
       done
     done
+
+    if [[ ${#READ_IDS[@]} -gt 0 ]]; then
+      n_reads="${#READ_IDS[@]}"
+      for ((i = 0; i < n_tasks; i++)); do
+        ti="${TASK_IDS[$i]}"
+        IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
+        for ((k = 0; k < n_reads; k++)); do
+          tj="${READ_IDS[$k]}"
+          [[ "$ti" == "$tj" ]] && continue
+          [[ -z "${READ_PATHS_PACKED[$k]}" ]] && continue
+          IFS='|' read -ra rj_arr <<< "${READ_PATHS_PACKED[$k]}"
+          for pi in "${pi_arr[@]}"; do
+            for rj in "${rj_arr[@]}"; do
+              if [[ "$pi" == "$rj" ]]; then
+                CONFLICTS+=("rw:${pi}(${ti}->${tj})")
+              elif [[ "$pi" == "." || "$rj" == "." || "$pi" == "$rj/"* || "$rj" == "$pi/"* ]]; then
+                CONFLICTS+=("rw:${pi}<->${rj}(${ti}->${tj})")
+              fi
+            done
+          done
+        done
+      done
+    fi
 
     if [[ ${#CONFLICTS[@]} -gt 0 ]]; then
       C_STR="$(printf '%s\n' "${CONFLICTS[@]}" | LC_ALL=C sort -u | awk 'NR>1{printf ", "} {printf "%s", $0}')"
@@ -1594,6 +1878,385 @@ timestamp_utc=${TS_UTC}
     set -e
     printf '%s\n' "$_VR_MSG"
     exit "$RC"
+    ;;
+
+  symbol-check)
+    REPO_ROOT="."
+    BASE_SHA=""
+    TARGET_REF=""
+    IGNORE_DIRTY=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
+        --target-ref) TARGET_REF="${2:-}"; shift 2 ;;
+        --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
+        *) echo "SYMBOL_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+
+    IGNORE_ARR=()
+    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+
+    TARGET_REF="$(trim_str "$TARGET_REF")"
+    TARGET_COMMIT_SHA=""
+    if [[ -n "$TARGET_REF" ]]; then
+      if [[ "$TARGET_REF" == -* ]]; then
+        echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+      if ! TARGET_COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" 2>/dev/null)"; then
+        echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+      TARGET_COMMIT_SHA="$(trim_str "$TARGET_COMMIT_SHA")"
+      if [[ -z "$TARGET_COMMIT_SHA" ]]; then
+        echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
+        exit 1
+      fi
+    fi
+
+    BASE_SHA="$(trim_str "$BASE_SHA")"
+    if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
+      if [[ -n "$TARGET_REF" ]]; then
+        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
+      elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
+      else
+        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
+      fi
+    fi
+
+    if [[ -n "$TARGET_REF" ]]; then
+      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "SYMBOL_FAIL: git diff -U0 failed"; exit 1; }
+    else
+      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA")" || { echo "SYMBOL_FAIL: git diff -U0 failed"; exit 1; }
+    fi
+
+    REM_KEYS=()
+    REM_EXPS=()
+    ADD_KEYS=()
+    ADD_EXPS=()
+
+    _sym_upsert() {
+      local kind="$1" f="$2" s="$3" e="$4" idx
+      if [[ "$kind" == "rem" ]]; then
+        if [[ ${#REM_KEYS[@]} -gt 0 ]]; then
+          for ((idx = 0; idx < ${#REM_KEYS[@]}; idx++)); do
+            if [[ "${REM_KEYS[$idx]}" == "${f}|${s}" ]]; then
+              [[ "$e" == "1" ]] && REM_EXPS[$idx]="1"
+              return 0
+            fi
+          done
+        fi
+        REM_KEYS+=("${f}|${s}")
+        REM_EXPS+=("$e")
+      else
+        if [[ ${#ADD_KEYS[@]} -gt 0 ]]; then
+          for ((idx = 0; idx < ${#ADD_KEYS[@]}; idx++)); do
+            if [[ "${ADD_KEYS[$idx]}" == "${f}|${s}" ]]; then
+              [[ "$e" == "1" ]] && ADD_EXPS[$idx]="1"
+              return 0
+            fi
+          done
+        fi
+        ADD_KEYS+=("${f}|${s}")
+        ADD_EXPS+=("$e")
+      fi
+    }
+
+    _sym_exists() {
+      local kind="$1" f="$2" s="$3" k
+      if [[ "$kind" == "rem" ]]; then
+        [[ ${#REM_KEYS[@]} -gt 0 ]] || return 1
+        for k in "${REM_KEYS[@]}"; do [[ "$k" == "${f}|${s}" ]] && return 0; done
+      else
+        [[ ${#ADD_KEYS[@]} -gt 0 ]] || return 1
+        for k in "${ADD_KEYS[@]}"; do [[ "$k" == "${f}|${s}" ]] && return 0; done
+      fi
+      return 1
+    }
+
+    OLD_FILE=""
+    NEW_FILE=""
+    OLD_EXT=""
+    NEW_EXT=""
+    SKIP_OLD=true
+    SKIP_NEW=true
+    IN_HUNK=false
+    while IFS= read -r ln; do
+      ln="${ln%$'\r'}"
+      if [[ "$ln" == "diff --git "* ]]; then
+        OLD_FILE=""; NEW_FILE=""; OLD_EXT=""; NEW_EXT=""; SKIP_OLD=true; SKIP_NEW=true; IN_HUNK=false
+        continue
+      fi
+      if ! $IN_HUNK && [[ "$ln" == "--- "* ]]; then
+        if [[ "$ln" == "--- /dev/null" ]]; then
+          OLD_FILE=""; OLD_EXT=""; SKIP_OLD=true
+        else
+          cand="${ln#--- }"
+          cand="${cand#a/}"
+          OLD_FILE="$(norm_path "$cand")"
+          SKIP_OLD=false
+          if [[ -z "$OLD_FILE" ]] || is_checkpoint_dir "$OLD_FILE" || is_noise_file "$OLD_FILE" || ! is_code_path "$OLD_FILE"; then
+            SKIP_OLD=true
+          elif [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$OLD_FILE" "${IGNORE_ARR[@]}"; then
+            SKIP_OLD=true
+          else
+            OLD_EXT="$(get_code_ext_lower "$OLD_FILE")" || SKIP_OLD=true
+          fi
+        fi
+        continue
+      fi
+      if ! $IN_HUNK && [[ "$ln" == "+++ "* ]]; then
+        if [[ "$ln" == "+++ /dev/null" ]]; then
+          NEW_FILE=""; NEW_EXT=""; SKIP_NEW=true
+        else
+          cand="${ln#+++ }"
+          cand="${cand#b/}"
+          NEW_FILE="$(norm_path "$cand")"
+          SKIP_NEW=false
+          if [[ -z "$NEW_FILE" ]] || is_checkpoint_dir "$NEW_FILE" || is_noise_file "$NEW_FILE" || ! is_code_path "$NEW_FILE"; then
+            SKIP_NEW=true
+          elif [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$NEW_FILE" "${IGNORE_ARR[@]}"; then
+            SKIP_NEW=true
+          else
+            NEW_EXT="$(get_code_ext_lower "$NEW_FILE")" || SKIP_NEW=true
+          fi
+        fi
+        continue
+      fi
+      if [[ "$ln" =~ ^@@\ -[0-9,]+\ \+[0-9,]+\ @@ ]] || [[ "$ln" =~ ^@@\ -[0-9]+\ \+[0-9]+\ @@ ]] || [[ "$ln" =~ ^@@\ -[0-9,]+\ \+[0-9]+\ @@ ]] || [[ "$ln" =~ ^@@\ -[0-9]+\ \+[0-9,]+\ @@ ]]; then
+        IN_HUNK=true
+        continue
+      fi
+      if ! $IN_HUNK; then continue; fi
+      if [[ "$ln" == "-"* ]] && ! $SKIP_OLD; then
+        if extract_symbol_decl_ext "$OLD_EXT" "${ln#-}"; then
+          _sym_upsert rem "$OLD_FILE" "$_SYM_NAME" "$_SYM_EXP"
+        fi
+      elif [[ "$ln" == "+"* ]] && ! $SKIP_NEW; then
+        if extract_symbol_decl_ext "$NEW_EXT" "${ln#+}"; then
+          _sym_upsert add "$NEW_FILE" "$_SYM_NAME" "$_SYM_EXP"
+        fi
+      fi
+    done <<< "$DIFF_U0"
+
+    if [[ -z "$TARGET_REF" ]]; then
+      UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "SYMBOL_FAIL: git ls-files failed"; exit 1; }
+      while IFS= read -r u; do
+        u="$(norm_path "$u")"
+        [[ -n "$u" ]] || continue
+        is_checkpoint_dir "$u" && continue
+        is_noise_file "$u" && continue
+        is_code_path "$u" || continue
+        if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$u" "${IGNORE_ARR[@]}"; then continue; fi
+        [[ -f "${REPO_ROOT}/${u}" ]] || continue
+        u_ext="$(get_code_ext_lower "$u")" || continue
+        while IFS= read -r fl || [[ -n "$fl" ]]; do
+          fl="${fl%$'\r'}"
+          if extract_symbol_decl_ext "$u_ext" "$fl"; then
+            _sym_upsert add "$u" "$_SYM_NAME" "$_SYM_EXP"
+          fi
+        done < "${REPO_ROOT}/${u}"
+      done < <(printf '%s\n' "$UN_OUT" | LC_ALL=C sort -u)
+    fi
+
+    REMOVED_SYMS=()
+    EXPORTED_REMOVED=()
+    DANGLING_REFS=()
+    ORPHAN_INTERNAL=()
+    REM_CHECKED="|"
+
+    if [[ ${#REM_KEYS[@]} -gt 0 ]]; then
+      for ((idx = 0; idx < ${#REM_KEYS[@]}; idx++)); do
+        k="${REM_KEYS[$idx]}"
+        is_exp="${REM_EXPS[$idx]}"
+        f="${k%%|*}"
+        s_name="${k#*|}"
+        _sym_exists add "$f" "$s_name" && continue
+        REMOVED_SYMS+=("$s_name")
+        [[ "$is_exp" == "1" ]] && EXPORTED_REMOVED+=("$s_name")
+        if [[ "$REM_CHECKED" == *"|${s_name}|"* ]]; then continue; fi
+        REM_CHECKED="${REM_CHECKED}${s_name}|"
+
+        set +e
+        if [[ -n "$TARGET_REF" ]]; then
+          g_out="$(git -C "$REPO_ROOT" grep -w -F -l -e "$s_name" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+        else
+          g_out="$(git -C "$REPO_ROOT" grep --untracked -w -F -l -e "$s_name" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+        fi
+        g_code=$?
+        set -e
+        if [[ $g_code -gt 1 ]]; then
+          echo "SYMBOL_FAIL: git grep failed for '$s_name'"
+          exit 1
+        fi
+        if [[ $g_code -eq 0 && -n "$g_out" ]]; then
+          hit_files=()
+          cprefix="${TARGET_COMMIT_SHA}:"
+          while IFS= read -r row; do
+            row="$(trim_str "$row")"
+            [[ -n "$row" ]] || continue
+            if [[ -n "$TARGET_REF" && "$row" == "${cprefix}"* ]]; then
+              row="${row#${cprefix}}"
+            fi
+            np="$(norm_path "$row")"
+            [[ -n "$np" ]] || continue
+            is_checkpoint_dir "$np" && continue
+            if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$np" "${IGNORE_ARR[@]}"; then continue; fi
+            is_noise_file "$np" && continue
+            is_code_path "$np" || continue
+            hit_files+=("$np")
+          done <<< "$g_out"
+          if [[ ${#hit_files[@]} -gt 0 ]]; then
+            f_cnt="$(printf '%s\n' "${hit_files[@]}" | LC_ALL=C sort -u | wc -l | tr -d ' ')"
+            if [[ $f_cnt -gt 0 ]]; then
+              DANGLING_REFS+=("${s_name}(${f_cnt}f)")
+            fi
+          fi
+        fi
+      done
+    fi
+
+    if [[ ${#ADD_KEYS[@]} -gt 0 ]]; then
+      for ((idx = 0; idx < ${#ADD_KEYS[@]}; idx++)); do
+        k="${ADD_KEYS[$idx]}"
+        is_exp="${ADD_EXPS[$idx]}"
+        [[ "$is_exp" == "1" ]] && continue
+        f="${k%%|*}"
+        s_name="${k#*|}"
+        is_test_path "$f" && continue
+        _sym_exists rem "$f" "$s_name" && continue
+
+        set +e
+        if [[ -n "$TARGET_REF" ]]; then
+          gn_out="$(git -C "$REPO_ROOT" grep -w -F -n -e "$s_name" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+        else
+          gn_out="$(git -C "$REPO_ROOT" grep --untracked -w -F -n -e "$s_name" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+        fi
+        gn_code=$?
+        set -e
+        if [[ $gn_code -gt 1 ]]; then
+          echo "SYMBOL_FAIL: git grep -n failed for '$s_name'"
+          exit 1
+        fi
+        line_hits=0
+        if [[ $gn_code -eq 0 && -n "$gn_out" ]]; then
+          cprefix="${TARGET_COMMIT_SHA}:"
+          while IFS= read -r row; do
+            row="$(trim_str "$row")"
+            [[ -n "$row" ]] || continue
+            if [[ -n "$TARGET_REF" && "$row" == "${cprefix}"* ]]; then
+              row="${row#${cprefix}}"
+            fi
+            [[ "$row" == *":"* ]] || continue
+            np="$(norm_path "${row%%:*}")"
+            [[ -n "$np" ]] || continue
+            is_checkpoint_dir "$np" && continue
+            if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$np" "${IGNORE_ARR[@]}"; then continue; fi
+            is_noise_file "$np" && continue
+            is_code_path "$np" || continue
+            line_hits=$((line_hits + 1))
+          done <<< "$gn_out"
+        fi
+        if [[ $line_hits -le 1 ]]; then
+          ORPHAN_INTERNAL+=("${f}:${s_name}")
+        fi
+      done
+    fi
+
+    REM_OUT="none"
+    [[ ${#REMOVED_SYMS[@]} -gt 0 ]] && REM_OUT="$(printf '%s\n' "${REMOVED_SYMS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    EXP_OUT="none"
+    [[ ${#EXPORTED_REMOVED[@]} -gt 0 ]] && EXP_OUT="$(printf '%s\n' "${EXPORTED_REMOVED[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    DAN_OUT="none"
+    [[ ${#DANGLING_REFS[@]} -gt 0 ]] && DAN_OUT="$(printf '%s\n' "${DANGLING_REFS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    ORP_OUT="none"
+    [[ ${#ORPHAN_INTERNAL[@]} -gt 0 ]] && ORP_OUT="$(printf '%s\n' "${ORPHAN_INTERNAL[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+
+    printf 'removed_symbols=%s\nexported_removed=%s\ndangling_refs=%s\norphan_internal=%s\n' "$REM_OUT" "$EXP_OUT" "$DAN_OUT" "$ORP_OUT"
+    if [[ "$DAN_OUT" == "none" && "$ORP_OUT" == "none" ]]; then
+      echo "SYMBOL_OK"
+      exit 0
+    fi
+    echo "SYMBOL_FINDINGS"
+    exit 2
+    ;;
+
+  check-worktree)
+    REPO_ROOT="."
+    EXPECTED_ROOT=""
+    EXPECTED_BASE_SHA=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --expected-root) EXPECTED_ROOT="${2:-}"; shift 2 ;;
+        --expected-base-sha) EXPECTED_BASE_SHA="${2:-}"; shift 2 ;;
+        *) echo "WORKTREE_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+
+    if [[ ! -d "$REPO_ROOT" ]]; then
+      echo "WORKTREE_UNSAFE: missing_repo_root(${REPO_ROOT})"
+      exit 2
+    fi
+    TOP_RAW="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+    TOP_RAW="$(trim_str "$TOP_RAW")"
+    if [[ -z "$TOP_RAW" ]]; then
+      echo "WORKTREE_UNSAFE: not_a_git_repo"
+      exit 2
+    fi
+    HEAD_RAW="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+    HEAD_RAW="$(trim_str "$HEAD_RAW")"
+    if [[ ! "$HEAD_RAW" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "WORKTREE_UNSAFE: unborn_or_invalid_head"
+      exit 2
+    fi
+    ACTUAL_ROOT_NORM="$(norm_path "$TOP_RAW")"
+
+    MID_OP="$(check_git_mid_operation "$REPO_ROOT")"
+    if [[ -n "$MID_OP" ]]; then
+      echo "WORKTREE_UNSAFE: git_op_in_progress(${MID_OP})"
+      exit 2
+    fi
+
+    EXPECTED_ROOT="$(trim_str "$EXPECTED_ROOT")"
+    if [[ -n "$EXPECTED_ROOT" ]]; then
+      if [[ ! -d "$EXPECTED_ROOT" ]]; then
+        echo "WORKTREE_UNSAFE: expected_root_missing(${EXPECTED_ROOT})"
+        exit 2
+      fi
+      EXP_TOP_RAW="$(git -C "$EXPECTED_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+      EXP_TOP_RAW="$(trim_str "$EXP_TOP_RAW")"
+      if [[ -z "$EXP_TOP_RAW" ]]; then
+        echo "WORKTREE_UNSAFE: expected_root_not_git(${EXPECTED_ROOT})"
+        exit 2
+      fi
+      EXP_TOP_NORM="$(norm_path "$EXP_TOP_RAW")"
+      ACT_COMMON="$(resolve_canonical_git_common_dir "$REPO_ROOT" || true)"
+      EXP_COMMON="$(resolve_canonical_git_common_dir "$EXPECTED_ROOT" || true)"
+
+      TOP_SAME=false
+      COMMON_SAME=false
+      if paths_equal_fs "$ACTUAL_ROOT_NORM" "$EXP_TOP_NORM"; then TOP_SAME=true; fi
+      if [[ -n "$ACT_COMMON" && -n "$EXP_COMMON" ]] && paths_equal_fs "$ACT_COMMON" "$EXP_COMMON"; then COMMON_SAME=true; fi
+      if ! $TOP_SAME && ! $COMMON_SAME; then
+        echo "WORKTREE_UNSAFE: root_mismatch(expected=${EXP_TOP_NORM},actual=${ACTUAL_ROOT_NORM})"
+        exit 2
+      fi
+    fi
+
+    EXPECTED_BASE_SHA="$(trim_str "$EXPECTED_BASE_SHA")"
+    if [[ -n "$EXPECTED_BASE_SHA" ]]; then
+      if [[ "$HEAD_RAW" != "$EXPECTED_BASE_SHA" ]]; then
+        echo "WORKTREE_UNSAFE: base_mismatch(expected=${EXPECTED_BASE_SHA},actual=${HEAD_RAW})"
+        exit 2
+      fi
+    fi
+
+    printf 'WORKTREE_OK: root=%s head=%s\n' "$ACTUAL_ROOT_NORM" "$HEAD_RAW"
+    exit 0
     ;;
 
   *)

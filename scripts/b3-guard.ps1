@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -482,6 +482,96 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
     return @{ Code = 0; Message = "VERIFY_VALID: task=$($kv['task_id']) scope=$($kv['scope']) tree=$shortTree"; RelevantPathsCsv = $kv['relevant_paths'] }
 }
 
+function Test-TestPath([string]$PathVal) {
+    return ($PathVal -match '(?i)(^|/)(tests?|__tests__)/|\.(test|spec)\.')
+}
+
+function Test-CodePath([string]$PathVal) {
+    return ($PathVal -match '\.(js|jsx|ts|tsx|mjs|cjs|py|go|cs|java|rs|ps1|sh)$')
+}
+
+function Find-DestructiveSql([string]$Line) {
+    return ($Line -match '(?i)\b(DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE\s+TABLE)\b')
+}
+
+$script:SkipSymbolNames = @('main', 'init', 'constructor', 'render', 'setup', 'teardown', 'default', 'handler', 'index', 'test', 'describe')
+
+function Extract-SymbolDecl([string]$FilePath, [string]$LineBody) {
+    $norm = $FilePath.ToLowerInvariant()
+    if ($norm -notmatch '(\.[a-z0-9]+)$') { return $null }
+    $ext = $Matches[1]
+    $symName = $null
+    $isExp = $false
+
+    switch ($ext) {
+        { $_ -in @('.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs') } {
+            if ($LineBody -cmatch '^[ \t]*(export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?(?:function|class|interface|type)[ \t]+([A-Za-z_][A-Za-z0-9_]{2,})') {
+                $isExp = [bool]$Matches[1]
+                $symName = $Matches[2]
+            } elseif ($LineBody -cmatch '^[ \t]*(export[ \t]+)?(?:const|let)[ \t]+([A-Za-z_][A-Za-z0-9_]{2,})[ \t]*=[ \t]*(?:async[ \t]+)?(?:\([^)]*\)[ \t]*=>|function([^a-zA-Z0-9_]|$))') {
+                $isExp = [bool]$Matches[1]
+                $symName = $Matches[2]
+            }
+        }
+        '.py' {
+            if ($LineBody -cmatch '^[ \t]*(?:async[ \t]+)?(?:def|class)[ \t]+([A-Za-z_][A-Za-z0-9_]{2,})') {
+                $symName = $Matches[1]
+                $isExp = -not $symName.StartsWith('_')
+            }
+        }
+        '.go' {
+            if ($LineBody -cmatch '^func[ \t]+(?:\([^)]+\)[ \t]+)?([A-Za-z_][A-Za-z0-9_]{2,})[ \t]*\(') {
+                $symName = $Matches[1]
+                $isExp = ($symName.Substring(0, 1) -cmatch '^[A-Z]$')
+            } elseif ($LineBody -cmatch '^type[ \t]+([A-Za-z_][A-Za-z0-9_]{2,})[ \t]+') {
+                $symName = $Matches[1]
+                $isExp = ($symName.Substring(0, 1) -cmatch '^[A-Z]$')
+            }
+        }
+        { $_ -in @('.cs', '.java') } {
+            if ($LineBody -cmatch '^[ \t]*(public|private|internal|protected)[ \t]+(?:(?:static|async|virtual|override|sealed|abstract)[ \t]+)*(?:class|interface|struct|record|enum)[ \t]+([A-Za-z_][A-Za-z0-9_]{2,})') {
+                $symName = $Matches[2]
+                $isExp = ($Matches[1] -ceq 'public')
+            }
+        }
+        '.rs' {
+            if ($LineBody -cmatch '^[ \t]*(pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?(?:fn|struct|enum|trait)[ \t]+([A-Za-z_][A-Za-z0-9_]{2,})') {
+                $isExp = [bool]$Matches[1]
+                $symName = $Matches[2]
+            }
+        }
+        { $_ -in @('.ps1', '.sh') } {
+            if ($LineBody -cmatch '^[ \t]*function[ \t]+([A-Za-z_][A-Za-z0-9_-]{2,})') {
+                $symName = $Matches[1]
+                $isExp = $false
+            } elseif ($ext -eq '.sh' -and $LineBody -cmatch '^([A-Za-z_][A-Za-z0-9_]{2,})\(\)[ \t]*\{') {
+                $symName = $Matches[1]
+                $isExp = $false
+            }
+        }
+    }
+
+    if (-not $symName) { return $null }
+    if ($script:SkipSymbolNames -ccontains $symName) { return $null }
+    return @{ Name = $symName; Exported = $isExp }
+}
+
+function Get-CanonicalGitCommonDir([string]$Dir) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $gd = (& git -C $Dir rev-parse --git-common-dir 2>$null | Out-String).Trim()
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($code -ne 0 -or -not $gd) { return $null }
+    if (-not [IO.Path]::IsPathRooted($gd)) {
+        $gd = Join-Path $Dir ($gd -replace '/', '\')
+    }
+    return (Normalize-PathValue ([IO.Path]::GetFullPath($gd)))
+}
+
 switch ($Command) {
     'fingerprint' {
         $trimmedScope = $Scope.Trim()
@@ -863,11 +953,11 @@ switch ($Command) {
         foreach ($row in @($changedRaw)) {
             if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
             $p = Normalize-PathValue ([string]$row)
-            if (-not $p -or $p -match '^\.b3/ship(/|$)' -or (Test-PathMatch $p $ignored)) { continue }
+            if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $p $ignored)) { continue }
             if (-not $allChanged.Contains($p)) { $allChanged.Add($p) }
         }
         foreach ($u in $untracked) {
-            if (-not $u -or $u -match '^\.b3/ship(/|$)' -or (Test-PathMatch $u $ignored)) { continue }
+            if (-not $u -or $u -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $u $ignored)) { continue }
             if (-not $allChanged.Contains($u)) { $allChanged.Add($u) }
         }
 
@@ -879,6 +969,14 @@ switch ($Command) {
         }
 
         $leftoverHits = New-Object System.Collections.Generic.List[string]
+        $safetyHits = New-Object System.Collections.Generic.List[string]
+        foreach ($p in $allChanged) {
+            if (Test-SecretPath $p) {
+                $safetyHits.Add("secret_path:$p")
+            }
+        }
+        $sqlHitCount = 0
+
         $ErrorActionPreference = 'Continue'
         try {
             if ($targetTrim) {
@@ -915,7 +1013,7 @@ switch ($Command) {
                     $cand = $ln.Substring(4)
                     if ($cand.StartsWith('b/')) { $cand = $cand.Substring(2) }
                     $curFile = Normalize-PathValue $cand
-                    $skipFile = (-not $curFile) -or ($curFile -match '^\.b3/ship(/|$)') -or (Test-PathMatch $curFile $ignored) -or (Test-NoiseFile $curFile) -or ($curFile -match '\.md$')
+                    $skipFile = (-not $curFile) -or ($curFile -match '^\.b3/(ship|autodev)(/|$)') -or (Test-PathMatch $curFile $ignored) -or (Test-NoiseFile $curFile) -or ($curFile -match '\.md$')
                 }
                 continue
             }
@@ -931,23 +1029,58 @@ switch ($Command) {
                 if ($tag -and $leftoverHits.Count -lt 10) {
                     $leftoverHits.Add("${curFile}:${curLine}:${tag}")
                 }
+                if (-not (Test-TestPath $curFile) -and (Find-DestructiveSql $body) -and $sqlHitCount -lt 10) {
+                    $safetyHits.Add("destructive_sql:${curFile}:${curLine}")
+                    $sqlHitCount++
+                }
                 $curLine++
             }
         }
 
         foreach ($u in @(Sort-Ordinal $untracked)) {
-            if ($leftoverHits.Count -ge 10) { break }
-            if (-not $u -or $u -match '^\.b3/ship(/|$)' -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or ($u -match '\.md$')) { continue }
+            if ($leftoverHits.Count -ge 10 -and $sqlHitCount -ge 10) { break }
+            if (-not $u -or $u -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or ($u -match '\.md$')) { continue }
             $full = Join-Path $RepoRoot ($u -replace '/', '\')
             if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+            $isUTest = Test-TestPath $u
             $lno = 0
             foreach ($fl in @(Get-Content -LiteralPath $full -ErrorAction SilentlyContinue)) {
                 $lno++
-                $tag = Find-LeftoverTag ([string]$fl)
+                $flStr = [string]$fl
+                $tag = Find-LeftoverTag $flStr
                 if ($tag -and $leftoverHits.Count -lt 10) {
                     $leftoverHits.Add("${u}:${lno}:${tag}")
                 }
+                if (-not $isUTest -and (Find-DestructiveSql $flStr) -and $sqlHitCount -lt 10) {
+                    $safetyHits.Add("destructive_sql:${u}:${lno}")
+                    $sqlHitCount++
+                }
             }
+        }
+
+        $ErrorActionPreference = 'Continue'
+        try {
+            if ($targetTrim) {
+                $delRaw = & git -C $RepoRoot diff --no-renames --diff-filter=D --name-only $resolvedBase $targetCommitSha -- 2>&1
+            } else {
+                $delRaw = & git -C $RepoRoot diff --no-renames --diff-filter=D --name-only $resolvedBase 2>&1
+            }
+            $delCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($delCode -ne 0) {
+            Fail ("MECHANICAL_FAIL: git diff --diff-filter=D failed: " + ($delRaw | Out-String).Trim()) 1
+        }
+        $deletedList = New-Object System.Collections.Generic.List[string]
+        foreach ($row in @($delRaw)) {
+            if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
+            $dp = Normalize-PathValue ([string]$row)
+            if (-not $dp -or $dp -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $dp $ignored) -or (Test-NoiseFile $dp)) { continue }
+            if (-not $deletedList.Contains($dp)) { $deletedList.Add($dp) }
+        }
+        if ($deletedList.Count -ge 10 -and -not $AllowMassDelete) {
+            $safetyHits.Add("mass_delete:$($deletedList.Count)f")
         }
 
         $obsoleteHits = New-Object System.Collections.Generic.List[string]
@@ -997,11 +1130,13 @@ switch ($Command) {
         $scOut = if ($scopeCreep.Count -gt 0) { (Sort-Ordinal $scopeCreep.ToArray()) -join ',' } else { 'none' }
         $loOut = if ($leftoverHits.Count -gt 0) { $leftoverHits -join ',' } else { 'none' }
         $obOut = if ($obsoleteHits.Count -gt 0) { (Sort-Ordinal $obsoleteHits.ToArray()) -join ',' } else { 'none' }
+        $sfOut = if ($safetyHits.Count -gt 0) { (Sort-Ordinal $safetyHits.ToArray()) -join ',' } else { 'none' }
 
         Write-Output "scope_creep=$scOut"
         Write-Output "leftovers=$loOut"
         Write-Output "obsolete_hits=$obOut"
-        if ($scOut -eq 'none' -and $loOut -eq 'none' -and $obOut -eq 'none') {
+        Write-Output "safety_hits=$sfOut"
+        if ($scOut -eq 'none' -and $loOut -eq 'none' -and $obOut -eq 'none' -and $sfOut -eq 'none') {
             Write-Output 'MECHANICAL_OK'
             exit 0
         }
@@ -1011,6 +1146,29 @@ switch ($Command) {
 
     'check-wave' {
         if (-not $WaveSpecs -or -not $WaveSpecs.Trim()) { Fail 'WAVE_FAIL: missing -WaveSpecs' 1 }
+
+        if ($ExpectedBaseSha -and $ExpectedBaseSha.Trim()) {
+            $expBase = $ExpectedBaseSha.Trim()
+            $midOp = Test-GitMidOperation $RepoRoot
+            if ($midOp) {
+                Fail "WAVE_BASE_MISMATCH: git_op_in_progress($midOp)" 2
+            }
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $actHead = (& git -C $RepoRoot rev-parse HEAD 2>$null | Out-String).Trim()
+                $headCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($headCode -ne 0 -or -not $actHead) {
+                Fail 'WAVE_BASE_MISMATCH: git rev-parse HEAD failed' 2
+            }
+            if ($actHead -cne $expBase) {
+                Fail "WAVE_BASE_MISMATCH: expected=$expBase actual=$actHead" 2
+            }
+        }
+
         $taskOrder = New-Object System.Collections.Generic.List[string]
         $taskPaths = @{}
         $totalPaths = 0
@@ -1032,6 +1190,22 @@ switch ($Command) {
         }
         if ($taskOrder.Count -lt 1) { Fail 'WAVE_FAIL: no tasks in -WaveSpecs' 1 }
 
+        $readPaths = @{}
+        if ($WaveReads -and $WaveReads.Trim()) {
+            foreach ($entry in ($WaveReads -split ';')) {
+                $trimEntry = $entry.Trim()
+                if (-not $trimEntry) { continue }
+                $eqIdx = $trimEntry.IndexOf('=')
+                if ($eqIdx -lt 0) { Fail "WAVE_FAIL: invalid WaveReads entry '$trimEntry' (expected TaskId=path1,path2)" 1 }
+                $rtid = $trimEntry.Substring(0, $eqIdx).Trim()
+                $rCsv = $trimEntry.Substring($eqIdx + 1)
+                if (-not $rtid) { Fail "WAVE_FAIL: empty task id in WaveReads '$trimEntry'" 1 }
+                if ($readPaths.ContainsKey($rtid)) { Fail "WAVE_FAIL: duplicate task id '$rtid' in WaveReads" 1 }
+                $rArr = @(Split-CsvList $rCsv -AsPaths)
+                $readPaths[$rtid] = $rArr
+            }
+        }
+
         $conflicts = New-Object System.Collections.Generic.List[string]
         for ($i = 0; $i -lt $taskOrder.Count; $i++) {
             for ($j = $i + 1; $j -lt $taskOrder.Count; $j++) {
@@ -1043,6 +1217,21 @@ switch ($Command) {
                             $conflicts.Add("${pi}(${ti},${tj})")
                         } elseif ($pi -eq '.' -or $pj -eq '.' -or $pi.StartsWith("$pj/") -or $pj.StartsWith("$pi/")) {
                             $conflicts.Add("${pi}<->${pj}(${ti},${tj})")
+                        }
+                    }
+                }
+            }
+        }
+
+        foreach ($ti in $taskOrder) {
+            foreach ($tj in @($readPaths.Keys)) {
+                if ($ti -ceq $tj) { continue }
+                foreach ($pi in $taskPaths[$ti]) {
+                    foreach ($rj in $readPaths[$tj]) {
+                        if ($pi -eq $rj) {
+                            $conflicts.Add("rw:${pi}(${ti}->${tj})")
+                        } elseif ($pi -eq '.' -or $rj -eq '.' -or $pi.StartsWith("$rj/") -or $rj.StartsWith("$pi/")) {
+                            $conflicts.Add("rw:${pi}<->${rj}(${ti}->${tj})")
                         }
                     }
                 }
@@ -1320,5 +1509,297 @@ switch ($Command) {
         $res = Test-VerifyReceipt $RepoRoot $ReceiptPath $ignored
         Write-Output $res.Message
         exit $res.Code
+    }
+
+    'symbol-check' {
+        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $targetTrim = $TargetRef.Trim()
+        $targetCommitSha = ''
+        $prev = $ErrorActionPreference
+        if ($targetTrim) {
+            if ($targetTrim.StartsWith('-')) {
+                Fail "SYMBOL_FAIL: invalid -TargetRef '$targetTrim'" 1
+            }
+            $ErrorActionPreference = 'Continue'
+            try {
+                $targetCommitSha = (& git -C $RepoRoot rev-parse --verify --quiet "${targetTrim}^{commit}" 2>$null | Out-String).Trim()
+                $trCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($trCode -ne 0 -or -not $targetCommitSha) {
+                Fail "SYMBOL_FAIL: invalid -TargetRef '$targetTrim'" 1
+            }
+        }
+
+        $resolvedBase = $BaseSha.Trim()
+        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+            if ($targetTrim) {
+                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha
+            } else {
+                $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
+            }
+        }
+
+        $ErrorActionPreference = 'Continue'
+        try {
+            if ($targetTrim) {
+                $diffLines = & git -C $RepoRoot diff --no-renames -U0 $resolvedBase $targetCommitSha -- 2>&1
+            } else {
+                $diffLines = & git -C $RepoRoot diff --no-renames -U0 $resolvedBase 2>&1
+            }
+            $dlCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($dlCode -ne 0) {
+            Fail ("SYMBOL_FAIL: git diff -U0 failed: " + ($diffLines | Out-String).Trim()) 1
+        }
+
+        $removedByFile = @{}
+        $addedByFile = @{}
+        $oldFile = ''
+        $newFile = ''
+        $skipOld = $true
+        $skipNew = $true
+        $inHunk = $false
+
+        foreach ($rawLine in @($diffLines)) {
+            if ($rawLine -is [System.Management.Automation.ErrorRecord]) { continue }
+            $ln = ([string]$rawLine).Replace("`r", '')
+            if ($ln.StartsWith('diff --git ')) {
+                $oldFile = ''; $newFile = ''; $skipOld = $true; $skipNew = $true; $inHunk = $false
+                continue
+            }
+            if (-not $inHunk -and $ln.StartsWith('--- ')) {
+                if ($ln -eq '--- /dev/null') {
+                    $oldFile = ''; $skipOld = $true
+                } else {
+                    $cand = $ln.Substring(4)
+                    if ($cand.StartsWith('a/')) { $cand = $cand.Substring(2) }
+                    $oldFile = Normalize-PathValue $cand
+                    $skipOld = (-not $oldFile) -or ($oldFile -match '^\.b3/(ship|autodev)(/|$)') -or (Test-PathMatch $oldFile $ignored) -or (Test-NoiseFile $oldFile) -or (-not (Test-CodePath $oldFile))
+                }
+                continue
+            }
+            if (-not $inHunk -and $ln.StartsWith('+++ ')) {
+                if ($ln -eq '+++ /dev/null') {
+                    $newFile = ''; $skipNew = $true
+                } else {
+                    $cand = $ln.Substring(4)
+                    if ($cand.StartsWith('b/')) { $cand = $cand.Substring(2) }
+                    $newFile = Normalize-PathValue $cand
+                    $skipNew = (-not $newFile) -or ($newFile -match '^\.b3/(ship|autodev)(/|$)') -or (Test-PathMatch $newFile $ignored) -or (Test-NoiseFile $newFile) -or (-not (Test-CodePath $newFile))
+                }
+                continue
+            }
+            if ($ln -match '^@@ -[0-9,]+ \+[0-9,]+ @@') {
+                $inHunk = $true
+                continue
+            }
+            if (-not $inHunk) { continue }
+            if ($ln.StartsWith('-') -and -not $skipOld) {
+                $sym = Extract-SymbolDecl $oldFile $ln.Substring(1)
+                if ($sym) {
+                    if (-not $removedByFile.ContainsKey($oldFile)) { $removedByFile[$oldFile] = @{} }
+                    $prevExp = if ($removedByFile[$oldFile].ContainsKey($sym.Name)) { [bool]$removedByFile[$oldFile][$sym.Name] } else { $false }
+                    $removedByFile[$oldFile][$sym.Name] = ($prevExp -or $sym.Exported)
+                }
+            } elseif ($ln.StartsWith('+') -and -not $skipNew) {
+                $sym = Extract-SymbolDecl $newFile $ln.Substring(1)
+                if ($sym) {
+                    if (-not $addedByFile.ContainsKey($newFile)) { $addedByFile[$newFile] = @{} }
+                    $prevExp = if ($addedByFile[$newFile].ContainsKey($sym.Name)) { [bool]$addedByFile[$newFile][$sym.Name] } else { $false }
+                    $addedByFile[$newFile][$sym.Name] = ($prevExp -or $sym.Exported)
+                }
+            }
+        }
+
+        if (-not $targetTrim) {
+            $untracked = @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard'))
+            foreach ($u in @(Sort-Ordinal $untracked)) {
+                if (-not $u -or $u -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or (-not (Test-CodePath $u))) { continue }
+                $full = Join-Path $RepoRoot ($u -replace '/', '\')
+                if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+                foreach ($fl in @(Get-Content -LiteralPath $full -ErrorAction SilentlyContinue)) {
+                    $sym = Extract-SymbolDecl $u ([string]$fl)
+                    if ($sym) {
+                        if (-not $addedByFile.ContainsKey($u)) { $addedByFile[$u] = @{} }
+                        $prevExp = if ($addedByFile[$u].ContainsKey($sym.Name)) { [bool]$addedByFile[$u][$sym.Name] } else { $false }
+                        $addedByFile[$u][$sym.Name] = ($prevExp -or $sym.Exported)
+                    }
+                }
+            }
+        }
+
+        $removedSyms = New-Object System.Collections.Generic.List[string]
+        $exportedRemoved = New-Object System.Collections.Generic.List[string]
+        $danglingRefs = New-Object System.Collections.Generic.List[string]
+        $orphanInternal = New-Object System.Collections.Generic.List[string]
+
+        $remChecked = @{}
+        foreach ($f in @($removedByFile.Keys)) {
+            foreach ($sName in @($removedByFile[$f].Keys)) {
+                if ($addedByFile.ContainsKey($f) -and $addedByFile[$f].ContainsKey($sName)) { continue }
+                $isExp = [bool]$removedByFile[$f][$sName]
+                if (-not $removedSyms.Contains($sName)) { $removedSyms.Add($sName) }
+                if ($isExp -and -not $exportedRemoved.Contains($sName)) { $exportedRemoved.Add($sName) }
+                if ($remChecked.ContainsKey($sName)) { continue }
+                $remChecked[$sName] = $true
+
+                $ErrorActionPreference = 'Continue'
+                try {
+                    if ($targetTrim) {
+                        $gOut = & git -C $RepoRoot grep -w -F -l -e $sName $targetCommitSha -- . ':(exclude).b3' ':(exclude)*.md' 2>$null
+                    } else {
+                        $gOut = & git -C $RepoRoot grep --untracked -w -F -l -e $sName -- . ':(exclude).b3' ':(exclude)*.md' 2>$null
+                    }
+                    $gCode = $LASTEXITCODE
+                } finally {
+                    $ErrorActionPreference = $prev
+                }
+                if ($gCode -gt 1) { Fail "SYMBOL_FAIL: git grep failed for '$sName'" 1 }
+                if ($gCode -eq 0) {
+                    $hitFiles = New-Object System.Collections.Generic.List[string]
+                    $commitPrefix = "${targetCommitSha}:"
+                    foreach ($row in @($gOut)) {
+                        if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
+                        $rStr = ([string]$row).Trim()
+                        if (-not $rStr) { continue }
+                        if ($targetTrim -and $rStr.StartsWith($commitPrefix)) { $rStr = $rStr.Substring($commitPrefix.Length) }
+                        $np = Normalize-PathValue $rStr
+                        if (-not $np -or $np -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $np $ignored) -or (Test-NoiseFile $np) -or (-not (Test-CodePath $np))) { continue }
+                        if (-not $hitFiles.Contains($np)) { $hitFiles.Add($np) }
+                    }
+                    if ($hitFiles.Count -gt 0) {
+                        $danglingRefs.Add("${sName}($($hitFiles.Count)f)")
+                    }
+                }
+            }
+        }
+
+        foreach ($f in @($addedByFile.Keys)) {
+            if (Test-TestPath $f) { continue }
+            foreach ($sName in @($addedByFile[$f].Keys)) {
+                $isExp = [bool]$addedByFile[$f][$sName]
+                if ($isExp) { continue }
+                if ($removedByFile.ContainsKey($f) -and $removedByFile[$f].ContainsKey($sName)) { continue }
+
+                $ErrorActionPreference = 'Continue'
+                try {
+                    if ($targetTrim) {
+                        $gnOut = & git -C $RepoRoot grep -w -F -n -e $sName $targetCommitSha -- . ':(exclude).b3' ':(exclude)*.md' 2>$null
+                    } else {
+                        $gnOut = & git -C $RepoRoot grep --untracked -w -F -n -e $sName -- . ':(exclude).b3' ':(exclude)*.md' 2>$null
+                    }
+                    $gnCode = $LASTEXITCODE
+                } finally {
+                    $ErrorActionPreference = $prev
+                }
+                if ($gnCode -gt 1) { Fail "SYMBOL_FAIL: git grep -n failed for '$sName'" 1 }
+                $lineHits = 0
+                if ($gnCode -eq 0) {
+                    $commitPrefix = "${targetCommitSha}:"
+                    foreach ($row in @($gnOut)) {
+                        if ($row -is [System.Management.Automation.ErrorRecord]) { continue }
+                        $rStr = ([string]$row).Trim()
+                        if (-not $rStr) { continue }
+                        if ($targetTrim -and $rStr.StartsWith($commitPrefix)) { $rStr = $rStr.Substring($commitPrefix.Length) }
+                        $cIdx = $rStr.IndexOf(':')
+                        if ($cIdx -lt 1) { continue }
+                        $np = Normalize-PathValue ($rStr.Substring(0, $cIdx))
+                        if (-not $np -or $np -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $np $ignored) -or (Test-NoiseFile $np) -or (-not (Test-CodePath $np))) { continue }
+                        $lineHits++
+                    }
+                }
+                if ($lineHits -le 1) {
+                    $orphanInternal.Add("${f}:${sName}")
+                }
+            }
+        }
+
+        $remOut = if ($removedSyms.Count -gt 0) { (Sort-Ordinal $removedSyms.ToArray()) -join ',' } else { 'none' }
+        $expOut = if ($exportedRemoved.Count -gt 0) { (Sort-Ordinal $exportedRemoved.ToArray()) -join ',' } else { 'none' }
+        $danOut = if ($danglingRefs.Count -gt 0) { (Sort-Ordinal $danglingRefs.ToArray()) -join ',' } else { 'none' }
+        $orpOut = if ($orphanInternal.Count -gt 0) { (Sort-Ordinal $orphanInternal.ToArray()) -join ',' } else { 'none' }
+
+        Write-Output "removed_symbols=$remOut"
+        Write-Output "exported_removed=$expOut"
+        Write-Output "dangling_refs=$danOut"
+        Write-Output "orphan_internal=$orpOut"
+        if ($danOut -eq 'none' -and $orpOut -eq 'none') {
+            Write-Output 'SYMBOL_OK'
+            exit 0
+        }
+        Write-Output 'SYMBOL_FINDINGS'
+        exit 2
+    }
+
+    'check-worktree' {
+        if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
+            Fail "WORKTREE_UNSAFE: missing_repo_root($RepoRoot)" 2
+        }
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $topRaw = (& git -C $RepoRoot rev-parse --show-toplevel 2>$null | Out-String).Trim()
+            $topCode = $LASTEXITCODE
+            $headRaw = (& git -C $RepoRoot rev-parse HEAD 2>$null | Out-String).Trim()
+            $headCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($topCode -ne 0 -or -not $topRaw) {
+            Fail 'WORKTREE_UNSAFE: not_a_git_repo' 2
+        }
+        if ($headCode -ne 0 -or $headRaw -notmatch '^[0-9a-f]{40}$') {
+            Fail 'WORKTREE_UNSAFE: unborn_or_invalid_head' 2
+        }
+        $actualRootNorm = Normalize-PathValue $topRaw
+
+        $midOp = Test-GitMidOperation $RepoRoot
+        if ($midOp) {
+            Fail "WORKTREE_UNSAFE: git_op_in_progress($midOp)" 2
+        }
+
+        if ($ExpectedRoot -and $ExpectedRoot.Trim()) {
+            $expDir = $ExpectedRoot.Trim()
+            if (-not (Test-Path -LiteralPath $expDir -PathType Container)) {
+                Fail "WORKTREE_UNSAFE: expected_root_missing($expDir)" 2
+            }
+            $ErrorActionPreference = 'Continue'
+            try {
+                $expTopRaw = (& git -C $expDir rev-parse --show-toplevel 2>$null | Out-String).Trim()
+                $expTopCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($expTopCode -ne 0 -or -not $expTopRaw) {
+                Fail "WORKTREE_UNSAFE: expected_root_not_git($expDir)" 2
+            }
+            $expTopNorm = Normalize-PathValue $expTopRaw
+            $actCommon = Get-CanonicalGitCommonDir $RepoRoot
+            $expCommon = Get-CanonicalGitCommonDir $expDir
+
+            $isWin = ([IO.Path]::DirectorySeparatorChar -eq '\')
+            $topSame = if ($isWin) { $actualRootNorm -ieq $expTopNorm } else { $actualRootNorm -ceq $expTopNorm }
+            $commonSame = $false
+            if ($actCommon -and $expCommon) {
+                $commonSame = if ($isWin) { $actCommon -ieq $expCommon } else { $actCommon -ceq $expCommon }
+            }
+            if (-not $topSame -and -not $commonSame) {
+                Fail "WORKTREE_UNSAFE: root_mismatch(expected=$expTopNorm,actual=$actualRootNorm)" 2
+            }
+        }
+
+        if ($ExpectedBaseSha -and $ExpectedBaseSha.Trim()) {
+            $expSha = $ExpectedBaseSha.Trim()
+            if ($headRaw -cne $expSha) {
+                Fail "WORKTREE_UNSAFE: base_mismatch(expected=$expSha,actual=$headRaw)" 2
+            }
+        }
+
+        Write-Output "WORKTREE_OK: root=$actualRootNorm head=$headRaw"
+        exit 0
     }
 }
