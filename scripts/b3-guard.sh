@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /b3-ship and /b3-review-loop (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check
 set -euo pipefail
+
+_CLEANUP_FILES=()
+_cleanup_tmp() {
+  if [[ ${#_CLEANUP_FILES[@]} -gt 0 ]]; then
+    local f
+    for f in "${_CLEANUP_FILES[@]}"; do
+      [[ -n "$f" && -f "$f" ]] && rm -f "$f" || true
+    done
+  fi
+}
+trap _cleanup_tmp EXIT
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check [options]" >&2
   exit 1
 fi
 shift
@@ -180,6 +191,315 @@ resolve_auto_base_for_target() {
   printf '%s' "$target_commit_sha"
 }
 
+is_checkpoint_dir() {
+  [[ "$1" == ".b3/ship" || "$1" == ".b3/ship/"* || "$1" == ".b3/autodev" || "$1" == ".b3/autodev/"* ]]
+}
+
+is_secret_path() {
+  local leaf="${1##*/}"
+  leaf="$(printf '%s' "$leaf" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ -n "$leaf" ]] || return 1
+  if [[ "$leaf" == ".env" ]]; then return 0; fi
+  if [[ "$leaf" == .env.* ]]; then
+    if [[ "$leaf" =~ ^\.env\.(example|sample|template)$ ]]; then return 1; fi
+    return 0
+  fi
+  if [[ "$leaf" =~ \.(pem|key|p12|pfx)$ ]]; then return 0; fi
+  case "$leaf" in
+    id_rsa|id_ed25519|credentials.json) return 0 ;;
+  esac
+  return 1
+}
+
+resolve_git_dir() {
+  local root="$1"
+  local gd
+  gd="$(git -C "$root" rev-parse --git-dir 2>/dev/null || true)"
+  gd="$(trim_str "$gd")"
+  [[ -n "$gd" ]] || return 1
+  if [[ "$gd" != /* && ! "$gd" =~ ^[A-Za-z]: ]]; then
+    gd="${root}/${gd}"
+  fi
+  printf '%s' "$gd"
+}
+
+check_git_mid_operation() {
+  local root="$1"
+  local git_dir marker
+  git_dir="$(resolve_git_dir "$root")" || return 0
+  for marker in MERGE_HEAD REBASE_HEAD rebase-merge rebase-apply CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    if [[ -e "${git_dir}/${marker}" ]]; then
+      printf '%s' "$marker"
+      return 0
+    fi
+  done
+}
+
+resolve_target_path() {
+  local root="$1"
+  local p
+  p="$(trim_str "$2")"
+  [[ -n "$p" ]] || return 1
+  if [[ "$p" == /* || "$p" =~ ^[A-Za-z]: ]]; then
+    printf '%s' "$p"
+  else
+    printf '%s' "${root}/${p#./}"
+  fi
+}
+
+repo_rel_path() {
+  local root="$1"
+  local full="$2"
+  local rn fn rn_low fn_low
+  rn="$(norm_path "$root")"
+  fn="$(norm_path "$full")"
+  if [[ "$rn" == "." ]]; then
+    printf '%s' "$fn"
+    return 0
+  fi
+  rn_low="$(printf '%s' "$rn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fn_low="$(printf '%s' "$fn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  if [[ "$fn_low" == "$rn_low/"* ]]; then
+    printf '%s' "${fn:${#rn}+1}"
+  elif [[ "$fn_low" == "$rn_low" ]]; then
+    printf '.'
+  else
+    printf '%s' "$fn"
+  fi
+}
+
+write_atomic_lf_file() {
+  local dest="$1"
+  local content="$2"
+  local parent tmp
+  parent="$(dirname "$dest")"
+  mkdir -p "$parent"
+  tmp="${dest}.tmp.$$.${RANDOM}"
+  _CLEANUP_FILES+=("$tmp")
+  printf '%s' "$content" | LC_ALL=C tr -d '\r' > "$tmp"
+  mv -f "$tmp" "$dest"
+}
+
+compute_tree_fingerprint() {
+  local root="$1"
+  local rel_csv="$2"
+  local ign_csv="$3"
+  local head_sha
+  head_sha="$(git -C "$root" rev-parse HEAD 2>&1)" || { echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"; return 1; }
+  head_sha="$(trim_str "$head_sha")"
+  if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"
+    return 1
+  fi
+
+  local -a ign_arr=()
+  while IFS= read -r p; do [[ -n "$p" ]] && ign_arr+=("$p"); done < <(split_csv_lines "$ign_csv" true | LC_ALL=C sort -u)
+
+  local had_rel=false
+  local -a clean_rel=()
+  local -a raw_rel=()
+  while IFS= read -r p; do [[ -n "$p" ]] && raw_rel+=("$p"); done < <(split_csv_lines "$rel_csv" true)
+  if [[ ${#raw_rel[@]} -gt 0 ]]; then
+    had_rel=true
+    while IFS= read -r np; do
+      [[ -n "$np" ]] || continue
+      is_checkpoint_dir "$np" && continue
+      if [[ ${#ign_arr[@]} -gt 0 ]] && path_in_list "$np" "${ign_arr[@]}"; then continue; fi
+      clean_rel+=("$np")
+    done < <(printf '%s\n' "${raw_rel[@]}" | LC_ALL=C sort -u)
+    if [[ ${#clean_rel[@]} -eq 0 ]]; then
+      echo "TREE_FP_FAIL: relevant paths resolved to empty after exclusions"
+      return 1
+    fi
+  fi
+
+  local paths_csv="ALL"
+  if [[ ${#clean_rel[@]} -gt 0 ]]; then
+    paths_csv="$(printf '%s\n' "${clean_rel[@]}" | paste -sd ',' -)"
+  fi
+
+  local wt_dirty staged_dirty untracked
+  if [[ ${#clean_rel[@]} -gt 0 ]]; then
+    wt_dirty="$(git -C "$root" diff --no-renames --name-only HEAD -- "${clean_rel[@]}")" || { echo "GIT_ERROR: git diff HEAD failed"; return 1; }
+    staged_dirty="$(git -C "$root" diff --no-renames --cached --name-only -- "${clean_rel[@]}")" || { echo "GIT_ERROR: git diff cached failed"; return 1; }
+    untracked="$(git -C "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}")" || { echo "GIT_ERROR: git ls-files failed"; return 1; }
+  else
+    wt_dirty="$(git -C "$root" diff --no-renames --name-only HEAD)" || { echo "GIT_ERROR: git diff HEAD failed"; return 1; }
+    staged_dirty="$(git -C "$root" diff --no-renames --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; return 1; }
+    untracked="$(git -C "$root" ls-files --others --exclude-standard)" || { echo "GIT_ERROR: git ls-files failed"; return 1; }
+  fi
+
+  local -a candidates=()
+  local line p
+  while IFS= read -r line; do
+    p="$(norm_path "$line")"
+    [[ -n "$p" ]] || continue
+    is_checkpoint_dir "$p" && continue
+    if [[ ${#ign_arr[@]} -gt 0 ]] && path_in_list "$p" "${ign_arr[@]}"; then continue; fi
+    if [[ ${#clean_rel[@]} -gt 0 ]] && ! path_in_list "$p" "${clean_rel[@]}"; then continue; fi
+    candidates+=("$p")
+  done < <(printf '%s\n%s\n%s\n' "$wt_dirty" "$staged_dirty" "$untracked")
+
+  local -a sorted_changed=()
+  if [[ ${#candidates[@]} -gt 0 ]]; then
+    while IFS= read -r p; do [[ -n "$p" ]] && sorted_changed+=("$p"); done < <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort -u)
+  fi
+
+  local git_dir tmp_fp w_sha tree_hash
+  git_dir="$(resolve_git_dir "$root")" || { echo "GIT_ERROR: unable to resolve .git dir"; return 1; }
+  tmp_fp="${git_dir}/b3-tree-fp-$$-${RANDOM}.tmp"
+  _CLEANUP_FILES+=("$tmp_fp")
+
+  {
+    printf 'HEAD=%s\n' "$head_sha"
+    printf 'PATHS=%s\n' "$paths_csv"
+    if [[ ${#sorted_changed[@]} -gt 0 ]]; then
+      for p in "${sorted_changed[@]}"; do
+        if [[ -f "${root}/${p}" ]]; then
+          w_sha="$(git -C "$root" hash-object -- "$p" 2>&1)" || { echo "GIT_ERROR: git hash-object failed for $p" >&2; rm -f "$tmp_fp"; return 1; }
+          w_sha="$(trim_str "$w_sha")"
+          printf 'W %s %s\n' "$p" "$w_sha"
+        else
+          printf 'W %s DELETED\n' "$p"
+        fi
+      done
+    fi
+  } > "$tmp_fp"
+
+  tree_hash="$(git -C "$root" hash-object -- "$tmp_fp" 2>&1)" || { echo "GIT_ERROR: git hash-object manifest failed: $tree_hash"; rm -f "$tmp_fp"; return 1; }
+  tree_hash="$(trim_str "$tree_hash")"
+  rm -f "$tmp_fp"
+  if [[ ! "$tree_hash" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "GIT_ERROR: git hash-object manifest failed: $tree_hash"
+    return 1
+  fi
+  printf '%s\n%s\n%s\n' "$head_sha" "$tree_hash" "$paths_csv"
+}
+
+run_verify_check() {
+  local root="$1"
+  local receipt_arg="$2"
+  local ign_csv="$3"
+  _VR_MSG=""
+  _VR_REL_PATHS=""
+  local trim_arg
+  trim_arg="$(trim_str "$receipt_arg")"
+  if [[ -z "$trim_arg" ]]; then
+    _VR_MSG="VERIFY_MISSING: empty receipt path"
+    return 1
+  fi
+  local full_receipt disp_path
+  full_receipt="$(resolve_target_path "$root" "$trim_arg")"
+  disp_path="$(repo_rel_path "$root" "$full_receipt")"
+  if [[ ! -f "$full_receipt" ]]; then
+    _VR_MSG="VERIFY_MISSING: $disp_path"
+    return 1
+  fi
+
+  local _v_schema="" _v_task_id="" _v_scope="" _v_head_sha="" _v_tree_hash="" _v_relevant_paths="" _v_exit_code="" _v_status=""
+  local _seen_keys="|"
+  local raw_line ln k v
+  while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+    ln="$(trim_str "$raw_line")"
+    [[ -z "$ln" ]] && continue
+    if [[ "$ln" != *"="* ]]; then
+      _VR_MSG="VERIFY_CORRUPT: malformed line in receipt"
+      return 1
+    fi
+    k="$(trim_str "${ln%%=*}")"
+    [[ -n "$k" ]] || { _VR_MSG="VERIFY_CORRUPT: malformed line in receipt"; return 1; }
+    v="$(trim_str "${ln#*=}")"
+    if [[ "$_seen_keys" == *"|${k}|"* ]]; then
+      _VR_MSG="VERIFY_CORRUPT: duplicate field '$k'"
+      return 1
+    fi
+    _seen_keys="${_seen_keys}${k}|"
+    case "$k" in
+      schema) _v_schema="$v" ;;
+      task_id) _v_task_id="$v" ;;
+      scope) _v_scope="$v" ;;
+      head_sha) _v_head_sha="$v" ;;
+      tree_hash) _v_tree_hash="$v" ;;
+      relevant_paths) _v_relevant_paths="$v" ;;
+      exit_code) _v_exit_code="$v" ;;
+      status) _v_status="$v" ;;
+    esac
+  done < "$full_receipt"
+
+  [[ -n "$_v_schema" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'schema'"; return 1; }
+  [[ -n "$_v_task_id" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'task_id'"; return 1; }
+  [[ -n "$_v_scope" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'scope'"; return 1; }
+  [[ -n "$_v_head_sha" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'head_sha'"; return 1; }
+  [[ -n "$_v_tree_hash" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'tree_hash'"; return 1; }
+  [[ -n "$_v_relevant_paths" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'relevant_paths'"; return 1; }
+  [[ -n "$_v_exit_code" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'exit_code'"; return 1; }
+  [[ -n "$_v_status" ]] || { _VR_MSG="VERIFY_CORRUPT: missing field 'status'"; return 1; }
+
+  if [[ "$_v_schema" != "b3-verify-v1" ]]; then
+    _VR_MSG="VERIFY_CORRUPT: unsupported schema '$_v_schema'"
+    return 1
+  fi
+  if [[ ! "$_v_head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    _VR_MSG="VERIFY_CORRUPT: invalid head_sha"
+    return 1
+  fi
+  if [[ ! "$_v_tree_hash" =~ ^[0-9a-f]{40}$ ]]; then
+    _VR_MSG="VERIFY_CORRUPT: invalid tree_hash"
+    return 1
+  fi
+  if [[ ! "$_v_exit_code" =~ ^-?[0-9]{1,9}$ ]]; then
+    _VR_MSG="VERIFY_CORRUPT: invalid exit_code"
+    return 1
+  fi
+  if [[ "$_v_status" != "PASS" && "$_v_status" != "FAIL" ]]; then
+    _VR_MSG="VERIFY_CORRUPT: invalid status '$_v_status'"
+    return 1
+  fi
+
+  if [[ "$_v_exit_code" -ne 0 || "$_v_status" != "PASS" ]]; then
+    _VR_MSG="VERIFY_FAILED_RECEIPT: exit=$_v_exit_code status=$_v_status"
+    return 1
+  fi
+
+  local rel_for_fp=""
+  if [[ "$_v_relevant_paths" != "ALL" ]]; then
+    local -a rp_arr=()
+    local rp
+    while IFS= read -r rp; do [[ -n "$rp" ]] && rp_arr+=("$rp"); done < <(split_csv_lines "$_v_relevant_paths" true)
+    if [[ ${#rp_arr[@]} -lt 1 ]]; then
+      _VR_MSG="VERIFY_CORRUPT: invalid relevant_paths"
+      return 1
+    fi
+    for rp in "${rp_arr[@]}"; do
+      if is_checkpoint_dir "$rp"; then
+        _VR_MSG="VERIFY_CORRUPT: invalid relevant_paths"
+        return 1
+      fi
+    done
+    rel_for_fp="$_v_relevant_paths"
+  fi
+
+  local fp_out cur_head cur_tree cur_paths
+  if ! fp_out="$(compute_tree_fingerprint "$root" "$rel_for_fp" "$ign_csv")"; then
+    _VR_MSG="$fp_out"
+    return 1
+  fi
+  {
+    IFS= read -r cur_head
+    IFS= read -r cur_tree
+    IFS= read -r cur_paths
+  } <<< "$fp_out"
+
+  if [[ "$cur_head" != "$_v_head_sha" || "$cur_tree" != "$_v_tree_hash" ]]; then
+    _VR_MSG="VERIFY_STALE: receipt=${_v_tree_hash:0:12} current=${cur_tree:0:12}"
+    return 2
+  fi
+
+  _VR_MSG="VERIFY_VALID: task=$_v_task_id scope=$_v_scope tree=${_v_tree_hash:0:12}"
+  _VR_REL_PATHS="$_v_relevant_paths"
+  return 0
+}
+
 case "$CMD" in
   fingerprint)
     DEPENDS_ON=""
@@ -329,13 +649,23 @@ case "$CMD" in
   precommit)
     REPO_ROOT="."
     ALLOWED=""
+    REQUIRE_RECEIPT=""
+    IGNORE_DIRTY=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --allowed-paths) ALLOWED="${2:-}"; shift 2 ;;
+        --require-verify-receipt) REQUIRE_RECEIPT="${2:-}"; shift 2 ;;
+        --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         *) echo "PRECOMMIT_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
+
+    MID_OP="$(check_git_mid_operation "$REPO_ROOT")"
+    if [[ -n "$MID_OP" ]]; then
+      echo "PRECOMMIT_FAIL: git operation in progress ($MID_OP)"
+      exit 1
+    fi
 
     ALLOWED_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
@@ -354,7 +684,7 @@ case "$CMD" in
 
     CP_HITS=()
     for p in "${STAGED_ARR[@]}"; do
-      if [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]]; then
+      if is_checkpoint_dir "$p"; then
         CP_HITS+=("$p")
       elif [[ "$p" == ".b3" || "$p" == ".b3/"* ]]; then
         if [[ ${#ALLOWED_ARR[@]} -eq 0 ]] || ! path_in_list "$p" "${ALLOWED_ARR[@]}"; then
@@ -370,6 +700,22 @@ case "$CMD" in
 
     [[ ${#ALLOWED_ARR[@]} -gt 0 ]] || { echo "PRECOMMIT_FAIL: missing --allowed-paths"; exit 1; }
 
+    SECRET_HITS=()
+    for p in "${STAGED_ARR[@]}"; do
+      if is_secret_path "$p"; then
+        exact_ok=false
+        for a in "${ALLOWED_ARR[@]}"; do
+          if [[ "$p" == "$a" ]]; then exact_ok=true; break; fi
+        done
+        if ! $exact_ok; then SECRET_HITS+=("$p"); fi
+      fi
+    done
+    if [[ ${#SECRET_HITS[@]} -gt 0 ]]; then
+      HITS_STR="$(printf '%s\n' "${SECRET_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+      echo "PRECOMMIT_FAIL: secret path staged without exact allow (${HITS_STR//,/, })"
+      exit 1
+    fi
+
     BAD_HITS=()
     for p in "${STAGED_ARR[@]}"; do
       if ! path_in_list "$p" "${ALLOWED_ARR[@]}"; then
@@ -380,6 +726,54 @@ case "$CMD" in
       HITS_STR="$(printf '%s\n' "${BAD_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
       echo "PRECOMMIT_FAIL: undeclared staged path (${HITS_STR//,/, })"
       exit 1
+    fi
+
+    REQUIRE_RECEIPT="$(trim_str "$REQUIRE_RECEIPT")"
+    if [[ -n "$REQUIRE_RECEIPT" ]]; then
+      IDX_VS_WT="$(git -C "$REPO_ROOT" diff --no-renames --name-only -- "${STAGED_ARR[@]}")" || { echo "GIT_ERROR: git diff index-vs-wt failed"; exit 1; }
+      STAGED_DEL="$(git -C "$REPO_ROOT" diff --no-renames --cached --diff-filter=D --name-only)" || { echo "GIT_ERROR: git diff cached delete failed"; exit 1; }
+      WT_MM=()
+      while IFS= read -r line; do
+        p="$(norm_path "$line")"
+        [[ -n "$p" ]] && WT_MM+=("$p")
+      done <<< "$IDX_VS_WT"
+      while IFS= read -r line; do
+        p="$(norm_path "$line")"
+        [[ -n "$p" ]] || continue
+        if [[ -e "${REPO_ROOT}/${p}" ]]; then
+          WT_MM+=("$p")
+        fi
+      done <<< "$STAGED_DEL"
+      if [[ ${#WT_MM[@]} -gt 0 ]]; then
+        MM_STR="$(printf '%s\n' "${WT_MM[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        echo "PRECOMMIT_FAIL: staged content differs from working tree (${MM_STR//,/, })"
+        exit 1
+      fi
+
+      set +e
+      run_verify_check "$REPO_ROOT" "$REQUIRE_RECEIPT" "$IGNORE_DIRTY"
+      VR_CODE=$?
+      set -e
+      if [[ $VR_CODE -ne 0 ]]; then
+        echo "PRECOMMIT_FAIL: verification receipt check failed (${_VR_MSG})"
+        exit 1
+      fi
+
+      if [[ "$_VR_REL_PATHS" != "ALL" ]]; then
+        REC_ARR=()
+        while IFS= read -r rp; do [[ -n "$rp" ]] && REC_ARR+=("$rp"); done < <(split_csv_lines "$_VR_REL_PATHS" true | LC_ALL=C sort -u)
+        OUTSIDE_ARR=()
+        for p in "${STAGED_ARR[@]}"; do
+          if [[ ${#REC_ARR[@]} -eq 0 ]] || ! path_in_list "$p" "${REC_ARR[@]}"; then
+            OUTSIDE_ARR+=("$p")
+          fi
+        done
+        if [[ ${#OUTSIDE_ARR[@]} -gt 0 ]]; then
+          OUT_STR="$(printf '%s\n' "${OUTSIDE_ARR[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+          echo "PRECOMMIT_FAIL: staged path outside receipt scope (${OUT_STR//,/, })"
+          exit 1
+        fi
+      fi
     fi
 
     echo "PRECOMMIT_OK"
@@ -897,7 +1291,7 @@ case "$CMD" in
     done
 
     mkdir -p "${RUNS_DIR}/${CANDIDATE}"
-    printf '%s\n' "$CANDIDATE" > "${SHIP_DIR}/CURRENT"
+    write_atomic_lf_file "${SHIP_DIR}/CURRENT" "${CANDIDATE}"$'\n'
     printf '%s\n' "$CANDIDATE"
     ;;
 
@@ -913,13 +1307,22 @@ case "$CMD" in
     done
     SHIP_DIR="${REPO_ROOT}/.b3/ship"
     RUNS_DIR="${SHIP_DIR}/runs"
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    AUTODEV_RUNS_DIR="${AUTODEV_DIR}/runs"
 
     if [[ -n "$RUN_ID" ]]; then
       RUN_ID="$(trim_str "$RUN_ID")"
       valid_run_id "$RUN_ID" || { echo "RESOLVE_FAIL: invalid run id '$RUN_ID'"; exit 1; }
-      [[ -d "${RUNS_DIR}/${RUN_ID}" ]] || { echo "RESOLVE_FAIL: run not found '$RUN_ID'"; exit 1; }
-      printf '.b3/ship/runs/%s\n' "$RUN_ID"
-      exit 0
+      if [[ -d "${RUNS_DIR}/${RUN_ID}" ]]; then
+        printf '.b3/ship/runs/%s\n' "$RUN_ID"
+        exit 0
+      fi
+      if [[ -d "${AUTODEV_RUNS_DIR}/${RUN_ID}" ]]; then
+        printf '.b3/autodev/runs/%s\n' "$RUN_ID"
+        exit 0
+      fi
+      echo "RESOLVE_FAIL: run not found '$RUN_ID'"
+      exit 1
     fi
 
     CUR_FILE="${SHIP_DIR}/CURRENT"
@@ -933,6 +1336,20 @@ case "$CMD" in
 
     if [[ -f "${SHIP_DIR}/progress.md" ]]; then
       printf '.b3/ship\n'
+      exit 0
+    fi
+
+    AD_CUR_FILE="${AUTODEV_DIR}/CURRENT"
+    if [[ -f "$AD_CUR_FILE" ]]; then
+      AD_CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+      valid_run_id "$AD_CUR_ID" || { echo "RESOLVE_FAIL: CURRENT contains invalid run id '$AD_CUR_ID'"; exit 1; }
+      [[ -d "${AUTODEV_RUNS_DIR}/${AD_CUR_ID}" ]] || { echo "RESOLVE_FAIL: CURRENT points to missing run '$AD_CUR_ID'"; exit 1; }
+      printf '.b3/autodev/runs/%s\n' "$AD_CUR_ID"
+      exit 0
+    fi
+
+    if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+      printf '.b3/autodev\n'
       exit 0
     fi
 
@@ -959,24 +1376,51 @@ case "$CMD" in
       done < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
     fi
 
-    if [[ ${#RUN_NAMES[@]} -eq 0 ]]; then
-      if [[ -f "${SHIP_DIR}/progress.md" ]]; then
-        ST="$(read_run_status "$SHIP_DIR")"
-        printf '* legacy [%s]\n' "$ST"
-      else
-        echo "NO_RUNS"
-      fi
+    if [[ ${#RUN_NAMES[@]} -gt 0 ]]; then
+      for id in "${RUN_NAMES[@]}"; do
+        ST="$(read_run_status "${RUNS_DIR}/${id}")"
+        MARK="  "
+        if [[ -n "$CUR_ID" && "$id" == "$CUR_ID" ]]; then
+          MARK="* "
+        fi
+        printf '%s%s [%s]\n' "$MARK" "$id" "$ST"
+      done
       exit 0
     fi
 
-    for id in "${RUN_NAMES[@]}"; do
-      ST="$(read_run_status "${RUNS_DIR}/${id}")"
-      MARK="  "
-      if [[ -n "$CUR_ID" && "$id" == "$CUR_ID" ]]; then
-        MARK="* "
-      fi
-      printf '%s%s [%s]\n' "$MARK" "$id" "$ST"
-    done
+    if [[ -f "${SHIP_DIR}/progress.md" ]]; then
+      ST="$(read_run_status "$SHIP_DIR")"
+      printf '* legacy [%s]\n' "$ST"
+      exit 0
+    fi
+
+    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+    AUTODEV_RUNS_DIR="${AUTODEV_DIR}/runs"
+    AD_CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+    AD_NAMES=()
+    if [[ -d "$AUTODEV_RUNS_DIR" ]]; then
+      while IFS= read -r d; do
+        [[ -n "$d" ]] && AD_NAMES+=("$d")
+      done < <(find "$AUTODEV_RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
+    fi
+    if [[ ${#AD_NAMES[@]} -gt 0 ]]; then
+      for id in "${AD_NAMES[@]}"; do
+        ST="$(read_run_status "${AUTODEV_RUNS_DIR}/${id}")"
+        MARK="  "
+        if [[ -n "$AD_CUR_ID" && "$id" == "$AD_CUR_ID" ]]; then
+          MARK="* "
+        fi
+        printf '%s%s [%s] (legacy-autodev)\n' "$MARK" "$id" "$ST"
+      done
+      exit 0
+    fi
+    if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+      ST="$(read_run_status "$AUTODEV_DIR")"
+      printf '* legacy (legacy-autodev) [%s]\n' "$ST"
+      exit 0
+    fi
+
+    echo "NO_RUNS"
     ;;
 
   prune)
@@ -1030,6 +1474,126 @@ case "$CMD" in
       done
       printf 'PRUNE_OK: %d removed\n' "${#PRUNED[@]}"
     fi
+    ;;
+
+  verify-run)
+    REPO_ROOT="."
+    VERIFY_CMD=""
+    RECEIPT_PATH=""
+    TASK_ID=""
+    SCOPE=""
+    RELEVANT_PATHS=""
+    LOG_PATH=""
+    IGNORE_DIRTY=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --verify-cmd) VERIFY_CMD="${2:-}"; shift 2 ;;
+        --receipt-path) RECEIPT_PATH="${2:-}"; shift 2 ;;
+        --task-id) TASK_ID="${2:-}"; shift 2 ;;
+        --scope) SCOPE="${2:-}"; shift 2 ;;
+        --relevant-paths) RELEVANT_PATHS="${2:-}"; shift 2 ;;
+        --log-path) LOG_PATH="${2:-}"; shift 2 ;;
+        --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
+        *) echo "VERIFY_RUN_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+
+    [[ -n "$(trim_str "$VERIFY_CMD")" ]] || { echo "VERIFY_RUN_FAIL: missing --verify-cmd"; exit 1; }
+    [[ -n "$(trim_str "$RECEIPT_PATH")" ]] || { echo "VERIFY_RUN_FAIL: missing --receipt-path"; exit 1; }
+
+    EFF_TASK="$(trim_str "$(printf '%s' "$TASK_ID" | LC_ALL=C tr '\r\n' '  ')")"
+    [[ -n "$EFF_TASK" ]] || EFF_TASK="unknown"
+    EFF_SCOPE="$(trim_str "$(printf '%s' "$SCOPE" | LC_ALL=C tr '\r\n' '  ')")"
+    [[ -n "$EFF_SCOPE" ]] || EFF_SCOPE="scoped"
+
+    FULL_RECEIPT="$(resolve_target_path "$REPO_ROOT" "$RECEIPT_PATH")"
+    RECEIPT_REL="$(repo_rel_path "$REPO_ROOT" "$FULL_RECEIPT")"
+    mkdir -p "$(dirname "$FULL_RECEIPT")"
+
+    OUT_TMP="${FULL_RECEIPT}.out.$$.${RANDOM}.tmp"
+    _CLEANUP_FILES+=("$OUT_TMP")
+    set +e
+    (cd "$REPO_ROOT" && sh -c "$VERIFY_CMD") >"$OUT_TMP" 2>&1
+    CMD_EXIT=$?
+    set -e
+
+    OUT_LINES="$(awk 'END{print NR}' "$OUT_TMP")"
+    if ! FP_OUT="$(compute_tree_fingerprint "$REPO_ROOT" "$RELEVANT_PATHS" "$IGNORE_DIRTY")"; then
+      echo "$FP_OUT"
+      rm -f "$OUT_TMP"
+      exit 1
+    fi
+    {
+      IFS= read -r FP_HEAD
+      IFS= read -r FP_TREE
+      IFS= read -r FP_PATHS
+    } <<< "$FP_OUT"
+
+    STATUS_VAL="FAIL"
+    [[ $CMD_EXIT -eq 0 ]] && STATUS_VAL="PASS"
+
+    LOG_DISP="none"
+    if [[ $CMD_EXIT -ne 0 || "$OUT_LINES" -gt 35 ]]; then
+      if [[ -n "$(trim_str "$LOG_PATH")" ]]; then
+        FULL_LOG="$(resolve_target_path "$REPO_ROOT" "$LOG_PATH")"
+      else
+        FULL_LOG="${FULL_RECEIPT}.log"
+      fi
+      mkdir -p "$(dirname "$FULL_LOG")"
+      TMP_LOG="${FULL_LOG}.tmp.$$.${RANDOM}"
+      _CLEANUP_FILES+=("$TMP_LOG")
+      LC_ALL=C tr -d '\r' < "$OUT_TMP" > "$TMP_LOG"
+      mv -f "$TMP_LOG" "$FULL_LOG"
+      LOG_DISP="$(repo_rel_path "$REPO_ROOT" "$FULL_LOG")"
+    fi
+
+    SINGLE_CMD="$(trim_str "$(printf '%s' "$VERIFY_CMD" | LC_ALL=C tr '\r\n' '  ')")"
+    TS_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    RECEIPT_BODY="schema=b3-verify-v1
+task_id=${EFF_TASK}
+scope=${EFF_SCOPE}
+head_sha=${FP_HEAD}
+tree_hash=${FP_TREE}
+relevant_paths=${FP_PATHS}
+exit_code=${CMD_EXIT}
+status=${STATUS_VAL}
+command=${SINGLE_CMD}
+log_path=${LOG_DISP}
+timestamp_utc=${TS_UTC}
+"
+    write_atomic_lf_file "$FULL_RECEIPT" "$RECEIPT_BODY"
+
+    SHORT_TREE="${FP_TREE:0:12}"
+    if [[ $CMD_EXIT -eq 0 ]]; then
+      rm -f "$OUT_TMP"
+      printf 'VERIFY_PASS: exit=0 tree=%s receipt=%s\n' "$SHORT_TREE" "$RECEIPT_REL"
+      exit 0
+    fi
+    printf 'VERIFY_FAIL: exit=%s tree=%s receipt=%s log=%s\n' "$CMD_EXIT" "$SHORT_TREE" "$RECEIPT_REL" "$LOG_DISP"
+    LC_ALL=C tr -d '\r' < "$OUT_TMP" | head -n 35
+    rm -f "$OUT_TMP"
+    exit 1
+    ;;
+
+  verify-check)
+    REPO_ROOT="."
+    RECEIPT_PATH=""
+    IGNORE_DIRTY=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --receipt-path) RECEIPT_PATH="${2:-}"; shift 2 ;;
+        --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
+        *) echo "VERIFY_CHECK_FAIL: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+    set +e
+    run_verify_check "$REPO_ROOT" "$RECEIPT_PATH" "$IGNORE_DIRTY"
+    RC=$?
+    set -e
+    printf '%s\n' "$_VR_MSG"
+    exit "$RC"
     ;;
 
   *)

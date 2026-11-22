@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -20,7 +20,17 @@ param(
     [string]$Slug = '',
     [string]$Timestamp = '',
     [string]$RunId = '',
-    [int]$Keep = 10
+    [int]$Keep = 10,
+    [string]$VerifyCmd = '',
+    [string]$ReceiptPath = '',
+    [string]$TaskId = '',
+    [string]$RelevantPaths = '',
+    [string]$LogPath = '',
+    [string]$RequireVerifyReceipt = '',
+    [switch]$AllowMassDelete,
+    [string]$WaveReads = '',
+    [string]$ExpectedBaseSha = '',
+    [string]$ExpectedRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -226,6 +236,252 @@ function Resolve-AutoBaseForTarget([string]$Root, [string]$TargetCommitSha) {
     return $TargetCommitSha
 }
 
+function Test-SecretPath([string]$PathVal) {
+    $leaf = (($PathVal -split '/')[-1]).ToLowerInvariant()
+    if (-not $leaf) { return $false }
+    if ($leaf -eq '.env') { return $true }
+    if ($leaf.StartsWith('.env.')) {
+        if ($leaf -match '^\.env\.(example|sample|template)$') { return $false }
+        return $true
+    }
+    if ($leaf -match '\.(pem|key|p12|pfx)$') { return $true }
+    if ($leaf -in @('id_rsa', 'id_ed25519', 'credentials.json')) { return $true }
+    return $false
+}
+
+function Get-ResolvedGitDir([string]$Root) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $gd = (& git -C $Root rev-parse --git-dir 2>$null | Out-String).Trim()
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($code -ne 0 -or -not $gd) { return $null }
+    if (-not [IO.Path]::IsPathRooted($gd)) {
+        $gd = Join-Path $Root ($gd -replace '/', '\')
+    }
+    return $gd
+}
+
+function Test-GitMidOperation([string]$Root) {
+    $gitDir = Get-ResolvedGitDir $Root
+    if (-not $gitDir) { return $null }
+    foreach ($marker in @('MERGE_HEAD', 'REBASE_HEAD', 'rebase-merge', 'rebase-apply', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG')) {
+        if (Test-Path -LiteralPath (Join-Path $gitDir $marker)) {
+            return $marker
+        }
+    }
+    return $null
+}
+
+function Resolve-TargetPath([string]$Root, [string]$PathArg) {
+    $p = $PathArg.Trim()
+    if (-not $p) { return $null }
+    if ([IO.Path]::IsPathRooted($p)) {
+        return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p)
+    }
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $Root ($p -replace '/', '\')))
+}
+
+function Get-RepoRelativePath([string]$Root, [string]$FullPath) {
+    $rootNorm = Normalize-PathValue $Root
+    $fullNorm = Normalize-PathValue $FullPath
+    if ($rootNorm -eq '.') { return $fullNorm }
+    if ($fullNorm.StartsWith("$rootNorm/", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $fullNorm.Substring($rootNorm.Length + 1)
+    }
+    if ($fullNorm.Equals($rootNorm, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return '.'
+    }
+    return $fullNorm
+}
+
+function Write-AtomicLfFile([string]$DestPath, [string]$Text) {
+    $parent = Split-Path -Parent $DestPath
+    if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $lfText = $Text.Replace("`r`n", "`n").Replace("`r", "`n")
+    $tmp = "$DestPath.tmp.${PID}." + ([guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+        [IO.File]::WriteAllText($tmp, $lfText, $utf8NoBom)
+        Move-Item -LiteralPath $tmp -Destination $DestPath -Force
+    } finally {
+        if (Test-Path -LiteralPath $tmp) {
+            Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnPaths) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $headSha = (& git -C $Root rev-parse HEAD 2>&1 | Out-String).Trim()
+        $headCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($headCode -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') {
+        Fail "GIT_ERROR: git rev-parse HEAD failed: $headSha" 1
+    }
+
+    $cleanRel = @()
+    if ($RelPaths -and $RelPaths.Count -gt 0) {
+        $relFiltered = New-Object System.Collections.Generic.List[string]
+        foreach ($rp in $RelPaths) {
+            $np = Normalize-PathValue $rp
+            if (-not $np -or $np -match '^\.b3/(ship|autodev)(/|$)') { continue }
+            if ($IgnPaths -and (Test-PathMatch $np $IgnPaths)) { continue }
+            $relFiltered.Add($np)
+        }
+        $cleanRel = @(Sort-Ordinal $relFiltered.ToArray())
+        if ($cleanRel.Count -eq 0) {
+            Fail 'TREE_FP_FAIL: relevant paths resolved to empty after exclusions' 1
+        }
+    }
+    $pathsCsv = if ($cleanRel.Count -gt 0) { $cleanRel -join ',' } else { 'ALL' }
+
+    if ($cleanRel.Count -gt 0) {
+        $wtDirty = @(Invoke-GitLines $Root (@('diff', '--no-renames', '--name-only', 'HEAD', '--') + $cleanRel))
+        $stagedDirty = @(Invoke-GitLines $Root (@('diff', '--no-renames', '--cached', '--name-only', '--') + $cleanRel))
+        $untracked = @(Invoke-GitLines $Root (@('ls-files', '--others', '--exclude-standard', '--') + $cleanRel))
+    } else {
+        $wtDirty = @(Invoke-GitLines $Root @('diff', '--no-renames', '--name-only', 'HEAD'))
+        $stagedDirty = @(Invoke-GitLines $Root @('diff', '--no-renames', '--cached', '--name-only'))
+        $untracked = @(Invoke-GitLines $Root @('ls-files', '--others', '--exclude-standard'))
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($p in @($wtDirty + $stagedDirty + $untracked)) {
+        if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
+        if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
+        if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
+        $candidates.Add($p)
+    }
+    $sortedChanged = @(Sort-Ordinal $candidates.ToArray())
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("HEAD=$headSha`n")
+    [void]$sb.Append("PATHS=$pathsCsv`n")
+
+    foreach ($p in $sortedChanged) {
+        $full = Join-Path $Root ($p -replace '/', '\')
+        if (Test-Path -LiteralPath $full -PathType Leaf) {
+            $ErrorActionPreference = 'Continue'
+            try {
+                $wSha = (& git -C $Root hash-object -- $p 2>&1 | Out-String).Trim()
+                $wCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $prev
+            }
+            if ($wCode -ne 0) { Fail "GIT_ERROR: git hash-object failed for $p" 1 }
+            [void]$sb.Append("W $p $wSha`n")
+        } else {
+            [void]$sb.Append("W $p DELETED`n")
+        }
+    }
+
+    $gitDir = Get-ResolvedGitDir $Root
+    if (-not $gitDir) { Fail 'GIT_ERROR: unable to resolve .git dir' 1 }
+    $tmpFp = Join-Path $gitDir ("b3-tree-fp-${PID}-" + ([guid]::NewGuid().ToString('N').Substring(0, 8)) + '.tmp')
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    try {
+        [IO.File]::WriteAllText($tmpFp, $sb.ToString(), $utf8NoBom)
+        $ErrorActionPreference = 'Continue'
+        try {
+            $treeHash = (& git -C $Root hash-object -- $tmpFp 2>&1 | Out-String).Trim()
+            $thCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($thCode -ne 0 -or $treeHash -notmatch '^[0-9a-f]{40}$') {
+            Fail "GIT_ERROR: git hash-object manifest failed: $treeHash" 1
+        }
+        return @{ HeadSha = $headSha; TreeHash = $treeHash; PathsCsv = $pathsCsv }
+    } finally {
+        if (Test-Path -LiteralPath $tmpFp) {
+            Remove-Item -LiteralPath $tmpFp -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPaths) {
+    $trimArg = $ReceiptArg.Trim()
+    if (-not $trimArg) {
+        return @{ Code = 1; Message = 'VERIFY_MISSING: empty receipt path' }
+    }
+    $fullReceipt = Resolve-TargetPath $Root $trimArg
+    $dispPath = Get-RepoRelativePath $Root $fullReceipt
+    if (-not (Test-Path -LiteralPath $fullReceipt -PathType Leaf)) {
+        return @{ Code = 1; Message = "VERIFY_MISSING: $dispPath" }
+    }
+
+    $rawText = [IO.File]::ReadAllText($fullReceipt)
+    $kv = @{}
+    foreach ($rawLine in ($rawText -split "\r?\n")) {
+        $ln = $rawLine.Trim()
+        if (-not $ln) { continue }
+        $eqIdx = $ln.IndexOf('=')
+        if ($eqIdx -lt 1) {
+            return @{ Code = 1; Message = 'VERIFY_CORRUPT: malformed line in receipt' }
+        }
+        $k = $ln.Substring(0, $eqIdx).Trim()
+        $v = $ln.Substring($eqIdx + 1).Trim()
+        if ($kv.ContainsKey($k)) {
+            return @{ Code = 1; Message = "VERIFY_CORRUPT: duplicate field '$k'" }
+        }
+        $kv[$k] = $v
+    }
+
+    foreach ($reqKey in @('schema', 'task_id', 'scope', 'head_sha', 'tree_hash', 'relevant_paths', 'exit_code', 'status')) {
+        if (-not $kv.ContainsKey($reqKey) -or -not $kv[$reqKey]) {
+            return @{ Code = 1; Message = "VERIFY_CORRUPT: missing field '$reqKey'" }
+        }
+    }
+    if ($kv['schema'] -cne 'b3-verify-v1') {
+        return @{ Code = 1; Message = "VERIFY_CORRUPT: unsupported schema '$($kv['schema'])'" }
+    }
+    if ($kv['head_sha'] -cnotmatch '^[0-9a-f]{40}$') {
+        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid head_sha' }
+    }
+    if ($kv['tree_hash'] -cnotmatch '^[0-9a-f]{40}$') {
+        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid tree_hash' }
+    }
+    if ($kv['exit_code'] -notmatch '^-?[0-9]{1,9}$') {
+        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid exit_code' }
+    }
+    if ($kv['status'] -cnotin @('PASS', 'FAIL')) {
+        return @{ Code = 1; Message = "VERIFY_CORRUPT: invalid status '$($kv['status'])'" }
+    }
+
+    if ([int]$kv['exit_code'] -ne 0 -or $kv['status'] -cne 'PASS') {
+        return @{ Code = 1; Message = "VERIFY_FAILED_RECEIPT: exit=$($kv['exit_code']) status=$($kv['status'])" }
+    }
+
+    $relSpec = @()
+    if ($kv['relevant_paths'] -cne 'ALL') {
+        $relSpec = @(Split-CsvList $kv['relevant_paths'] -AsPaths)
+        $validRel = @($relSpec | Where-Object { $_ -and ($_ -notmatch '^\.b3/(ship|autodev)(/|$)') })
+        if ($validRel.Count -lt 1 -or $validRel.Count -ne $relSpec.Count) {
+            return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid relevant_paths' }
+        }
+    }
+
+    $cur = Get-TreeFingerprint $Root $relSpec $IgnPaths
+    if ($cur.HeadSha -cne $kv['head_sha'] -or $cur.TreeHash -cne $kv['tree_hash']) {
+        $recShort = $kv['tree_hash'].Substring(0, 12)
+        $curShort = $cur.TreeHash.Substring(0, 12)
+        return @{ Code = 2; Message = "VERIFY_STALE: receipt=$recShort current=$curShort" }
+    }
+
+    $shortTree = $kv['tree_hash'].Substring(0, 12)
+    return @{ Code = 0; Message = "VERIFY_VALID: task=$($kv['task_id']) scope=$($kv['scope']) tree=$shortTree"; RelevantPathsCsv = $kv['relevant_paths'] }
+}
+
 switch ($Command) {
     'fingerprint' {
         $trimmedScope = $Scope.Trim()
@@ -300,6 +556,11 @@ switch ($Command) {
     }
 
     'precommit' {
+        $midOp = Test-GitMidOperation $RepoRoot
+        if ($midOp) {
+            Fail "PRECOMMIT_FAIL: git operation in progress ($midOp)" 1
+        }
+
         $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
         $staged = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--cached', '--name-only'))
         if ($staged.Count -lt 1) {
@@ -307,7 +568,7 @@ switch ($Command) {
         }
 
         $checkpointHits = @($staged | Where-Object {
-            ($_ -match '^\.b3/ship(/|$)') -or (($_ -match '^\.b3(/|$)') -and -not (Test-PathMatch $_ $allowed))
+            ($_ -match '^\.b3/(ship|autodev)(/|$)') -or (($_ -match '^\.b3(/|$)') -and -not (Test-PathMatch $_ $allowed))
         })
         if ($checkpointHits.Count -gt 0) {
             Fail ("PRECOMMIT_FAIL: checkpoint staged (" + ($checkpointHits -join ', ') + ")") 1
@@ -316,9 +577,54 @@ switch ($Command) {
         if ($allowed.Count -lt 1) {
             Fail 'PRECOMMIT_FAIL: missing -AllowedPaths' 1
         }
+
+        $secretHits = New-Object System.Collections.Generic.List[string]
+        foreach ($p in $staged) {
+            if (Test-SecretPath $p) {
+                $exactOk = $false
+                foreach ($a in $allowed) {
+                    if ($p -ceq $a) { $exactOk = $true; break }
+                }
+                if (-not $exactOk) { $secretHits.Add($p) }
+            }
+        }
+        if ($secretHits.Count -gt 0) {
+            Fail ("PRECOMMIT_FAIL: secret path staged without exact allow (" + ($secretHits -join ', ') + ")") 1
+        }
+
         $undeclared = @($staged | Where-Object { -not (Test-PathMatch $_ $allowed) })
         if ($undeclared.Count -gt 0) {
             Fail ("PRECOMMIT_FAIL: undeclared staged path (" + ($undeclared -join ', ') + ")") 1
+        }
+
+        if ($RequireVerifyReceipt -and $RequireVerifyReceipt.Trim()) {
+            $wtMismatch = New-Object System.Collections.Generic.List[string]
+            $idxVsWt = @(Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--name-only', '--') + $staged))
+            foreach ($p in $idxVsWt) { $wtMismatch.Add($p) }
+            $stagedDel = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--cached', '--diff-filter=D', '--name-only'))
+            foreach ($d in $stagedDel) {
+                if ((Test-Path -LiteralPath (Join-Path $RepoRoot ($d -replace '/', '\'))) -and -not $wtMismatch.Contains($d)) {
+                    $wtMismatch.Add($d)
+                }
+            }
+            if ($wtMismatch.Count -gt 0) {
+                $sortedMm = (Sort-Ordinal $wtMismatch.ToArray()) -join ', '
+                Fail "PRECOMMIT_FAIL: staged content differs from working tree ($sortedMm)" 1
+            }
+
+            $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+            $vr = Test-VerifyReceipt $RepoRoot $RequireVerifyReceipt $ignored
+            if ($vr.Code -ne 0) {
+                Fail "PRECOMMIT_FAIL: verification receipt check failed ($($vr.Message))" 1
+            }
+            if ($vr.RelevantPathsCsv -cne 'ALL') {
+                $recPaths = @(Split-CsvList $vr.RelevantPathsCsv -AsPaths)
+                $outside = @($staged | Where-Object { -not (Test-PathMatch $_ $recPaths) })
+                if ($outside.Count -gt 0) {
+                    $sortedOut = (Sort-Ordinal $outside) -join ', '
+                    Fail "PRECOMMIT_FAIL: staged path outside receipt scope ($sortedOut)" 1
+                }
+            }
         }
 
         Write-Output 'PRECOMMIT_OK'
@@ -775,8 +1081,7 @@ switch ($Command) {
 
         $runDir = Join-Path $runsDir $candidate
         New-Item -ItemType Directory -Path $runDir -Force | Out-Null
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [IO.File]::WriteAllText((Join-Path $ShipDir 'CURRENT'), "$candidate`n", $utf8NoBom)
+        Write-AtomicLfFile (Join-Path $ShipDir 'CURRENT') "$candidate`n"
 
         Write-Output $candidate
         exit 0
@@ -785,6 +1090,8 @@ switch ($Command) {
     'resolve-run' {
         $ShipDir = Join-Path $RepoRoot '.b3\ship'
         $runsDir = Join-Path $ShipDir 'runs'
+        $AutodevDir = Join-Path $RepoRoot '.b3\autodev'
+        $autodevRunsDir = Join-Path $AutodevDir 'runs'
 
         if ($RunId) {
             $trimmed = $RunId.Trim()
@@ -792,11 +1099,16 @@ switch ($Command) {
                 Fail "RESOLVE_FAIL: invalid run id '$RunId'" 1
             }
             $target = Join-Path $runsDir $trimmed
-            if (-not (Test-Path -LiteralPath $target -PathType Container)) {
-                Fail "RESOLVE_FAIL: run not found '$trimmed'" 1
+            if (Test-Path -LiteralPath $target -PathType Container) {
+                Write-Output ".b3/ship/runs/$trimmed"
+                exit 0
             }
-            Write-Output ".b3/ship/runs/$trimmed"
-            exit 0
+            $legacyTarget = Join-Path $autodevRunsDir $trimmed
+            if (Test-Path -LiteralPath $legacyTarget -PathType Container) {
+                Write-Output ".b3/autodev/runs/$trimmed"
+                exit 0
+            }
+            Fail "RESOLVE_FAIL: run not found '$trimmed'" 1
         }
 
         $curFile = Join-Path $ShipDir 'CURRENT'
@@ -818,6 +1130,25 @@ switch ($Command) {
             exit 0
         }
 
+        $autodevCur = Join-Path $AutodevDir 'CURRENT'
+        if (Test-Path -LiteralPath $autodevCur -PathType Leaf) {
+            $acId = ([IO.File]::ReadAllText($autodevCur)).Trim()
+            if (-not (Test-ValidRunId $acId)) {
+                Fail "RESOLVE_FAIL: CURRENT contains invalid run id '$acId'" 1
+            }
+            $acTarget = Join-Path $autodevRunsDir $acId
+            if (-not (Test-Path -LiteralPath $acTarget -PathType Container)) {
+                Fail "RESOLVE_FAIL: CURRENT points to missing run '$acId'" 1
+            }
+            Write-Output ".b3/autodev/runs/$acId"
+            exit 0
+        }
+
+        if (Test-Path -LiteralPath (Join-Path $AutodevDir 'progress.md') -PathType Leaf) {
+            Write-Output '.b3/autodev'
+            exit 0
+        }
+
         Fail 'NO_ACTIVE_RUN' 1
     }
 
@@ -831,21 +1162,44 @@ switch ($Command) {
             $rawNames = @(Get-ChildItem -LiteralPath $runsDir -Directory | ForEach-Object { $_.Name })
             $dirNames = @(Sort-Ordinal $rawNames -Descending)
         }
-        if ($dirNames.Count -eq 0) {
-            if (Test-Path -LiteralPath (Join-Path $ShipDir 'progress.md') -PathType Leaf) {
-                $st = Get-RunStatus $ShipDir
-                Write-Output "* legacy [$st]"
-            } else {
-                Write-Output 'NO_RUNS'
+        if ($dirNames.Count -gt 0) {
+            foreach ($id in $dirNames) {
+                $st = Get-RunStatus (Join-Path $runsDir $id)
+                $mark = if ($curId -and ($id -ceq $curId)) { '* ' } else { '  ' }
+                Write-Output "$mark$id [$st]"
             }
             exit 0
         }
 
-        foreach ($id in $dirNames) {
-            $st = Get-RunStatus (Join-Path $runsDir $id)
-            $mark = if ($curId -and ($id -ceq $curId)) { '* ' } else { '  ' }
-            Write-Output "$mark$id [$st]"
+        if (Test-Path -LiteralPath (Join-Path $ShipDir 'progress.md') -PathType Leaf) {
+            $st = Get-RunStatus $ShipDir
+            Write-Output "* legacy [$st]"
+            exit 0
         }
+
+        $AutodevDir = Join-Path $RepoRoot '.b3\autodev'
+        $autodevRunsDir = Join-Path $AutodevDir 'runs'
+        $autodevCur = Get-CurrentRunId $AutodevDir
+        $adNames = @()
+        if (Test-Path -LiteralPath $autodevRunsDir -PathType Container) {
+            $rawAd = @(Get-ChildItem -LiteralPath $autodevRunsDir -Directory | ForEach-Object { $_.Name })
+            $adNames = @(Sort-Ordinal $rawAd -Descending)
+        }
+        if ($adNames.Count -gt 0) {
+            foreach ($id in $adNames) {
+                $st = Get-RunStatus (Join-Path $autodevRunsDir $id)
+                $mark = if ($autodevCur -and ($id -ceq $autodevCur)) { '* ' } else { '  ' }
+                Write-Output "$mark$id [$st] (legacy-autodev)"
+            }
+            exit 0
+        }
+        if (Test-Path -LiteralPath (Join-Path $AutodevDir 'progress.md') -PathType Leaf) {
+            $st = Get-RunStatus $AutodevDir
+            Write-Output "* legacy (legacy-autodev) [$st]"
+            exit 0
+        }
+
+        Write-Output 'NO_RUNS'
         exit 0
     }
 
@@ -884,5 +1238,87 @@ switch ($Command) {
             Write-Output "PRUNE_OK: $($pruned.Count) removed"
         }
         exit 0
+    }
+
+    'verify-run' {
+        if (-not $VerifyCmd -or -not $VerifyCmd.Trim()) { Fail 'VERIFY_RUN_FAIL: missing -VerifyCmd' 1 }
+        if (-not $ReceiptPath -or -not $ReceiptPath.Trim()) { Fail 'VERIFY_RUN_FAIL: missing -ReceiptPath' 1 }
+
+        $effTaskId = if ($TaskId -and $TaskId.Trim()) { ($TaskId.Trim() -replace '[\r\n]+', ' ') } else { 'unknown' }
+        $effScope = if ($Scope -and $Scope.Trim()) { ($Scope.Trim() -replace '[\r\n]+', ' ') } else { 'scoped' }
+        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $relArr = @(Split-CsvList $RelevantPaths -AsPaths)
+
+        $fullReceipt = Resolve-TargetPath $RepoRoot $ReceiptPath
+        $receiptRel = Get-RepoRelativePath $RepoRoot $fullReceipt
+
+        $wrapper = "`$global:LASTEXITCODE = 0`n& { $VerifyCmd }`nif (-not `$?) { if (`$LASTEXITCODE -and `$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE } else { exit 1 } }`nif (`$LASTEXITCODE -and `$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nexit 0"
+        $encCmd = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wrapper))
+
+        $outLines = New-Object System.Collections.Generic.List[string]
+        Push-Location $RepoRoot
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $rawOut = & powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encCmd 2>&1
+            $cmdExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevEap
+            Pop-Location
+        }
+        foreach ($item in @($rawOut)) {
+            if ($null -eq $item) { continue }
+            $s = if ($item -is [System.Management.Automation.ErrorRecord]) { $item.ToString() } else { [string]$item }
+            foreach ($sub in ($s -split "\r?\n")) {
+                $outLines.Add($sub)
+            }
+        }
+
+        $fp = Get-TreeFingerprint $RepoRoot $relArr $ignored
+        $statusVal = if ($cmdExit -eq 0) { 'PASS' } else { 'FAIL' }
+
+        $logDisp = 'none'
+        if ($cmdExit -ne 0 -or $outLines.Count -gt 35) {
+            $fullLog = if ($LogPath -and $LogPath.Trim()) { Resolve-TargetPath $RepoRoot $LogPath } else { "$fullReceipt.log" }
+            $logBody = if ($outLines.Count -gt 0) { ($outLines.ToArray() -join "`n") + "`n" } else { '' }
+            Write-AtomicLfFile $fullLog $logBody
+            $logDisp = Get-RepoRelativePath $RepoRoot $fullLog
+        }
+
+        $singleCmd = ($VerifyCmd -replace '[\r\n]+', ' ').Trim()
+        $tsUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+        $receiptBody = @(
+            "schema=b3-verify-v1",
+            "task_id=$effTaskId",
+            "scope=$effScope",
+            "head_sha=$($fp.HeadSha)",
+            "tree_hash=$($fp.TreeHash)",
+            "relevant_paths=$($fp.PathsCsv)",
+            "exit_code=$cmdExit",
+            "status=$statusVal",
+            "command=$singleCmd",
+            "log_path=$logDisp",
+            "timestamp_utc=$tsUtc"
+        ) -join "`n"
+        Write-AtomicLfFile $fullReceipt "$receiptBody`n"
+
+        $shortTree = $fp.TreeHash.Substring(0, 12)
+        if ($cmdExit -eq 0) {
+            Write-Output "VERIFY_PASS: exit=0 tree=$shortTree receipt=$receiptRel"
+            exit 0
+        }
+        Write-Output "VERIFY_FAIL: exit=$cmdExit tree=$shortTree receipt=$receiptRel log=$logDisp"
+        $cap = [Math]::Min(35, $outLines.Count)
+        for ($i = 0; $i -lt $cap; $i++) {
+            Write-Output $outLines[$i]
+        }
+        exit 1
+    }
+
+    'verify-check' {
+        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $res = Test-VerifyReceipt $RepoRoot $ReceiptPath $ignored
+        Write-Output $res.Message
+        exit $res.Code
     }
 }
