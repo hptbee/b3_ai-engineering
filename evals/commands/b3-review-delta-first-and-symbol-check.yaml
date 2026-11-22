@@ -1,0 +1,9 @@
+id: cmd-review-001
+artifact: skills/engineering/code-review/SKILL.md
+intent: /b3-review runs deterministic diff-scope, mechanical-check, and symbol-check before scoped delta reading and receipt checks
+scenario: |
+  Reviewer runs /b3-review on a refactor removing an internal helper
+  Skips diff-scope/symbol-check and dumps full raw diffs, unrelated files, and unverified self-reported test claims into context
+expected_outcome: FAIL
+failure_mode: unscoped-diff-dump-and-skipped-symbol-check
+notes: Scope (delta-first) enforces guard triage, contract/AC tracing, and b3-guard verify-check on receipts

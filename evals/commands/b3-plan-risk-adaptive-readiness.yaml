@@ -1,0 +1,9 @@
+id: cmd-plan-002
+artifact: skills/engineering/planning/SKILL.md
+intent: /b3-plan uses compact plans for localized edits and deep contract/failure readiness checks for high-risk triggers without unresolved TBD placeholders
+scenario: |
+  Agent plans a stateful auth boundary change with cross-module dependencies
+  Plan leaves TBD auth decision and omits AC-to-verification mapping
+expected_outcome: FAIL
+failure_mode: incomplete-readiness-and-hidden-placeholder
+notes: High-risk triggers activate shared contracts/failure modes and Readiness Check blocks unresolved TBDs

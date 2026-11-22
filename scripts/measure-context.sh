@@ -90,6 +90,11 @@ RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
 REV_AGENT_B="$(file_bytes "agents/b3-reviewer.md")"
 REV_DELTA_B=$((REV_AGENT_B + CR_SKILL_B))
+PLAN_CMD_B=$(($(file_bytes "commands/b3-plan.md") + $(file_bytes "skills/engineering/planning/SKILL.md")))
+IMPL_CMD_B=$(($(file_bytes "commands/b3-implement.md") + $(file_bytes "skills/engineering/problem-solving/SKILL.md")))
+DEBUG_CMD_B=$(($(file_bytes "commands/b3-debug.md") + $(file_bytes "skills/engineering/debugging/SKILL.md")))
+REVIEW_CMD_B=$(($(file_bytes "commands/b3-review.md") + CR_SKILL_B))
+VERIFY_CMD_B=$(($(file_bytes "commands/b3-verify.md") + $(file_bytes "skills/engineering/verification/SKILL.md")))
 RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + REV_AGENT_B + CR_SKILL_B))
 RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md")))
 
@@ -108,6 +113,7 @@ printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/b3-ship.m
 printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.md]\n" "$SHIP_REFS" "$(est_tok "$SHIP_REFS")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer + code-review/SKILL.md=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$CR_SKILL_B"
 printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md + code-review/SKILL.md]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"
+printf "standalone_cmds   : plan=%d B, impl=%d B, debug=%d B, review=%d B, verify=%d B\n" "$PLAN_CMD_B" "$IMPL_CMD_B" "$DEBUG_CMD_B" "$REVIEW_CMD_B" "$VERIFY_CMD_B"
 printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
 printf "agents_roles_total: %6d B (~%4d tok)  [5 runtime subagent roles excl. README.md]\n" "$AGENT_ROLES_B" "$(est_tok "$AGENT_ROLES_B")"
 printf "max_skill_file    : %6d B  (%s)\n" "$MAX_SKILL" "$MAX_SKILL_FILE"
