@@ -1,4 +1,4 @@
-# Decision 014 — Parallel disjoint waves, worker cache reuse, mechanical pass, and bug-class sweep
+# Decision 014 — Parallel disjoint waves, subagent cache reuse, mechanical pass, and bug-class sweep
 
 ## Context
 
@@ -16,7 +16,7 @@ Following `decision-012` (which deferred parallel multi-WP waves while adopting 
 ### ADAPT
 
 - **Deterministic Mechanical Pass (`autodev-guard mechanical-check`, `0 LLM tokens`):** Run `scope_creep` (against `AllowedPaths`), added-line `leftovers` (`debugger`, `.only(`, `@ts-ignore`, `eslint-disable`, empty `TODO`/`FIXME` on non-`.md` files), and `obsolete_hits` (`exists` / `git grep`) before spending LLM review tokens.
-- **Worker prompt-cache reuse (`impl_agent` in `progress.md` + delta resume):** Record `impl_agent` in `{RUN_DIR}/progress.md` (`## Tasks` table, host-neutral replacement for `TodoWrite`) and resume the owning worker with delta findings/contract diffs on Fix passes while keeping **Reviewer** strictly fresh and independent.
+- **Subagent prompt-cache reuse (`impl_agent` in `progress.md` + delta resume):** Record `impl_agent` in `{RUN_DIR}/progress.md` (`## Tasks` table, host-neutral replacement for `TodoWrite`) and resume the owning subagent with delta findings/contract diffs on Fix passes while keeping **Reviewer** strictly fresh and independent.
 - **Bug-class sweep & replacement rule (`agents/fixer.md`):** Name 1-line broken invariant per finding, sweep sibling sites strictly inside `OWNED FILES`/`DIFF SCOPE` (reporting unowned sites without expanding scope), add/update a behavior test when applicable, and delete replaced/renamed symbols once unused.
 - **2-tier circuit breaker (`review-loop/strategy.md`):** (a) same finding survives 2 rounds → rewrite brief or spawn a fresh Fixer (drop stale `impl_agent`); (b) same bug class recurs 2 consecutive rounds → stop patching and return to `Analyze`/design.
 - **Optional disjoint-file Parallel Waves + Hub-and-Spoke (`workflows/autonomous-development.md`):** Allow launching 2–3 `ready` tasks in one message when `autodev-guard check-wave` proves disjoint `OWNED FILES` (exact + prefix + repo-root `.`), paste shared contracts verbatim (never paraphrased), enforce scoped `VERIFY` (no pipe exit-code swallowing; fix only self-caused failures in owned files; report unowned/baseline failures), relay `discoveries`/`change_requests` solely through Parent, and keep atomic sequential per-task commits.
@@ -24,15 +24,15 @@ Following `decision-012` (which deferred parallel multi-WP waves while adopting 
 
 ### REJECT
 
-- `Concept Pack in chat and briefs, never a file` (multiplies input tokens across workers/reviewers and loses state on `/compact`; B3 keeps `{RUN_DIR}/` file paths).
+- `Concept Pack in chat and briefs, never a file` (multiplies input tokens across subagents/reviewers and loses state on `/compact`; B3 keeps `{RUN_DIR}/` file paths).
 - Claude-specific `TodoWrite` for agent tracking (replaced by `{RUN_DIR}/progress.md` `impl_agent` column).
 - Parent reading full changed files as primary reviewer (bloats orchestrator context; B3 keeps isolated `agents/reviewer.md` subagents with `<= 25`-line replies).
 
 ## Consequences
 
 - Mechanical defect detection and wave safety become deterministic zero-token CLI checks (`autodev-guard.{ps1,sh}`).
-- Fix iterations preserve worker prompt cache and eliminate sibling defects in fewer rounds while preserving independent review and strict static context budgets (`measure-context -Strict`).
-- Live multi-worker parallel wave execution across all 4 hosts remains `UNKNOWN / INCOMPLETE` until exercised on a multi-package product repo.
+- Fix iterations preserve subagent prompt cache and eliminate sibling defects in fewer rounds while preserving independent review and strict static context budgets (`measure-context -Strict`).
+- Live multi-subagent parallel wave execution across all 4 hosts remains `UNKNOWN / INCOMPLETE` until exercised on a multi-package product repo.
 
 ## Confidence
 

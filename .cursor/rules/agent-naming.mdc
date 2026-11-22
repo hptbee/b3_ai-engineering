@@ -1,0 +1,8 @@
+---
+description: Hard agent and sub-agent naming rule — deterministic b3- kebab-case spawn names; never use autodev or worker for sub-agents
+alwaysApply: true
+---
+
+Follow the portable agent naming rule:
+
+@rules/agent-naming.md
