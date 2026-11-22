@@ -20,6 +20,8 @@ evals/
 │
 ├── agents/
 │
+├── commands/
+│
 ├── workflows/
 │   └── ship/
 │
@@ -104,9 +106,9 @@ Quality evals need fixtures with a known good outcome, not only prompt sniff tes
 
 A loop that always reports success is a failed loop. A loop that always reports dozens of speculative issues is also a failed loop.
 
-## Workflow eval folders
+## Workflow & command eval folders
 
-`evals/workflows/ship/` holds lifecycle fixtures for `workflows/ship.md`. Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). YAML cases remain schema-checked. Git, ignore, install, and resume ancestry have a separate PowerShell behavioral script (`scripts/validate-ship-behavior.ps1`) and an isolated product-repo smoke (`scripts/smoke-ship-product.ps1`). Those scripts are not a Cursor slash-command or Codex runtime test.
+`evals/workflows/ship/` holds lifecycle fixtures for `workflows/ship.md`, and `evals/commands/` holds boundary, evidence, and convergence fixtures for the six standalone commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-review-loop`, `/b3-verify`). Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). YAML cases remain schema-checked via `scripts/validate-evals.sh`. Deterministic guard, receipt provenance, isolation, install, and resume ancestry behavior have PowerShell sandbox suites (`scripts/validate-ship-behavior.ps1`, `scripts/validate-standalone-commands.ps1`) and an isolated product-repo smoke (`scripts/smoke-ship-product.ps1`). Those scripts are not a Cursor slash-command or Codex runtime test.
 
 ## Honesty metrics
 

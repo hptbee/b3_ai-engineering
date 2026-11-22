@@ -6,12 +6,12 @@ In Cursor these files are slash-invocable. Each file selects skills; it does not
 
 | Command | Intent |
 | --- | --- |
-| [`b3-plan.md`](b3-plan.md) | Implementation plan, no coding |
-| [`b3-implement.md`](b3-implement.md) | Execute via problem-solving + domain skills |
-| [`b3-debug.md`](b3-debug.md) | Root-cause investigation |
-| [`b3-review.md`](b3-review.md) | One code-review pass |
-| [`b3-verify.md`](b3-verify.md) | Evidence for a named claim |
-| [`b3-review-loop.md`](b3-review-loop.md) | One-shot independent loop to gate/stuck/limit |
+| [`b3-plan.md`](b3-plan.md) | Risk-adaptive implementation plan with AC-to-check mapping; plan-only stop |
+| [`b3-implement.md`](b3-implement.md) | Single-hop execution request (`problem-solving` + domain skill, guards, risk-sensitive review, max 2 bounded fix rounds; no `/b3-ship` escalation) |
+| [`b3-debug.md`](b3-debug.md) | Broken-invariant root cause, cheapest hypothesis, sibling sweep, regression test, and 3-attempt escalation |
+| [`b3-review.md`](b3-review.md) | Single-pass delta-first code review (local guards + `symbol-check` + receipt/AC checks, GitHub PR, optional confirmed PR post) |
+| [`b3-verify.md`](b3-verify.md) | Executed evidence for a named claim via `b3-guard verify-run`/`verify-check` (`b3-verify-v1`) receipts |
+| [`b3-review-loop.md`](b3-review-loop.md) | One-shot independent loop to gate/stuck/limit (standalone `.b3/ship/review-loop/<slug>/` state + `SINGLE_AGENT_LIMIT` honesty) |
 | [`b3-ship.md`](b3-ship.md) | Full lifecycle until completion, blocker, or `status` |
 
 Canonical commands live here (`commands/`). Cursor exposes them via `.cursor/commands` (`sync-skills cursor`); Codex, Claude Code, and Antigravity invoke the same procedures through `adapters/command-skills/` or prompt intent. Runtime host slash UX is **NOT VERIFIED** here.
