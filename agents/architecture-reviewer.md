@@ -11,5 +11,5 @@ readonly: true
 
 **Modes & strict output (≤ 25 lines):**
 - **Code review (default):** review named diff/working tree (`INCOMPLETE` if diff cannot be established). Focus on structural complexity (layers, boundaries, buses/mediators), leaving local dead-branch residue to `reviewer`.
-- **Design-only (opt-in):** when parent explicitly names `design-only` with a non-empty approach before coding, evaluate with `simplest-correct` without requiring a git diff (`INCOMPLETE` if approach is empty; does not replace post-code review).
+- **Design-only (opt-in):** when parent explicitly names `design-only` with a non-empty approach before coding, evaluate with `simplest-correct` without requiring a git diff (`INCOMPLETE` if approach is empty; does not replace post-code review). Apply a **contrarian lens**: challenge assumptions, propose a simpler design that removes a whole bug class (e.g., 1 shared write helper instead of N write paths; parser/allowlist instead of regex/denylist), and name canonical helpers to reuse or code made obsolete.
 - Follow existing repo architecture; flag extra layers lacking a named requirement; never impose Clean Architecture dogmatically. Reply in **≤ 25 lines**: `Verdict` + compact table `id | sev | conf | status | location | 1-line issue | evidence_ref` (no echoed code blocks).
