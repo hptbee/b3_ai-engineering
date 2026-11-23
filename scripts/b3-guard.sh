@@ -294,7 +294,7 @@ build_working_tree_oid() {
   else
     rm -f "$tmp_idx"
   fi
-  if ! run_git_cmd_with_index "$root" "$tmp_idx" add -A; then
+  if ! run_git_cmd_with_index "$root" "$tmp_idx" add -A -- . ':(exclude).b3/ship' ':(exclude).b3/autodev'; then
     echo "${prefix}: git add -A failed: $(git_err_detail)"
     rm -f "$tmp_idx"
     exit 1
