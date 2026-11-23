@@ -276,6 +276,24 @@ function Read-PluginManifest([string]$ManifestPath) {
     return $m
 }
 
+function Test-RecordedLinkTarget([string]$LinkPath, [string]$ExpectedDir) {
+    if (-not (Test-IsReparseLink $LinkPath)) { return $false }
+    try {
+        $item = Get-Item -LiteralPath $LinkPath -Force
+        $raw = [string](@($item.Target)[0])
+        if (-not $raw) { return $false }
+        if (-not [IO.Path]::IsPathRooted($raw)) {
+            $raw = Join-Path (Split-Path -Parent $LinkPath) $raw
+        }
+        $actual = [IO.Path]::GetFullPath($raw).TrimEnd('\', '/')
+        $expected = [IO.Path]::GetFullPath($ExpectedDir).TrimEnd('\', '/')
+        if ($env:OS -eq 'Windows_NT') {
+            return $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        return $actual -ceq $expected
+    } catch { return $false }
+}
+
 function Sort-OrdinalStrings([string[]]$Items) {
     $arr = @($Items)
     if ($arr.Count -gt 1) {
@@ -668,7 +686,7 @@ if ($Action -eq 'verify') {
             }
             if (Test-Path -LiteralPath $skillsOut -PathType Container) {
                 foreach ($child in @(Get-ChildItem -LiteralPath $skillsOut -Force)) {
-                    if ((Test-IsReparseLink $child.FullName) -and -not $skillMap.ContainsKey($child.Name)) {
+                    if ((Test-IsReparseLink $child.FullName) -and -not $skillMap.ContainsKey($child.Name) -and $manifest.Links.ContainsKey("skills/$($child.Name)")) {
                         $skillsOk = $false
                         $errors.Add("stale managed skill link present: $($child.FullName)")
                     }
@@ -720,7 +738,7 @@ if ($Action -eq 'verify') {
                     if ($expectedAgentSet -notcontains $existingAg.Name) {
                         $agTxt = [IO.File]::ReadAllText($existingAg.FullName, [System.Text.Encoding]::UTF8)
                         $isTrackedAg = $manifest.Exists -and $manifest.Files.ContainsKey("agents/$($existingAg.Name)")
-                        if ($isTrackedAg -or ($agTxt -match '<!-- Generated from .*/(\.cursor/)?agents/')) {
+                        if ($isTrackedAg) {
                             $agentsOk = $false
                             $errors.Add("stale generated agent file present: $($existingAg.FullName)")
                         }
@@ -750,6 +768,10 @@ if ($Action -eq 'verify') {
 }
 
 # --- Fail-closed preflight checks before any write (install / update) ---
+$oldManifest = Read-PluginManifest $manifestFile
+if ($oldManifest.Exists -and $oldManifest.Schema -ne 'b3-antigravity-plugin-v1') {
+    Fail "refusing to update invalid B3 manifest at $manifestFile"
+}
 if ((Test-Path -LiteralPath $PluginRoot) -or (Test-IsReparseLink $PluginRoot)) {
     if (Test-IsReparseLink $PluginRoot) {
         Fail "refusing to replace link at PluginRoot: $PluginRoot"
@@ -758,7 +780,7 @@ if ((Test-Path -LiteralPath $PluginRoot) -or (Test-IsReparseLink $PluginRoot)) {
     if (-not $rootItem.PSIsContainer) {
         Fail "refusing to replace existing file: $PluginRoot"
     }
-    $existingManifest = Read-PluginManifest $manifestFile
+    $existingManifest = $oldManifest
     $isB3Plugin = $existingManifest.Exists -or (Test-B3PluginJson (Join-Path $PluginRoot 'plugin.json'))
     if (-not $isB3Plugin -and -not $Force) {
         Fail "refusing to overwrite existing non-B3 directory without -Force: $PluginRoot"
@@ -782,25 +804,50 @@ if ((Test-Path -LiteralPath $PluginRoot) -or (Test-IsReparseLink $PluginRoot)) {
         $managedFilePaths.Add((Join-Path $PluginRoot "agents\$($ag.FileName)"))
     }
     foreach ($mp in $managedFilePaths) {
-        if ((Test-Path -LiteralPath $mp) -or (Test-IsReparseLink $mp)) {
-            if (Test-IsReparseLink $mp) {
-                Fail "existing link blocks managed file: $mp"
-            }
-            if (-not (Test-Path -LiteralPath $mp -PathType Leaf)) {
-                Fail "existing non-file path blocks managed file: $mp"
-            }
+        if (-not ((Test-Path -LiteralPath $mp) -or (Test-IsReparseLink $mp))) { continue }
+        if (Test-IsReparseLink $mp) { Fail "existing link blocks managed file: $mp" }
+        if (-not (Test-Path -LiteralPath $mp -PathType Leaf)) {
+            Fail "existing non-file path blocks managed file: $mp"
+        }
+        if ($mp -eq $manifestFile) { continue }
+        $rel = $mp.Substring($PluginRoot.Length).TrimStart('\', '/') -replace '\\', '/'
+        $expectedSha = if ($oldManifest.Files.ContainsKey($rel)) { $oldManifest.Files[$rel] } else { '' }
+        if (-not $Force -and (-not $expectedSha -or (Get-FileSha256 $mp) -ne $expectedSha)) {
+            Fail "UPDATE_CONFLICT: unmanaged or modified file: $mp (preserved; use -Force only after backing it up)"
         }
     }
     $existingSkillsDir = Join-Path $PluginRoot 'skills'
     if (Test-Path -LiteralPath $existingSkillsDir -PathType Container) {
         foreach ($child in @(Get-ChildItem -LiteralPath $existingSkillsDir -Force)) {
-            if (-not $skillMap.ContainsKey($child.Name)) { continue }
-            if (-not (Test-IsReparseLink $child.FullName)) {
-                if (-not $Force) {
-                    Fail "refusing to overwrite non-link entry in $existingSkillsDir without -Force: $($child.FullName)"
+            $key = "skills/$($child.Name)"
+            $desired = $skillMap.ContainsKey($child.Name)
+            $tracked = $oldManifest.Links.ContainsKey($key)
+            if (Test-IsReparseLink $child.FullName) {
+                if ($tracked) {
+                    if (-not $Force -and -not (Test-RecordedLinkTarget $child.FullName $oldManifest.Links[$key])) {
+                        Fail "UPDATE_CONFLICT: modified B3 skill link: $($child.FullName)"
+                    }
+                } elseif ($desired) {
+                    Fail "UPDATE_CONFLICT: untracked skill link: $($child.FullName) (move it manually; -Force cannot delete it)"
                 }
-                if (-not (Test-Path -LiteralPath (Join-Path $child.FullName 'SKILL.md') -PathType Leaf)) {
-                    Fail "refusing to overwrite non-skill directory even with -Force: $($child.FullName)"
+                continue
+            }
+            if ($desired) {
+                if (-not $Force -or -not (Test-Path -LiteralPath (Join-Path $child.FullName 'SKILL.md') -PathType Leaf)) {
+                    Fail "UPDATE_CONFLICT: existing skill directory: $($child.FullName) (explicit -Force requires a valid SKILL.md)"
+                }
+            }
+        }
+    }
+    $expectedAgentFiles = @($renderedAgents | ForEach-Object { $_.FileName })
+    $agentDirForPrune = Join-Path $PluginRoot 'agents'
+    if (Test-Path -LiteralPath $agentDirForPrune -PathType Container) {
+        foreach ($af in @(Get-ChildItem -LiteralPath $agentDirForPrune -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+            if ($expectedAgentFiles -contains $af.Name) { continue }
+            $rel = "agents/$($af.Name)"
+            if ($oldManifest.Files.ContainsKey($rel) -and -not $Force) {
+                if ((Get-FileSha256 $af.FullName) -ne $oldManifest.Files[$rel]) {
+                    Fail "UPDATE_CONFLICT: modified stale B3 agent: $($af.FullName)"
                 }
             }
         }
@@ -839,8 +886,11 @@ Write-Utf8NoBom (Join-Path $rulesOutDir 'AGENTS.md') $rulesContent
 $manifestLines.Add("file|rules/AGENTS.md|$(Get-TextSha256 $rulesContent)")
 
 foreach ($child in @(Get-ChildItem -LiteralPath $skillsOutDir -Force)) {
+    $key = "skills/$($child.Name)"
     if (Test-IsReparseLink $child.FullName) {
-        if (-not $skillMap.ContainsKey($child.Name) -or -not (Test-LinkTarget $child.FullName $skillMap[$child.Name])) {
+        # Never prune untracked user links, even when their names resemble B3 skills.
+        if ($oldManifest.Links.ContainsKey($key) -and
+            (-not $skillMap.ContainsKey($child.Name) -or -not (Test-LinkTarget $child.FullName $skillMap[$child.Name]))) {
             Remove-LinkOnly $child.FullName
         }
     } elseif ($Force -and $skillMap.ContainsKey($child.Name)) {
@@ -851,21 +901,22 @@ foreach ($sn in $sortedSkillNames) {
     $src = $skillMap[$sn]
     $dest = Join-Path $skillsOutDir $sn
     if (-not (Test-LinkTarget $dest $src)) {
-        if (Test-IsReparseLink $dest) { Remove-LinkOnly $dest }
+        if (Test-IsReparseLink $dest) {
+            if (-not $oldManifest.Links.ContainsKey("skills/$sn")) {
+                Fail "UPDATE_CONFLICT: refusing to replace untracked skill link: $dest"
+            }
+            Remove-LinkOnly $dest
+        }
         Create-DirLink $dest $src
     }
     $manifestLines.Add("link|skills/$sn|$(To-Forward $src)")
 }
 
 $expectedAgentFiles = @($renderedAgents | ForEach-Object { $_.FileName })
-$oldManifest = Read-PluginManifest $manifestFile
 foreach ($existingAgent in @(Get-ChildItem -LiteralPath $agentsOutDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
-    if ($expectedAgentFiles -notcontains $existingAgent.Name) {
-        $existingText = [IO.File]::ReadAllText($existingAgent.FullName, [System.Text.Encoding]::UTF8)
-        $isTracked = $oldManifest.Files.ContainsKey("agents/$($existingAgent.Name)")
-        if ($Force -or $isTracked -or ($existingText -match '<!-- Generated from .*/(\.cursor/)?agents/')) {
-            Remove-Item -LiteralPath $existingAgent.FullName -Force
-        }
+    if ($expectedAgentFiles -notcontains $existingAgent.Name -and
+        $oldManifest.Files.ContainsKey("agents/$($existingAgent.Name)")) {
+        Remove-Item -LiteralPath $existingAgent.FullName -Force
     }
 }
 foreach ($ag in $renderedAgents) {

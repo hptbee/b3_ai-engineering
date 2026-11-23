@@ -628,6 +628,91 @@ try {
     } else {
         FailCheck 'ag-global-uninstall-protects-modified' "in=$($in14.Code) conf=$($unConf14.Code) kept=$kept14 force=$($unForce14.Code) clean=$clean14 sh=$sh14Ok"
     }
+
+    # --- 15. P1: user-owned links/agents are not adopted or pruned ---
+    $uh15 = Join-Path $sandbox 'u15'
+    $pr15 = Join-Path $uh15 '.gemini\config\plugins\b3-ai-engineering'
+    $ext15 = Join-Path $uh15 'external-user-skill'
+    New-Item -ItemType Directory -Path $ext15 -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $ext15 'SKILL.md') -Value @('---','name: user-custom','description: user','---')
+    $in15 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr15, '-UserHome', $uh15)
+    $customLink15 = Join-Path $pr15 'skills\user-custom'
+    New-Item -ItemType Junction -Path $customLink15 -Target $ext15 | Out-Null
+    $customAgent15 = Join-Path $pr15 'agents\user-generated.md'
+    Set-Content -LiteralPath $customAgent15 -Value '<!-- Generated from /other/agents/user-generated.md -->'
+    $up15Ps = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr15, '-UserHome', $uh15)
+    $ver15Ps = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr15, '-UserHome', $uh15)
+    $up15ShOk = $true
+    if ($hasBash) {
+        $pr15p = $pr15 -replace '\\', '/'
+        $uh15p = $uh15 -replace '\\', '/'
+        $up15Sh = Invoke-ShScript $agShPosix "update --plugin-root '$pr15p' --user-home '$uh15p'"
+        $ver15Sh = Invoke-ShScript $agShPosix "verify --plugin-root '$pr15p' --user-home '$uh15p'"
+        $up15ShOk = ($up15Sh.Code -eq 0) -and ($ver15Sh.Code -eq 0)
+    }
+    $preserved15 = (Test-Path -LiteralPath (Join-Path $customLink15 'SKILL.md')) -and (Test-Path -LiteralPath $customAgent15)
+    $uh15b = Join-Path $sandbox 'u15b'
+    $pr15b = Join-Path $uh15b '.gemini\config\plugins\b3-ai-engineering'
+    $ext15b = Join-Path $uh15b 'external-same-name'
+    New-Item -ItemType Directory -Path (Join-Path $pr15b 'skills'), $ext15b -Force | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $pr15b 'skills\debugging') -Target $ext15b | Out-Null
+    $blocked15Ps = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr15b, '-UserHome', $uh15b, '-Force')
+    $blocked15ShOk = $true
+    if ($hasBash) {
+        $pr15bp = $pr15b -replace '\\', '/'
+        $uh15bp = $uh15b -replace '\\', '/'
+        $blocked15Sh = Invoke-ShScript $agShPosix "install --plugin-root '$pr15bp' --user-home '$uh15bp' --force"
+        $blocked15ShOk = ($blocked15Sh.Code -eq 1) -and ($blocked15Sh.Text -match 'UPDATE_CONFLICT')
+    }
+    $collisionKept15 = (Test-Path -LiteralPath (Join-Path $pr15b 'skills\debugging')) -and (Test-Path -LiteralPath $ext15b)
+    if ($in15.Code -eq 0 -and $up15Ps.Code -eq 0 -and $ver15Ps.Code -eq 0 -and $up15ShOk -and $preserved15 -and
+        $blocked15Ps.Code -eq 1 -and $blocked15ShOk -and $collisionKept15) {
+        Pass 'ag-global-untracked-links-survive-update'
+    } else {
+        FailCheck 'ag-global-untracked-links-survive-update' "in=$($in15.Code) up=$($up15Ps.Code) verify=$($ver15Ps.Code) bash=$up15ShOk preserved=$preserved15 collision=$($blocked15Ps.Code)/$blocked15ShOk/$collisionKept15"
+    }
+
+    # --- 16. P1: modified managed files stop update before any writes ---
+    $uh16 = Join-Path $sandbox 'u16'
+    $pr16 = Join-Path $uh16 '.gemini\config\plugins\b3-ai-engineering'
+    $in16 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr16, '-UserHome', $uh16)
+    $agent16 = Join-Path $pr16 'agents\b3-reviewer.md'
+    $rules16 = Join-Path $pr16 'rules\AGENTS.md'
+    $plugin16 = Join-Path $pr16 'plugin.json'
+    $manifest16 = Join-Path $pr16 '.b3-plugin-manifest'
+    $priorPlugin16 = (Get-FileHash -LiteralPath $plugin16 -Algorithm SHA256).Hash
+    $priorManifest16 = (Get-FileHash -LiteralPath $manifest16 -Algorithm SHA256).Hash
+    Add-Content -LiteralPath $agent16 -Value '<!-- personal edit -->'
+    $blocked16Ps = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr16, '-UserHome', $uh16)
+    $blocked16ShOk = $true
+    if ($hasBash) {
+        $pr16p = $pr16 -replace '\\', '/'
+        $uh16p = $uh16 -replace '\\', '/'
+        $blocked16Sh = Invoke-ShScript $agShPosix "update --plugin-root '$pr16p' --user-home '$uh16p'"
+        $blocked16ShOk = ($blocked16Sh.Code -eq 1) -and ($blocked16Sh.Text -match 'UPDATE_CONFLICT')
+    }
+    $protected16 = ((Get-Content -LiteralPath $agent16 -Raw) -match 'personal edit') -and
+                   ((Get-FileHash -LiteralPath $plugin16 -Algorithm SHA256).Hash -eq $priorPlugin16) -and
+                   ((Get-FileHash -LiteralPath $manifest16 -Algorithm SHA256).Hash -eq $priorManifest16)
+    $restored16 = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr16, '-UserHome', $uh16, '-Force')
+    Add-Content -LiteralPath $rules16 -Value '<!-- personal rules -->'
+    $rulesBlockedPs16 = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr16, '-UserHome', $uh16)
+    $rulesBlockedShOk16 = $true
+    if ($hasBash) {
+        $rulesBlockedSh16 = Invoke-ShScript $agShPosix "update --plugin-root '$pr16p' --user-home '$uh16p'"
+        $rulesBlockedShOk16 = ($rulesBlockedSh16.Code -eq 1) -and ($rulesBlockedSh16.Text -match 'UPDATE_CONFLICT')
+    }
+    $rulesKept16 = (Get-Content -LiteralPath $rules16 -Raw) -match 'personal rules'
+    $forced16 = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr16, '-UserHome', $uh16, '-Force')
+    $verified16 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr16, '-UserHome', $uh16)
+    if ($in16.Code -eq 0 -and $blocked16Ps.Code -eq 1 -and $blocked16ShOk -and $protected16 -and
+        $restored16.Code -eq 0 -and $rulesBlockedPs16.Code -eq 1 -and $rulesBlockedShOk16 -and
+        $rulesKept16 -and $forced16.Code -eq 0 -and $verified16.Code -eq 0) {
+        Pass 'ag-global-update-preserves-user-edits'
+    } else {
+        FailCheck 'ag-global-update-preserves-user-edits' "in=$($in16.Code) agent=$($blocked16Ps.Code)/$blocked16ShOk protected=$protected16 restore=$($restored16.Code) rules=$($rulesBlockedPs16.Code)/$rulesBlockedShOk16 kept=$rulesKept16 forced=$($forced16.Code) ver=$($verified16.Code)"
+    }
+
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue

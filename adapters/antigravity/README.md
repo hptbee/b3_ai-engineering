@@ -66,7 +66,8 @@ Use either the unified host dispatcher or the standalone plugin manager:
 ```
 
 - Pass `-DryRun` / `--dry-run` to preview `install` or `uninstall` without modifying disk.
-- Pass `-Force` / `--force` to overwrite conflicting unmanaged non-link directories.
+- Normal `install`/`update` checks SHA-256 values recorded in `.b3-plugin-manifest` **before writing**. Modified generated files cause `UPDATE_CONFLICT` and are preserved. Back up your edits before using `-Force` / `--force` to deliberately replace same-named generated files or skill directories.
+- Untracked symlinks and custom agents are never pruned; an untracked symlink colliding with a desired B3 skill name must be moved manually, even with `-Force`.
 - Custom target/path flags (for sandboxes or non-default homes): `-PluginRoot` / `--plugin-root`, `-B3Home` / `--b3-home`, and `-UserHome` / `--user-home` (or `-AntigravityPluginRoot` / `-PluginRoot` and `-CursorHome` via `adapters/install-global.ps1`, `--plugin-root` and `--cursor-home` via `adapters/install-global.sh`).
 - `verify` checks each capability surface independently (`check.plugin`, `check.rules`, `check.skills`, `check.commands`, `check.agents`), hashes `plugin.json`, `rules/AGENTS.md`, and `agents/*.md` against canonical `B3_HOME` to detect drift, validates Windows NTFS junctions (and POSIX symlinks where supported), and scans for duplicate roots (`COEXISTENCE_WARNING:`).
 
@@ -82,7 +83,7 @@ In any local repository that has never run `install-product`:
 - **Prevent duplicated roots:**
   - Do **not** keep duplicate B3 skills in `~/.gemini/config/skills/` or `~/.agents/skills/`, or a second plugin directory with `"name": "b3-ai-engineering"` under `~/.gemini/config/plugins/` (`verify` flags each with `COEXISTENCE_WARNING:`).
   - **Cursor coexistence:** Installing global Cursor (`~/.cursor/`) alongside the global Antigravity plugin (`~/.gemini/config/plugins/b3-ai-engineering/`) shares one canonical `B3_HOME` cleanly with zero cross-host warnings. In a shared per-product repo, use `install-product -HostName cursor` (avoid creating repo `.agents/skills`) and keep the global Antigravity plugin active.
-- **Migration from pre-manifest plugin install:** Re-run `install` or `update` to add `.b3-plugin-manifest`; `uninstall` also cleans up legacy generated plugin files safely while preserving unrelated user notes and `~/.gemini/config/config.json`.
+- **Migration from pre-manifest plugin install:** Back up any changes to generated files, then run `install -Force` / `install --force` to adopt the legacy installation into `.b3-plugin-manifest` (or remove/move colliding files first). Plain `install`/`update` now refuses to overwrite untracked generated files. The legacy `uninstall` fallback remains separate from manifest-tracked uninstall.
 
 ## 3. Alternative local & product setup modes
 

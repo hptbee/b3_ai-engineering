@@ -812,7 +812,7 @@ if [[ "$ACTION" == "verify" ]]; then
             for sn in "${ALL_SKILL_NAMES[@]}"; do
               if [[ "$sn" == "$ename" ]]; then known=true; break; fi
             done
-            if ! $known; then
+            if ! $known && manifest_link_target "skills/${ename}" >/dev/null 2>&1; then
               SKILLS_OK=false
               ERRORS+=("stale managed skill link present: $entry")
             fi
@@ -879,7 +879,7 @@ if [[ "$ACTION" == "verify" ]]; then
                 if [[ "$fk" == "agents/${ebase}" ]]; then tracked=true; break; fi
               done
             fi
-            if $tracked || grep -Eq '<!-- Generated from .*/(\.cursor/)?agents/' "$existing"; then
+            if $tracked; then
               AGENTS_OK=false
               ERRORS+=("stale generated agent file present: $existing")
             fi
@@ -917,6 +917,10 @@ is_b3_skill_name() {
 }
 
 # --- Preflight before any write (install / update) ---
+load_manifest
+if $M_EXISTS && [[ "$M_SCHEMA" != "b3-antigravity-plugin-v1" ]]; then
+  echo "error: invalid B3 manifest at $MANIFEST_FILE" >&2; exit 1
+fi
 if [[ -e "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
   if [[ ! -d "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
     echo "error: refusing to replace existing non-directory path: $PLUGIN_ROOT" >&2
@@ -954,13 +958,14 @@ if [[ -e "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
   done
   for mp in "${MANAGED_FILES[@]}"; do
     if [[ -e "$mp" || -L "$mp" ]]; then
-      if is_link_entry "$mp"; then
-        echo "error: existing link blocks managed file: $mp" >&2
-        exit 1
-      fi
-      if [[ ! -f "$mp" ]]; then
-        echo "error: existing non-file path blocks managed file: $mp" >&2
-        exit 1
+      if is_link_entry "$mp"; then echo "error: existing link blocks managed file: $mp" >&2; exit 1; fi
+      if [[ ! -f "$mp" ]]; then echo "error: existing non-file path blocks managed file: $mp" >&2; exit 1; fi
+      if [[ "$mp" != "$MANIFEST_FILE" ]]; then
+        key="${mp#${PLUGIN_ROOT}/}"
+        exp_sha="$(manifest_file_sha "$key" 2>/dev/null || true)"
+        if ! $FORCE && { [[ -z "$exp_sha" ]] || [[ "$(sha256_file "$mp")" != "$exp_sha" ]]; }; then
+          echo "error: UPDATE_CONFLICT: unmanaged or modified file: $mp (preserved; backup before --force)" >&2; exit 1
+        fi
       fi
     fi
   done
@@ -968,16 +973,34 @@ if [[ -e "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
     for entry in "${PLUGIN_ROOT}/skills"/* "${PLUGIN_ROOT}/skills"/.[!.]* "${PLUGIN_ROOT}/skills"/..?*; do
       [[ -e "$entry" || -L "$entry" ]] || continue
       ename="$(basename "$entry")"
-      is_b3_skill_name "$ename" || continue
-      if ! is_link_entry "$entry"; then
-        if ! $FORCE; then
-          echo "error: refusing to overwrite non-link entry in ${PLUGIN_ROOT}/skills without --force: $entry" >&2
-          exit 1
+      prior="$(manifest_link_target "skills/${ename}" 2>/dev/null || true)"
+      if is_link_entry "$entry"; then
+        if [[ -n "$prior" ]]; then
+          if ! $FORCE && ! link_matches_expected_or_dangling "$entry" "$prior"; then
+            echo "error: UPDATE_CONFLICT: modified managed skill link: $entry" >&2; exit 1
+          fi
+        elif is_b3_skill_name "$ename"; then
+          echo "error: UPDATE_CONFLICT: untracked skill link: $entry (move manually; --force cannot delete)" >&2; exit 1
         fi
-        if [[ ! -f "${entry}/SKILL.md" ]]; then
-          echo "error: refusing to overwrite non-skill directory even with --force: $entry" >&2
-          exit 1
+      elif is_b3_skill_name "$ename"; then
+        if ! $FORCE || [[ ! -f "${entry}/SKILL.md" ]]; then
+          echo "error: UPDATE_CONFLICT: existing skill directory: $entry (explicit --force requires SKILL.md)" >&2; exit 1
         fi
+      fi
+    done
+  fi
+  if [[ -d "${PLUGIN_ROOT}/agents" ]]; then
+    for existing in "${PLUGIN_ROOT}/agents"/*.md; do
+      [[ -f "$existing" ]] || continue
+      ebase="$(basename "$existing")"
+      keep=false
+      for expected in "${AGENT_BASES[@]}"; do
+        if [[ "$ebase" == "$expected" ]]; then keep=true; break; fi
+      done
+      $keep && continue
+      exp_sha="$(manifest_file_sha "agents/${ebase}" 2>/dev/null || true)"
+      if [[ -n "$exp_sha" ]] && ! $FORCE && [[ "$(sha256_file "$existing")" != "$exp_sha" ]]; then
+        echo "error: UPDATE_CONFLICT: modified stale B3 agent: $existing" >&2; exit 1
       fi
     done
   fi
@@ -1013,16 +1036,14 @@ for entry in "${PLUGIN_ROOT}/skills"/* "${PLUGIN_ROOT}/skills"/.[!.]* "${PLUGIN_
   [[ -e "$entry" || -L "$entry" ]] || continue
   ename="$(basename "$entry")"
   if is_link_entry "$entry"; then
+    # Only previous manifest links are B3-owned; preserve all untracked links.
+    prior="$(manifest_link_target "skills/${ename}" 2>/dev/null || true)"
+    [[ -n "$prior" ]] || continue
     desired_dir=""
     for i in "${!ALL_SKILL_NAMES[@]}"; do
-      if [[ "${ALL_SKILL_NAMES[$i]}" == "$ename" ]]; then
-        desired_dir="${ALL_SKILL_DIRS[$i]}"
-        break
-      fi
+      if [[ "${ALL_SKILL_NAMES[$i]}" == "$ename" ]]; then desired_dir="${ALL_SKILL_DIRS[$i]}"; break; fi
     done
-    if [[ -z "$desired_dir" ]] || ! link_target_ok "$entry" "$desired_dir"; then
-      remove_link_only "$entry"
-    fi
+    if [[ -z "$desired_dir" ]] || ! link_target_ok "$entry" "$desired_dir"; then remove_link_only "$entry"; fi
   elif $FORCE && is_b3_skill_name "$ename"; then
     rm -rf "$entry"
   fi
@@ -1043,7 +1064,13 @@ for i in "${SORTED_SKILL_IDX[@]}"; do
   sdir="${ALL_SKILL_DIRS[$i]}"
   dest="${PLUGIN_ROOT}/skills/${sname}"
   if ! link_target_ok "$dest" "$sdir"; then
-    if is_link_entry "$dest"; then remove_link_only "$dest"; fi
+    if is_link_entry "$dest"; then
+      prior="$(manifest_link_target "skills/${sname}" 2>/dev/null || true)"
+      if [[ -z "$prior" ]]; then
+        echo "error: UPDATE_CONFLICT: untracked skill link: $dest" >&2; exit 1
+      fi
+      remove_link_only "$dest"
+    fi
     create_dir_link "$dest" "$sdir"
   fi
   MANIFEST_LINES="${MANIFEST_LINES}link|skills/${sname}|${sdir}
@@ -1065,7 +1092,7 @@ for existing in "${PLUGIN_ROOT}/agents"/*.md; do
         if [[ "$fk" == "agents/${ebase}" ]]; then tracked=true; break; fi
       done
     fi
-    if $FORCE || $tracked || grep -Eq '<!-- Generated from .*/(\.cursor/)?agents/' "$existing"; then
+    if $tracked; then
       rm -f "$existing"
     fi
   fi
