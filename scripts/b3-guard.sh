@@ -14,6 +14,70 @@ _cleanup_tmp() {
 }
 trap _cleanup_tmp EXIT
 
+_GIT_STDOUT=""
+_GIT_STDERR=""
+run_git_cmd() {
+  local root="$1"; shift
+  local errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$errf")
+  _GIT_STDOUT=""
+  _GIT_STDERR=""
+  if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f "$errf"
+  return $rc
+}
+
+run_git_cmd_stdin() {
+  local root="$1"
+  local stdin_text="$2"
+  shift 2
+  local errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$errf")
+  _GIT_STDOUT=""
+  _GIT_STDERR=""
+  if _GIT_STDOUT="$(printf '%s' "$stdin_text" | git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f "$errf"
+  return $rc
+}
+
+run_git_cmd_stdin_file() {
+  local root="$1"
+  local stdin_file="$2"
+  shift 2
+  local errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$errf")
+  _GIT_STDOUT=""
+  _GIT_STDERR=""
+  if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" < "$stdin_file" 2>"$errf")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f "$errf"
+  return $rc
+}
+
+git_err_detail() {
+  local d
+  d="$(trim_str "$_GIT_STDERR")"
+  [[ -n "$d" ]] || d="$(trim_str "$_GIT_STDOUT")"
+  printf '%s' "$d"
+}
+
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
   echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree [options]" >&2
@@ -166,9 +230,9 @@ resolve_auto_base_sha() {
   local root="$1"
   shift
   local -a ignored=("$@")
-  local diff_out un_out line p
-  diff_out="$(git -C "$root" diff --no-renames --name-only HEAD 2>/dev/null || true)"
-  un_out="$(git -C "$root" ls-files --others --exclude-standard 2>/dev/null || true)"
+  local diff_out="" un_out="" line p
+  if run_git_cmd "$root" diff --no-renames --name-only HEAD; then diff_out="$_GIT_STDOUT"; fi
+  if run_git_cmd "$root" ls-files --others --exclude-standard; then un_out="$_GIT_STDOUT"; fi
   while IFS= read -r line; do
     p="$(norm_path "$line")"
     [[ -z "$p" ]] && continue
@@ -178,12 +242,16 @@ resolve_auto_base_sha() {
     return 0
   done < <(printf '%s\n%s\n' "$diff_out" "$un_out")
 
-  local head_sha ref mb
-  head_sha="$(git -C "$root" rev-parse HEAD 2>/dev/null || true)"
+  local head_sha="" ref mb=""
+  if run_git_cmd "$root" rev-parse HEAD; then head_sha="$(trim_str "$_GIT_STDOUT")"; fi
   if [[ -n "$head_sha" ]]; then
     for ref in origin/HEAD origin/main origin/master main master; do
-      if git -C "$root" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
-        mb="$(git -C "$root" merge-base "$ref" HEAD 2>/dev/null || true)"
+      if run_git_cmd "$root" rev-parse --verify --quiet "$ref"; then
+        if run_git_cmd "$root" merge-base "$ref" HEAD; then
+          mb="$(trim_str "$_GIT_STDOUT")"
+        else
+          mb=""
+        fi
         if [[ -n "$mb" && "$mb" != "$head_sha" ]]; then
           printf '%s' "$mb"
           return 0
@@ -197,10 +265,14 @@ resolve_auto_base_sha() {
 resolve_auto_base_for_target() {
   local root="$1"
   local target_commit_sha="$2"
-  local ref mb
+  local ref mb=""
   for ref in origin/HEAD origin/main origin/master main master HEAD; do
-    if git -C "$root" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
-      mb="$(git -C "$root" merge-base "$ref" "$target_commit_sha" 2>/dev/null || true)"
+    if run_git_cmd "$root" rev-parse --verify --quiet "$ref"; then
+      if run_git_cmd "$root" merge-base "$ref" "$target_commit_sha"; then
+        mb="$(trim_str "$_GIT_STDOUT")"
+      else
+        mb=""
+      fi
       if [[ -n "$mb" && "$mb" != "$target_commit_sha" ]]; then
         printf '%s' "$mb"
         return 0
@@ -232,9 +304,10 @@ is_secret_path() {
 
 resolve_git_dir() {
   local root="$1"
-  local gd
-  gd="$(git -C "$root" rev-parse --git-dir 2>/dev/null || true)"
-  gd="$(trim_str "$gd")"
+  local gd=""
+  if run_git_cmd "$root" rev-parse --git-dir; then
+    gd="$(trim_str "$_GIT_STDOUT")"
+  fi
   [[ -n "$gd" ]] || return 1
   if [[ "$gd" != /* && ! "$gd" =~ ^[A-Za-z]: ]]; then
     gd="${root}/${gd}"
@@ -563,27 +636,209 @@ write_atomic_lf_file() {
   mv -f "$tmp" "$dest"
 }
 
+resolve_symlink_oid() {
+  local root="$1"
+  local rel_p="$2"
+  local full="${root}/${rel_p}"
+  local sha
+  if [[ -L "$full" ]]; then
+    local tgt
+    tgt="$(readlink "$full")"
+    if ! run_git_cmd_stdin "$root" "$tgt" hash-object --stdin; then
+      echo "GIT_ERROR: git hash-object symlink failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git hash-object symlink failed for ${rel_p}: $sha"
+      return 1
+    fi
+    printf '%s' "$sha"
+    return 0
+  elif [[ -f "$full" ]]; then
+    if ! run_git_cmd "$root" hash-object -- "$rel_p"; then
+      echo "GIT_ERROR: git hash-object failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git hash-object failed for ${rel_p}: $sha"
+      return 1
+    fi
+    printf '%s' "$sha"
+    return 0
+  fi
+  return 2
+}
+
+resolve_submodule_entry() {
+  local root="$1"
+  local rel_p="$2"
+  local fallback_oid="${3:-}"
+  local depth="${4:-0}"
+  local sub_full="${root}/${rel_p}"
+  local zero_oid="0000000000000000000000000000000000000000"
+  local has_fb=false
+  if [[ -n "$fallback_oid" && "$fallback_oid" != "$zero_oid" && "$fallback_oid" =~ ^[0-9a-f]{40}$ ]]; then
+    has_fb=true
+  fi
+
+  if [[ -d "$sub_full" && -e "${sub_full}/.git" ]]; then
+    local sub_head="" has_head=false sh_out
+    if run_git_cmd "$sub_full" rev-parse HEAD; then
+      sh_out="$(trim_str "$_GIT_STDOUT")"
+      if [[ "$sh_out" =~ ^[0-9a-f]{40}$ ]]; then
+        sub_head="$sh_out"
+        has_head=true
+      fi
+    fi
+    if ! $has_head; then
+      if $has_fb; then sub_head="$fallback_oid"; else sub_head="UNBORN"; fi
+    fi
+
+    if ! run_git_cmd "$sub_full" status --porcelain -uall --ignore-submodules=none; then
+      echo "GIT_ERROR: submodule status failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    local st_out="$_GIT_STDOUT"
+    local -a st_lines=()
+    local raw_st clean_st trimmed_st
+    while IFS= read -r raw_st; do
+      clean_st="${raw_st%$'\r'}"
+      trimmed_st="$(trim_str "$clean_st")"
+      [[ -n "$trimmed_st" ]] && st_lines+=("$clean_st")
+    done <<< "$st_out"
+
+    if [[ ${#st_lines[@]} -eq 0 ]]; then
+      printf '160000 commit %s' "$sub_head"
+      return 0
+    fi
+
+    local dirty_buf="" sl
+    while IFS= read -r sl; do
+      [[ -n "$sl" ]] && dirty_buf="${dirty_buf}S ${sl}"$'\n'
+    done < <(printf '%s\n' "${st_lines[@]}" | LC_ALL=C sort)
+
+    local s_wt="" s_ca="" s_un=""
+    if $has_head; then
+      run_git_cmd "$sub_full" diff --no-renames --name-only --ignore-submodules=none HEAD || { echo "GIT_ERROR: submodule diff failed for ${rel_p}: $(git_err_detail)"; return 1; }
+      s_wt="$_GIT_STDOUT"
+    fi
+    run_git_cmd "$sub_full" diff --no-renames --cached --name-only || { echo "GIT_ERROR: submodule diff cached failed for ${rel_p}: $(git_err_detail)"; return 1; }
+    s_ca="$_GIT_STDOUT"
+    run_git_cmd "$sub_full" ls-files --others --exclude-standard || { echo "GIT_ERROR: submodule ls-files failed for ${rel_p}: $(git_err_detail)"; return 1; }
+    s_un="$_GIT_STDOUT"
+
+    local -a s_cands=()
+    local line sp
+    while IFS= read -r line; do
+      sp="$(norm_path "$line")"
+      [[ -n "$sp" ]] && s_cands+=("$sp")
+    done < <(printf '%s\n%s\n%s\n' "$s_wt" "$s_ca" "$s_un")
+
+    if [[ ${#s_cands[@]} -gt 0 ]]; then
+      local sp_full f_sha n_tag nh
+      while IFS= read -r sp; do
+        [[ -n "$sp" ]] || continue
+        sp_full="${sub_full}/${sp}"
+        if [[ -L "$sp_full" ]]; then
+          local l_sha="" rc_l=0
+          if l_sha="$(resolve_symlink_oid "$sub_full" "$sp")"; then
+            dirty_buf="${dirty_buf}C ${sp} 120000:${l_sha}"$'\n'
+          else
+            rc_l=$?
+            if [[ $rc_l -eq 1 ]]; then echo "$l_sha"; return 1; fi
+            dirty_buf="${dirty_buf}C ${sp} DELETED"$'\n'
+          fi
+        elif [[ -f "$sp_full" ]]; then
+          if ! run_git_cmd "$sub_full" hash-object -- "$sp"; then
+            echo "GIT_ERROR: submodule hash-object failed for ${rel_p}/${sp}: $(git_err_detail)"
+            return 1
+          fi
+          f_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ ! "$f_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GIT_ERROR: submodule hash-object failed for ${rel_p}/${sp}: $f_sha"
+            return 1
+          fi
+          dirty_buf="${dirty_buf}C ${sp} ${f_sha}"$'\n'
+        elif [[ -d "$sp_full" ]]; then
+          if [[ -e "${sp_full}/.git" ]]; then
+            if [[ "$depth" -ge 5 ]]; then
+              echo "GIT_ERROR: nested submodule depth exceeded for ${rel_p}/${sp}"
+              return 1
+            fi
+            local nested_val="" rc_n=0
+            if nested_val="$(resolve_submodule_entry "$sub_full" "$sp" "" $((depth + 1)))"; then
+              n_tag="$nested_val"
+            else
+              rc_n=$?
+              if [[ $rc_n -eq 1 ]]; then echo "$nested_val"; return 1; fi
+              n_tag="DIR"
+            fi
+          else
+            n_tag="DIR"
+          fi
+          dirty_buf="${dirty_buf}D ${sp} ${n_tag}"$'\n'
+        else
+          dirty_buf="${dirty_buf}C ${sp} DELETED"$'\n'
+        fi
+      done < <(printf '%s\n' "${s_cands[@]}" | LC_ALL=C sort -u)
+    fi
+
+    if ! run_git_cmd_stdin "$root" "$dirty_buf" hash-object --stdin; then
+      echo "GIT_ERROR: git hash-object submodule digest failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    local d_sha
+    d_sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$d_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git hash-object submodule digest failed for ${rel_p}: $d_sha"
+      return 1
+    fi
+    printf '160000 commit %s+dirty:%s' "$sub_head" "$d_sha"
+    return 0
+  fi
+
+  if $has_fb; then
+    printf '160000 commit %s' "$fallback_oid"
+    return 0
+  fi
+  return 2
+}
+
 compute_tree_fingerprint() {
   local root="$1"
   local rel_csv="$2"
   local ign_csv="$3"
   local head_sha
-  head_sha="$(git -C "$root" rev-parse HEAD 2>&1)" || { echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"; return 1; }
-  head_sha="$(trim_str "$head_sha")"
+  if ! run_git_cmd "$root" rev-parse HEAD; then
+    echo "GIT_ERROR: git rev-parse HEAD failed: $(git_err_detail)"
+    return 1
+  fi
+  head_sha="$(trim_str "$_GIT_STDOUT")"
   if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
     echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"
     return 1
   fi
 
+  local is_win_os=false
+  case "$(uname -s 2>/dev/null || printf '')" in
+    MINGW*|MSYS*|CYGWIN*) is_win_os=true ;;
+  esac
+  local core_filemode=false
+  if run_git_cmd "$root" config --bool core.filemode; then
+    [[ "$(trim_str "$_GIT_STDOUT")" == "true" ]] && core_filemode=true
+  else
+    ! $is_win_os && core_filemode=true
+  fi
+
   local -a ign_arr=()
   while IFS= read -r p; do [[ -n "$p" ]] && ign_arr+=("$p"); done < <(split_csv_lines "$ign_csv" true | LC_ALL=C sort -u)
 
-  local had_rel=false
   local -a clean_rel=()
   local -a raw_rel=()
   while IFS= read -r p; do [[ -n "$p" ]] && raw_rel+=("$p"); done < <(split_csv_lines "$rel_csv" true)
   if [[ ${#raw_rel[@]} -gt 0 ]]; then
-    had_rel=true
     while IFS= read -r np; do
       [[ -n "$np" ]] || continue
       is_checkpoint_dir "$np" && continue
@@ -596,61 +851,357 @@ compute_tree_fingerprint() {
     fi
   fi
 
-  local paths_csv="ALL"
+  local paths_csv="ALL" clean_ign_csv="" clean_rel_csv=""
   if [[ ${#clean_rel[@]} -gt 0 ]]; then
     paths_csv="$(printf '%s\n' "${clean_rel[@]}" | paste -sd ',' -)"
+    clean_rel_csv="$paths_csv"
+  fi
+  if [[ ${#ign_arr[@]} -gt 0 ]]; then
+    clean_ign_csv="$(printf '%s\n' "${ign_arr[@]}" | paste -sd ',' -)"
   fi
 
-  local wt_dirty staged_dirty untracked
+  local ls_out diff_head_raw diff_cached_raw diff_idx_wt_raw untracked
   if [[ ${#clean_rel[@]} -gt 0 ]]; then
-    wt_dirty="$(git -C "$root" diff --no-renames --name-only HEAD -- "${clean_rel[@]}")" || { echo "GIT_ERROR: git diff HEAD failed"; return 1; }
-    staged_dirty="$(git -C "$root" diff --no-renames --cached --name-only -- "${clean_rel[@]}")" || { echo "GIT_ERROR: git diff cached failed"; return 1; }
-    untracked="$(git -C "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}")" || { echo "GIT_ERROR: git ls-files failed"; return 1; }
+    run_git_cmd "$root" ls-tree -r HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
+    ls_out="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+    diff_head_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+    diff_cached_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+    diff_idx_wt_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
+    untracked="$_GIT_STDOUT"
   else
-    wt_dirty="$(git -C "$root" diff --no-renames --name-only HEAD)" || { echo "GIT_ERROR: git diff HEAD failed"; return 1; }
-    staged_dirty="$(git -C "$root" diff --no-renames --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; return 1; }
-    untracked="$(git -C "$root" ls-files --others --exclude-standard)" || { echo "GIT_ERROR: git ls-files failed"; return 1; }
+    run_git_cmd "$root" ls-tree -r HEAD || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
+    ls_out="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+    diff_head_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+    diff_cached_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+    diff_idx_wt_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
+    untracked="$_GIT_STDOUT"
   fi
 
-  local -a candidates=()
-  local line p
-  while IFS= read -r line; do
-    p="$(norm_path "$line")"
-    [[ -n "$p" ]] || continue
-    is_checkpoint_dir "$p" && continue
-    if [[ ${#ign_arr[@]} -gt 0 ]] && path_in_list "$p" "${ign_arr[@]}"; then continue; fi
-    if [[ ${#clean_rel[@]} -gt 0 ]] && ! path_in_list "$p" "${clean_rel[@]}"; then continue; fi
-    candidates+=("$p")
-  done < <(printf '%s\n%s\n%s\n' "$wt_dirty" "$staged_dirty" "$untracked")
+  local tasks_raw
+  tasks_raw="$({
+    printf '__HEAD__\n%s\n' "$diff_head_raw"
+    printf '__CACHED__\n%s\n' "$diff_cached_raw"
+    printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
+    printf '__UNTRACKED__\n%s\n' "$untracked"
+  } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
+    function norm_p(s) {
+      gsub(/\r/, "", s)
+      gsub(/\\/, "/", s)
+      sub(/^[ \t]+/, "", s)
+      sub(/[ \t]+$/, "", s)
+      sub(/^\.\//, "", s)
+      while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
+      return s
+    }
+    function is_cp(s) {
+      return (s ~ /^\.b3\/(ship|autodev)(\/|$)/)
+    }
+    function in_list(s, arr, n,    i, pat) {
+      for (i = 1; i <= n; i++) {
+        pat = arr[i]
+        if (pat == "") continue
+        if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
+      }
+      return 0
+    }
+    function accept_path(fp) {
+      if (fp == "" || is_cp(fp)) return 0
+      if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
+      if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
+      return 1
+    }
+    function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
+      if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
+      ti = index(line, "\t")
+      if (ti < 3) return
+      meta = substr(line, 2, ti - 2)
+      nmp = split(meta, mp, /[ \t]+/)
+      if (nmp < 5) return
+      nm = mp[2]; noid = mp[4]
+      if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
+      fp = norm_p(substr(line, ti + 1))
+      if (!accept_path(fp)) return
+      if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
+      out_m[fp] = nm
+      out_o[fp] = noid
+    }
+    BEGIN {
+      split("", ign_arr); split("", rel_arr)
+      split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", untr)
+      n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
+      n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
+      sec = ""
+    }
+    { gsub(/\r$/, "", $0) }
+    $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__UNTRACKED__" { sec = $0; next }
+    $0 == "" { next }
+    sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
+    sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
+    sec == "__IDXWT__" {
+      if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
+      ti = index($0, "\t")
+      if (ti < 3) next
+      fp = norm_p(substr($0, ti + 1))
+      if (accept_path(fp)) iw[fp] = 1
+      next
+    }
+    sec == "__UNTRACKED__" {
+      fp = norm_p($0)
+      if (accept_path(fp)) untr[fp] = 1
+      next
+    }
+    END {
+      z = "0000000000000000000000000000000000000000"
+      for (fp in h_m) {
+        m = h_m[fp]; oid = h_o[fp]
+        if (m == "000000") continue
+        if (m == "160000") {
+          fb = (oid != z ? oid : ((fp in c_m && c_m[fp] == "160000" && c_o[fp] != z) ? c_o[fp] : "-"))
+          printf "SUB\t%s\t%s\n", fb, fp
+          continue
+        }
+        if (m == "120000") {
+          if (oid != z) continue
+          if ((fp in c_m) && c_m[fp] == "120000" && c_o[fp] != z && !(fp in iw)) continue
+          printf "LINK\t-\t%s\n", fp
+          continue
+        }
+        if (oid != z) continue
+        if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) continue
+        printf "BLOB\t%s\t%s\n", m, fp
+      }
+      for (fp in untr) {
+        if (!(fp in h_m) || h_m[fp] == "000000") {
+          printf "UNTR\t-\t%s\n", fp
+        }
+      }
+    }
+  ')"
 
-  local -a sorted_changed=()
-  if [[ ${#candidates[@]} -gt 0 ]]; then
-    while IFS= read -r p; do [[ -n "$p" ]] && sorted_changed+=("$p"); done < <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort -u)
-  fi
+  local resolved_lines="" kind arg p full_p res_val rc_r=0 w_sha l_sha u_mode
+  while IFS=$'\t' read -r kind arg p; do
+    [[ -n "$kind" && -n "$p" ]] || continue
+    full_p="${root}/${p}"
+    case "$kind" in
+      SUB)
+        [[ "$arg" == "-" ]] && arg=""
+        if res_val="$(resolve_submodule_entry "$root" "$p" "$arg")"; then
+          resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+        else
+          rc_r=$?
+          if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
+        fi
+        ;;
+      LINK)
+        if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
+          resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
+        else
+          rc_r=$?
+          if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
+        fi
+        ;;
+      BLOB)
+        if [[ -f "$full_p" ]]; then
+          if ! run_git_cmd "$root" hash-object -- "$p"; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+            return 1
+          fi
+          w_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+            return 1
+          fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"${arg} blob ${w_sha}"$'\n'
+        else
+          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
+        fi
+        ;;
+      UNTR)
+        if [[ -L "$full_p" ]]; then
+          if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
+            resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
+          else
+            rc_r=$?
+            if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+          fi
+        elif [[ -f "$full_p" ]]; then
+          if ! run_git_cmd "$root" hash-object -- "$p"; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+            return 1
+          fi
+          w_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+            return 1
+          fi
+          u_mode="100644"
+          if ! $is_win_os && $core_filemode && [[ -x "$full_p" ]]; then u_mode="100755"; fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"${u_mode} blob ${w_sha}"$'\n'
+        elif [[ -d "$full_p" && -e "${full_p}/.git" ]]; then
+          if res_val="$(resolve_submodule_entry "$root" "$p" "")"; then
+            resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+          else
+            rc_r=$?
+            if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+          fi
+        fi
+        ;;
+    esac
+  done <<< "$tasks_raw"
 
-  local git_dir tmp_fp w_sha tree_hash
-  git_dir="$(resolve_git_dir "$root")" || { echo "GIT_ERROR: unable to resolve .git dir"; return 1; }
-  tmp_fp="${git_dir}/b3-tree-fp-$$-${RANDOM}.tmp"
+  local tmp_fp tree_hash
+  tmp_fp="$(mktemp "${TMPDIR:-/tmp}/b3-tree-fp.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-tree-fp.$$.${RANDOM}.tmp")"
   _CLEANUP_FILES+=("$tmp_fp")
 
   {
-    printf 'HEAD=%s\n' "$head_sha"
     printf 'PATHS=%s\n' "$paths_csv"
-    if [[ ${#sorted_changed[@]} -gt 0 ]]; then
-      for p in "${sorted_changed[@]}"; do
-        if [[ -f "${root}/${p}" ]]; then
-          w_sha="$(git -C "$root" hash-object -- "$p" 2>&1)" || { echo "GIT_ERROR: git hash-object failed for $p" >&2; rm -f "$tmp_fp"; return 1; }
-          w_sha="$(trim_str "$w_sha")"
-          printf 'W %s %s\n' "$p" "$w_sha"
-        else
-          printf 'W %s DELETED\n' "$p"
-        fi
-      done
-    fi
+    {
+      printf '__LS__\n%s\n' "$ls_out"
+      printf '__HEAD__\n%s\n' "$diff_head_raw"
+      printf '__CACHED__\n%s\n' "$diff_cached_raw"
+      printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
+      printf '__RESOLVED__\n%s' "$resolved_lines"
+    } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
+      function norm_p(s) {
+        gsub(/\r/, "", s)
+        gsub(/\\/, "/", s)
+        sub(/^[ \t]+/, "", s)
+        sub(/[ \t]+$/, "", s)
+        sub(/^\.\//, "", s)
+        while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
+        return s
+      }
+      function is_cp(s) {
+        return (s ~ /^\.b3\/(ship|autodev)(\/|$)/)
+      }
+      function in_list(s, arr, n,    i, pat) {
+        for (i = 1; i <= n; i++) {
+          pat = arr[i]
+          if (pat == "") continue
+          if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
+        }
+        return 0
+      }
+      function accept_path(fp) {
+        if (fp == "" || is_cp(fp)) return 0
+        if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
+        if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
+        return 1
+      }
+      function entry_type(m) {
+        if (m == "160000") return "commit"
+        if (m == "000000") return "deleted"
+        if (m == "040000") return "tree"
+        return "blob"
+      }
+      function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
+        if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
+        ti = index(line, "\t")
+        if (ti < 3) return
+        meta = substr(line, 2, ti - 2)
+        nmp = split(meta, mp, /[ \t]+/)
+        if (nmp < 5) return
+        nm = mp[2]; noid = mp[4]
+        if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
+        fp = norm_p(substr(line, ti + 1))
+        if (!accept_path(fp)) return
+        if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
+        out_m[fp] = nm
+        out_o[fp] = noid
+      }
+      BEGIN {
+        split("", ign_arr); split("", rel_arr)
+        split("", eff); split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", res)
+        n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
+        n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
+        sec = ""
+      }
+      { gsub(/\r$/, "", $0) }
+      $0 == "__LS__" || $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__RESOLVED__" { sec = $0; next }
+      $0 == "" { next }
+      sec == "__LS__" {
+        ti = index($0, "\t")
+        if (ti < 2) next
+        meta = substr($0, 1, ti - 1)
+        nm = split(meta, mp, /[ \t]+/)
+        if (nm < 3 || mp[1] !~ /^[0-9]{6}$/ || (mp[2] != "blob" && mp[2] != "commit") || mp[3] !~ /^[0-9a-f]{40}$/) next
+        fp = norm_p(substr($0, ti + 1))
+        if (!accept_path(fp)) next
+        eff[fp] = mp[1] " " mp[2] " " mp[3]
+        next
+      }
+      sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
+      sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
+      sec == "__IDXWT__" {
+        if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
+        ti = index($0, "\t")
+        if (ti < 3) next
+        fp = norm_p(substr($0, ti + 1))
+        if (accept_path(fp)) iw[fp] = 1
+        next
+      }
+      sec == "__RESOLVED__" {
+        ti = index($0, "\t")
+        if (ti < 2) next
+        fp = substr($0, 1, ti - 1)
+        res[fp] = substr($0, ti + 1)
+        next
+      }
+      END {
+        z = "0000000000000000000000000000000000000000"
+        for (fp in h_m) {
+          m = h_m[fp]; oid = h_o[fp]
+          if (m == "000000") {
+            delete eff[fp]
+          } else if (fp in res) {
+            if (res[fp] == "DELETED") delete eff[fp]
+            else eff[fp] = res[fp]
+          } else if (oid != z) {
+            eff[fp] = m " blob " oid
+          } else if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) {
+            eff[fp] = m " blob " c_o[fp]
+          } else {
+            delete eff[fp]
+          }
+        }
+        for (fp in res) {
+          if (!(fp in h_m) || h_m[fp] == "000000") {
+            if (res[fp] == "DELETED") delete eff[fp]
+            else eff[fp] = res[fp]
+          }
+        }
+        for (fp in c_m) {
+          cm = c_m[fp]
+          has_e = (fp in eff)
+          em = ""
+          if (has_e) { split(eff[fp], e_p, " "); em = e_p[1] }
+          if ((cm == "000000" && has_e) || (cm != "000000" && (!has_e || em != cm))) {
+            printf "I\t%s\t%s %s %s\n", fp, cm, entry_type(cm), c_o[fp]
+          }
+        }
+        for (fp in eff) {
+          printf "E\t%s\t%s\n", fp, eff[fp]
+        }
+      }
+    ' | LC_ALL=C sort -t $'\t' -k1,1 -k2,2 | LC_ALL=C awk -F '\t' '{ printf "%s %s %s\n", $1, $3, $2 }'
   } > "$tmp_fp"
 
-  tree_hash="$(git -C "$root" hash-object -- "$tmp_fp" 2>&1)" || { echo "GIT_ERROR: git hash-object manifest failed: $tree_hash"; rm -f "$tmp_fp"; return 1; }
-  tree_hash="$(trim_str "$tree_hash")"
+  if ! run_git_cmd_stdin_file "$root" "$tmp_fp" hash-object --stdin; then
+    echo "GIT_ERROR: git hash-object manifest failed: $(git_err_detail)"
+    rm -f "$tmp_fp"
+    return 1
+  fi
+  tree_hash="$(trim_str "$_GIT_STDOUT")"
   rm -f "$tmp_fp"
   if [[ ! "$tree_hash" =~ ^[0-9a-f]{40}$ ]]; then
     echo "GIT_ERROR: git hash-object manifest failed: $tree_hash"
@@ -871,7 +1422,13 @@ run_verify_check() {
     IFS= read -r cur_paths
   } <<< "$fp_out"
 
-  if [[ "$cur_head" != "$_v_head_sha" || "$cur_tree" != "$_v_tree_hash" ]]; then
+  if [[ "$cur_head" != "$_v_head_sha" ]]; then
+    if ! run_git_cmd "$root" merge-base --is-ancestor "$_v_head_sha" "$cur_head"; then
+      _VR_MSG="VERIFY_STALE: receipt=${_v_tree_hash:0:12} current=${cur_tree:0:12}"
+      return 2
+    fi
+  fi
+  if [[ "$cur_tree" != "$_v_tree_hash" ]]; then
     _VR_MSG="VERIFY_STALE: receipt=${_v_tree_hash:0:12} current=${cur_tree:0:12}"
     return 2
   fi
@@ -991,9 +1548,10 @@ extract_symbol_decl_ext() {
 
 resolve_canonical_git_common_dir() {
   local dir="$1"
-  local gd
-  gd="$(git -C "$dir" rev-parse --git-common-dir 2>/dev/null || true)"
-  gd="$(trim_str "$gd")"
+  local gd=""
+  if run_git_cmd "$dir" rev-parse --git-common-dir; then
+    gd="$(trim_str "$_GIT_STDOUT")"
+  fi
   [[ -n "$gd" ]] || return 1
   if [[ "$gd" != /* && ! "$gd" =~ ^[A-Za-z]: ]]; then
     gd="${dir}/${gd}"
@@ -1108,12 +1666,13 @@ case "$CMD" in
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
 
-    if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$TASK_BASE" HEAD 2>/dev/null; then
+    if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$TASK_BASE" HEAD; then
       echo "STALE: HEAD is not a descendant of task_base"
       exit 2
     fi
 
-    COMMITTED_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT" HEAD)" || { echo "GIT_ERROR: git diff failed"; exit 1; }
+    run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT" HEAD || { echo "GIT_ERROR: git diff failed: $(git_err_detail)"; exit 1; }
+    COMMITTED_OUT="$_GIT_STDOUT"
     COMMITTED_HITS=()
     while IFS= read -r line; do
       p="$(norm_path "$line")"
@@ -1138,9 +1697,12 @@ case "$CMD" in
     done
 
     if [[ ${#RO_ARR[@]} -gt 0 ]]; then
-      WT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT")" || { echo "GIT_ERROR: git diff working tree failed"; exit 1; }
-      CA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; exit 1; }
-      UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "GIT_ERROR: git ls-files failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT" || { echo "GIT_ERROR: git diff working tree failed: $(git_err_detail)"; exit 1; }
+      WT_OUT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" diff --no-renames --cached --name-only || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
+      CA_OUT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
+      UN_OUT="$_GIT_STDOUT"
       RO_HITS=()
       while IFS= read -r line; do
         p="$(norm_path "$line")"
@@ -1188,7 +1750,8 @@ case "$CMD" in
     ALLOWED_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
 
-    STAGED_OUT="$(git -C "$REPO_ROOT" diff --no-renames --cached --name-only)" || { echo "GIT_ERROR: git diff cached failed"; exit 1; }
+    run_git_cmd "$REPO_ROOT" diff --no-renames --cached --name-only || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
+    STAGED_OUT="$_GIT_STDOUT"
     STAGED_ARR=()
     while IFS= read -r line; do
       p="$(norm_path "$line")"
@@ -1248,8 +1811,10 @@ case "$CMD" in
 
     REQUIRE_RECEIPT="$(trim_str "$REQUIRE_RECEIPT")"
     if [[ -n "$REQUIRE_RECEIPT" ]]; then
-      IDX_VS_WT="$(git -C "$REPO_ROOT" diff --no-renames --name-only -- "${STAGED_ARR[@]}")" || { echo "GIT_ERROR: git diff index-vs-wt failed"; exit 1; }
-      STAGED_DEL="$(git -C "$REPO_ROOT" diff --no-renames --cached --diff-filter=D --name-only)" || { echo "GIT_ERROR: git diff cached delete failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only -- "${STAGED_ARR[@]}" || { echo "GIT_ERROR: git diff index-vs-wt failed: $(git_err_detail)"; exit 1; }
+      IDX_VS_WT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" diff --no-renames --cached --diff-filter=D --name-only || { echo "GIT_ERROR: git diff cached delete failed: $(git_err_detail)"; exit 1; }
+      STAGED_DEL="$_GIT_STDOUT"
       WT_MM=()
       while IFS= read -r line; do
         p="$(norm_path "$line")"
@@ -1266,6 +1831,22 @@ case "$CMD" in
         MM_STR="$(printf '%s\n' "${WT_MM[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
         echo "PRECOMMIT_FAIL: staged content differs from working tree (${MM_STR//,/, })"
         exit 1
+      fi
+
+      IGN_ARR=()
+      while IFS= read -r ip; do [[ -n "$ip" ]] && IGN_ARR+=("$ip"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+      if [[ ${#IGN_ARR[@]} -gt 0 ]]; then
+        STAGED_IGN=()
+        for p in "${STAGED_ARR[@]}"; do
+          if path_in_list "$p" "${IGN_ARR[@]}"; then
+            STAGED_IGN+=("$p")
+          fi
+        done
+        if [[ ${#STAGED_IGN[@]} -gt 0 ]]; then
+          SI_STR="$(printf '%s\n' "${STAGED_IGN[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+          echo "PRECOMMIT_FAIL: staged path excluded by ignore-dirty-paths (${SI_STR//,/, })"
+          exit 1
+        fi
       fi
 
       set +e
@@ -1292,6 +1873,45 @@ case "$CMD" in
           exit 1
         fi
       fi
+
+      SCOPE_ALL=false
+      SCOPE_ARR=()
+      if [[ "$_VR_REL_PATHS" == "ALL" ]]; then
+        SCOPE_ALL=true
+      else
+        while IFS= read -r rp; do
+          [[ -n "$rp" ]] || continue
+          [[ "$rp" == "." ]] && SCOPE_ALL=true
+          SCOPE_ARR+=("$rp")
+        done < <(split_csv_lines "$_VR_REL_PATHS" true | LC_ALL=C sort -u)
+      fi
+      if $SCOPE_ALL; then
+        run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
+        UNSTAGED_RAW="$_GIT_STDOUT"
+        run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
+        UNTRACKED_RAW="$_GIT_STDOUT"
+      else
+        run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
+        UNSTAGED_RAW="$_GIT_STDOUT"
+        run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
+        UNTRACKED_RAW="$_GIT_STDOUT"
+      fi
+      UNSTAGED_SCOPE=()
+      while IFS= read -r line; do
+        p="$(norm_path "$line")"
+        [[ -n "$p" ]] || continue
+        is_checkpoint_dir "$p" && continue
+        if [[ ${#IGN_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGN_ARR[@]}"; then continue; fi
+        if ! $SCOPE_ALL; then
+          [[ ${#SCOPE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${SCOPE_ARR[@]}" || continue
+        fi
+        UNSTAGED_SCOPE+=("$p")
+      done < <(printf '%s\n%s\n' "$UNSTAGED_RAW" "$UNTRACKED_RAW")
+      if [[ ${#UNSTAGED_SCOPE[@]} -gt 0 ]]; then
+        UN_STR="$(printf '%s\n' "${UNSTAGED_SCOPE[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        echo "PRECOMMIT_FAIL: unstaged changes in receipt scope (${UN_STR//,/, })"
+        exit 1
+      fi
     fi
 
     echo "PRECOMMIT_OK"
@@ -1305,13 +1925,22 @@ case "$CMD" in
         *) echo "SNAPSHOT_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
-    SHA="$(git -C "$REPO_ROOT" stash create 2>/dev/null)" || { echo "SNAPSHOT_FAIL: git stash create failed"; exit 1; }
-    SHA="$(trim_str "$SHA")"
-    if [[ -z "$SHA" ]]; then
-      SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" || { echo "SNAPSHOT_FAIL: git rev-parse HEAD failed"; exit 1; }
-      SHA="$(trim_str "$SHA")"
+    if ! run_git_cmd "$REPO_ROOT" stash create; then
+      echo "SNAPSHOT_FAIL: git stash create failed"
+      exit 1
     fi
-    OBJ_TYPE="$(git -C "$REPO_ROOT" cat-file -t "$SHA" 2>/dev/null || true)"
+    SHA="$(trim_str "$_GIT_STDOUT")"
+    if [[ -z "$SHA" ]]; then
+      if ! run_git_cmd "$REPO_ROOT" rev-parse HEAD; then
+        echo "SNAPSHOT_FAIL: git rev-parse HEAD failed: $(git_err_detail)"
+        exit 1
+      fi
+      SHA="$(trim_str "$_GIT_STDOUT")"
+    fi
+    OBJ_TYPE=""
+    if run_git_cmd "$REPO_ROOT" cat-file -t "$SHA"; then
+      OBJ_TYPE="$(trim_str "$_GIT_STDOUT")"
+    fi
     if [[ "$OBJ_TYPE" != "commit" ]]; then
       echo "SNAPSHOT_FAIL: invalid snapshot commit '$SHA'"
       exit 1
@@ -1345,11 +1974,11 @@ case "$CMD" in
         echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
       fi
-      if ! TARGET_COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" 2>/dev/null)"; then
+      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}"; then
         echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
       fi
-      TARGET_COMMIT_SHA="$(trim_str "$TARGET_COMMIT_SHA")"
+      TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
       if [[ -z "$TARGET_COMMIT_SHA" ]]; then
         echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
@@ -1368,11 +1997,14 @@ case "$CMD" in
     fi
 
     if [[ -n "$TARGET_REF" ]]; then
-      NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed: $(git_err_detail)"; exit 1; }
+      NUMSTAT_OUT="$_GIT_STDOUT"
       UNTRACKED_OUT=""
     else
-      NUMSTAT_OUT="$(git -C "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed"; exit 1; }
-      UNTRACKED_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "DIFF_SCOPE_FAIL: git ls-files failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed: $(git_err_detail)"; exit 1; }
+      NUMSTAT_OUT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "DIFF_SCOPE_FAIL: git ls-files failed: $(git_err_detail)"; exit 1; }
+      UNTRACKED_OUT="$_GIT_STDOUT"
     fi
 
     REVIEW_ARR=()
@@ -1418,9 +2050,11 @@ case "$CMD" in
     if [[ -n "$PREV_SHA" ]]; then
       HAS_PREV=true
       if [[ -n "$TARGET_REF" ]]; then
-        DELTA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed"; exit 1; }
+        run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" "$TARGET_COMMIT_SHA" -- || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
+        DELTA_OUT="$_GIT_STDOUT"
       else
-        DELTA_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA")" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed"; exit 1; }
+        run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
+        DELTA_OUT="$_GIT_STDOUT"
       fi
       DELTA_ARR=()
       while IFS= read -r line; do
@@ -1506,11 +2140,11 @@ case "$CMD" in
         echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
       fi
-      if ! TARGET_COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" 2>/dev/null)"; then
+      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}"; then
         echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
       fi
-      TARGET_COMMIT_SHA="$(trim_str "$TARGET_COMMIT_SHA")"
+      TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
       if [[ -z "$TARGET_COMMIT_SHA" ]]; then
         echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
@@ -1529,11 +2163,14 @@ case "$CMD" in
     fi
 
     if [[ -n "$TARGET_REF" ]]; then
-      CH_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "MECHANICAL_FAIL: git diff --name-only failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
+      CH_OUT="$_GIT_STDOUT"
       UN_OUT=""
     else
-      CH_OUT="$(git -C "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff --name-only failed"; exit 1; }
-      UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "MECHANICAL_FAIL: git ls-files failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
+      CH_OUT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MECHANICAL_FAIL: git ls-files failed: $(git_err_detail)"; exit 1; }
+      UN_OUT="$_GIT_STDOUT"
     fi
 
     ALL_CHANGED=()
@@ -1565,9 +2202,11 @@ case "$CMD" in
     SQL_HIT_COUNT=0
 
     if [[ -n "$TARGET_REF" ]]; then
-      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "MECHANICAL_FAIL: git diff -U0 failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      DIFF_U0="$_GIT_STDOUT"
     else
-      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff -U0 failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      DIFF_U0="$_GIT_STDOUT"
     fi
     LEFTOVER_HITS=()
     CUR_FILE=""
@@ -1661,9 +2300,11 @@ case "$CMD" in
     fi
 
     if [[ -n "$TARGET_REF" ]]; then
-      DEL_OUT="$(git -C "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
+      DEL_OUT="$_GIT_STDOUT"
     else
-      DEL_OUT="$(git -C "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA")" || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA" || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
+      DEL_OUT="$_GIT_STDOUT"
     fi
     DEL_ARR=()
     while IFS= read -r line; do
@@ -1689,23 +2330,21 @@ case "$CMD" in
         exists_path=false
         if [[ -n "$norm_tok" ]]; then
           if [[ -n "$TARGET_REF" ]]; then
-            if git -C "$REPO_ROOT" cat-file -e "${TARGET_COMMIT_SHA}:${norm_tok}" 2>/dev/null; then
+            if run_git_cmd "$REPO_ROOT" cat-file -e "${TARGET_COMMIT_SHA}:${norm_tok}"; then
               exists_path=true
             fi
           elif [[ -e "${REPO_ROOT}/${norm_tok}" ]]; then
             exists_path=true
           fi
         fi
-        set +e
         if [[ -n "$TARGET_REF" ]]; then
-          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/ship' 2>/dev/null)"
+          if run_git_cmd "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/ship'; then grep_code=0; else grep_code=$?; fi
         else
-          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" -- . ':(exclude).b3/ship' 2>/dev/null)"
+          if run_git_cmd "$REPO_ROOT" grep -l -F -e "$tok" -- . ':(exclude).b3/ship'; then grep_code=0; else grep_code=$?; fi
         fi
-        grep_code=$?
-        set -e
+        grep_out="$_GIT_STDOUT"
         if [[ "$grep_code" -gt 1 ]]; then
-          echo "MECHANICAL_FAIL: git grep failed for obsolete '$tok'"
+          echo "MECHANICAL_FAIL: git grep failed for obsolete '$tok': $(git_err_detail)"
           exit 1
         fi
         grep_count=0
@@ -1772,8 +2411,11 @@ case "$CMD" in
         echo "WAVE_BASE_MISMATCH: git_op_in_progress($MID_OP)"
         exit 2
       fi
-      ACT_HEAD="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
-      ACT_HEAD="$(trim_str "$ACT_HEAD")"
+      if run_git_cmd "$REPO_ROOT" rev-parse HEAD; then
+        ACT_HEAD="$(trim_str "$_GIT_STDOUT")"
+      else
+        ACT_HEAD=""
+      fi
       if [[ -z "$ACT_HEAD" ]]; then
         echo "WAVE_BASE_MISMATCH: git rev-parse HEAD failed"
         exit 2
@@ -2311,11 +2953,11 @@ timestamp_utc=${TS_UTC}
         echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
       fi
-      if ! TARGET_COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" 2>/dev/null)"; then
+      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}"; then
         echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
       fi
-      TARGET_COMMIT_SHA="$(trim_str "$TARGET_COMMIT_SHA")"
+      TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
       if [[ -z "$TARGET_COMMIT_SHA" ]]; then
         echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
         exit 1
@@ -2334,9 +2976,11 @@ timestamp_utc=${TS_UTC}
     fi
 
     if [[ -n "$TARGET_REF" ]]; then
-      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" --)" || { echo "SYMBOL_FAIL: git diff -U0 failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      DIFF_U0="$_GIT_STDOUT"
     else
-      DIFF_U0="$(git -C "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA")" || { echo "SYMBOL_FAIL: git diff -U0 failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      DIFF_U0="$_GIT_STDOUT"
     fi
 
     REM_KEYS=()
@@ -2449,7 +3093,8 @@ timestamp_utc=${TS_UTC}
     done <<< "$DIFF_U0"
 
     if [[ -z "$TARGET_REF" ]]; then
-      UN_OUT="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)" || { echo "SYMBOL_FAIL: git ls-files failed"; exit 1; }
+      run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "SYMBOL_FAIL: git ls-files failed: $(git_err_detail)"; exit 1; }
+      UN_OUT="$_GIT_STDOUT"
       while IFS= read -r u; do
         u="$(norm_path "$u")"
         [[ -n "$u" ]] || continue
@@ -2486,16 +3131,14 @@ timestamp_utc=${TS_UTC}
         if [[ "$REM_CHECKED" == *"|${s_name}|"* ]]; then continue; fi
         REM_CHECKED="${REM_CHECKED}${s_name}|"
 
-        set +e
         if [[ -n "$TARGET_REF" ]]; then
-          g_out="$(git -C "$REPO_ROOT" grep -w -F -l -e "$s_name" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+          if run_git_cmd "$REPO_ROOT" grep -w -F -l -e "$s_name" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3' ':(exclude)*.md'; then g_code=0; else g_code=$?; fi
         else
-          g_out="$(git -C "$REPO_ROOT" grep --untracked -w -F -l -e "$s_name" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+          if run_git_cmd "$REPO_ROOT" grep --untracked -w -F -l -e "$s_name" -- . ':(exclude).b3' ':(exclude)*.md'; then g_code=0; else g_code=$?; fi
         fi
-        g_code=$?
-        set -e
+        g_out="$_GIT_STDOUT"
         if [[ $g_code -gt 1 ]]; then
-          echo "SYMBOL_FAIL: git grep failed for '$s_name'"
+          echo "SYMBOL_FAIL: git grep failed for '$s_name': $(git_err_detail)"
           exit 1
         fi
         if [[ $g_code -eq 0 && -n "$g_out" ]]; then
@@ -2535,16 +3178,14 @@ timestamp_utc=${TS_UTC}
         is_test_path "$f" && continue
         _sym_exists rem "$f" "$s_name" && continue
 
-        set +e
         if [[ -n "$TARGET_REF" ]]; then
-          gn_out="$(git -C "$REPO_ROOT" grep -w -F -n -e "$s_name" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+          if run_git_cmd "$REPO_ROOT" grep -w -F -n -e "$s_name" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3' ':(exclude)*.md'; then gn_code=0; else gn_code=$?; fi
         else
-          gn_out="$(git -C "$REPO_ROOT" grep --untracked -w -F -n -e "$s_name" -- . ':(exclude).b3' ':(exclude)*.md' 2>/dev/null)"
+          if run_git_cmd "$REPO_ROOT" grep --untracked -w -F -n -e "$s_name" -- . ':(exclude).b3' ':(exclude)*.md'; then gn_code=0; else gn_code=$?; fi
         fi
-        gn_code=$?
-        set -e
+        gn_out="$_GIT_STDOUT"
         if [[ $gn_code -gt 1 ]]; then
-          echo "SYMBOL_FAIL: git grep -n failed for '$s_name'"
+          echo "SYMBOL_FAIL: git grep -n failed for '$s_name': $(git_err_detail)"
           exit 1
         fi
         line_hits=0
@@ -2607,14 +3248,18 @@ timestamp_utc=${TS_UTC}
       echo "WORKTREE_UNSAFE: missing_repo_root(${REPO_ROOT})"
       exit 2
     fi
-    TOP_RAW="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
-    TOP_RAW="$(trim_str "$TOP_RAW")"
+    TOP_RAW=""
+    if run_git_cmd "$REPO_ROOT" rev-parse --show-toplevel; then
+      TOP_RAW="$(trim_str "$_GIT_STDOUT")"
+    fi
     if [[ -z "$TOP_RAW" ]]; then
       echo "WORKTREE_UNSAFE: not_a_git_repo"
       exit 2
     fi
-    HEAD_RAW="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
-    HEAD_RAW="$(trim_str "$HEAD_RAW")"
+    HEAD_RAW=""
+    if run_git_cmd "$REPO_ROOT" rev-parse HEAD; then
+      HEAD_RAW="$(trim_str "$_GIT_STDOUT")"
+    fi
     if [[ ! "$HEAD_RAW" =~ ^[0-9a-f]{40}$ ]]; then
       echo "WORKTREE_UNSAFE: unborn_or_invalid_head"
       exit 2
@@ -2633,8 +3278,10 @@ timestamp_utc=${TS_UTC}
         echo "WORKTREE_UNSAFE: expected_root_missing(${EXPECTED_ROOT})"
         exit 2
       fi
-      EXP_TOP_RAW="$(git -C "$EXPECTED_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
-      EXP_TOP_RAW="$(trim_str "$EXP_TOP_RAW")"
+      EXP_TOP_RAW=""
+      if run_git_cmd "$EXPECTED_ROOT" rev-parse --show-toplevel; then
+        EXP_TOP_RAW="$(trim_str "$_GIT_STDOUT")"
+      fi
       if [[ -z "$EXP_TOP_RAW" ]]; then
         echo "WORKTREE_UNSAFE: expected_root_not_git(${EXPECTED_ROOT})"
         exit 2
