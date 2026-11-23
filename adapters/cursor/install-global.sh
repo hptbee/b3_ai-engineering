@@ -69,6 +69,19 @@ canon_path_allow_missing() {
   while [[ "$p" == */ && "$p" != "/" && ! "$p" =~ ^[A-Za-z]:/$ ]]; do
     p="${p%/}"
   done
+  if [[ -L "$p" ]]; then
+    local base parent resolved
+    base="$(basename "$p")"
+    parent="$(dirname "$p")"
+    if [[ -d "$parent" ]]; then
+      resolved="$(canon_existing_dir "$parent")"
+      resolved="${resolved%/}"
+      printf '%s/%s' "$resolved" "$base"
+    else
+      printf '%s' "$p"
+    fi
+    return
+  fi
   if [[ -d "$p" ]]; then
     canon_existing_dir "$p"
     return
@@ -134,6 +147,14 @@ write_lf_file() {
   mv -f "$tmp" "$dest"
 }
 
+install_file_atomic() {
+  local src="$1" dest="$2"
+  mkdir -p "$(dirname "$dest")"
+  local tmp="${dest}.tmp.$$.${RANDOM}"
+  cp "$src" "$tmp"
+  mv -f "$tmp" "$dest"
+}
+
 is_link_entry() {
   local p="$1"
   [[ -L "$p" ]]
@@ -180,6 +201,28 @@ link_target_ok() {
   rd="$(cd -P "$dest" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
   re="$(cd -P "$expected" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
   [[ -n "$rd" && "$(norm_cmp_path "$rd")" == "$(norm_cmp_path "$re")" ]]
+}
+
+link_matches_expected_or_dangling() {
+  local dest="$1" expected="$2"
+  is_link_entry "$dest" || return 1
+  if [[ -d "$dest" ]]; then
+    link_target_ok "$dest" "$expected"
+    return $?
+  fi
+  local rl
+  rl="$(readlink "$dest" 2>/dev/null)" || return 1
+  if $IS_WINDOWS && command -v cygpath >/dev/null 2>&1; then
+    rl="$(cygpath -m "$rl" 2>/dev/null || printf '%s' "$rl")"
+  elif [[ "$rl" != /* && ! "$rl" =~ ^[A-Za-z]: ]]; then
+    local parent
+    parent="$(canon_path_allow_missing "$(dirname "$dest")")"
+    rl="${parent%/}/${rl}"
+  fi
+  local exp_norm rl_norm
+  exp_norm="$(canon_path_allow_missing "$expected")"
+  rl_norm="$(canon_path_allow_missing "$rl")"
+  [[ "$(norm_cmp_path "$rl_norm")" == "$(norm_cmp_path "$exp_norm")" ]]
 }
 
 validate_frontmatter() {
@@ -353,18 +396,77 @@ manifest_file_sha() {
   return 1
 }
 
+manifest_skill_target() {
+  local target="$1" i
+  if [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_SKILL_NAMES[@]}; i++)); do
+      if [[ "${M_SKILL_NAMES[$i]}" == "$target" ]]; then
+        printf '%s' "${M_SKILL_TARGETS[$i]}"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+manifest_cmd_sha() {
+  local target="$1" i
+  if [[ ${#M_CMD_NAMES[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_CMD_NAMES[@]}; i++)); do
+      if [[ "${M_CMD_NAMES[$i]}" == "$target" ]]; then
+        printf '%s' "${M_CMD_SHAS[$i]}"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+manifest_agent_sha() {
+  local target="$1" i
+  if [[ ${#M_AGENT_NAMES[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_AGENT_NAMES[@]}; i++)); do
+      if [[ "${M_AGENT_NAMES[$i]}" == "$target" ]]; then
+        printf '%s' "${M_AGENT_SHAS[$i]}"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
 # --- Uninstall ---
 if [[ "$ACTION" == "uninstall" ]]; then
+  if is_link_entry "$CURSOR_HOME"; then
+    echo "error: refusing to uninstall link-based CursorHome: $CURSOR_HOME" >&2
+    exit 1
+  fi
+  if is_link_entry "$MANIFEST_FILE"; then
+    echo "error: refusing to read link-based manifest: $MANIFEST_FILE" >&2
+    exit 1
+  fi
   load_manifest
   if ! $M_EXISTS; then
     echo "nothing installed (no manifest at $MANIFEST_FILE)"
     exit 0
   fi
   REMOVED=0
-  if [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
+  SKIPPED=0
+  if is_link_entry "$SKILLS_DEST"; then
+    echo "warning: skipping symlinked skills directory: $SKILLS_DEST" >&2
+    SKIPPED=$((SKIPPED + 1))
+  elif [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
     for sk in "${M_SKILL_NAMES[@]}"; do
       p="${SKILLS_DEST}/${sk}"
       if is_link_entry "$p"; then
+        if ! $FORCE; then
+          exp_target="$(manifest_skill_target "$sk" 2>/dev/null || true)"
+          if [[ -n "$exp_target" ]] && ! link_matches_expected_or_dangling "$p" "$exp_target"; then
+            echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
+            SKIPPED=$((SKIPPED + 1))
+            continue
+          fi
+        fi
         if $DRY_RUN; then echo "dry-run: remove skill link $p"; else remove_link_only "$p"; fi
         REMOVED=$((REMOVED + 1))
       elif [[ -e "$p" ]]; then
@@ -372,11 +474,25 @@ if [[ "$ACTION" == "uninstall" ]]; then
       fi
     done
   fi
-  if [[ ${#M_CMD_NAMES[@]} -gt 0 ]]; then
+  if is_link_entry "$COMMANDS_DEST"; then
+    echo "warning: skipping symlinked commands directory: $COMMANDS_DEST" >&2
+    SKIPPED=$((SKIPPED + 1))
+  elif [[ ${#M_CMD_NAMES[@]} -gt 0 ]]; then
     for cmd in "${M_CMD_NAMES[@]}"; do
       p="${COMMANDS_DEST}/${cmd}"
+      if is_link_entry "$p"; then
+        echo "warning: skipping symlinked command path: $p" >&2
+        SKIPPED=$((SKIPPED + 1))
+        continue
+      fi
       if [[ -f "$p" ]]; then
         if grep -q 'b3-global-cursor-managed:' "$p"; then
+          exp_sha="$(manifest_cmd_sha "$cmd" 2>/dev/null || true)"
+          if ! $FORCE && [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
+            echo "warning: skipping modified command file: $p (re-run with --force to remove)" >&2
+            SKIPPED=$((SKIPPED + 1))
+            continue
+          fi
           if $DRY_RUN; then echo "dry-run: remove command $p"; else rm -f "$p"; fi
           REMOVED=$((REMOVED + 1))
         else
@@ -385,11 +501,25 @@ if [[ "$ACTION" == "uninstall" ]]; then
       fi
     done
   fi
-  if [[ ${#M_AGENT_NAMES[@]} -gt 0 ]]; then
+  if is_link_entry "$AGENTS_DEST"; then
+    echo "warning: skipping symlinked agents directory: $AGENTS_DEST" >&2
+    SKIPPED=$((SKIPPED + 1))
+  elif [[ ${#M_AGENT_NAMES[@]} -gt 0 ]]; then
     for ag in "${M_AGENT_NAMES[@]}"; do
       p="${AGENTS_DEST}/${ag}"
+      if is_link_entry "$p"; then
+        echo "warning: skipping symlinked agent path: $p" >&2
+        SKIPPED=$((SKIPPED + 1))
+        continue
+      fi
       if [[ -f "$p" ]]; then
         if grep -q 'b3-global-cursor-managed:' "$p"; then
+          exp_sha="$(manifest_agent_sha "$ag" 2>/dev/null || true)"
+          if ! $FORCE && [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
+            echo "warning: skipping modified agent file: $p (re-run with --force to remove)" >&2
+            SKIPPED=$((SKIPPED + 1))
+            continue
+          fi
           if $DRY_RUN; then echo "dry-run: remove agent $p"; else rm -f "$p"; fi
           REMOVED=$((REMOVED + 1))
         else
@@ -398,22 +528,49 @@ if [[ "$ACTION" == "uninstall" ]]; then
       fi
     done
   fi
-  if manifest_file_sha "b3-user-rules.txt" >/dev/null 2>&1 && [[ -f "$USER_RULES_FILE" ]]; then
-    if grep -q 'b3-global-cursor-managed:' "$USER_RULES_FILE"; then
-      if $DRY_RUN; then echo "dry-run: remove $USER_RULES_FILE"; else rm -f "$USER_RULES_FILE"; fi
-      REMOVED=$((REMOVED + 1))
-    else
-      echo "warning: skipping unmanaged file: $USER_RULES_FILE" >&2
+  if exp_rules_sha="$(manifest_file_sha "b3-user-rules.txt" 2>/dev/null)"; then
+    if is_link_entry "$USER_RULES_FILE"; then
+      echo "warning: skipping symlinked file path: $USER_RULES_FILE" >&2
+      SKIPPED=$((SKIPPED + 1))
+    elif [[ -f "$USER_RULES_FILE" ]]; then
+      if grep -q 'b3-global-cursor-managed:' "$USER_RULES_FILE"; then
+        if ! $FORCE && [[ -n "$exp_rules_sha" ]] && [[ "$(sha256_file "$USER_RULES_FILE")" != "$exp_rules_sha" ]]; then
+          echo "warning: skipping modified file: $USER_RULES_FILE (re-run with --force to remove)" >&2
+          SKIPPED=$((SKIPPED + 1))
+        else
+          if $DRY_RUN; then echo "dry-run: remove $USER_RULES_FILE"; else rm -f "$USER_RULES_FILE"; fi
+          REMOVED=$((REMOVED + 1))
+        fi
+      else
+        echo "warning: skipping unmanaged file: $USER_RULES_FILE" >&2
+      fi
     fi
   fi
-  if exp_home_sha="$(manifest_file_sha "b3-home" 2>/dev/null)" && [[ -f "$B3_HOME_FILE" ]]; then
-    cur_sha="$(sha256_file "$B3_HOME_FILE")"
-    if [[ "$cur_sha" == "$exp_home_sha" ]]; then
-      if $DRY_RUN; then echo "dry-run: remove $B3_HOME_FILE"; else rm -f "$B3_HOME_FILE"; fi
-      REMOVED=$((REMOVED + 1))
-    else
-      echo "warning: skipping modified b3-home: $B3_HOME_FILE" >&2
+  if exp_home_sha="$(manifest_file_sha "b3-home" 2>/dev/null)"; then
+    if is_link_entry "$B3_HOME_FILE"; then
+      echo "warning: skipping symlinked file path: $B3_HOME_FILE" >&2
+      SKIPPED=$((SKIPPED + 1))
+    elif [[ -f "$B3_HOME_FILE" ]]; then
+      cur_sha="$(sha256_file "$B3_HOME_FILE")"
+      if ! $FORCE && [[ -n "$exp_home_sha" ]] && [[ "$cur_sha" != "$exp_home_sha" ]]; then
+        echo "warning: skipping modified b3-home: $B3_HOME_FILE (re-run with --force to remove)" >&2
+        SKIPPED=$((SKIPPED + 1))
+      else
+        if $DRY_RUN; then echo "dry-run: remove $B3_HOME_FILE"; else rm -f "$B3_HOME_FILE"; fi
+        REMOVED=$((REMOVED + 1))
+      fi
     fi
+  fi
+  if [[ $SKIPPED -gt 0 ]]; then
+    if ! $DRY_RUN; then
+      for d in "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"; do
+        if [[ -d "$d" && ! -L "$d" ]] && [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
+          rmdir "$d"
+        fi
+      done
+    fi
+    echo "UNINSTALL_CONFLICT: removed=$REMOVED skipped=$SKIPPED cursor_home=$CURSOR_HOME (re-run with --force to remove modified managed entries)"
+    exit 1
   fi
   if $DRY_RUN; then
     echo "dry-run: remove manifest $MANIFEST_FILE"
@@ -538,19 +695,37 @@ in_expected_agents() {
 # --- Verify ---
 if [[ "$ACTION" == "verify" ]]; then
   ERRS=()
-  if ! $M_EXISTS; then
+  if is_link_entry "$CURSOR_HOME"; then
+    ERRS+=("cursor_home is a link (expected regular directory): $CURSOR_HOME")
+  fi
+  if is_link_entry "$SKILLS_DEST"; then
+    ERRS+=("skills directory is a link (expected regular directory): $SKILLS_DEST")
+  fi
+  if is_link_entry "$COMMANDS_DEST"; then
+    ERRS+=("commands directory is a link (expected regular directory): $COMMANDS_DEST")
+  fi
+  if is_link_entry "$AGENTS_DEST"; then
+    ERRS+=("agents directory is a link (expected regular directory): $AGENTS_DEST")
+  fi
+  if is_link_entry "$MANIFEST_FILE"; then
+    ERRS+=("manifest is a link (expected regular file): $MANIFEST_FILE")
+  elif ! $M_EXISTS; then
     ERRS+=("missing manifest: $MANIFEST_FILE")
   fi
   LEGACY_LINK="${SKILLS_DEST}/b3-ai-engineering"
   if [[ -e "$LEGACY_LINK" || -L "$LEGACY_LINK" ]]; then
     ERRS+=("legacy b3-ai-engineering entry still exists at $LEGACY_LINK (run with --force to migrate)")
   fi
-  if [[ ! -f "$B3_HOME_FILE" ]]; then
+  if [[ -L "$B3_HOME_FILE" ]]; then
+    ERRS+=("b3-home is a link (expected regular file): $B3_HOME_FILE")
+  elif [[ ! -f "$B3_HOME_FILE" ]]; then
     ERRS+=("missing b3-home file: $B3_HOME_FILE")
   elif [[ "$(sha256_file "$B3_HOME_FILE")" != "$(sha256_file "${RENDER_DIR}/b3-home")" ]]; then
     ERRS+=("b3-home mismatch at $B3_HOME_FILE")
   fi
-  if [[ ! -f "$USER_RULES_FILE" ]]; then
+  if [[ -L "$USER_RULES_FILE" ]]; then
+    ERRS+=("b3-user-rules.txt is a link (expected regular file): $USER_RULES_FILE")
+  elif [[ ! -f "$USER_RULES_FILE" ]]; then
     ERRS+=("missing b3-user-rules.txt: $USER_RULES_FILE")
   elif [[ "$(sha256_file "$USER_RULES_FILE")" != "$(sha256_file "${RENDER_DIR}/b3-user-rules.txt")" ]]; then
     ERRS+=("stale or modified b3-user-rules.txt at $USER_RULES_FILE")
@@ -575,7 +750,9 @@ if [[ "$ACTION" == "verify" ]]; then
   fi
   for c in "${EXPECTED_COMMANDS[@]}"; do
     dest="${COMMANDS_DEST}/${c}"
-    if [[ ! -f "$dest" ]]; then
+    if [[ -L "$dest" ]]; then
+      ERRS+=("command is a link (expected regular file): $dest")
+    elif [[ ! -f "$dest" ]]; then
       ERRS+=("missing command: $dest")
     elif [[ "$(sha256_file "$dest")" != "$(sha256_file "${RENDER_DIR}/commands/${c}")" ]]; then
       ERRS+=("stale or modified command: $dest")
@@ -583,7 +760,9 @@ if [[ "$ACTION" == "verify" ]]; then
   done
   for a in "${EXPECTED_AGENTS[@]}"; do
     dest="${AGENTS_DEST}/${a}"
-    if [[ ! -f "$dest" ]]; then
+    if [[ -L "$dest" ]]; then
+      ERRS+=("agent is a link (expected regular file): $dest")
+    elif [[ ! -f "$dest" ]]; then
       ERRS+=("missing agent: $dest")
     elif [[ "$(sha256_file "$dest")" != "$(sha256_file "${RENDER_DIR}/agents/${a}")" ]]; then
       ERRS+=("stale or modified agent: $dest")
@@ -605,6 +784,28 @@ if [[ "$ACTION" == "verify" ]]; then
 fi
 
 # --- Preflight all conflicts before modifying disk (install / update) ---
+for container_dir in "$CURSOR_HOME" "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"; do
+  if [[ -e "$container_dir" || -L "$container_dir" ]]; then
+    if is_link_entry "$container_dir"; then
+      echo "error: refusing to traverse link directory: $container_dir" >&2
+      exit 1
+    fi
+    if [[ ! -d "$container_dir" ]]; then
+      echo "error: existing non-directory path blocks directory: $container_dir" >&2
+      exit 1
+    fi
+  fi
+done
+if [[ -e "$MANIFEST_FILE" || -L "$MANIFEST_FILE" ]]; then
+  if is_link_entry "$MANIFEST_FILE"; then
+    echo "error: existing link blocks $MANIFEST_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -f "$MANIFEST_FILE" ]]; then
+    echo "error: existing non-file path blocks $MANIFEST_FILE" >&2
+    exit 1
+  fi
+fi
 LEGACY_LINK="${SKILLS_DEST}/b3-ai-engineering"
 REMOVE_LEGACY=false
 if [[ -e "$LEGACY_LINK" || -L "$LEGACY_LINK" ]]; then
@@ -643,12 +844,15 @@ done
 
 for c in "${EXPECTED_COMMANDS[@]}"; do
   dest="${COMMANDS_DEST}/${c}"
-  if [[ -f "$dest" ]]; then
+  if [[ -L "$dest" ]]; then
+    echo "error: existing link blocks command $dest" >&2
+    exit 1
+  elif [[ -f "$dest" ]]; then
     if ! grep -q 'b3-global-cursor-managed:' "$dest" && ! $FORCE; then
       echo "error: refusing to overwrite unmanaged command $dest (re-run with --force to replace)" >&2
       exit 1
     fi
-  elif [[ -e "$dest" || -L "$dest" ]]; then
+  elif [[ -e "$dest" ]]; then
     echo "error: existing non-file path blocks command $dest" >&2
     exit 1
   fi
@@ -656,18 +860,24 @@ done
 
 for a in "${EXPECTED_AGENTS[@]}"; do
   dest="${AGENTS_DEST}/${a}"
-  if [[ -f "$dest" ]]; then
+  if [[ -L "$dest" ]]; then
+    echo "error: existing link blocks agent $dest" >&2
+    exit 1
+  elif [[ -f "$dest" ]]; then
     if ! grep -q 'b3-global-cursor-managed:' "$dest" && ! $FORCE; then
       echo "error: refusing to overwrite unmanaged agent $dest (re-run with --force to replace)" >&2
       exit 1
     fi
-  elif [[ -e "$dest" || -L "$dest" ]]; then
+  elif [[ -e "$dest" ]]; then
     echo "error: existing non-file path blocks agent $dest" >&2
     exit 1
   fi
 done
 
-if [[ -e "$B3_HOME_FILE" || -L "$B3_HOME_FILE" ]]; then
+if [[ -L "$B3_HOME_FILE" ]]; then
+  echo "error: existing link blocks $B3_HOME_FILE" >&2
+  exit 1
+elif [[ -e "$B3_HOME_FILE" ]]; then
   [[ -f "$B3_HOME_FILE" ]] || { echo "error: existing non-file path blocks $B3_HOME_FILE" >&2; exit 1; }
   cur_home="$(trim_crlf "$(cat "$B3_HOME_FILE")")"
   cur_home="${cur_home//\\//}"
@@ -680,7 +890,10 @@ if [[ -e "$B3_HOME_FILE" || -L "$B3_HOME_FILE" ]]; then
   fi
 fi
 
-if [[ -e "$USER_RULES_FILE" || -L "$USER_RULES_FILE" ]]; then
+if [[ -L "$USER_RULES_FILE" ]]; then
+  echo "error: existing link blocks $USER_RULES_FILE" >&2
+  exit 1
+elif [[ -e "$USER_RULES_FILE" ]]; then
   [[ -f "$USER_RULES_FILE" ]] || { echo "error: existing non-file path blocks $USER_RULES_FILE" >&2; exit 1; }
   if ! grep -q 'b3-global-cursor-managed:' "$USER_RULES_FILE" && ! $FORCE; then
     echo "error: refusing to overwrite unmanaged $USER_RULES_FILE (re-run with --force)" >&2
@@ -749,7 +962,7 @@ fi
 for c in "${EXPECTED_COMMANDS[@]}"; do
   dest="${COMMANDS_DEST}/${c}"
   tmp_src="${RENDER_DIR}/commands/${c}"
-  cp -f "$tmp_src" "$dest"
+  install_file_atomic "$tmp_src" "$dest"
   c_sha="$(sha256_file "$tmp_src")"
   MANIFEST_BODY="${MANIFEST_BODY}command|${c}|${c_sha}
 "
@@ -768,7 +981,7 @@ fi
 for a in "${EXPECTED_AGENTS[@]}"; do
   dest="${AGENTS_DEST}/${a}"
   tmp_src="${RENDER_DIR}/agents/${a}"
-  cp -f "$tmp_src" "$dest"
+  install_file_atomic "$tmp_src" "$dest"
   a_sha="$(sha256_file "$tmp_src")"
   MANIFEST_BODY="${MANIFEST_BODY}agent|${a}|${a_sha}
 "
@@ -784,10 +997,10 @@ if [[ ${#M_AGENT_NAMES[@]} -gt 0 ]]; then
   done
 fi
 
-cp -f "${RENDER_DIR}/b3-home" "$B3_HOME_FILE"
+install_file_atomic "${RENDER_DIR}/b3-home" "$B3_HOME_FILE"
 MANIFEST_BODY="${MANIFEST_BODY}file|b3-home|$(sha256_file "${RENDER_DIR}/b3-home")
 "
-cp -f "${RENDER_DIR}/b3-user-rules.txt" "$USER_RULES_FILE"
+install_file_atomic "${RENDER_DIR}/b3-user-rules.txt" "$USER_RULES_FILE"
 MANIFEST_BODY="${MANIFEST_BODY}file|b3-user-rules.txt|$(sha256_file "${RENDER_DIR}/b3-user-rules.txt")
 "
 

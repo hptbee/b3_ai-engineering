@@ -6,7 +6,16 @@ $root = Split-Path -Parent $PSScriptRoot
 $instPs = Join-Path $root 'adapters\cursor\install-global.ps1'
 $instShPosix = ($root -replace '\\', '/') + '/adapters/cursor/install-global.sh'
 $gitBash = 'C:\Program Files\Git\bin\bash.exe'
+if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
+    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
+    if ($bashCmd -and ($bashCmd.Source -notmatch '[\\/]Windows[\\/]System32[\\/]bash\.exe$')) {
+        $gitBash = $bashCmd.Source
+    }
+}
 $hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
+if (-not $hasBash) {
+    Write-Output "WARNING: bash not found; cross-shell .sh checks skipped (INCOMPLETE)"
+}
 $failed = 0
 
 function Pass([string]$Name) { Write-Output "PASS $Name" }
@@ -325,6 +334,95 @@ try {
     } else {
         FailCheck 'cursor-global-coexistence-and-uninstall' "coex=$coexWarn un=$($un8.Code) verAfter=$($verAfterUn.Code) gone=$b3Gone safe=$userArtifactsSafe"
     }
+
+    # --- 11. cursor-global-symlink-boundaries (F1, F2) ---
+    $uh11 = Join-Path $sandbox 'u11'
+    $liveCuTarget = Join-Path $uh11 'live-cu-target'
+    $liveCuLink = Join-Path $uh11 'live-cu-link'
+    New-Item -ItemType Directory -Path $liveCuTarget -Force | Out-Null
+    & cmd.exe /c mklink /J "`"$liveCuLink`"" "`"$liveCuTarget`"" | Out-Null
+    $psLiveIn = Invoke-PsGlobal @('install', '-CursorHome', $liveCuLink, '-UserHome', $uh11, '-Force')
+    $psLiveVer = Invoke-PsGlobal @('verify', '-CursorHome', $liveCuLink, '-UserHome', $uh11)
+    $psLiveUn = Invoke-PsGlobal @('uninstall', '-CursorHome', $liveCuLink, '-UserHome', $uh11)
+    $shLiveOk = $true
+    if ($hasBash) {
+        $liveCuP = $liveCuLink -replace '\\', '/'
+        $uh11p = $uh11 -replace '\\', '/'
+        $shLiveIn = Invoke-ShGlobal $instShPosix "install --cursor-home '$liveCuP' --user-home '$uh11p' --force"
+        $shLiveVer = Invoke-ShGlobal $instShPosix "verify --cursor-home '$liveCuP' --user-home '$uh11p'"
+        $shLiveUn = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$liveCuP' --user-home '$uh11p'"
+        $shLiveOk = ($shLiveIn.Code -eq 1) -and ($shLiveVer.Code -eq 1) -and ($shLiveUn.Code -eq 1)
+    }
+    $cuTargetEmpty = (@(Get-ChildItem -LiteralPath $liveCuTarget -Force).Count -eq 0)
+
+    $subCu = Join-Path $uh11 'sub-cu'
+    $extCmd = Join-Path $uh11 'ext-cmd'
+    New-Item -ItemType Directory -Path $subCu, $extCmd | Out-Null
+    & cmd.exe /c mklink /J "`"$(Join-Path $subCu 'commands')`"" "`"$extCmd`"" | Out-Null
+    $psSubCmd = Invoke-PsGlobal @('install', '-CursorHome', $subCu, '-UserHome', $uh11, '-Force')
+    $shSubCmdOk = $true
+    if ($hasBash) {
+        $subCuP = $subCu -replace '\\', '/'
+        $shSubCmd = Invoke-ShGlobal $instShPosix "install --cursor-home '$subCuP' --user-home '$uh11p' --force"
+        $shSubCmdOk = ($shSubCmd.Code -eq 1)
+    }
+    $extCmdUntouched = -not (Test-Path -LiteralPath (Join-Path $extCmd 'b3-ship.md'))
+    if ($psLiveIn.Code -eq 1 -and $psLiveVer.Code -eq 1 -and $psLiveUn.Code -eq 1 -and $shLiveOk -and $cuTargetEmpty -and
+        $psSubCmd.Code -eq 1 -and $shSubCmdOk -and $extCmdUntouched) {
+        Pass 'cursor-global-symlink-boundaries'
+    } else {
+        FailCheck 'cursor-global-symlink-boundaries' "psLive=$($psLiveIn.Code)/$($psLiveVer.Code)/$($psLiveUn.Code) shLive=$shLiveOk empty=$cuTargetEmpty sub=$($psSubCmd.Code)/$shSubCmdOk ext=$extCmdUntouched"
+    }
+
+    # --- 12. cursor-global-uninstall-protects-modified (F4) ---
+    $uh12 = Join-Path $sandbox 'u12'
+    $ch12 = Join-Path $uh12 '.cursor'
+    $dbgTgt12 = Join-Path $uh12 'custom-dbg-ps'
+    New-Item -ItemType Directory -Path $dbgTgt12 -Force | Out-Null
+    $in12 = Invoke-PsGlobal @('install', '-CursorHome', $ch12, '-UserHome', $uh12)
+    Add-Content -LiteralPath (Join-Path $ch12 'commands\b3-plan.md') "`n<!-- user edit -->"
+    & cmd.exe /c rmdir "`"$(Join-Path $ch12 'skills\debugging')`"" | Out-Null
+    & cmd.exe /c mklink /J "`"$(Join-Path $ch12 'skills\debugging')`"" "`"$dbgTgt12`"" | Out-Null
+    $unConf12 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch12, '-UserHome', $uh12)
+    $keptMod12 = ((Get-Content -LiteralPath (Join-Path $ch12 'commands\b3-plan.md') -Raw) -match 'user edit') -and
+                 (Test-Path -LiteralPath (Join-Path $ch12 'skills\debugging')) -and
+                 (Test-Path -LiteralPath (Join-Path $ch12 '.b3-global-manifest'))
+    $unForce12 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch12, '-UserHome', $uh12, '-Force')
+    $clean12 = (-not (Test-Path -LiteralPath (Join-Path $ch12 'commands\b3-plan.md'))) -and
+               (-not (Test-Path -LiteralPath (Join-Path $ch12 'skills\debugging'))) -and
+               (-not (Test-Path -LiteralPath (Join-Path $ch12 '.b3-global-manifest'))) -and
+               (Test-Path -LiteralPath $dbgTgt12)
+
+    $sh12Ok = $true
+    if ($hasBash) {
+        $uh12s = Join-Path $sandbox 'u12sh'
+        $ch12s = Join-Path $uh12s '.cursor'
+        $dbgTgt12s = Join-Path $uh12s 'custom-dbg-sh'
+        New-Item -ItemType Directory -Path $dbgTgt12s -Force | Out-Null
+        $ch12sp = $ch12s -replace '\\', '/'
+        $uh12sp = $uh12s -replace '\\', '/'
+        $shIn12 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch12sp' --user-home '$uh12sp'"
+        Add-Content -LiteralPath (Join-Path $ch12s 'commands\b3-plan.md') "`n<!-- user edit -->"
+        & cmd.exe /c rmdir "`"$(Join-Path $ch12s 'skills\debugging')`"" | Out-Null
+        & cmd.exe /c mklink /J "`"$(Join-Path $ch12s 'skills\debugging')`"" "`"$dbgTgt12s`"" | Out-Null
+        $shConf12 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch12sp' --user-home '$uh12sp'"
+        $shKept12 = ((Get-Content -LiteralPath (Join-Path $ch12s 'commands\b3-plan.md') -Raw) -match 'user edit') -and
+                    (Test-Path -LiteralPath (Join-Path $ch12s 'skills\debugging')) -and
+                    (Test-Path -LiteralPath (Join-Path $ch12s '.b3-global-manifest'))
+        $shForce12 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch12sp' --user-home '$uh12sp' --force"
+        $shClean12 = (-not (Test-Path -LiteralPath (Join-Path $ch12s 'commands\b3-plan.md'))) -and
+                     (-not (Test-Path -LiteralPath (Join-Path $ch12s 'skills\debugging'))) -and
+                     (-not (Test-Path -LiteralPath (Join-Path $ch12s '.b3-global-manifest'))) -and
+                     (Test-Path -LiteralPath $dbgTgt12s)
+        $sh12Ok = ($shIn12.Code -eq 0) -and ($shConf12.Code -eq 1) -and ($shConf12.Text -match 'UNINSTALL_CONFLICT:') -and
+                  $shKept12 -and ($shForce12.Code -eq 0) -and $shClean12
+    }
+    if ($in12.Code -eq 0 -and $unConf12.Code -eq 1 -and ($unConf12.Text -match 'UNINSTALL_CONFLICT:') -and
+        $keptMod12 -and $unForce12.Code -eq 0 -and $clean12 -and $sh12Ok) {
+        Pass 'cursor-global-uninstall-protects-modified'
+    } else {
+        FailCheck 'cursor-global-uninstall-protects-modified' "in=$($in12.Code) conf=$($unConf12.Code) kept=$keptMod12 force=$($unForce12.Code) clean=$clean12 sh=$sh12Ok"
+    }
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue
@@ -336,5 +434,9 @@ if ($failed -gt 0) {
     Write-Output "$failed check(s) failed"
     exit 1
 }
-Write-Output 'ok'
+if (-not $hasBash) {
+    Write-Output 'ok (PS-only; bash skipped - INCOMPLETE)'
+} else {
+    Write-Output 'ok'
+}
 exit 0

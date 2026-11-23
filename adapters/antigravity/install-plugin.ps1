@@ -1,4 +1,4 @@
-﻿# Global Antigravity plugin lifecycle manager for B3 AI Engineering (Windows PowerShell / pwsh).
+# Global Antigravity plugin lifecycle manager for B3 AI Engineering (Windows PowerShell / pwsh).
 # Installs, updates, verifies, or uninstalls the canonical B3 plugin bundle under ~/.gemini/config/plugins/b3-ai-engineering.
 # Usage: .\adapters\antigravity\install-plugin.ps1 [-Action install|update|verify|uninstall] [-PluginRoot <dir>] [-B3Home <dir>] [-UserHome <dir>] [-DryRun] [-Force]
 param(
@@ -381,6 +381,7 @@ if ($Action -eq 'uninstall') {
     }
 
     $removed = 0
+    $skipped = 0
     $trackedFiles = New-Object System.Collections.Generic.List[string]
     $trackedLinks = New-Object System.Collections.Generic.List[string]
     if ($manifest.Exists) {
@@ -394,7 +395,7 @@ if ($Action -eq 'uninstall') {
             $trackedFiles.Add('rules/AGENTS.md')
         }
         $agDir = Join-Path $PluginRoot 'agents'
-        if (Test-Path -LiteralPath $agDir -PathType Container) {
+        if ((Test-Path -LiteralPath $agDir -PathType Container) -and -not (Test-IsReparseLink $agDir)) {
             foreach ($af in @(Get-ChildItem -LiteralPath $agDir -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
                 $txt = [IO.File]::ReadAllText($af.FullName, [System.Text.Encoding]::UTF8)
                 if ($txt -match '<!-- Generated from .*/(\.cursor/)?agents/') {
@@ -403,34 +404,81 @@ if ($Action -eq 'uninstall') {
             }
         }
         $skDir = Join-Path $PluginRoot 'skills'
-        if (Test-Path -LiteralPath $skDir -PathType Container) {
+        if ((Test-Path -LiteralPath $skDir -PathType Container) -and -not (Test-IsReparseLink $skDir)) {
             foreach ($sk in @(Get-ChildItem -LiteralPath $skDir -Force -ErrorAction SilentlyContinue)) {
                 if (Test-IsReparseLink $sk.FullName) { $trackedLinks.Add("skills/$($sk.Name)") }
             }
         }
     }
 
-    foreach ($lk in $trackedLinks) {
-        $p = Join-Path $PluginRoot ($lk -replace '/', '\')
-        if (Test-IsReparseLink $p) {
-            if ($DryRun) { Write-Output "dry-run: remove skill link $p" } else { Remove-LinkOnly $p }
-            $removed++
-        } elseif (Test-Path -LiteralPath $p) {
-            Write-Warning "skipping unmanaged non-link entry: $p"
+    $skillsContainer = Join-Path $PluginRoot 'skills'
+    $skillsContainerIsLink = Test-IsReparseLink $skillsContainer
+    if ($skillsContainerIsLink) {
+        Write-Warning "skipping symlinked skills directory: $skillsContainer"
+        $skipped++
+    } else {
+        foreach ($lk in $trackedLinks) {
+            $p = Join-Path $PluginRoot ($lk -replace '/', '\')
+            if (Test-IsReparseLink $p) {
+                if ($manifest.Exists -and $manifest.Links.ContainsKey($lk) -and -not $Force) {
+                    $expTarget = $manifest.Links[$lk]
+                    if ($expTarget -and -not (Test-LinkTarget $p $expTarget)) {
+                        Write-Warning "skipping retargeted skill link: $p (expected $expTarget; re-run with -Force to remove)"
+                        $skipped++
+                        continue
+                    }
+                }
+                if ($DryRun) { Write-Output "dry-run: remove skill link $p" } else { Remove-LinkOnly $p }
+                $removed++
+            } elseif (Test-Path -LiteralPath $p) {
+                Write-Warning "skipping unmanaged non-link entry: $p"
+            }
         }
     }
+    $warnedContainers = @{}
     foreach ($fk in $trackedFiles) {
         $p = Join-Path $PluginRoot ($fk -replace '/', '\')
+        $parentDir = Split-Path -Parent $p
+        if ((Normalize-Path $parentDir) -ne $PluginRoot -and (Test-IsReparseLink $parentDir)) {
+            if (-not $warnedContainers.ContainsKey($parentDir)) {
+                Write-Warning "skipping symlinked container directory: $parentDir"
+                $warnedContainers[$parentDir] = $true
+            }
+            $skipped++
+            continue
+        }
         if (Test-IsReparseLink $p) {
             Write-Warning "skipping symlinked file path: $p"
+            $skipped++
             continue
         }
         if (Test-Path -LiteralPath $p -PathType Leaf) {
+            if ($manifest.Exists -and $manifest.Files.ContainsKey($fk) -and $manifest.Files[$fk] -and -not $Force) {
+                if ((Get-FileSha256 $p) -ne $manifest.Files[$fk]) {
+                    Write-Warning "skipping modified managed file: $p (re-run with -Force to remove)"
+                    $skipped++
+                    continue
+                }
+            }
             if ($DryRun) { Write-Output "dry-run: remove file $p" } else { Remove-Item -LiteralPath $p -Force }
             $removed++
         }
     }
-    if ($manifest.Exists -and (Test-Path -LiteralPath $manifestFile -PathType Leaf)) {
+    if ($skipped -gt 0) {
+        if (-not $DryRun) {
+            foreach ($subDir in @('skills', 'rules', 'agents')) {
+                $sd = Join-Path $PluginRoot $subDir
+                if ((Test-Path -LiteralPath $sd -PathType Container) -and -not (Test-IsReparseLink $sd)) {
+                    if (@(Get-ChildItem -LiteralPath $sd -Force).Count -eq 0) {
+                        Remove-Item -LiteralPath $sd -Force
+                    }
+                }
+            }
+        }
+        Write-Output "UNINSTALL_CONFLICT: removed=$removed skipped=$skipped plugin_root=$PluginRoot (re-run with -Force to remove modified managed entries)"
+        exit 1
+    }
+    if ($manifest.Exists -and (Test-Path -LiteralPath $manifestFile -PathType Leaf) -and -not (Test-IsReparseLink $manifestFile)) {
         if ($DryRun) { Write-Output "dry-run: remove manifest $manifestFile" } else { Remove-Item -LiteralPath $manifestFile -Force }
         $removed++
     }
@@ -566,12 +614,15 @@ if ($Action -eq 'verify') {
         $errors.Add("plugin directory missing or invalid: $PluginRoot")
     } else {
         $manifest = Read-PluginManifest $manifestFile
-        if (-not $manifest.Exists -or $manifest.Schema -ne 'b3-antigravity-plugin-v1') {
+        if ((Test-IsReparseLink $manifestFile) -or -not $manifest.Exists -or $manifest.Schema -ne 'b3-antigravity-plugin-v1') {
             $pluginOk = $false
             $errors.Add("missing or invalid .b3-plugin-manifest at $manifestFile")
         }
         $pjPath = Join-Path $PluginRoot 'plugin.json'
-        if (-not (Test-B3PluginJson $pjPath)) {
+        if (Test-IsReparseLink $pjPath) {
+            $pluginOk = $false
+            $errors.Add("plugin.json is a link (expected regular file): $pjPath")
+        } elseif (-not (Test-B3PluginJson $pjPath)) {
             $pluginOk = $false
             $errors.Add("missing or invalid plugin.json at $pjPath")
         } elseif ((Get-FileSha256 $pjPath) -ne (Get-TextSha256 $pluginJson)) {
@@ -584,6 +635,9 @@ if ($Action -eq 'verify') {
         if (Test-IsReparseLink $rulesDirOut) {
             $rulesOk = $false
             $errors.Add("rules directory is a link (expected regular directory): $rulesDirOut")
+        } elseif (Test-IsReparseLink $rulesOut) {
+            $rulesOk = $false
+            $errors.Add("rules/AGENTS.md is a link (expected regular file): $rulesOut")
         } elseif (-not (Test-Path -LiteralPath $rulesOut -PathType Leaf)) {
             $rulesOk = $false
             $errors.Add("missing rules/AGENTS.md at $rulesOut")
@@ -644,7 +698,10 @@ if ($Action -eq 'verify') {
         } else {
             foreach ($ag in $renderedAgents) {
                 $dest = Join-Path $agentsOut $ag.FileName
-                if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
+                if (Test-IsReparseLink $dest) {
+                    $agentsOk = $false
+                    $errors.Add("agent file is a link (expected regular file): $dest")
+                } elseif (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
                     $agentsOk = $false
                     $errors.Add("missing agent file: $dest")
                 } elseif ((Get-FileSha256 $dest) -ne (Get-TextSha256 $ag.Content)) {
@@ -684,11 +741,11 @@ if ($Action -eq 'verify') {
     if ($errors.Count -gt 0) {
         foreach ($e in $errors) { Write-Output "VERIFY_ERROR: $e" }
         Write-Output "VERIFY_FAIL: errors=$($errors.Count) plugin_root=$PluginRoot"
-        Write-Output "note: filesystem verification only — Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
+        Write-Output "note: filesystem verification only -- Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
         exit 1
     }
     Write-Output "VERIFY_OK: skills=$($coreSkillMap.Count) commands=$($cmdSkillMap.Count) agents=$($renderedAgents.Count) rules_bytes=$rulesBytes plugin_root=$PluginRoot b3_home=$b3HomeForward"
-    Write-Output "note: filesystem verification only — Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
+    Write-Output "note: filesystem verification only -- Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
     exit 0
 }
 
@@ -706,11 +763,45 @@ if ((Test-Path -LiteralPath $PluginRoot) -or (Test-IsReparseLink $PluginRoot)) {
     if (-not $isB3Plugin -and -not $Force) {
         Fail "refusing to overwrite existing non-B3 directory without -Force: $PluginRoot"
     }
+    foreach ($subName in @('rules', 'skills', 'agents')) {
+        $subPath = Join-Path $PluginRoot $subName
+        if ((Test-Path -LiteralPath $subPath) -or (Test-IsReparseLink $subPath)) {
+            if (Test-IsReparseLink $subPath) {
+                Fail "refusing to traverse link directory ${subName}: $subPath"
+            }
+            if (-not (Test-Path -LiteralPath $subPath -PathType Container)) {
+                Fail "existing non-directory path blocks ${subName}: $subPath"
+            }
+        }
+    }
+    $managedFilePaths = New-Object System.Collections.Generic.List[string]
+    $managedFilePaths.Add((Join-Path $PluginRoot 'plugin.json'))
+    $managedFilePaths.Add((Join-Path $PluginRoot 'rules\AGENTS.md'))
+    $managedFilePaths.Add($manifestFile)
+    foreach ($ag in $renderedAgents) {
+        $managedFilePaths.Add((Join-Path $PluginRoot "agents\$($ag.FileName)"))
+    }
+    foreach ($mp in $managedFilePaths) {
+        if ((Test-Path -LiteralPath $mp) -or (Test-IsReparseLink $mp)) {
+            if (Test-IsReparseLink $mp) {
+                Fail "existing link blocks managed file: $mp"
+            }
+            if (-not (Test-Path -LiteralPath $mp -PathType Leaf)) {
+                Fail "existing non-file path blocks managed file: $mp"
+            }
+        }
+    }
     $existingSkillsDir = Join-Path $PluginRoot 'skills'
-    if ((Test-Path -LiteralPath $existingSkillsDir -PathType Container) -and -not $Force) {
+    if (Test-Path -LiteralPath $existingSkillsDir -PathType Container) {
         foreach ($child in @(Get-ChildItem -LiteralPath $existingSkillsDir -Force)) {
+            if (-not $skillMap.ContainsKey($child.Name)) { continue }
             if (-not (Test-IsReparseLink $child.FullName)) {
-                Fail "refusing to overwrite non-link entry in $existingSkillsDir without -Force: $($child.FullName)"
+                if (-not $Force) {
+                    Fail "refusing to overwrite non-link entry in $existingSkillsDir without -Force: $($child.FullName)"
+                }
+                if (-not (Test-Path -LiteralPath (Join-Path $child.FullName 'SKILL.md') -PathType Leaf)) {
+                    Fail "refusing to overwrite non-skill directory even with -Force: $($child.FullName)"
+                }
             }
         }
     }
@@ -752,7 +843,7 @@ foreach ($child in @(Get-ChildItem -LiteralPath $skillsOutDir -Force)) {
         if (-not $skillMap.ContainsKey($child.Name) -or -not (Test-LinkTarget $child.FullName $skillMap[$child.Name])) {
             Remove-LinkOnly $child.FullName
         }
-    } elseif ($Force) {
+    } elseif ($Force -and $skillMap.ContainsKey($child.Name)) {
         Remove-Item -LiteralPath $child.FullName -Recurse -Force
     }
 }

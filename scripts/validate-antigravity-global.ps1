@@ -8,9 +8,15 @@ $agShPosix = ($root -replace '\\', '/') + '/adapters/antigravity/install-plugin.
 $uniPs = Join-Path $root 'adapters\install-global.ps1'
 $uniShPosix = ($root -replace '\\', '/') + '/adapters/install-global.sh'
 $gitBash = 'C:\Program Files\Git\bin\bash.exe'
+if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
+    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
+    if ($bashCmd -and ($bashCmd.Source -notmatch '[\\/]Windows[\\/]System32[\\/]bash\.exe$')) {
+        $gitBash = $bashCmd.Source
+    }
+}
 $hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
 if (-not $hasBash) {
-    Write-Output "WARNING: Git Bash not found at $gitBash; Bash cross-shell checks skipped"
+    Write-Output "WARNING: bash not found; cross-shell .sh checks skipped (INCOMPLETE)"
 }
 $failed = 0
 
@@ -495,6 +501,133 @@ try {
     } else {
         FailCheck 'unified-install-global-dispatcher' "c=$($uC1.Code)/$uCOnly a=$($uA1.Code)/$uAOnly trail=$trailOk mix=$mixOk dr=$allDrClean all=$($allIn.Code)/$($allUp.Code)/$($allVer.Code) noWarn=$noCoexConflict sh=$shAllOk gone=$allGone"
     }
+
+    # --- 12. ag-global-symlink-boundaries (F1, F2) ---
+    $uh12 = Join-Path $sandbox 'u12'
+    $liveTarget = Join-Path $uh12 'live-target'
+    $liveLink = Join-Path $uh12 'live-plugin-link'
+    New-Item -ItemType Directory -Path $liveTarget -Force | Out-Null
+    & cmd.exe /c mklink /J "`"$liveLink`"" "`"$liveTarget`"" | Out-Null
+    $psLiveIn = Invoke-PsScript $agPs @('install', '-PluginRoot', $liveLink, '-UserHome', $uh12, '-Force')
+    $psLiveVer = Invoke-PsScript $agPs @('verify', '-PluginRoot', $liveLink, '-UserHome', $uh12)
+    $psLiveUn = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $liveLink, '-UserHome', $uh12)
+    $shLiveOk = $true
+    if ($hasBash) {
+        $liveLinkP = $liveLink -replace '\\', '/'
+        $uh12p = $uh12 -replace '\\', '/'
+        $shLiveIn = Invoke-ShScript $agShPosix "install --plugin-root '$liveLinkP' --user-home '$uh12p' --force"
+        $shLiveVer = Invoke-ShScript $agShPosix "verify --plugin-root '$liveLinkP' --user-home '$uh12p'"
+        $shLiveUn = Invoke-ShScript $agShPosix "uninstall --plugin-root '$liveLinkP' --user-home '$uh12p'"
+        $shLiveOk = ($shLiveIn.Code -eq 1) -and ($shLiveVer.Code -eq 1) -and ($shLiveUn.Code -eq 1)
+    }
+    $liveTargetUntouched = (Test-Path -LiteralPath $liveTarget) -and (@(Get-ChildItem -LiteralPath $liveTarget -Force).Count -eq 0)
+
+    $subAllOk = $true
+    foreach ($subName in @('agents', 'rules', 'skills')) {
+        $prSub = Join-Path $uh12 "pr-sub-$subName"
+        $extSub = Join-Path $uh12 "ext-$subName"
+        New-Item -ItemType Directory -Path $prSub, $extSub | Out-Null
+        & cmd.exe /c mklink /J "`"$(Join-Path $prSub $subName)`"" "`"$extSub`"" | Out-Null
+        $psSub = Invoke-PsScript $agPs @('install', '-PluginRoot', $prSub, '-UserHome', $uh12, '-Force')
+        $shSubOk = $true
+        if ($hasBash) {
+            $prSubP = $prSub -replace '\\', '/'
+            $shSub = Invoke-ShScript $agShPosix "install --plugin-root '$prSubP' --user-home '$uh12p' --force"
+            $shSubOk = ($shSub.Code -eq 1)
+        }
+        $extEmpty = (@(Get-ChildItem -LiteralPath $extSub -Force).Count -eq 0)
+        if ($psSub.Code -ne 1 -or -not $shSubOk -or -not $extEmpty) {
+            $subAllOk = $false
+        }
+    }
+    if ($psLiveIn.Code -eq 1 -and $psLiveVer.Code -eq 1 -and $psLiveUn.Code -eq 1 -and $shLiveOk -and $liveTargetUntouched -and $subAllOk) {
+        Pass 'ag-global-symlink-boundaries'
+    } else {
+        FailCheck 'ag-global-symlink-boundaries' "ps=$($psLiveIn.Code)/$($psLiveVer.Code)/$($psLiveUn.Code) sh=$shLiveOk untouched=$liveTargetUntouched sub=$subAllOk"
+    }
+
+    # --- 13. ag-global-force-preserves-non-b3-skills (F3) ---
+    $uh13 = Join-Path $sandbox 'u13'
+    $pr13 = Join-Path $uh13 '.gemini\config\plugins\b3-ai-engineering'
+    New-Item -ItemType Directory -Path (Join-Path $pr13 'skills\verification'), (Join-Path $pr13 'skills\my-custom-skill'), (Join-Path $pr13 'skills\debugging') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $pr13 'skills\verification\SKILL.md') "---`nname: verification`ndescription: local`n---`n"
+    Set-Content -LiteralPath (Join-Path $pr13 'skills\my-custom-skill\SKILL.md') "---`nname: my-custom-skill`ndescription: user`n---`n"
+    Set-Content -LiteralPath (Join-Path $pr13 'skills\user-note.txt') "keep me`n"
+    Set-Content -LiteralPath (Join-Path $pr13 'skills\debugging\not-a-skill.txt') "not a skill`n"
+    $refNonSkill = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr13, '-UserHome', $uh13, '-Force')
+    $shNonSkillOk = $true
+    if ($hasBash) {
+        $pr13p = $pr13 -replace '\\', '/'
+        $uh13p = $uh13 -replace '\\', '/'
+        $shNonSkill = Invoke-ShScript $agShPosix "install --plugin-root '$pr13p' --user-home '$uh13p' --force"
+        $shNonSkillOk = ($shNonSkill.Code -eq 1)
+    }
+    Remove-Item -LiteralPath (Join-Path $pr13 'skills\debugging') -Recurse -Force
+    $force13Ps = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr13, '-UserHome', $uh13, '-Force')
+    $kept13Ps = (Test-Path -LiteralPath (Join-Path $pr13 'skills\my-custom-skill\SKILL.md')) -and
+                (Test-Path -LiteralPath (Join-Path $pr13 'skills\user-note.txt')) -and
+                (Test-Path -LiteralPath (Join-Path $pr13 'skills\verification\SKILL.md'))
+
+    $sh13Ok = $true
+    if ($hasBash) {
+        & cmd.exe /c rmdir "`"$(Join-Path $pr13 'skills\verification')`"" | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $pr13 'skills\verification') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $pr13 'skills\verification\SKILL.md') "---`nname: verification`ndescription: local2`n---`n"
+        $force13Sh = Invoke-ShScript $agShPosix "install --plugin-root '$pr13p' --user-home '$uh13p' --force"
+        $ver13Sh = Invoke-ShScript $agShPosix "verify --plugin-root '$pr13p' --user-home '$uh13p'"
+        $kept13Sh = (Test-Path -LiteralPath (Join-Path $pr13 'skills\my-custom-skill\SKILL.md')) -and
+                    (Test-Path -LiteralPath (Join-Path $pr13 'skills\user-note.txt'))
+        $sh13Ok = ($force13Sh.Code -eq 0) -and ($ver13Sh.Code -eq 0) -and $kept13Sh
+    }
+    if ($refNonSkill.Code -eq 1 -and $shNonSkillOk -and $force13Ps.Code -eq 0 -and $kept13Ps -and $sh13Ok) {
+        Pass 'ag-global-force-preserves-non-b3-skills'
+    } else {
+        FailCheck 'ag-global-force-preserves-non-b3-skills' "refNS=$($refNonSkill.Code)/$shNonSkillOk f=$($force13Ps.Code) kept=$kept13Ps sh=$sh13Ok"
+    }
+
+    # --- 14. ag-global-uninstall-protects-modified (F4) ---
+    $uh14 = Join-Path $sandbox 'u14'
+    $pr14 = Join-Path $uh14 '.gemini\config\plugins\b3-ai-engineering'
+    $dbgTgt14 = Join-Path $uh14 'custom-dbg-ps'
+    New-Item -ItemType Directory -Path $dbgTgt14 -Force | Out-Null
+    $in14 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr14, '-UserHome', $uh14)
+    Add-Content -LiteralPath (Join-Path $pr14 'agents\b3-reviewer.md') "`n<!-- user edit -->"
+    & cmd.exe /c rmdir "`"$(Join-Path $pr14 'skills\debugging')`"" | Out-Null
+    & cmd.exe /c mklink /J "`"$(Join-Path $pr14 'skills\debugging')`"" "`"$dbgTgt14`"" | Out-Null
+    $unConf14 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr14, '-UserHome', $uh14)
+    $kept14 = ((Get-Content -LiteralPath (Join-Path $pr14 'agents\b3-reviewer.md') -Raw) -match 'user edit') -and
+              (Test-Path -LiteralPath (Join-Path $pr14 'skills\debugging')) -and
+              (Test-Path -LiteralPath (Join-Path $pr14 '.b3-plugin-manifest'))
+    $unForce14 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr14, '-UserHome', $uh14, '-Force')
+    $clean14 = (-not (Test-Path -LiteralPath $pr14)) -and (Test-Path -LiteralPath $dbgTgt14)
+
+    $sh14Ok = $true
+    if ($hasBash) {
+        $uh14s = Join-Path $sandbox 'u14sh'
+        $pr14s = Join-Path $uh14s '.gemini\config\plugins\b3-ai-engineering'
+        $dbgTgt14s = Join-Path $uh14s 'custom-dbg-sh'
+        New-Item -ItemType Directory -Path $dbgTgt14s -Force | Out-Null
+        $pr14sp = $pr14s -replace '\\', '/'
+        $uh14sp = $uh14s -replace '\\', '/'
+        $shIn14 = Invoke-ShScript $agShPosix "install --plugin-root '$pr14sp' --user-home '$uh14sp'"
+        Add-Content -LiteralPath (Join-Path $pr14s 'agents\b3-reviewer.md') "`n<!-- user edit -->"
+        & cmd.exe /c rmdir "`"$(Join-Path $pr14s 'skills\debugging')`"" | Out-Null
+        & cmd.exe /c mklink /J "`"$(Join-Path $pr14s 'skills\debugging')`"" "`"$dbgTgt14s`"" | Out-Null
+        $shConf14 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr14sp' --user-home '$uh14sp'"
+        $shKept14 = ((Get-Content -LiteralPath (Join-Path $pr14s 'agents\b3-reviewer.md') -Raw) -match 'user edit') -and
+                    (Test-Path -LiteralPath (Join-Path $pr14s 'skills\debugging')) -and
+                    (Test-Path -LiteralPath (Join-Path $pr14s '.b3-plugin-manifest'))
+        $shForce14 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr14sp' --user-home '$uh14sp' --force"
+        $shClean14 = (-not (Test-Path -LiteralPath $pr14s)) -and (Test-Path -LiteralPath $dbgTgt14s)
+        $sh14Ok = ($shIn14.Code -eq 0) -and ($shConf14.Code -eq 1) -and ($shConf14.Text -match 'UNINSTALL_CONFLICT:') -and
+                  $shKept14 -and ($shForce14.Code -eq 0) -and $shClean14
+    }
+    if ($in14.Code -eq 0 -and $unConf14.Code -eq 1 -and ($unConf14.Text -match 'UNINSTALL_CONFLICT:') -and
+        $kept14 -and $unForce14.Code -eq 0 -and $clean14 -and $sh14Ok) {
+        Pass 'ag-global-uninstall-protects-modified'
+    } else {
+        FailCheck 'ag-global-uninstall-protects-modified' "in=$($in14.Code) conf=$($unConf14.Code) kept=$kept14 force=$($unForce14.Code) clean=$clean14 sh=$sh14Ok"
+    }
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue
@@ -506,5 +639,9 @@ if ($failed -gt 0) {
     Write-Output "$failed check(s) failed"
     exit 1
 }
-Write-Output 'ok'
+if (-not $hasBash) {
+    Write-Output 'ok (PS-only; bash skipped - INCOMPLETE)'
+} else {
+    Write-Output 'ok'
+}
 exit 0

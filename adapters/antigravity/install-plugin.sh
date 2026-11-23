@@ -82,6 +82,19 @@ canon_path_allow_missing() {
   while [[ "$p" == */ && "$p" != "/" && ! "$p" =~ ^[A-Za-z]:/$ ]]; do
     p="${p%/}"
   done
+  if [[ -L "$p" ]]; then
+    local base parent resolved
+    base="$(basename "$p")"
+    parent="$(dirname "$p")"
+    if [[ -d "$parent" ]]; then
+      resolved="$(canon_existing_dir "$parent")"
+      resolved="${resolved%/}"
+      printf '%s/%s' "$resolved" "$base"
+    else
+      printf '%s' "$p"
+    fi
+    return
+  fi
   if [[ -d "$p" ]]; then
     canon_existing_dir "$p"
     return
@@ -130,12 +143,16 @@ sha256_file() {
 }
 
 sha256_text() {
-  local tmp="${TMPDIR:-/tmp}/.b3_ag_sha.$$.${RANDOM}"
-  printf '%s' "$1" | LC_ALL=C tr -d '\r' > "$tmp"
-  local h
-  h="$(sha256_file "$tmp")"
-  rm -f "$tmp"
-  printf '%s' "$h"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$1" | LC_ALL=C tr -d '\r' | sha256sum | awk '{print tolower($1)}'
+  elif command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | LC_ALL=C tr -d '\r' | shasum -a 256 | awk '{print tolower($1)}'
+  elif command -v openssl >/dev/null 2>&1; then
+    printf '%s' "$1" | LC_ALL=C tr -d '\r' | openssl dgst -sha256 | awk '{print tolower($NF)}'
+  else
+    echo "error: missing sha256 utility (sha256sum/shasum/openssl)" >&2
+    return 1
+  fi
 }
 
 write_lf_file() {
@@ -189,6 +206,28 @@ link_target_ok() {
   rd="$(cd -P "$dest" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
   re="$(cd -P "$expected" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
   [[ -n "$rd" && "$(norm_cmp_path "$rd")" == "$(norm_cmp_path "$re")" ]]
+}
+
+link_matches_expected_or_dangling() {
+  local dest="$1" expected="$2"
+  is_link_entry "$dest" || return 1
+  if [[ -d "$dest" ]]; then
+    link_target_ok "$dest" "$expected"
+    return $?
+  fi
+  local rl
+  rl="$(readlink "$dest" 2>/dev/null)" || return 1
+  if $IS_WINDOWS && command -v cygpath >/dev/null 2>&1; then
+    rl="$(cygpath -m "$rl" 2>/dev/null || printf '%s' "$rl")"
+  elif [[ "$rl" != /* && ! "$rl" =~ ^[A-Za-z]: ]]; then
+    local parent
+    parent="$(canon_path_allow_missing "$(dirname "$dest")")"
+    rl="${parent%/}/${rl}"
+  fi
+  local exp_norm rl_norm
+  exp_norm="$(canon_path_allow_missing "$expected")"
+  rl_norm="$(canon_path_allow_missing "$rl")"
+  [[ "$(norm_cmp_path "$rl_norm")" == "$(norm_cmp_path "$exp_norm")" ]]
 }
 
 skill_name_from_file() {
@@ -375,7 +414,9 @@ M_SCHEMA=""
 M_B3_HOME=""
 M_PLUGIN_ROOT=""
 M_FILE_KEYS=()
+M_FILE_SHAS=()
 M_LINK_KEYS=()
+M_LINK_TARGETS=()
 
 load_manifest() {
   M_EXISTS=false
@@ -383,7 +424,9 @@ load_manifest() {
   M_B3_HOME=""
   M_PLUGIN_ROOT=""
   M_FILE_KEYS=()
+  M_FILE_SHAS=()
   M_LINK_KEYS=()
+  M_LINK_TARGETS=()
   [[ -f "$MANIFEST_FILE" ]] || return 0
   M_EXISTS=true
   local raw k v1 v2
@@ -399,14 +442,44 @@ load_manifest() {
     v1="${raw#*|}"
     v2="${v1#*|}"
     v1="${v1%%|*}"
-    if [[ "$k" == "file" ]]; then M_FILE_KEYS+=("$v1")
-    elif [[ "$k" == "link" ]]; then M_LINK_KEYS+=("$v1")
+    if [[ "$k" == "file" ]]; then M_FILE_KEYS+=("$v1"); M_FILE_SHAS+=("$v2")
+    elif [[ "$k" == "link" ]]; then M_LINK_KEYS+=("$v1"); M_LINK_TARGETS+=("$v2")
     fi
   done < "$MANIFEST_FILE"
 }
 
+manifest_file_sha() {
+  local target="$1" i
+  if [[ ${#M_FILE_KEYS[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_FILE_KEYS[@]}; i++)); do
+      if [[ "${M_FILE_KEYS[$i]}" == "$target" ]]; then
+        printf '%s' "${M_FILE_SHAS[$i]}"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
+manifest_link_target() {
+  local target="$1" i
+  if [[ ${#M_LINK_KEYS[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_LINK_KEYS[@]}; i++)); do
+      if [[ "${M_LINK_KEYS[$i]}" == "$target" ]]; then
+        printf '%s' "${M_LINK_TARGETS[$i]}"
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
 # --- Uninstall action ---
 if [[ "$ACTION" == "uninstall" ]]; then
+  if is_link_entry "$PLUGIN_ROOT"; then
+    echo "error: refusing to uninstall link-based PluginRoot: $PLUGIN_ROOT" >&2
+    exit 1
+  fi
   load_manifest
   HAS_PJ=false
   is_b3_plugin_json "${PLUGIN_ROOT}/plugin.json" && HAS_PJ=true
@@ -417,10 +490,6 @@ if [[ "$ACTION" == "uninstall" ]]; then
     fi
     echo "nothing installed (no B3 plugin at $PLUGIN_ROOT)"
     exit 0
-  fi
-  if is_link_entry "$PLUGIN_ROOT"; then
-    echo "error: refusing to uninstall link-based PluginRoot: $PLUGIN_ROOT" >&2
-    exit 1
   fi
 
   TRACKED_FILES=()
@@ -433,7 +502,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
     if [[ -f "${PLUGIN_ROOT}/rules/AGENTS.md" ]] && grep -q 'Generated from B3_HOME:' "${PLUGIN_ROOT}/rules/AGENTS.md"; then
       TRACKED_FILES+=("rules/AGENTS.md")
     fi
-    if [[ -d "${PLUGIN_ROOT}/agents" ]]; then
+    if [[ -d "${PLUGIN_ROOT}/agents" ]] && ! is_link_entry "${PLUGIN_ROOT}/agents"; then
       for af in "${PLUGIN_ROOT}/agents"/*.md; do
         [[ -f "$af" ]] || continue
         if grep -Eq '<!-- Generated from .*/(\.cursor/)?agents/' "$af"; then
@@ -441,7 +510,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
         fi
       done
     fi
-    if [[ -d "${PLUGIN_ROOT}/skills" ]]; then
+    if [[ -d "${PLUGIN_ROOT}/skills" ]] && ! is_link_entry "${PLUGIN_ROOT}/skills"; then
       for sk in "${PLUGIN_ROOT}/skills"/*; do
         [[ -e "$sk" || -L "$sk" ]] || continue
         is_link_entry "$sk" && TRACKED_LINKS+=("skills/$(basename "$sk")")
@@ -450,10 +519,22 @@ if [[ "$ACTION" == "uninstall" ]]; then
   fi
 
   removed=0
-  if [[ ${#TRACKED_LINKS[@]} -gt 0 ]]; then
+  skipped=0
+  if is_link_entry "${PLUGIN_ROOT}/skills"; then
+    echo "warning: skipping symlinked skills directory: ${PLUGIN_ROOT}/skills" >&2
+    skipped=$((skipped + 1))
+  elif [[ ${#TRACKED_LINKS[@]} -gt 0 ]]; then
     for lk in "${TRACKED_LINKS[@]}"; do
       p="${PLUGIN_ROOT}/${lk}"
       if is_link_entry "$p"; then
+        if $M_EXISTS && ! $FORCE; then
+          exp_target="$(manifest_link_target "$lk" 2>/dev/null || true)"
+          if [[ -n "$exp_target" ]] && ! link_matches_expected_or_dangling "$p" "$exp_target"; then
+            echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
+            skipped=$((skipped + 1))
+            continue
+          fi
+        fi
         if $DRY_RUN; then echo "dry-run: remove skill link $p"; else remove_link_only "$p"; fi
         removed=$((removed + 1))
       elif [[ -e "$p" ]]; then
@@ -461,18 +542,52 @@ if [[ "$ACTION" == "uninstall" ]]; then
       fi
     done
   fi
+  WARNED_CONTAINERS=()
   if [[ ${#TRACKED_FILES[@]} -gt 0 ]]; then
     for fk in "${TRACKED_FILES[@]}"; do
       p="${PLUGIN_ROOT}/${fk}"
+      p_parent="$(dirname "$p")"
+      if [[ "$(norm_cmp_path "$p_parent")" != "$(norm_cmp_path "$PLUGIN_ROOT")" ]] && is_link_entry "$p_parent"; then
+        already_w=false
+        if [[ ${#WARNED_CONTAINERS[@]} -gt 0 ]]; then
+          for wc in "${WARNED_CONTAINERS[@]}"; do
+            if [[ "$wc" == "$p_parent" ]]; then already_w=true; break; fi
+          done
+        fi
+        if ! $already_w; then
+          echo "warning: skipping symlinked container directory: $p_parent" >&2
+          WARNED_CONTAINERS+=("$p_parent")
+        fi
+        skipped=$((skipped + 1))
+        continue
+      fi
       if is_link_entry "$p"; then
         echo "warning: skipping symlinked file path: $p" >&2
+        skipped=$((skipped + 1))
         continue
       fi
       if [[ -f "$p" ]]; then
+        if $M_EXISTS && ! $FORCE; then
+          exp_sha="$(manifest_file_sha "$fk" 2>/dev/null || true)"
+          if [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
+            echo "warning: skipping modified managed file: $p (re-run with --force to remove)" >&2
+            skipped=$((skipped + 1))
+            continue
+          fi
+        fi
         if $DRY_RUN; then echo "dry-run: remove file $p"; else rm -f "$p"; fi
         removed=$((removed + 1))
       fi
     done
+  fi
+  if [[ $skipped -gt 0 ]]; then
+    if ! $DRY_RUN; then
+      for sd in "${PLUGIN_ROOT}/skills" "${PLUGIN_ROOT}/rules" "${PLUGIN_ROOT}/agents"; do
+        if [[ -d "$sd" && ! -L "$sd" ]]; then rmdir "$sd" 2>/dev/null || true; fi
+      done
+    fi
+    echo "UNINSTALL_CONFLICT: removed=${removed} skipped=${skipped} plugin_root=${PLUGIN_ROOT} (re-run with --force to remove modified managed entries)"
+    exit 1
   fi
   if $M_EXISTS && [[ -f "$MANIFEST_FILE" && ! -L "$MANIFEST_FILE" ]]; then
     if $DRY_RUN; then echo "dry-run: remove manifest $MANIFEST_FILE"; else rm -f "$MANIFEST_FILE"; fi
@@ -634,12 +749,15 @@ if [[ "$ACTION" == "verify" ]]; then
     ERRORS+=("plugin directory missing or invalid: $PLUGIN_ROOT")
   else
     load_manifest
-    if ! $M_EXISTS || [[ "$M_SCHEMA" != "b3-antigravity-plugin-v1" ]]; then
+    if is_link_entry "$MANIFEST_FILE" || ! $M_EXISTS || [[ "$M_SCHEMA" != "b3-antigravity-plugin-v1" ]]; then
       PLUGIN_OK=false
       ERRORS+=("missing or invalid .b3-plugin-manifest at $MANIFEST_FILE")
     fi
     PJ_PATH="${PLUGIN_ROOT}/plugin.json"
-    if ! is_b3_plugin_json "$PJ_PATH"; then
+    if is_link_entry "$PJ_PATH"; then
+      PLUGIN_OK=false
+      ERRORS+=("plugin.json is a link (expected regular file): $PJ_PATH")
+    elif ! is_b3_plugin_json "$PJ_PATH"; then
       PLUGIN_OK=false
       ERRORS+=("missing or invalid plugin.json at $PJ_PATH")
     elif [[ "$(sha256_file "$PJ_PATH")" != "$(sha256_text "$PLUGIN_JSON")" ]]; then
@@ -652,6 +770,9 @@ if [[ "$ACTION" == "verify" ]]; then
     if is_link_entry "$RULES_DIR_OUT"; then
       RULES_OK=false
       ERRORS+=("rules directory is a link (expected regular directory): $RULES_DIR_OUT")
+    elif is_link_entry "$RULES_OUT"; then
+      RULES_OK=false
+      ERRORS+=("rules/AGENTS.md is a link (expected regular file): $RULES_OUT")
     elif [[ ! -f "$RULES_OUT" ]]; then
       RULES_OK=false
       ERRORS+=("missing rules/AGENTS.md at $RULES_OUT")
@@ -729,7 +850,10 @@ if [[ "$ACTION" == "verify" ]]; then
         ab="${AGENT_BASES[$i]}"
         ac="${AGENT_CONTENTS[$i]}"
         dest="${AGENTS_OUT}/${ab}"
-        if [[ ! -f "$dest" ]]; then
+        if is_link_entry "$dest"; then
+          AGENTS_OK=false
+          ERRORS+=("agent file is a link (expected regular file): $dest")
+        elif [[ ! -f "$dest" ]]; then
           AGENTS_OK=false
           ERRORS+=("missing agent file: $dest")
         elif [[ "$(sha256_file "$dest")" != "$(sha256_text "$ac")" ]]; then
@@ -776,13 +900,21 @@ if [[ "$ACTION" == "verify" ]]; then
   if [[ ${#ERRORS[@]} -gt 0 ]]; then
     for e in "${ERRORS[@]}"; do echo "VERIFY_ERROR: $e"; done
     echo "VERIFY_FAIL: errors=${#ERRORS[@]} plugin_root=${PLUGIN_ROOT}"
-    echo "note: filesystem verification only — Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
+    echo "note: filesystem verification only -- Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
     exit 1
   fi
   echo "VERIFY_OK: skills=${#CORE_SKILL_NAMES[@]} commands=${#CMD_SKILL_NAMES[@]} agents=${#AGENT_BASES[@]} rules_bytes=${RULES_BYTES} plugin_root=${PLUGIN_ROOT} b3_home=${B3_HOME}"
-  echo "note: filesystem verification only — Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
+  echo "note: filesystem verification only -- Antigravity runtime discovery is UNKNOWN / INCOMPLETE until verified in a live session"
   exit 0
 fi
+
+is_b3_skill_name() {
+  local cand="$1" sn
+  for sn in "${ALL_SKILL_NAMES[@]}"; do
+    [[ "$sn" == "$cand" ]] && return 0
+  done
+  return 1
+}
 
 # --- Preflight before any write (install / update) ---
 if [[ -e "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
@@ -799,12 +931,53 @@ if [[ -e "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
     echo "error: refusing to overwrite existing non-B3 directory without --force: $PLUGIN_ROOT" >&2
     exit 1
   fi
-  if [[ -d "${PLUGIN_ROOT}/skills" ]] && ! $FORCE; then
+  for sub_name in rules skills agents; do
+    sub_path="${PLUGIN_ROOT}/${sub_name}"
+    if [[ -e "$sub_path" || -L "$sub_path" ]]; then
+      if is_link_entry "$sub_path"; then
+        echo "error: refusing to traverse link directory ${sub_name}: $sub_path" >&2
+        exit 1
+      fi
+      if [[ ! -d "$sub_path" ]]; then
+        echo "error: existing non-directory path blocks ${sub_name}: $sub_path" >&2
+        exit 1
+      fi
+    fi
+  done
+  MANAGED_FILES=(
+    "${PLUGIN_ROOT}/plugin.json"
+    "${PLUGIN_ROOT}/rules/AGENTS.md"
+    "$MANIFEST_FILE"
+  )
+  for ab in "${AGENT_BASES[@]}"; do
+    MANAGED_FILES+=("${PLUGIN_ROOT}/agents/${ab}")
+  done
+  for mp in "${MANAGED_FILES[@]}"; do
+    if [[ -e "$mp" || -L "$mp" ]]; then
+      if is_link_entry "$mp"; then
+        echo "error: existing link blocks managed file: $mp" >&2
+        exit 1
+      fi
+      if [[ ! -f "$mp" ]]; then
+        echo "error: existing non-file path blocks managed file: $mp" >&2
+        exit 1
+      fi
+    fi
+  done
+  if [[ -d "${PLUGIN_ROOT}/skills" ]]; then
     for entry in "${PLUGIN_ROOT}/skills"/* "${PLUGIN_ROOT}/skills"/.[!.]* "${PLUGIN_ROOT}/skills"/..?*; do
       [[ -e "$entry" || -L "$entry" ]] || continue
+      ename="$(basename "$entry")"
+      is_b3_skill_name "$ename" || continue
       if ! is_link_entry "$entry"; then
-        echo "error: refusing to overwrite non-link entry in ${PLUGIN_ROOT}/skills without --force: $entry" >&2
-        exit 1
+        if ! $FORCE; then
+          echo "error: refusing to overwrite non-link entry in ${PLUGIN_ROOT}/skills without --force: $entry" >&2
+          exit 1
+        fi
+        if [[ ! -f "${entry}/SKILL.md" ]]; then
+          echo "error: refusing to overwrite non-skill directory even with --force: $entry" >&2
+          exit 1
+        fi
       fi
     done
   fi
@@ -838,8 +1011,8 @@ MANIFEST_LINES="${MANIFEST_LINES}file|rules/AGENTS.md|$(sha256_text "$RULES_CONT
 
 for entry in "${PLUGIN_ROOT}/skills"/* "${PLUGIN_ROOT}/skills"/.[!.]* "${PLUGIN_ROOT}/skills"/..?*; do
   [[ -e "$entry" || -L "$entry" ]] || continue
+  ename="$(basename "$entry")"
   if is_link_entry "$entry"; then
-    ename="$(basename "$entry")"
     desired_dir=""
     for i in "${!ALL_SKILL_NAMES[@]}"; do
       if [[ "${ALL_SKILL_NAMES[$i]}" == "$ename" ]]; then
@@ -850,7 +1023,7 @@ for entry in "${PLUGIN_ROOT}/skills"/* "${PLUGIN_ROOT}/skills"/.[!.]* "${PLUGIN_
     if [[ -z "$desired_dir" ]] || ! link_target_ok "$entry" "$desired_dir"; then
       remove_link_only "$entry"
     fi
-  elif $FORCE; then
+  elif $FORCE && is_b3_skill_name "$ename"; then
     rm -rf "$entry"
   fi
 done
