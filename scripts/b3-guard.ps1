@@ -36,6 +36,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepoRoot)
+$repoRootBase = [IO.Path]::GetPathRoot($RepoRoot)
+if ($RepoRoot -eq '/' -or $RepoRoot -eq '\') {
+    $RepoRoot = '/'
+} elseif ($RepoRoot -match '^([A-Za-z]:)[\\/]?$') {
+    $RepoRoot = "$($Matches[1])\"
+} elseif (-not ($repoRootBase -and $RepoRoot.Equals($repoRootBase, [System.StringComparison]::OrdinalIgnoreCase))) {
+    $RepoRoot = $RepoRoot.TrimEnd('\', '/')
+    if (-not $RepoRoot) { $RepoRoot = '/' }
+}
 
 function Fail([string]$Message, [int]$Code = 1) {
     Write-Output $Message
@@ -301,6 +310,103 @@ function Get-RepoRelativePath([string]$Root, [string]$FullPath) {
     return $fullNorm
 }
 
+function Test-IsReparseItem([System.IO.FileSystemInfo]$Item) {
+    if (-not $Item) { return $false }
+    if ($Item.LinkType -in @('Junction', 'SymbolicLink')) { return $true }
+    return (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+function Test-IsReparsePath([string]$PathValue) {
+    if (-not $PathValue) { return $false }
+    $item = Get-Item -LiteralPath $PathValue -Force -ErrorAction SilentlyContinue
+    return (Test-IsReparseItem $item)
+}
+
+function Remove-DirTreeSafely([string]$TargetDir) {
+    $item = Get-Item -LiteralPath $TargetDir -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return }
+    if (Test-IsReparseItem $item) {
+        Fail "PRUNE_FAIL: refusing recursive delete of link path: $TargetDir" 1
+    }
+    if (-not $item.PSIsContainer) {
+        Remove-Item -LiteralPath $TargetDir -Force
+        return
+    }
+    foreach ($child in @(Get-ChildItem -LiteralPath $TargetDir -Force)) {
+        if ($null -eq $child) { continue }
+        if (Test-IsReparseItem $child) {
+            if ($child.PSIsContainer) {
+                [System.IO.Directory]::Delete($child.FullName, $false)
+            } else {
+                Remove-Item -LiteralPath $child.FullName -Force
+            }
+        } elseif ($child.PSIsContainer) {
+            Remove-DirTreeSafely $child.FullName
+        } else {
+            Remove-Item -LiteralPath $child.FullName -Force
+        }
+    }
+    [System.IO.Directory]::Delete($TargetDir, $false)
+}
+
+function Resolve-SafeRepoWritePath([string]$Root, [string]$PathArg) {
+    if ([string]::IsNullOrWhiteSpace($PathArg)) { return $null }
+    $trimmed = $PathArg.Trim()
+    $slashArg = $trimmed -replace '\\', '/'
+    if (-not $slashArg -or $slashArg -eq '.' -or $slashArg.StartsWith('~') -or $slashArg.EndsWith('/')) { return $null }
+    if ($trimmed -match '[\x00-\x1F\x7F]') { return $null }
+    if ($slashArg -match '(^|/)\.\.(/|$)') { return $null }
+    if ([IO.Path]::DirectorySeparatorChar -eq '\' -and $slashArg -match '^[A-Za-z]:' -and $slashArg -notmatch '^[A-Za-z]:/') { return $null }
+
+    $full = $null
+    try {
+        $full = Resolve-TargetPath $Root $trimmed
+    } catch {
+        return $null
+    }
+    if (-not $full) { return $null }
+
+    $rootSlash = ($Root -replace '\\', '/').TrimEnd('/')
+    $fullSlash = ($full -replace '\\', '/').TrimEnd('/')
+    $cmp = if ([IO.Path]::DirectorySeparatorChar -eq '\') {
+        [System.StringComparison]::OrdinalIgnoreCase
+    } else {
+        [System.StringComparison]::Ordinal
+    }
+    if ($rootSlash -eq '') {
+        if (-not $fullSlash.StartsWith('/', $cmp) -or $fullSlash -eq '') { return $null }
+    } else {
+        if ($fullSlash.Equals($rootSlash, $cmp) -or (-not $fullSlash.StartsWith("$rootSlash/", $cmp))) {
+            return $null
+        }
+    }
+
+    $rel = Get-RepoRelativePath $Root $full
+    if (-not $rel -or $rel -eq '.' -or [IO.Path]::IsPathRooted($rel) -or $rel.StartsWith('/') -or $rel.StartsWith('~') -or ($rel -match '^[A-Za-z]:') -or ($rel -match '(^|/)\.\.(/|$)') -or ($rel -match '^\.git(/|$)')) {
+        return $null
+    }
+
+    $segCur = $Root
+    foreach ($seg in ($rel -split '/')) {
+        if (-not $seg -or $seg -eq '.') { continue }
+        $segCur = Join-Path $segCur $seg
+        $segItem = Get-Item -LiteralPath $segCur -Force -ErrorAction SilentlyContinue
+        if ($segItem) {
+            if (Test-IsReparseItem $segItem) { return $null }
+            try {
+                $attrs = [IO.File]::GetAttributes($segCur)
+                if (($attrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
+            } catch {
+                return $null
+            }
+        } elseif (Test-Path -LiteralPath $segCur) {
+            return $null
+        }
+    }
+
+    return @{ FullPath = $full; RelPath = $rel }
+}
+
 function Write-AtomicLfFile([string]$DestPath, [string]$Text) {
     $parent = Split-Path -Parent $DestPath
     if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
@@ -484,14 +590,18 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
                     if (($attrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
                         return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
                     }
-                } catch {}
+                } catch {
+                    return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+                }
             } else {
                 try {
                     $item = Get-Item -LiteralPath $segCur -Force -ErrorAction SilentlyContinue
-                    if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                    if (Test-IsReparseItem $item) {
                         return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
                     }
-                } catch {}
+                } catch {
+                    return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
+                }
             }
         }
         if (-not (Test-Path -LiteralPath $logFull -PathType Leaf)) {
@@ -1457,15 +1567,19 @@ switch ($Command) {
 
     'prune' {
         if ($Keep -lt 0) { Fail 'PRUNE_FAIL: -Keep must be >= 0' 1 }
-        $ShipDir = Join-Path $RepoRoot '.b3\ship'
+        $dotB3Dir = Join-Path $RepoRoot '.b3'
+        $ShipDir = Join-Path $dotB3Dir 'ship'
         $runsDir = Join-Path $ShipDir 'runs'
+        if ((Test-IsReparsePath $dotB3Dir) -or (Test-IsReparsePath $ShipDir) -or (Test-IsReparsePath $runsDir)) {
+            Fail 'PRUNE_FAIL: runs directory is a link' 1
+        }
         if (-not (Test-Path -LiteralPath $runsDir -PathType Container)) {
             Write-Output 'PRUNE_OK: 0 removed'
             exit 0
         }
 
         $curId = Get-CurrentRunId $ShipDir
-        $rawNames = @(Get-ChildItem -LiteralPath $runsDir -Directory | ForEach-Object { $_.Name })
+        $rawNames = @(Get-ChildItem -LiteralPath $runsDir -Directory -Force | Where-Object { -not (Test-IsReparseItem $_) } | ForEach-Object { $_.Name })
         $dirNames = @(Sort-Ordinal $rawNames -Descending)
         $passCount = 0
         $pruned = New-Object System.Collections.Generic.List[string]
@@ -1477,7 +1591,7 @@ switch ($Command) {
             if ($st -ceq 'PASS') {
                 $passCount++
                 if ($passCount -gt $Keep -and -not $isCurrent) {
-                    Remove-Item -LiteralPath $fullDir -Recurse -Force
+                    Remove-DirTreeSafely $fullDir
                     $pruned.Add($id)
                 }
             }
@@ -1496,13 +1610,20 @@ switch ($Command) {
         if (-not $VerifyCmd -or -not $VerifyCmd.Trim()) { Fail 'VERIFY_RUN_FAIL: missing -VerifyCmd' 1 }
         if (-not $ReceiptPath -or -not $ReceiptPath.Trim()) { Fail 'VERIFY_RUN_FAIL: missing -ReceiptPath' 1 }
 
+        $receiptInfo = Resolve-SafeRepoWritePath $RepoRoot $ReceiptPath
+        if (-not $receiptInfo) { Fail 'VERIFY_RUN_FAIL: invalid receipt_path' 1 }
+
+        $effLogArg = if ($LogPath -and $LogPath.Trim()) { $LogPath } else { "$($receiptInfo.RelPath).log" }
+        $logInfo = Resolve-SafeRepoWritePath $RepoRoot $effLogArg
+        if (-not $logInfo) { Fail 'VERIFY_RUN_FAIL: invalid log_path' 1 }
+
         $effTaskId = if ($TaskId -and $TaskId.Trim()) { ($TaskId.Trim() -replace '[\r\n]+', ' ') } else { 'unknown' }
         $effScope = if ($Scope -and $Scope.Trim()) { ($Scope.Trim() -replace '[\r\n]+', ' ') } else { 'scoped' }
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
         $relArr = @(Split-CsvList $RelevantPaths -AsPaths)
 
-        $fullReceipt = Resolve-TargetPath $RepoRoot $ReceiptPath
-        $receiptRel = Get-RepoRelativePath $RepoRoot $fullReceipt
+        $fullReceipt = $receiptInfo.FullPath
+        $receiptRel = $receiptInfo.RelPath
 
         $psExe = $null
         try {
@@ -1539,10 +1660,10 @@ switch ($Command) {
 
         $logDisp = 'none'
         if ($cmdExit -ne 0 -or $outLines.Count -gt 35) {
-            $fullLog = if ($LogPath -and $LogPath.Trim()) { Resolve-TargetPath $RepoRoot $LogPath } else { "$fullReceipt.log" }
+            $fullLog = $logInfo.FullPath
             $logBody = if ($outLines.Count -gt 0) { ($outLines.ToArray() -join "`n") + "`n" } else { '' }
             Write-AtomicLfFile $fullLog $logBody
-            $logDisp = Get-RepoRelativePath $RepoRoot $fullLog
+            $logDisp = $logInfo.RelPath
         }
 
         $singleCmd = ($VerifyCmd -replace '[\r\n]+', ' ').Trim()

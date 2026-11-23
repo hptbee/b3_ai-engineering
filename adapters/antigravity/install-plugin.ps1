@@ -165,9 +165,9 @@ if ($Action -eq 'uninstall') {
             $p = Join-Path $PluginRoot ($lk -replace '/', '\')
             if (-not (Test-PathWithinRoot $PluginRoot $p)) { Fail "refusing to uninstall path outside PluginRoot: $p" }
             if (Test-IsReparseLink $p) {
-                if ($manifest.Exists -and $manifest.Sections.link.ContainsKey($lk) -and -not $Force) {
-                    $expTarget = $manifest.Sections.link[$lk]
-                    if ($expTarget -and -not (Test-LinkTarget $p $expTarget)) {
+                if ($manifest.Exists -and -not $Force) {
+                    $expTarget = if ($manifest.Sections.link.ContainsKey($lk)) { $manifest.Sections.link[$lk] } else { '' }
+                    if (-not $expTarget -or -not (Test-LinkTarget $p $expTarget)) {
                         Write-Warning "skipping retargeted skill link: $p (expected $expTarget; re-run with -Force to remove)"
                         $skipped++
                         continue
@@ -199,8 +199,9 @@ if ($Action -eq 'uninstall') {
             continue
         }
         if (Test-Path -LiteralPath $p -PathType Leaf) {
-            if ($manifest.Exists -and $manifest.Sections.file.ContainsKey($fk) -and $manifest.Sections.file[$fk] -and -not $Force) {
-                if ((Get-FileSha256 $p) -ne $manifest.Sections.file[$fk]) {
+            if ($manifest.Exists -and -not $Force) {
+                $expSha = if ($manifest.Sections.file.ContainsKey($fk)) { $manifest.Sections.file[$fk] } else { '' }
+                if (-not $expSha -or ((Get-FileSha256 $p) -ne $expSha)) {
                     Write-Warning "skipping modified managed file: $p (re-run with -Force to remove)"
                     $skipped++
                     continue
@@ -303,10 +304,16 @@ if ($Action -eq 'verify') {
         $pluginOk = $false; $rulesOk = $false; $skillsOk = $false; $commandsOk = $false; $agentsOk = $false
         $errors.Add("plugin directory missing or invalid: $PluginRoot")
     } else {
-        $manifest = Read-B3Manifest $manifestFile
-        if ((Test-IsReparseLink $manifestFile) -or -not $manifest.Exists -or $manifest.Corrupt -or $manifest.Schema -ne 'b3-antigravity-plugin-v1') {
+        if (Test-IsReparseLink $manifestFile) {
+            $manifest = [PSCustomObject]@{ Exists = $false; Corrupt = $false; Schema = ''; Sections = @{ skill=@{}; command=@{}; agent=@{}; file=@{}; link=@{} } }
             $pluginOk = $false
             $errors.Add("missing or invalid .b3-plugin-manifest at $manifestFile")
+        } else {
+            $manifest = Read-B3Manifest $manifestFile
+            if (-not $manifest.Exists -or $manifest.Corrupt -or $manifest.Schema -ne 'b3-antigravity-plugin-v1') {
+                $pluginOk = $false
+                $errors.Add("missing or invalid .b3-plugin-manifest at $manifestFile")
+            }
         }
         $pjPath = Join-Path $PluginRoot 'plugin.json'
         if (Test-IsReparseLink $pjPath) {
@@ -516,7 +523,7 @@ foreach ($child in @(Get-ChildItem -LiteralPath $skillsOutDir -Force)) {
             Remove-LinkOnly $child.FullName
         }
     } elseif ($Force -and $skillMap.ContainsKey($child.Name)) {
-        Remove-Item -LiteralPath $child.FullName -Recurse -Force
+        Remove-DirTreeSafely $child.FullName
     }
 }
 foreach ($sn in $sortedSkillNames) {

@@ -21,6 +21,11 @@ if [[ -z "$CMD" ]]; then
 fi
 shift
 
+_B3_IS_WINDOWS=false
+case "$(uname -s 2>/dev/null || true)" in
+  MINGW*|MSYS*|CYGWIN*) _B3_IS_WINDOWS=true ;;
+esac
+
 norm_path() {
   local p="$1"
   p="${p//$'\r'/}"
@@ -249,37 +254,301 @@ check_git_mid_operation() {
   done
 }
 
+upper_drive_path() {
+  local p="$1"
+  local LC_ALL=C
+  if [[ "$p" =~ ^[a-z]: ]]; then
+    local drv
+    drv="$(printf '%s' "${p:0:1}" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+    printf '%s' "${drv}${p:1}"
+  else
+    printf '%s' "$p"
+  fi
+}
+
+canon_repo_root() {
+  local raw="$1"
+  [[ -n "$raw" && -d "$raw" ]] || return 1
+  local res
+  res="$(cd -P "$raw" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+  res="$(norm_path "$res")"
+  res="$(upper_drive_path "$res")"
+  if [[ "$res" =~ ^[A-Za-z]:$ ]]; then
+    res="${res}/"
+  fi
+  printf '%s' "$res"
+}
+
+normalize_abs_for_repo() {
+  local p="$1"
+  p="${p//$'\r'/}"
+  p="${p//\\//}"
+  if [[ "$_B3_IS_WINDOWS" == "true" ]]; then
+    local re_msys='^/([A-Za-z])(/.*)?$'
+    if [[ "$p" =~ $re_msys ]]; then
+      if command -v cygpath >/dev/null 2>&1; then
+        local cp
+        cp="$(cygpath -m "$p" 2>/dev/null || true)"
+        if [[ -n "$cp" ]]; then
+          p="$cp"
+        else
+          p="${BASH_REMATCH[1]}:${BASH_REMATCH[2]:-/}"
+        fi
+      else
+        p="${BASH_REMATCH[1]}:${BASH_REMATCH[2]:-/}"
+      fi
+    elif [[ "$p" == /* ]] && command -v cygpath >/dev/null 2>&1; then
+      local cp
+      cp="$(cygpath -m "$p" 2>/dev/null || true)"
+      [[ -n "$cp" ]] && p="$cp"
+    fi
+    p="$(upper_drive_path "$p")"
+  fi
+  local re_winroot='^[A-Za-z]:/$'
+  while [[ "$p" == */ && "$p" != "/" && ! "$p" =~ $re_winroot ]]; do
+    p="${p%/}"
+  done
+  printf '%s' "$p"
+}
+
 resolve_target_path() {
   local root="$1"
   local p
   p="$(trim_str "$2")"
   [[ -n "$p" ]] || return 1
+  p="${p//\\//}"
   if [[ "$p" == /* || "$p" =~ ^[A-Za-z]: ]]; then
-    printf '%s' "$p"
+    normalize_abs_for_repo "$p"
   else
-    printf '%s' "${root}/${p#./}"
+    while [[ "$p" == ./* ]]; do
+      p="${p#./}"
+    done
+    local r="${root%/}"
+    normalize_abs_for_repo "${r}/${p}"
   fi
 }
 
 repo_rel_path() {
   local root="$1"
   local full="$2"
-  local rn fn rn_low fn_low
+  local rn fn
   rn="$(norm_path "$root")"
   fn="$(norm_path "$full")"
   if [[ "$rn" == "." ]]; then
     printf '%s' "$fn"
     return 0
   fi
-  rn_low="$(printf '%s' "$rn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-  fn_low="$(printf '%s' "$fn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-  if [[ "$fn_low" == "$rn_low/"* ]]; then
-    printf '%s' "${fn:${#rn}+1}"
-  elif [[ "$fn_low" == "$rn_low" ]]; then
-    printf '.'
-  else
-    printf '%s' "$fn"
+  if [[ "$rn" == "/" ]]; then
+    if [[ "$fn" == "/" ]]; then
+      printf '.'
+    elif [[ "$fn" == /* ]]; then
+      printf '%s' "${fn:1}"
+    else
+      printf '%s' "$fn"
+    fi
+    return 0
   fi
+  if [[ "$_B3_IS_WINDOWS" == "true" ]]; then
+    local rn_low fn_low
+    rn_low="$(printf '%s' "$rn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    fn_low="$(printf '%s' "$fn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$fn_low" == "$rn_low/"* ]]; then
+      printf '%s' "${fn:${#rn}+1}"
+    elif [[ "$fn_low" == "$rn_low" ]]; then
+      printf '.'
+    else
+      printf '%s' "$fn"
+    fi
+  else
+    if [[ "$fn" == "$rn/"* ]]; then
+      printf '%s' "${fn:${#rn}+1}"
+    elif [[ "$fn" == "$rn" ]]; then
+      printf '.'
+    else
+      printf '%s' "$fn"
+    fi
+  fi
+}
+
+_path_within_or_equal() {
+  local cand="$1"
+  local root="$2"
+  local cand_cmp="$cand"
+  local root_cmp="$root"
+  if [[ "$_B3_IS_WINDOWS" == "true" ]]; then
+    cand_cmp="$(printf '%s' "$cand" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    root_cmp="$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
+  if [[ "$root_cmp" == "/" ]]; then
+    [[ "$cand_cmp" == /* ]]
+    return $?
+  fi
+  local root_base="${root_cmp%/}"
+  [[ "$cand_cmp" == "$root_cmp" || "$cand_cmp" == "$root_base/"* ]]
+}
+
+_SAFE_FULL=""
+_SAFE_REL=""
+validate_repo_write_path() {
+  _SAFE_FULL=""
+  _SAFE_REL=""
+  local LC_ALL=C
+  local root="$1"
+  local raw_arg="$2"
+  local p
+  p="$(trim_str "$raw_arg")"
+  [[ -n "$p" ]] || return 1
+  p="${p//\\//}"
+  if [[ "$p" == "." || "$p" == ~* || "$p" == */ ]]; then
+    return 1
+  fi
+  if [[ "$p" =~ [[:cntrl:]] ]]; then
+    return 1
+  fi
+  local re_dotdot='(^|/)\.\.(/|$)'
+  if [[ "$p" =~ $re_dotdot ]]; then
+    return 1
+  fi
+  if [[ "$_B3_IS_WINDOWS" == "true" ]] && [[ "$p" =~ ^[A-Za-z]: && ! "$p" =~ ^[A-Za-z]:/ ]]; then
+    return 1
+  fi
+
+  local full
+  full="$(resolve_target_path "$root" "$p")" || return 1
+  [[ -n "$full" ]] || return 1
+
+  local root_cmp="$root" full_cmp="$full"
+  if [[ "$_B3_IS_WINDOWS" == "true" ]]; then
+    root_cmp="$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    full_cmp="$(printf '%s' "$full" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
+
+  local prefix prefix_cmp rel
+  if [[ "$root_cmp" == "/" ]]; then
+    if [[ "$full_cmp" == "/" || "$full_cmp" != /* ]]; then
+      return 1
+    fi
+    rel="${full:1}"
+  else
+    local root_base="${root%/}"
+    local root_base_cmp="${root_cmp%/}"
+    prefix="${root_base}/"
+    prefix_cmp="${root_base_cmp}/"
+    if [[ "$full_cmp" == "$root_cmp" || "$full_cmp" == "$root_base_cmp" || "$full_cmp" == "$prefix_cmp" || "$full_cmp" != "$prefix_cmp"* ]]; then
+      return 1
+    fi
+    rel="${full:${#prefix}}"
+  fi
+
+  while [[ "$rel" == *"//"* ]]; do
+    rel="${rel//\/\///}"
+  done
+  rel="${rel#/}"
+  [[ -n "$rel" && "$rel" != "." ]] || return 1
+  if [[ "$rel" == /* || "$rel" == ~* || "$rel" =~ ^[A-Za-z]: || "$rel" =~ $re_dotdot ]]; then
+    return 1
+  fi
+  local rel_low re_git='^\.git(/|$)'
+  rel_low="$(printf '%s' "$rel" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  if [[ "$rel_low" =~ $re_git ]]; then
+    return 1
+  fi
+
+  local rem="$rel" seg_cur="${root%/}" seg
+  while [[ -n "$rem" ]]; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    [[ -z "$seg" || "$seg" == "." ]] && continue
+    if [[ "$seg" == ".." ]]; then
+      return 1
+    fi
+    seg_cur="${seg_cur}/${seg}"
+    if [[ -L "$seg_cur" ]]; then
+      return 1
+    fi
+  done
+
+  local anc next_anc re_winroot='^[A-Za-z]:/$'
+  anc="$(dirname "$full")"
+  [[ "$anc" =~ ^[A-Za-z]:$ ]] && anc="${anc}/"
+  while [[ -n "$anc" && "$anc" != "/" && ! "$anc" =~ $re_winroot && ! -d "$anc" ]]; do
+    next_anc="$(dirname "$anc")"
+    [[ "$next_anc" =~ ^[A-Za-z]:$ ]] && next_anc="${next_anc}/"
+    [[ "$next_anc" == "$anc" ]] && break
+    anc="$next_anc"
+  done
+  if [[ -d "$anc" ]]; then
+    local canon_anc
+    canon_anc="$(cd -P "$anc" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+    canon_anc="$(normalize_abs_for_repo "$canon_anc")"
+    if ! _path_within_or_equal "$canon_anc" "$root"; then
+      return 1
+    fi
+  fi
+
+  local full_clean="${root%/}/${rel}"
+  _SAFE_FULL="$full_clean"
+  _SAFE_REL="$rel"
+  return 0
+}
+
+remove_dir_tree_safely() {
+  local dir="$1"
+  while [[ "$dir" == */ && "$dir" != "/" ]]; do
+    dir="${dir%/}"
+  done
+  if [[ -L "$dir" ]]; then
+    echo "PRUNE_FAIL: refusing recursive delete of link path: $dir"
+    exit 1
+  fi
+  if [[ ! -e "$dir" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$dir" ]]; then
+    rm -f "$dir"
+    return 0
+  fi
+  local entry base ps_exe win_path
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    base="${entry##*/}"
+    [[ "$base" == "." || "$base" == ".." ]] && continue
+    if [[ -L "$entry" ]]; then
+      if [[ "$_B3_IS_WINDOWS" == "true" ]] && [[ -d "$entry" || ! -e "$entry" ]]; then
+        ps_exe=""
+        win_path=""
+        if command -v powershell.exe >/dev/null 2>&1; then
+          ps_exe="powershell.exe"
+        elif command -v powershell >/dev/null 2>&1; then
+          ps_exe="powershell"
+        elif command -v pwsh >/dev/null 2>&1; then
+          ps_exe="pwsh"
+        elif [[ -x "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]]; then
+          ps_exe="/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        fi
+        if [[ -n "$ps_exe" ]] && command -v cygpath >/dev/null 2>&1; then
+          win_path="$(cygpath -w "$entry" 2>/dev/null || true)"
+        fi
+        if [[ -n "$ps_exe" && -n "$win_path" ]]; then
+          B3_WIN_PATH="$win_path" "$ps_exe" -NoProfile -NonInteractive -Command '[System.IO.Directory]::Delete($env:B3_WIN_PATH, $false)' >/dev/null 2>&1 || rm -f "$entry"
+        else
+          rm -f "$entry"
+        fi
+      else
+        rm -f "$entry"
+      fi
+    elif [[ -d "$entry" ]]; then
+      remove_dir_tree_safely "$entry"
+    else
+      rm -f "$entry"
+    fi
+  done
+  rmdir "$dir"
 }
 
 write_atomic_lf_file() {
@@ -398,6 +667,12 @@ run_verify_check() {
   local req_rel_arg="${5:-}"
   _VR_MSG=""
   _VR_REL_PATHS=""
+  local canon_r
+  if ! canon_r="$(canon_repo_root "$root")"; then
+    _VR_MSG="VERIFY_CHECK_FAIL: invalid --repo-root"
+    return 1
+  fi
+  root="$canon_r"
   local trim_arg
   trim_arg="$(trim_str "$receipt_arg")"
   if [[ -z "$trim_arg" ]]; then
@@ -484,7 +759,7 @@ run_verify_check() {
   fi
 
   if [[ "$_v_log_path" != "none" ]]; then
-    local lp_slash canon_root full_log log_dir canon_dir cr_low cd_low
+    local lp_slash full_log log_dir
     lp_slash="${_v_log_path//\\//}"
     lp_slash="$(trim_str "$lp_slash")"
     if [[ -z "$lp_slash" || "$lp_slash" == "." || "$lp_slash" == /* || "$lp_slash" == ~* || "$lp_slash" =~ ^[A-Za-z]: || "$lp_slash" =~ (^|/)\.\.(/|$) ]]; then
@@ -492,7 +767,7 @@ run_verify_check() {
       return 1
     fi
     full_log="$(resolve_target_path "$root" "$lp_slash")"
-    local rem="${lp_slash#./}" seg_cur="$root" seg
+    local rem="${lp_slash#./}" seg_cur="${root%/}" seg
     while [[ -n "$rem" ]]; do
       if [[ "$rem" == */* ]]; then
         seg="${rem%%/*}"
@@ -508,19 +783,15 @@ run_verify_check() {
         return 1
       fi
     done
-    canon_root="$(cd "$root" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_root=""
-    canon_root="$(norm_path "$canon_root")"
-    if [[ -n "$canon_root" ]]; then
-      log_dir="$(dirname "$full_log")"
-      if [[ -d "$log_dir" ]]; then
-        canon_dir="$(cd "$log_dir" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_dir=""
-        canon_dir="$(norm_path "$canon_dir")"
-        cr_low="$(printf '%s' "$canon_root" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-        cd_low="$(printf '%s' "$canon_dir" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-        if [[ -z "$cd_low" || ( "$cd_low" != "$cr_low" && "$cd_low" != "$cr_low/"* ) ]]; then
-          _VR_MSG="VERIFY_CORRUPT: invalid log_path"
-          return 1
-        fi
+    log_dir="$(dirname "$full_log")"
+    [[ "$log_dir" =~ ^[A-Za-z]:$ ]] && log_dir="${log_dir}/"
+    if [[ -d "$log_dir" ]]; then
+      local canon_dir
+      canon_dir="$(cd -P "$log_dir" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_dir=""
+      canon_dir="$(normalize_abs_for_repo "$canon_dir")"
+      if [[ -z "$canon_dir" ]] || ! _path_within_or_equal "$canon_dir" "$root"; then
+        _VR_MSG="VERIFY_CORRUPT: invalid log_path"
+        return 1
       fi
     fi
     if [[ ! -f "$full_log" ]]; then
@@ -1826,8 +2097,13 @@ case "$CMD" in
       exit 1
     fi
 
-    SHIP_DIR="${REPO_ROOT}/.b3/ship"
+    DOT_B3_DIR="${REPO_ROOT%/}/.b3"
+    SHIP_DIR="${DOT_B3_DIR}/ship"
     RUNS_DIR="${SHIP_DIR}/runs"
+    if [[ -L "$DOT_B3_DIR" || -L "$SHIP_DIR" || -L "$RUNS_DIR" ]]; then
+      echo "PRUNE_FAIL: runs directory is a link"
+      exit 1
+    fi
     if [[ ! -d "$RUNS_DIR" ]]; then
       echo "PRUNE_OK: 0 removed"
       exit 0
@@ -1847,7 +2123,7 @@ case "$CMD" in
         if [[ "$ST" == "PASS" ]]; then
           PASS_COUNT=$((PASS_COUNT + 1))
           if [[ $PASS_COUNT -gt $KEEP && "$id" != "$CUR_ID" ]]; then
-            rm -rf "${RUNS_DIR:?}/${id}"
+            remove_dir_tree_safely "${RUNS_DIR}/${id}"
             PRUNED+=("$id")
           fi
         fi
@@ -1890,13 +2166,35 @@ case "$CMD" in
     [[ -n "$(trim_str "$VERIFY_CMD")" ]] || { echo "VERIFY_RUN_FAIL: missing --verify-cmd"; exit 1; }
     [[ -n "$(trim_str "$RECEIPT_PATH")" ]] || { echo "VERIFY_RUN_FAIL: missing --receipt-path"; exit 1; }
 
+    if ! REPO_ROOT="$(canon_repo_root "$REPO_ROOT")"; then
+      echo "VERIFY_RUN_FAIL: invalid --repo-root"
+      exit 1
+    fi
+
+    if ! validate_repo_write_path "$REPO_ROOT" "$RECEIPT_PATH"; then
+      echo "VERIFY_RUN_FAIL: invalid receipt_path"
+      exit 1
+    fi
+    FULL_RECEIPT="$_SAFE_FULL"
+    RECEIPT_REL="$_SAFE_REL"
+
+    if [[ -n "$(trim_str "$LOG_PATH")" ]]; then
+      CAND_LOG="$LOG_PATH"
+    else
+      CAND_LOG="${RECEIPT_REL}.log"
+    fi
+    if ! validate_repo_write_path "$REPO_ROOT" "$CAND_LOG"; then
+      echo "VERIFY_RUN_FAIL: invalid log_path"
+      exit 1
+    fi
+    FULL_LOG="$_SAFE_FULL"
+    LOG_REL="$_SAFE_REL"
+
     EFF_TASK="$(trim_str "$(printf '%s' "$TASK_ID" | LC_ALL=C tr '\r\n' '  ')")"
     [[ -n "$EFF_TASK" ]] || EFF_TASK="unknown"
     EFF_SCOPE="$(trim_str "$(printf '%s' "$SCOPE" | LC_ALL=C tr '\r\n' '  ')")"
     [[ -n "$EFF_SCOPE" ]] || EFF_SCOPE="scoped"
 
-    FULL_RECEIPT="$(resolve_target_path "$REPO_ROOT" "$RECEIPT_PATH")"
-    RECEIPT_REL="$(repo_rel_path "$REPO_ROOT" "$FULL_RECEIPT")"
     mkdir -p "$(dirname "$FULL_RECEIPT")"
 
     OUT_TMP="${FULL_RECEIPT}.out.$$.${RANDOM}.tmp"
@@ -1923,17 +2221,12 @@ case "$CMD" in
 
     LOG_DISP="none"
     if [[ $CMD_EXIT -ne 0 || "$OUT_LINES" -gt 35 ]]; then
-      if [[ -n "$(trim_str "$LOG_PATH")" ]]; then
-        FULL_LOG="$(resolve_target_path "$REPO_ROOT" "$LOG_PATH")"
-      else
-        FULL_LOG="${FULL_RECEIPT}.log"
-      fi
       mkdir -p "$(dirname "$FULL_LOG")"
       TMP_LOG="${FULL_LOG}.tmp.$$.${RANDOM}"
       _CLEANUP_FILES+=("$TMP_LOG")
       LC_ALL=C tr -d '\r' < "$OUT_TMP" > "$TMP_LOG"
       mv -f "$TMP_LOG" "$FULL_LOG"
-      LOG_DISP="$(repo_rel_path "$REPO_ROOT" "$FULL_LOG")"
+      LOG_DISP="$LOG_REL"
     fi
 
     SINGLE_CMD="$(normalize_cmd_str "$VERIFY_CMD")"
@@ -1980,6 +2273,11 @@ timestamp_utc=${TS_UTC}
         *) echo "VERIFY_CHECK_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
+    if ! REPO_ROOT="$(canon_repo_root "$REPO_ROOT")"; then
+      _VR_MSG="VERIFY_CHECK_FAIL: invalid --repo-root"
+      printf '%s\n' "$_VR_MSG"
+      exit 1
+    fi
     set +e
     run_verify_check "$REPO_ROOT" "$RECEIPT_PATH" "$IGNORE_DIRTY" "$EXPECTED_CMD" "$RELEVANT_PATHS"
     RC=$?

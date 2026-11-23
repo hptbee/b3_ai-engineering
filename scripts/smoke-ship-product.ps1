@@ -2,6 +2,7 @@
 # This is not a Cursor slash-command test and not a Codex/Claude runtime test.
 # Usage: powershell -File scripts/smoke-ship-product.ps1
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $sandbox = Join-Path $env:TEMP ("b3-ship-smoke-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
@@ -185,6 +186,7 @@ module.exports = { greet, greetAlias };
 }
 finally {
     if ($null -eq $prevSkipModelInit) { Remove-Item Env:B3_SKIP_MODEL_INIT -ErrorAction SilentlyContinue } else { $env:B3_SKIP_MODEL_INIT = $prevSkipModelInit }
-    Pop-Location
+    Pop-Location -ErrorAction SilentlyContinue
+    Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }

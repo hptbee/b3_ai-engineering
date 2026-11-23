@@ -162,7 +162,7 @@ try {
     $pr5DanglingTarget = Join-Path $uh5 'dangling-target'
     $pr5DanglingLink = Join-Path $uh5 'dangling-link'
     New-Item -ItemType Directory -Path $pr5DanglingTarget -Force | Out-Null
-    & cmd.exe /c mklink /J "`"$pr5DanglingLink`"" "`"$pr5DanglingTarget`"" | Out-Null
+    New-Item -ItemType Junction -Path $pr5DanglingLink -Target $pr5DanglingTarget | Out-Null
     Remove-Item -LiteralPath $pr5DanglingTarget -Force
     $refDanglingUninst = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr5DanglingLink, '-UserHome', $uh5)
 
@@ -182,7 +182,7 @@ try {
     }
     $forceNonB3 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5, '-Force')
     # Inject non-link dir under skills/ and check refusal without -Force
-    & cmd.exe /c rmdir "`"$(Join-Path $pr5NonB3 'skills\verification')`"" | Out-Null
+    [System.IO.Directory]::Delete((Join-Path $pr5NonB3 'skills\verification'), $false)
     New-Item -ItemType Directory -Path (Join-Path $pr5NonB3 'skills\verification') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $pr5NonB3 'skills\verification\SKILL.md') "---`nname: verification`ndescription: local`n---`n"
     $refNonLink = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5)
@@ -442,7 +442,7 @@ try {
     $liveTarget = Join-Path $uh12 'live-target'
     $liveLink = Join-Path $uh12 'live-plugin-link'
     New-Item -ItemType Directory -Path $liveTarget -Force | Out-Null
-    & cmd.exe /c mklink /J "`"$liveLink`"" "`"$liveTarget`"" | Out-Null
+    New-Item -ItemType Junction -Path $liveLink -Target $liveTarget | Out-Null
     $psLiveIn = Invoke-PsScript $agPs @('install', '-PluginRoot', $liveLink, '-UserHome', $uh12, '-Force')
     $psLiveVer = Invoke-PsScript $agPs @('verify', '-PluginRoot', $liveLink, '-UserHome', $uh12)
     $psLiveUn = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $liveLink, '-UserHome', $uh12)
@@ -462,7 +462,7 @@ try {
         $prSub = Join-Path $uh12 "pr-sub-$subName"
         $extSub = Join-Path $uh12 "ext-$subName"
         New-Item -ItemType Directory -Path $prSub, $extSub | Out-Null
-        & cmd.exe /c mklink /J "`"$(Join-Path $prSub $subName)`"" "`"$extSub`"" | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $prSub $subName) -Target $extSub | Out-Null
         $psSub = Invoke-PsScript $agPs @('install', '-PluginRoot', $prSub, '-UserHome', $uh12, '-Force')
         $shSubOk = $true
         if ($hasBash) {
@@ -505,7 +505,7 @@ try {
 
     $sh13Ok = $true
     if ($hasBash) {
-        & cmd.exe /c rmdir "`"$(Join-Path $pr13 'skills\verification')`"" | Out-Null
+        [System.IO.Directory]::Delete((Join-Path $pr13 'skills\verification'), $false)
         New-Item -ItemType Directory -Path (Join-Path $pr13 'skills\verification') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $pr13 'skills\verification\SKILL.md') "---`nname: verification`ndescription: local2`n---`n"
         $force13Sh = Invoke-ShScript $agShPosix "install --plugin-root '$pr13p' --user-home '$uh13p' --force"
@@ -527,8 +527,8 @@ try {
     New-Item -ItemType Directory -Path $dbgTgt14 -Force | Out-Null
     $in14 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr14, '-UserHome', $uh14)
     Add-Content -LiteralPath (Join-Path $pr14 'agents\b3-reviewer.md') "`n<!-- user edit -->"
-    & cmd.exe /c rmdir "`"$(Join-Path $pr14 'skills\debugging')`"" | Out-Null
-    & cmd.exe /c mklink /J "`"$(Join-Path $pr14 'skills\debugging')`"" "`"$dbgTgt14`"" | Out-Null
+    [System.IO.Directory]::Delete((Join-Path $pr14 'skills\debugging'), $false)
+    New-Item -ItemType Junction -Path (Join-Path $pr14 'skills\debugging') -Target $dbgTgt14 | Out-Null
     $unConf14 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr14, '-UserHome', $uh14)
     $kept14 = ((Get-Content -LiteralPath (Join-Path $pr14 'agents\b3-reviewer.md') -Raw) -match 'user edit') -and
               (Test-Path -LiteralPath (Join-Path $pr14 'skills\debugging')) -and
@@ -546,8 +546,8 @@ try {
         $uh14sp = $uh14s -replace '\\', '/'
         $shIn14 = Invoke-ShScript $agShPosix "install --plugin-root '$pr14sp' --user-home '$uh14sp'"
         Add-Content -LiteralPath (Join-Path $pr14s 'agents\b3-reviewer.md') "`n<!-- user edit -->"
-        & cmd.exe /c rmdir "`"$(Join-Path $pr14s 'skills\debugging')`"" | Out-Null
-        & cmd.exe /c mklink /J "`"$(Join-Path $pr14s 'skills\debugging')`"" "`"$dbgTgt14s`"" | Out-Null
+        [System.IO.Directory]::Delete((Join-Path $pr14s 'skills\debugging'), $false)
+        New-Item -ItemType Junction -Path (Join-Path $pr14s 'skills\debugging') -Target $dbgTgt14s | Out-Null
         $shConf14 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr14sp' --user-home '$uh14sp'"
         $shKept14 = ((Get-Content -LiteralPath (Join-Path $pr14s 'agents\b3-reviewer.md') -Raw) -match 'user edit') -and
                     (Test-Path -LiteralPath (Join-Path $pr14s 'skills\debugging')) -and
@@ -752,6 +752,135 @@ try {
         Pass 'ag-global-manifest-path-traversal'
     } else {
         FailCheck 'ag-global-manifest-path-traversal' "in=$($in18.Code) un=$($unTrav18.Code) uf=$($unForceTrav18.Code) ver=$($verTrav18.Code) up=$($upTrav18.Code) kept=$kept18 sh=$sh18Ok"
+    }
+
+    # --- 19. ag-global-special-chars-no-cmd-injection (R002) ---
+    $uh19 = Join-Path $sandbox 'u19 amp & %TEMP% dir'
+    $pr19 = Join-Path $uh19 '.gemini\config\plugins\b3-ai-engineering'
+    $in19 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr19, '-UserHome', $uh19)
+    $ver19 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr19, '-UserHome', $uh19)
+    $un19 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr19, '-UserHome', $uh19)
+    $sh19Ok = $true
+    if ($hasBash) {
+        $uh19s = Join-Path $sandbox 'u19sh amp & %TEMP% dir'
+        $pr19s = Join-Path $uh19s '.gemini\config\plugins\b3-ai-engineering'
+        $pr19sp = $pr19s -replace '\\', '/'
+        $uh19sp = $uh19s -replace '\\', '/'
+        $shIn19 = Invoke-ShScript $agShPosix "install --plugin-root '$pr19sp' --user-home '$uh19sp'"
+        $shVer19 = Invoke-ShScript $agShPosix "verify --plugin-root '$pr19sp' --user-home '$uh19sp'"
+        $shUn19 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr19sp' --user-home '$uh19sp'"
+        $sh19Ok = ($shIn19.Code -eq 0) -and ($shVer19.Code -eq 0) -and ($shUn19.Code -eq 0) -and (-not (Test-Path -LiteralPath $pr19s))
+    }
+    if ($in19.Code -eq 0 -and $ver19.Code -eq 0 -and $un19.Code -eq 0 -and (-not (Test-Path -LiteralPath $pr19)) -and $sh19Ok) {
+        Pass 'ag-global-special-chars-no-cmd-injection'
+    } else {
+        FailCheck 'ag-global-special-chars-no-cmd-injection' "in=$($in19.Code) ver=$($ver19.Code) un=$($un19.Code) sh=$sh19Ok"
+    }
+
+    # --- 20. ag-global-force-nested-junction-safe (R003) ---
+    $uh20 = Join-Path $sandbox 'u20'
+    $pr20 = Join-Path $uh20 '.gemini\config\plugins\b3-ai-engineering'
+    $decoy20 = Join-Path $uh20 'external-decoy'
+    New-Item -ItemType Directory -Path $decoy20, (Join-Path $pr20 'skills\debugging') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $decoy20 'keep.txt') "keep decoy`n"
+    Set-Content -LiteralPath (Join-Path $pr20 'skills\debugging\SKILL.md') "---`nname: debugging`ndescription: local`n---`n"
+    Set-Content -LiteralPath (Join-Path $pr20 'skills\debugging\.hidden-note') "dotfile`n"
+    New-Item -ItemType Junction -Path (Join-Path $pr20 'skills\debugging\nested-link') -Target $decoy20 | Out-Null
+    $f20 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr20, '-UserHome', $uh20, '-Force')
+    $v20 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr20, '-UserHome', $uh20)
+    $decoyKept20 = Test-Path -LiteralPath (Join-Path $decoy20 'keep.txt') -PathType Leaf
+    $sh20Ok = $true
+    if ($hasBash) {
+        $uh20s = Join-Path $sandbox 'u20sh'
+        $pr20s = Join-Path $uh20s '.gemini\config\plugins\b3-ai-engineering'
+        $decoy20s = Join-Path $uh20s 'external-decoy-sh'
+        New-Item -ItemType Directory -Path $decoy20s, (Join-Path $pr20s 'skills\debugging') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $decoy20s 'keep.txt') "keep decoy sh`n"
+        Set-Content -LiteralPath (Join-Path $pr20s 'skills\debugging\SKILL.md') "---`nname: debugging`ndescription: local`n---`n"
+        Set-Content -LiteralPath (Join-Path $pr20s 'skills\debugging\.hidden-note') "dotfile`n"
+        New-Item -ItemType Junction -Path (Join-Path $pr20s 'skills\debugging\nested-link') -Target $decoy20s | Out-Null
+        $pr20sp = $pr20s -replace '\\', '/'
+        $uh20sp = $uh20s -replace '\\', '/'
+        $shF20 = Invoke-ShScript $agShPosix "install --plugin-root '$pr20sp' --user-home '$uh20sp' --force"
+        $shV20 = Invoke-ShScript $agShPosix "verify --plugin-root '$pr20sp' --user-home '$uh20sp'"
+        $sh20Ok = ($shF20.Code -eq 0) -and ($shV20.Code -eq 0) -and (Test-Path -LiteralPath (Join-Path $decoy20s 'keep.txt') -PathType Leaf)
+    }
+    if ($f20.Code -eq 0 -and $v20.Code -eq 0 -and $decoyKept20 -and $sh20Ok) {
+        Pass 'ag-global-force-nested-junction-safe'
+    } else {
+        FailCheck 'ag-global-force-nested-junction-safe' "f=$($f20.Code) v=$($v20.Code) decoy=$decoyKept20 sh=$sh20Ok"
+    }
+
+    # --- 21. ag-global-manifest-hardening (R025) ---
+    $uh21 = Join-Path $sandbox 'u21'
+    $pr21 = Join-Path $uh21 '.gemini\config\plugins\b3-ai-engineering'
+    $in21 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr21, '-UserHome', $uh21)
+    $m21Path = Join-Path $pr21 '.b3-plugin-manifest'
+    $m21Clean = [System.IO.File]::ReadAllText($m21Path, (New-Object System.Text.UTF8Encoding($false)))
+    $validSha21 = ('b' * 64)
+    $badVariants21 = @(
+        @{ Name = 'empty-hash'; Body = ($m21Clean -replace '(?m)^(file\|plugin\.json\|).*$', '$1') },
+        @{ Name = 'non-hex-hash'; Body = ($m21Clean -replace '(?m)^(file\|plugin\.json\|).*$', '${1}not-a-sha256') },
+        @{ Name = 'empty-target'; Body = ($m21Clean -replace '(?m)^(link\|skills/debugging\|).*$', '$1') },
+        @{ Name = 'rel-target'; Body = ($m21Clean -replace '(?m)^(link\|skills/debugging\|).*$', '${1}relative/path') },
+        @{ Name = 'trav-target'; Body = ($m21Clean -replace '(?m)^(link\|skills/debugging\|).*$', '${1}C:/ok/../escape') },
+        @{ Name = 'pipe-target'; Body = ($m21Clean -replace '(?m)^(link\|skills/debugging\|).*$', '${1}C:/ok|extra') },
+        @{ Name = 'dup-entry'; Body = ($m21Clean.TrimEnd("`n") + "`nfile|plugin.json|$validSha21`n") },
+        @{ Name = 'empty-schema'; Body = ($m21Clean -replace '(?m)^schema=.*$', 'schema=') },
+        @{ Name = 'dup-header'; Body = ($m21Clean.TrimEnd("`n") + "`nb3_home=C:/other`n") }
+    )
+    $psHard21Ok = ($in21.Code -eq 0)
+    $hard21FailDetail = ''
+    foreach ($bv in $badVariants21) {
+        [System.IO.File]::WriteAllText($m21Path, $bv.Body, (New-Object System.Text.UTF8Encoding($false)))
+        $vBad = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr21, '-UserHome', $uh21)
+        $uBad = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr21, '-UserHome', $uh21)
+        $xBad = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr21, '-UserHome', $uh21)
+        if ($vBad.Code -eq 0 -or $uBad.Code -eq 0 -or $xBad.Code -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $pr21 'plugin.json'))) {
+            $psHard21Ok = $false
+            $hard21FailDetail = "ps:$($bv.Name)=v:$($vBad.Code)/u:$($uBad.Code)/x:$($xBad.Code)"
+            break
+        }
+    }
+    $shHard21Ok = $true
+    if ($hasBash) {
+        $uh21s = Join-Path $sandbox 'u21sh'
+        $pr21s = Join-Path $uh21s '.gemini\config\plugins\b3-ai-engineering'
+        $pr21sp = $pr21s -replace '\\', '/'
+        $uh21sp = $uh21s -replace '\\', '/'
+        $shIn21 = Invoke-ShScript $agShPosix "install --plugin-root '$pr21sp' --user-home '$uh21sp'"
+        $m21sPath = Join-Path $pr21s '.b3-plugin-manifest'
+        $m21sClean = [System.IO.File]::ReadAllText($m21sPath, (New-Object System.Text.UTF8Encoding($false)))
+        if ($shIn21.Code -ne 0) { $shHard21Ok = $false; $hard21FailDetail += " shIn=$($shIn21.Code)" }
+        else {
+            $shBadVariants21 = @(
+                @{ Name = 'empty-hash'; Body = ($m21sClean -replace '(?m)^(file\|plugin\.json\|).*$', '$1') },
+                @{ Name = 'non-hex-hash'; Body = ($m21sClean -replace '(?m)^(file\|plugin\.json\|).*$', '${1}not-a-sha256') },
+                @{ Name = 'empty-target'; Body = ($m21sClean -replace '(?m)^(link\|skills/debugging\|).*$', '$1') },
+                @{ Name = 'rel-target'; Body = ($m21sClean -replace '(?m)^(link\|skills/debugging\|).*$', '${1}relative/path') },
+                @{ Name = 'trav-target'; Body = ($m21sClean -replace '(?m)^(link\|skills/debugging\|).*$', '${1}C:/ok/../escape') },
+                @{ Name = 'pipe-target'; Body = ($m21sClean -replace '(?m)^(link\|skills/debugging\|).*$', '${1}C:/ok|extra') },
+                @{ Name = 'dup-entry'; Body = ($m21sClean.TrimEnd("`n") + "`nfile|plugin.json|$validSha21`n") },
+                @{ Name = 'empty-schema'; Body = ($m21sClean -replace '(?m)^schema=.*$', 'schema=') },
+                @{ Name = 'dup-header'; Body = ($m21sClean.TrimEnd("`n") + "`nb3_home=C:/other`n") }
+            )
+            foreach ($bv in $shBadVariants21) {
+                [System.IO.File]::WriteAllText($m21sPath, $bv.Body, (New-Object System.Text.UTF8Encoding($false)))
+                $sv = Invoke-ShScript $agShPosix "verify --plugin-root '$pr21sp' --user-home '$uh21sp'"
+                $su = Invoke-ShScript $agShPosix "update --plugin-root '$pr21sp' --user-home '$uh21sp'"
+                $sx = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr21sp' --user-home '$uh21sp'"
+                if ($sv.Code -eq 0 -or $su.Code -eq 0 -or $sx.Code -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $pr21s 'plugin.json'))) {
+                    $shHard21Ok = $false
+                    $hard21FailDetail += " sh:$($bv.Name)=v:$($sv.Code)/u:$($su.Code)/x:$($sx.Code)"
+                    break
+                }
+            }
+        }
+    }
+    if ($psHard21Ok -and $shHard21Ok) {
+        Pass 'ag-global-manifest-hardening'
+    } else {
+        FailCheck 'ag-global-manifest-hardening' $hard21FailDetail
     }
 
 }

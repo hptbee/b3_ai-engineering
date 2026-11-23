@@ -42,8 +42,8 @@ function Uninstall-ManagedFile([string]$Path, [string]$ExpectedSha, [bool]$Requi
             return
         }
     }
-    if (-not $Force -and $ExpectedSha -and ((Get-FileSha256 $Path) -ne $ExpectedSha)) {
-        Write-Warning "skipping modified ${Label}: $Path (re-run with -Force to remove)"
+    if (-not $Force -and (-not $ExpectedSha -or ((Get-FileSha256 $Path) -ne $ExpectedSha))) {
+        Write-Warning "skipping modified or unverified ${Label}: $Path (re-run with -Force to remove)"
         $Skipped.Value++
         return
     }
@@ -106,7 +106,7 @@ if ($Action -eq 'uninstall') {
             }
             if (Test-IsReparseLink $p) {
                 $expTarget = $manifest.Sections.skill[$sk]
-                if (-not $Force -and $expTarget -and -not (Test-LinkTarget $p $expTarget)) {
+                if (-not $Force -and (-not $expTarget -or -not (Test-LinkTarget $p $expTarget))) {
                     Write-Warning "skipping retargeted skill link: $p (expected $expTarget; re-run with -Force to remove)"
                     $skipped++
                     continue
@@ -397,7 +397,7 @@ foreach ($sn in $sortedSkillNames) {
     $srcFwd = To-Forward $src
     if (-not $skillAlreadyOk.ContainsKey($sn)) {
         if (Test-IsReparseLink $dest) { Remove-LinkOnly $dest }
-        elseif (Test-Path -LiteralPath $dest -PathType Container) { Remove-Item -LiteralPath $dest -Recurse -Force }
+        elseif (Test-Path -LiteralPath $dest -PathType Container) { Remove-DirTreeSafely $dest }
         Create-DirLink $dest $src
     }
     $manifestLines.Add("skill|$sn|$srcFwd")

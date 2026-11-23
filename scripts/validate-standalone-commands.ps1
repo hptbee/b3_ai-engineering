@@ -5,9 +5,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $guardPs = Join-Path $root 'scripts\b3-guard.ps1'
 $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
-$gitBash = 'C:\Program Files\Git\bin\bash.exe'
-$hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
 $failed = 0
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
+$gitBash = $script:GitBash
+$hasBash = $script:HasBash
 
 function Pass([string]$Name) { Write-Output "PASS $Name" }
 function FailCheck([string]$Name, [string]$Detail) {
@@ -89,8 +90,8 @@ try {
     New-Item -ItemType Directory -Path $outJuncDir | Out-Null
     Set-Content (Join-Path $outJuncDir 'secret.log') "outside secret`n"
     $juncPath = Join-Path $badDir 'extlink'
-    & cmd /c mklink /J $juncPath $outJuncDir | Out-Null
-    $juncExit = $LASTEXITCODE
+    New-Item -ItemType Junction -Path $juncPath -Target $outJuncDir | Out-Null
+    $juncOk = Test-Path -LiteralPath $juncPath -PathType Container
     Set-Content (Join-Path $badDir 'junclog.verify') "schema=b3-verify-v1`ntask_id=t1`nscope=scoped`nhead_sha=$headSha`ntree_hash=$treeSha`nrelevant_paths=src/a.ts`nexit_code=0`nstatus=PASS`ncommand=echo ok`nlog_path=.b3/ship/verify/extlink/secret.log`ntimestamp_utc=2026-11-22T10:00:00Z`n"
 
     $psNoCmd = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/nocmd.verify')
@@ -117,9 +118,9 @@ try {
                     ($shAbsLog.Code -eq 1) -and ($shAbsLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and
                     ($shJuncLog.Code -eq 1) -and ($shJuncLog.Text -match 'VERIFY_CORRUPT: invalid log_path')
     }
-    if (Test-Path -LiteralPath $juncPath) { [IO.Directory]::Delete($juncPath) }
+    if (Test-Path -LiteralPath $juncPath) { [IO.Directory]::Delete($juncPath, $false) }
 
-    if ($seed.Code -eq 0 -and $seedCheckPs.Code -eq 0 -and $juncExit -eq 0 -and
+    if ($seed.Code -eq 0 -and $seedCheckPs.Code -eq 0 -and $juncOk -and
         $psNoCmd.Code -eq 1 -and ($psNoCmd.Text -match "VERIFY_CORRUPT: missing field 'command'") -and
         $psBadTs.Code -eq 1 -and ($psBadTs.Text -match 'VERIFY_CORRUPT: invalid timestamp_utc') -and
         $psMissLog.Code -eq 1 -and ($psMissLog.Text -match 'VERIFY_CORRUPT: missing log_path') -and
@@ -128,7 +129,102 @@ try {
         $psJuncLog.Code -eq 1 -and ($psJuncLog.Text -match 'VERIFY_CORRUPT: invalid log_path') -and $provShOk) {
         Pass 'standalone-verify-provenance'
     } else {
-        FailCheck 'standalone-verify-provenance' "seed=$($seed.Code) juncExit=$juncExit psNoCmd=$($psNoCmd.Text) psBadTs=$($psBadTs.Text) psMiss=$($psMissLog.Text) psTrav=$($psTravLog.Text) psAbs=$($psAbsLog.Text) psJunc=$($psJuncLog.Text) shOk=$provShOk"
+        FailCheck 'standalone-verify-provenance' "seed=$($seed.Code) juncOk=$juncOk psNoCmd=$($psNoCmd.Text) psBadTs=$($psBadTs.Text) psMiss=$($psMissLog.Text) psTrav=$($psTravLog.Text) psAbs=$($psAbsLog.Text) psJunc=$($psJuncLog.Text) shOk=$provShOk"
+    }
+
+    # --- R016 regression: verify-run containment, pre-execution validation, and relative-root canonicalization ---
+    $r1c = Join-Path $sandbox 'containment-repo'
+    $r1cPosix = $r1c -replace '\\', '/'
+    Init-TestRepo $r1c
+    New-Item -ItemType Directory -Path (Join-Path $r1c 'src') | Out-Null
+    Set-Content (Join-Path $r1c 'src\a.ts') "export const a = 1;`n"
+    Push-Location $r1c
+    & git add .; & git commit -qm 'init'
+    Pop-Location
+
+    $cVerifyDir = Join-Path $r1c '.b3\ship\verify'
+    New-Item -ItemType Directory -Path $cVerifyDir -Force | Out-Null
+    $cJunc = Join-Path $cVerifyDir 'extlink'
+    New-Item -ItemType Junction -Path $cJunc -Target $outJuncDir | Out-Null
+
+    $sideEffectPs = Join-Path $sandbox 'ran-ps.txt'
+    $outLogEsc = Join-Path $sandbox 'escape-run.log'
+    $outRecEsc = Join-Path $sandbox 'escape-rec.verify'
+    $outJuncLog = Join-Path $outJuncDir 'evil-run.log'
+
+    $psLogTrav = Invoke-PsGuard @('verify-run', '-RepoRoot', $r1c, '-VerifyCmd', "Set-Content '$sideEffectPs' 'ran'; exit 0", '-ReceiptPath', '.b3/ship/verify/ok.verify', '-LogPath', '../escape-run.log')
+    $psLogAbs = Invoke-PsGuard @('verify-run', '-RepoRoot', $r1c, '-VerifyCmd', 'exit 2', '-ReceiptPath', '.b3/ship/verify/ok.verify', '-LogPath', $outLogEsc)
+    $psLogJunc = Invoke-PsGuard @('verify-run', '-RepoRoot', $r1c, '-VerifyCmd', 'exit 2', '-ReceiptPath', '.b3/ship/verify/ok.verify', '-LogPath', '.b3/ship/verify/extlink/evil-run.log')
+    $psRecTrav = Invoke-PsGuard @('verify-run', '-RepoRoot', $r1c, '-VerifyCmd', "Set-Content '$sideEffectPs' 'ran'", '-ReceiptPath', '../escape-rec.verify')
+    $psRecAbs = Invoke-PsGuard @('verify-run', '-RepoRoot', $r1c, '-VerifyCmd', 'echo ok', '-ReceiptPath', $outRecEsc)
+    $psRecGit = Invoke-PsGuard @('verify-run', '-RepoRoot', $r1c, '-VerifyCmd', 'echo ok', '-ReceiptPath', '.git/evil.verify')
+    $psRecJunc = Invoke-PsGuard @('verify-run', '-RepoRoot', $r1c, '-VerifyCmd', 'echo ok', '-ReceiptPath', '.b3/ship/verify/extlink/evil.verify')
+
+    $absInRecPs = Join-Path $r1c '.b3\ship\verify\relroot-ps.verify'
+    $absInLogPs = Join-Path $r1c '.b3\ship\verify\relroot-ps.log'
+    Push-Location $r1c
+    try {
+        $psRelRootRun = Invoke-PsGuard @('verify-run', '-VerifyCmd', '1..40 | ForEach-Object { "line-$_" }', '-ReceiptPath', $absInRecPs, '-LogPath', $absInLogPs, '-RelevantPaths', 'src/a.ts')
+    } finally {
+        Pop-Location
+    }
+    $psRelRootChk = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1c, '-ReceiptPath', '.b3/ship/verify/relroot-ps.verify')
+    $psRelRecTxt = if (Test-Path -LiteralPath $absInRecPs) { Get-Content -LiteralPath $absInRecPs -Raw } else { '' }
+    $psRelLogSafe = ($psRelRecTxt -match '(?m)^log_path=\.b3/ship/verify/relroot-ps\.log\r?$')
+
+    $contShOk = $true
+    $contShDetail = ''
+    if ($hasBash) {
+        $sideEffectSh = (Join-Path $sandbox 'ran-sh.txt') -replace '\\', '/'
+        $outLogEscP = $outLogEsc -replace '\\', '/'
+        $outRecEscP = $outRecEsc -replace '\\', '/'
+        $shLogTrav = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r1cPosix' --verify-cmd 'touch $sideEffectSh' --receipt-path '.b3/ship/verify/ok.verify' --log-path '../escape-run.log'"
+        $shLogAbs = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r1cPosix' --verify-cmd 'exit 2' --receipt-path '.b3/ship/verify/ok.verify' --log-path '$outLogEscP'"
+        $shLogJunc = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r1cPosix' --verify-cmd 'exit 2' --receipt-path '.b3/ship/verify/ok.verify' --log-path '.b3/ship/verify/extlink/evil-run.log'"
+        $shRecTrav = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r1cPosix' --verify-cmd 'touch $sideEffectSh' --receipt-path '../escape-rec.verify'"
+        $shRecAbs = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r1cPosix' --verify-cmd 'echo ok' --receipt-path '$outRecEscP'"
+        $shRecGit = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r1cPosix' --verify-cmd 'echo ok' --receipt-path '.git/evil.verify'"
+        $shRecJunc = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r1cPosix' --verify-cmd 'echo ok' --receipt-path '.b3/ship/verify/extlink/evil.verify'"
+
+        $absInRecShP = "$r1cPosix/.b3/ship/verify/relroot-sh.verify"
+        $absInLogShP = "$r1cPosix/.b3/ship/verify/relroot-sh.log"
+        $shRelRootRun = Invoke-ShGuard "cd '$r1cPosix' && '$guardShPosix' verify-run --verify-cmd 'seq 1 40' --receipt-path '$absInRecShP' --log-path '$absInLogShP' --relevant-paths 'src/a.ts'"
+        $shRelRootChk = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1cPosix' --receipt-path '.b3/ship/verify/relroot-sh.verify'"
+        $absInRecShWin = Join-Path $r1c '.b3\ship\verify\relroot-sh.verify'
+        $shRelRecTxt = if (Test-Path -LiteralPath $absInRecShWin) { Get-Content -LiteralPath $absInRecShWin -Raw } else { '' }
+        $shRelLogSafe = ($shRelRecTxt -match '(?m)^log_path=\.b3/ship/verify/relroot-sh\.log\r?$')
+
+        $contShOk = ($shLogTrav.Code -eq 1) -and ($shLogTrav.Text -match 'VERIFY_RUN_FAIL: invalid log_path') -and
+                    ($shLogAbs.Code -eq 1) -and ($shLogAbs.Text -match 'VERIFY_RUN_FAIL: invalid log_path') -and
+                    ($shLogJunc.Code -eq 1) -and ($shLogJunc.Text -match 'VERIFY_RUN_FAIL: invalid log_path') -and
+                    ($shRecTrav.Code -eq 1) -and ($shRecTrav.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+                    ($shRecAbs.Code -eq 1) -and ($shRecAbs.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+                    ($shRecGit.Code -eq 1) -and ($shRecGit.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+                    ($shRecJunc.Code -eq 1) -and ($shRecJunc.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+                    (-not (Test-Path -LiteralPath (Join-Path $sandbox 'ran-sh.txt'))) -and
+                    ($shRelRootRun.Code -eq 0) -and ($shRelRootChk.Code -eq 0) -and ($shRelRootChk.Text -match 'VERIFY_VALID:') -and $shRelLogSafe
+        if (-not $contShOk) {
+            $contShDetail = "lt=$($shLogTrav.Code):$($shLogTrav.Text)|la=$($shLogAbs.Code)|lj=$($shLogJunc.Code)|rt=$($shRecTrav.Code)|ra=$($shRecAbs.Code)|rg=$($shRecGit.Code)|rj=$($shRecJunc.Code)|rr=$($shRelRootRun.Code):$($shRelRootRun.Text)|rc=$($shRelRootChk.Code):$($shRelRootChk.Text)|safe=$shRelLogSafe"
+        }
+    }
+    if (Test-Path -LiteralPath $cJunc) { [IO.Directory]::Delete($cJunc, $false) }
+    $noEscapes = (-not (Test-Path -LiteralPath $sideEffectPs)) -and
+                 (-not (Test-Path -LiteralPath $outLogEsc)) -and
+                 (-not (Test-Path -LiteralPath $outRecEsc)) -and
+                 (-not (Test-Path -LiteralPath $outJuncLog)) -and
+                 (-not (Test-Path -LiteralPath (Join-Path $r1c '.git\evil.verify')))
+    if ($psLogTrav.Code -eq 1 -and ($psLogTrav.Text -match 'VERIFY_RUN_FAIL: invalid log_path') -and
+        $psLogAbs.Code -eq 1 -and ($psLogAbs.Text -match 'VERIFY_RUN_FAIL: invalid log_path') -and
+        $psLogJunc.Code -eq 1 -and ($psLogJunc.Text -match 'VERIFY_RUN_FAIL: invalid log_path') -and
+        $psRecTrav.Code -eq 1 -and ($psRecTrav.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+        $psRecAbs.Code -eq 1 -and ($psRecAbs.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+        $psRecGit.Code -eq 1 -and ($psRecGit.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+        $psRecJunc.Code -eq 1 -and ($psRecJunc.Text -match 'VERIFY_RUN_FAIL: invalid receipt_path') -and
+        $psRelRootRun.Code -eq 0 -and $psRelRootChk.Code -eq 0 -and ($psRelRootChk.Text -match 'VERIFY_VALID:') -and $psRelLogSafe -and
+        $noEscapes -and $contShOk) {
+        Pass 'standalone-verify-run-containment'
+    } else {
+        FailCheck 'standalone-verify-run-containment' "psLT=$($psLogTrav.Code) psLA=$($psLogAbs.Code) psLJ=$($psLogJunc.Code) psRT=$($psRecTrav.Code) psRA=$($psRecAbs.Code) psRG=$($psRecGit.Code) psRJ=$($psRecJunc.Code) relRun=$($psRelRootRun.Code) relChk=$($psRelRootChk.Code)/$psRelLogSafe noEsc=$noEscapes shOk=$contShOk ($contShDetail)"
     }
 
     # --- 2. standalone-verify-cmd-and-scope ---
@@ -342,6 +438,7 @@ try {
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue
+    Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 

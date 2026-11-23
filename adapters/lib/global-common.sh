@@ -161,6 +161,19 @@ install_file_atomic() {
   mv -f "$tmp" "$dest"
 }
 
+_win_ps_exe() {
+  if command -v powershell.exe >/dev/null 2>&1; then
+    command -v powershell.exe
+  elif command -v pwsh >/dev/null 2>&1; then
+    command -v pwsh
+  elif [[ -x "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" ]]; then
+    printf '%s\n' "/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+  else
+    echo "error: PowerShell (powershell.exe or pwsh) not found on PATH" >&2
+    return 1
+  fi
+}
+
 is_link_entry() {
   [[ -L "$1" ]]
 }
@@ -172,9 +185,10 @@ remove_link_only() {
     exit 1
   fi
   if $IS_WINDOWS && [[ -d "$p" || ! -e "$p" ]]; then
-    local win_p
+    local win_p ps_exe
     win_p="$(cygpath -w "$p")"
-    if MSYS_NO_PATHCONV=1 cmd.exe /c rmdir "$win_p" >/dev/null 2>&1; then
+    ps_exe="$(_win_ps_exe)"
+    if B3_WIN_PATH="$win_p" "$ps_exe" -NoProfile -NonInteractive -Command '[System.IO.Directory]::Delete($env:B3_WIN_PATH, $false)' >/dev/null 2>&1; then
       return 0
     fi
   fi
@@ -186,16 +200,50 @@ create_dir_link() {
   if [[ "$dest" == */* ]]; then parent="${dest%/*}"; else parent="."; fi
   mkdir -p "${parent:-/}"
   if $IS_WINDOWS; then
-    local win_d win_t
+    local win_d win_t ps_exe
     win_d="$(cygpath -w "$dest")"
     win_t="$(cygpath -w "$target")"
-    MSYS_NO_PATHCONV=1 cmd.exe /c mklink /J "$win_d" "$win_t" >/dev/null || {
+    ps_exe="$(_win_ps_exe)"
+    B3_WIN_DEST="$win_d" B3_WIN_TARGET="$win_t" "$ps_exe" -NoProfile -NonInteractive -Command 'New-Item -ItemType Junction -Path $env:B3_WIN_DEST -Target $env:B3_WIN_TARGET | Out-Null' >/dev/null || {
       echo "error: could not create junction $dest -> $target" >&2
       exit 1
     }
   else
     ln -s "$target" "$dest"
   fi
+}
+
+remove_dir_tree_safely() {
+  local dir="$1" entry
+  while [[ "$dir" == */ && "$dir" != "/" ]]; do
+    dir="${dir%/}"
+  done
+  if [[ -z "$dir" || "$dir" == "/" ]]; then
+    echo "error: refusing unsafe recursive delete path: '$dir'" >&2
+    exit 1
+  fi
+  if is_link_entry "$dir"; then
+    echo "error: refusing recursive delete of link path: $dir" >&2
+    exit 1
+  fi
+  if [[ ! -e "$dir" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$dir" ]]; then
+    rm -f "$dir"
+    return 0
+  fi
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    if is_link_entry "$entry"; then
+      remove_link_only "$entry"
+    elif [[ -d "$entry" ]]; then
+      remove_dir_tree_safely "$entry"
+    else
+      rm -f "$entry"
+    fi
+  done
+  rmdir "$dir"
 }
 
 link_target_ok() {
@@ -333,6 +381,48 @@ path_within_root() {
   [[ "$parent_norm" == "$root_norm" || "$parent_norm" == "${root_norm}/"* ]]
 }
 
+_is_clean_nonempty_val() {
+  local val="$1"
+  [[ -n "$val" ]] || return 1
+  [[ "$val" != ' '* && "$val" != *' ' && "$val" != $'\t'* && "$val" != *$'\t' ]] || return 1
+  [[ "$val" =~ [[:cntrl:]] ]] && return 1
+  return 0
+}
+
+is_safe_header_path() {
+  local val="$1"
+  local LC_ALL=C
+  _is_clean_nonempty_val "$val" || return 1
+  local re_dotdot='(^|[/\\])\.\.([/\\]|$)'
+  local re_posix='^/'
+  local re_win='^[A-Za-z]:[/\\]'
+  [[ "$val" =~ $re_dotdot ]] && return 1
+  [[ "$val" =~ $re_posix || "$val" =~ $re_win ]]
+}
+
+is_safe_manifest_value() {
+  local kind="$1" val="$2"
+  local LC_ALL=C
+  _is_clean_nonempty_val "$val" || return 1
+  case "$kind" in
+    command|agent|file)
+      local re_sha='^[0-9a-f]{64}$'
+      [[ "$val" =~ $re_sha ]]
+      ;;
+    skill|link)
+      [[ "$val" != *"|"* ]] || return 1
+      local re_dotdot='(^|[/\\])\.\.([/\\]|$)'
+      local re_posix='^/'
+      local re_win='^[A-Za-z]:[/\\]'
+      [[ "$val" =~ $re_dotdot ]] && return 1
+      [[ "$val" =~ $re_posix || "$val" =~ $re_win ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 manifest_load() {
   local mfile="$1"
   M_EXISTS=false
@@ -346,13 +436,32 @@ manifest_load() {
   [[ -f "$mfile" ]] || return 0
   M_EXISTS=true
   local raw k v1 v2
+  local seen_schema=false seen_b3_home=false seen_plugin_root=false
   while IFS= read -r raw || [[ -n "$raw" ]]; do
     raw="${raw%$'\r'}"
     [[ -n "$raw" ]] || continue
     case "$raw" in
-      schema=*) M_SCHEMA="${raw#schema=}"; continue ;;
-      b3_home=*) M_B3_HOME="${raw#b3_home=}"; continue ;;
-      plugin_root=*) M_PLUGIN_ROOT="${raw#plugin_root=}"; continue ;;
+      schema=*)
+        if $seen_schema; then M_CORRUPT=true; continue; fi
+        seen_schema=true
+        v1="${raw#schema=}"
+        if ! _is_clean_nonempty_val "$v1"; then M_CORRUPT=true; continue; fi
+        M_SCHEMA="$v1"
+        continue ;;
+      b3_home=*)
+        if $seen_b3_home; then M_CORRUPT=true; continue; fi
+        seen_b3_home=true
+        v1="${raw#b3_home=}"
+        if ! is_safe_header_path "$v1"; then M_CORRUPT=true; continue; fi
+        M_B3_HOME="$v1"
+        continue ;;
+      plugin_root=*)
+        if $seen_plugin_root; then M_CORRUPT=true; continue; fi
+        seen_plugin_root=true
+        v1="${raw#plugin_root=}"
+        if ! is_safe_header_path "$v1"; then M_CORRUPT=true; continue; fi
+        M_PLUGIN_ROOT="$v1"
+        continue ;;
     esac
     if [[ "$raw" != *"|"* ]]; then
       M_CORRUPT=true
@@ -369,6 +478,14 @@ manifest_load() {
     case "$k" in
       skill|command|agent|file|link)
         if ! is_safe_manifest_key "$k" "$v1"; then
+          M_CORRUPT=true
+          continue
+        fi
+        if manifest_has "$k" "$v1"; then
+          M_CORRUPT=true
+          continue
+        fi
+        if ! is_safe_manifest_value "$k" "$v2"; then
           M_CORRUPT=true
           continue
         fi

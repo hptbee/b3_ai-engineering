@@ -74,14 +74,24 @@ if (Test-Path -LiteralPath $homeDest) {
 }
 
 function Remove-JunctionOrSymlink([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $item = Get-Item -LiteralPath $Path -Force
-    if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
-        & cmd.exe /c rmdir "$Path"
-        if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $Path)) { Fail "could not remove junction $Path" }
-        return
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return }
+    $isLink = ($item.LinkType -in @('Junction', 'SymbolicLink')) -or (($item.Attributes.ToString()) -match 'ReparsePoint')
+    if (-not $isLink) {
+        Fail "refusing to replace existing $Path"
     }
-    Fail "refusing to replace existing $Path"
+    try {
+        if ($item.PSIsContainer -and ($env:OS -eq 'Windows_NT')) {
+            [System.IO.Directory]::Delete($Path, $false)
+        } else {
+            Remove-Item -LiteralPath $Path -Force
+        }
+    } catch {
+        Fail "could not remove junction $Path : $($_.Exception.Message)"
+    }
+    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        Fail "could not remove junction $Path"
+    }
 }
 
 function Get-SkillNameFromFile([string]$Path) {
