@@ -33,6 +33,23 @@ run_git_cmd() {
   return $rc
 }
 
+run_git_cmd_with_index() {
+  local root="$1" idx_file="$2"; shift 2
+  local errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$errf")
+  _GIT_STDOUT=""
+  _GIT_STDERR=""
+  if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f "$errf"
+  return $rc
+}
+
 run_git_cmd_stdin() {
   local root="$1"
   local stdin_text="$2"
@@ -195,11 +212,77 @@ read_run_status() {
   fi
 }
 
+is_binary_file() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  local n
+  n="$(dd if="$f" bs=8192 count=1 2>/dev/null | LC_ALL=C tr -cd '\000' | wc -c | tr -d ' ')"
+  [[ "${n:-0}" -gt 0 ]]
+}
+
+assert_valid_git_rev() {
+  local root="$1" rev="$2" kind="$3" prefix="$4" opt="$5" sha=""
+  if [[ -z "$rev" || "$rev" == -* ]]; then
+    echo "${prefix}: invalid ${opt} '${rev}'"
+    exit 1
+  fi
+  if ! run_git_cmd "$root" rev-parse --verify --quiet "${rev}^{${kind}}"; then
+    echo "${prefix}: invalid ${opt} '${rev}'"
+    exit 1
+  fi
+  sha="$(trim_str "$_GIT_STDOUT")"
+  if [[ -z "$sha" ]]; then
+    echo "${prefix}: invalid ${opt} '${rev}'"
+    exit 1
+  fi
+  _VALID_REV_SHA="$sha"
+}
+
+build_working_tree_oid() {
+  local root="$1" prefix="$2" real_idx_raw="" real_idx="" tmp_idx="" tree_sha=""
+  if ! run_git_cmd "$root" rev-parse --git-path index; then
+    echo "${prefix}: failed to locate git index"
+    exit 1
+  fi
+  real_idx_raw="$(trim_str "$_GIT_STDOUT")"
+  real_idx="$(resolve_target_path "$root" "$real_idx_raw")"
+  tmp_idx="$(mktemp "${TMPDIR:-/tmp}/b3-snap-idx.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-snap-idx.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$tmp_idx")
+  if [[ -f "$real_idx" ]]; then
+    cp "$real_idx" "$tmp_idx"
+  else
+    rm -f "$tmp_idx"
+  fi
+  if ! run_git_cmd_with_index "$root" "$tmp_idx" add -A; then
+    echo "${prefix}: git add -A failed: $(git_err_detail)"
+    rm -f "$tmp_idx"
+    exit 1
+  fi
+  if ! run_git_cmd_with_index "$root" "$tmp_idx" rm -r --cached --ignore-unmatch --quiet -- .b3/ship .b3/autodev; then
+    echo "${prefix}: git rm checkpoint failed: $(git_err_detail)"
+    rm -f "$tmp_idx"
+    exit 1
+  fi
+  if ! run_git_cmd_with_index "$root" "$tmp_idx" write-tree; then
+    echo "${prefix}: git write-tree failed: $(git_err_detail)"
+    rm -f "$tmp_idx"
+    exit 1
+  fi
+  tree_sha="$(trim_str "$_GIT_STDOUT")"
+  rm -f "$tmp_idx"
+  if [[ -z "$tree_sha" ]]; then
+    echo "${prefix}: git write-tree returned empty SHA"
+    exit 1
+  fi
+  _WT_TREE_OID="$tree_sha"
+}
+
 is_noise_file() {
-  local leaf="${1##*/}"
+  local leaf
+  leaf="$(printf '%s' "${1##*/}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
   case "$leaf" in
-    package-lock.json|pnpm-lock.yaml|yarn.lock|bun.lockb|packages.lock.json|Cargo.lock|poetry.lock) return 0 ;;
-    *.min.js|*.min.css|*.snap|*.Designer.cs|*.g.cs|*.map) return 0 ;;
+    package-lock.json|pnpm-lock.yaml|yarn.lock|bun.lockb|packages.lock.json|cargo.lock|poetry.lock) return 0 ;;
+    *.min.js|*.min.css|*.snap|*.designer.cs|*.g.cs|*.map) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -236,7 +319,7 @@ resolve_auto_base_sha() {
   while IFS= read -r line; do
     p="$(norm_path "$line")"
     [[ -z "$p" ]] && continue
-    [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+    is_checkpoint_dir "$p" && continue
     if [[ ${#ignored[@]} -gt 0 ]] && path_in_list "$p" "${ignored[@]}"; then continue; fi
     printf '%s' "HEAD"
     return 0
@@ -279,11 +362,27 @@ resolve_auto_base_for_target() {
       fi
     fi
   done
+  if run_git_cmd "$root" rev-parse --verify --quiet "${target_commit_sha}^"; then
+    local par=""
+    par="$(trim_str "$_GIT_STDOUT")"
+    if [[ -n "$par" ]]; then
+      printf '%s' "$par"
+      return 0
+    fi
+  fi
   printf '%s' "$target_commit_sha"
 }
 
 is_checkpoint_dir() {
-  [[ "$1" == ".b3/ship" || "$1" == ".b3/ship/"* || "$1" == ".b3/autodev" || "$1" == ".b3/autodev/"* ]]
+  local lp
+  lp="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$lp" == ".b3/ship" || "$lp" == ".b3/ship/"* || "$lp" == ".b3/autodev" || "$lp" == ".b3/autodev/"* ]]
+}
+
+is_md_file() {
+  local lp
+  lp="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$lp" == *.md ]]
 }
 
 is_secret_path() {
@@ -517,6 +616,13 @@ validate_repo_write_path() {
     rel="${rel//\/\///}"
   done
   rel="${rel#/}"
+  while [[ "$rel" == ./* ]]; do
+    rel="${rel#./}"
+  done
+  while [[ "$rel" == *"/./"* ]]; do
+    rel="${rel//\/.\///}"
+  done
+  rel="${rel%/.}"
   [[ -n "$rel" && "$rel" != "." ]] || return 1
   if [[ "$rel" == /* || "$rel" == ~* || "$rel" =~ ^[A-Za-z]: || "$rel" =~ $re_dotdot ]]; then
     return 1
@@ -737,7 +843,7 @@ resolve_submodule_entry() {
     done < <(printf '%s\n%s\n%s\n' "$s_wt" "$s_ca" "$s_un")
 
     if [[ ${#s_cands[@]} -gt 0 ]]; then
-      local sp_full f_sha n_tag nh
+      local sp_full f_sha n_tag
       while IFS= read -r sp; do
         [[ -n "$sp" ]] || continue
         sp_full="${sub_full}/${sp}"
@@ -1310,42 +1416,18 @@ run_verify_check() {
   fi
 
   if [[ "$_v_log_path" != "none" ]]; then
-    local lp_slash full_log log_dir
+    local lp_slash
     lp_slash="${_v_log_path//\\//}"
     lp_slash="$(trim_str "$lp_slash")"
     if [[ -z "$lp_slash" || "$lp_slash" == "." || "$lp_slash" == /* || "$lp_slash" == ~* || "$lp_slash" =~ ^[A-Za-z]: || "$lp_slash" =~ (^|/)\.\.(/|$) ]]; then
       _VR_MSG="VERIFY_CORRUPT: invalid log_path"
       return 1
     fi
-    full_log="$(resolve_target_path "$root" "$lp_slash")"
-    local rem="${lp_slash#./}" seg_cur="${root%/}" seg
-    while [[ -n "$rem" ]]; do
-      if [[ "$rem" == */* ]]; then
-        seg="${rem%%/*}"
-        rem="${rem#*/}"
-      else
-        seg="$rem"
-        rem=""
-      fi
-      [[ -z "$seg" || "$seg" == "." ]] && continue
-      seg_cur="${seg_cur}/${seg}"
-      if [[ -L "$seg_cur" ]]; then
-        _VR_MSG="VERIFY_CORRUPT: invalid log_path"
-        return 1
-      fi
-    done
-    log_dir="$(dirname "$full_log")"
-    [[ "$log_dir" =~ ^[A-Za-z]:$ ]] && log_dir="${log_dir}/"
-    if [[ -d "$log_dir" ]]; then
-      local canon_dir
-      canon_dir="$(cd -P "$log_dir" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_dir=""
-      canon_dir="$(normalize_abs_for_repo "$canon_dir")"
-      if [[ -z "$canon_dir" ]] || ! _path_within_or_equal "$canon_dir" "$root"; then
-        _VR_MSG="VERIFY_CORRUPT: invalid log_path"
-        return 1
-      fi
+    if ! validate_repo_write_path "$root" "$lp_slash"; then
+      _VR_MSG="VERIFY_CORRUPT: invalid log_path"
+      return 1
     fi
-    if [[ ! -f "$full_log" ]]; then
+    if [[ ! -f "$_SAFE_FULL" ]]; then
       _VR_MSG="VERIFY_CORRUPT: missing log_path"
       return 1
     fi
@@ -1707,8 +1789,11 @@ case "$CMD" in
       while IFS= read -r line; do
         p="$(norm_path "$line")"
         [[ -z "$p" ]] && continue
-        [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+        is_checkpoint_dir "$p" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then
+          continue
+        fi
+        if [[ ${#OWNED_ARR[@]} -gt 0 ]] && path_in_list "$p" "${OWNED_ARR[@]}"; then
           continue
         fi
         if path_in_list "$p" "${RO_ARR[@]}"; then
@@ -1925,14 +2010,17 @@ case "$CMD" in
         *) echo "SNAPSHOT_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
-    if ! run_git_cmd "$REPO_ROOT" stash create; then
-      echo "SNAPSHOT_FAIL: git stash create failed"
-      exit 1
-    fi
-    SHA="$(trim_str "$_GIT_STDOUT")"
-    if [[ -z "$SHA" ]]; then
-      if ! run_git_cmd "$REPO_ROOT" rev-parse HEAD; then
-        echo "SNAPSHOT_FAIL: git rev-parse HEAD failed: $(git_err_detail)"
+    assert_valid_git_rev "$REPO_ROOT" "HEAD" "commit" "SNAPSHOT_FAIL" "HEAD"
+    HEAD_SHA="$_VALID_REV_SHA"
+    assert_valid_git_rev "$REPO_ROOT" "HEAD" "tree" "SNAPSHOT_FAIL" "HEAD^{tree}"
+    HEAD_TREE="$_VALID_REV_SHA"
+    build_working_tree_oid "$REPO_ROOT" "SNAPSHOT_FAIL"
+    CUR_TREE="$_WT_TREE_OID"
+    if [[ "$CUR_TREE" == "$HEAD_TREE" ]]; then
+      SHA="$HEAD_SHA"
+    else
+      if ! run_git_cmd "$REPO_ROOT" commit-tree "$CUR_TREE" -p "$HEAD_SHA" -m "b3-snapshot"; then
+        echo "SNAPSHOT_FAIL: git commit-tree failed: $(git_err_detail)"
         exit 1
       fi
       SHA="$(trim_str "$_GIT_STDOUT")"
@@ -1995,17 +2083,25 @@ case "$CMD" in
         BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
       fi
     fi
+    assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "object" "DIFF_SCOPE_FAIL" "--base-sha"
 
     if [[ -n "$TARGET_REF" ]]; then
       run_git_cmd "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed: $(git_err_detail)"; exit 1; }
       NUMSTAT_OUT="$_GIT_STDOUT"
       UNTRACKED_OUT=""
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA" || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --numstat "$BASE_SHA" -- || { echo "DIFF_SCOPE_FAIL: git diff --numstat failed: $(git_err_detail)"; exit 1; }
       NUMSTAT_OUT="$_GIT_STDOUT"
       run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "DIFF_SCOPE_FAIL: git ls-files failed: $(git_err_detail)"; exit 1; }
       UNTRACKED_OUT="$_GIT_STDOUT"
     fi
+
+    exact_in_list() {
+      local cand="$1"; shift
+      local it
+      for it in "$@"; do [[ "$it" == "$cand" ]] && return 0; done
+      return 1
+    }
 
     REVIEW_ARR=()
     NOISE_ARR=()
@@ -2015,13 +2111,13 @@ case "$CMD" in
       [[ -n "${raw_path:-}" ]] || continue
       p="$(norm_path "$raw_path")"
       [[ -z "$p" ]] && continue
-      [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+      is_checkpoint_dir "$p" && continue
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
       if is_noise_file "$p"; then
-        NOISE_ARR+=("$p")
+        if [[ ${#NOISE_ARR[@]} -eq 0 ]] || ! exact_in_list "$p" "${NOISE_ARR[@]}"; then NOISE_ARR+=("$p"); fi
         continue
       fi
-      REVIEW_ARR+=("$p")
+      if [[ ${#REVIEW_ARR[@]} -eq 0 ]] || ! exact_in_list "$p" "${REVIEW_ARR[@]}"; then REVIEW_ARR+=("$p"); fi
       [[ "$add" =~ ^[0-9]+$ ]] && TOTAL_LINES=$((TOTAL_LINES + add))
       [[ "$del" =~ ^[0-9]+$ ]] && TOTAL_LINES=$((TOTAL_LINES + del))
     done <<< "$NUMSTAT_OUT"
@@ -2029,17 +2125,17 @@ case "$CMD" in
     while IFS= read -r line; do
       p="$(norm_path "$line")"
       [[ -z "$p" ]] && continue
-      [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+      is_checkpoint_dir "$p" && continue
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
       if is_noise_file "$p"; then
-        NOISE_ARR+=("$p")
+        if [[ ${#NOISE_ARR[@]} -eq 0 ]] || ! exact_in_list "$p" "${NOISE_ARR[@]}"; then NOISE_ARR+=("$p"); fi
         continue
       fi
-      if [[ ${#REVIEW_ARR[@]} -eq 0 ]] || ! path_in_list "$p" "${REVIEW_ARR[@]}"; then
+      if [[ ${#REVIEW_ARR[@]} -eq 0 ]] || ! exact_in_list "$p" "${REVIEW_ARR[@]}"; then
         REVIEW_ARR+=("$p")
-        if [[ -f "${REPO_ROOT}/${p}" ]]; then
-          lc="$(wc -l < "${REPO_ROOT}/${p}" | tr -d ' ')"
-          TOTAL_LINES=$((TOTAL_LINES + lc))
+        if [[ -f "${REPO_ROOT}/${p}" ]] && ! is_binary_file "${REPO_ROOT}/${p}"; then
+          lc="$(awk 'END{print NR}' "${REPO_ROOT}/${p}")"
+          TOTAL_LINES=$((TOTAL_LINES + ${lc:-0}))
         fi
       fi
     done <<< "$UNTRACKED_OUT"
@@ -2049,22 +2145,24 @@ case "$CMD" in
     DF_OUT="none"
     if [[ -n "$PREV_SHA" ]]; then
       HAS_PREV=true
+      assert_valid_git_rev "$REPO_ROOT" "$PREV_SHA" "commit" "DIFF_SCOPE_FAIL" "--prev-sha"
       if [[ -n "$TARGET_REF" ]]; then
-        run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" "$TARGET_COMMIT_SHA" -- || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
-        DELTA_OUT="$_GIT_STDOUT"
+        DELTA_END="$TARGET_COMMIT_SHA"
       else
-        run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
-        DELTA_OUT="$_GIT_STDOUT"
+        build_working_tree_oid "$REPO_ROOT" "DIFF_SCOPE_FAIL"
+        DELTA_END="$_WT_TREE_OID"
       fi
+      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" "$DELTA_END" -- || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
+      DELTA_OUT="$_GIT_STDOUT"
       DELTA_ARR=()
       while IFS= read -r line; do
         p="$(norm_path "$line")"
         [[ -z "$p" ]] && continue
-        [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+        is_checkpoint_dir "$p" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
         if is_noise_file "$p"; then continue; fi
         DELTA_ARR+=("$p")
-      done < <(printf '%s\n%s\n' "$DELTA_OUT" "$UNTRACKED_OUT")
+      done <<< "$DELTA_OUT"
       if [[ ${#DELTA_ARR[@]} -gt 0 ]]; then
         DF_OUT="$(printf '%s\n' "${DELTA_ARR[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
       fi
@@ -2162,13 +2260,19 @@ case "$CMD" in
       fi
     fi
 
+    assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "object" "MECHANICAL_FAIL" "--base-sha"
+
     if [[ -n "$TARGET_REF" ]]; then
       run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
       CH_OUT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=d --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
+      NONDEL_OUT="$_GIT_STDOUT"
       UN_OUT=""
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
       CH_OUT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=d --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
+      NONDEL_OUT="$_GIT_STDOUT"
       run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MECHANICAL_FAIL: git ls-files failed: $(git_err_detail)"; exit 1; }
       UN_OUT="$_GIT_STDOUT"
     fi
@@ -2182,6 +2286,15 @@ case "$CMD" in
       ALL_CHANGED+=("$p")
     done < <(printf '%s\n%s\n' "$CH_OUT" "$UN_OUT")
 
+    NON_DEL_CHANGED=()
+    while IFS= read -r line; do
+      p="$(norm_path "$line")"
+      [[ -z "$p" ]] && continue
+      is_checkpoint_dir "$p" && continue
+      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
+      NON_DEL_CHANGED+=("$p")
+    done < <(printf '%s\n%s\n' "$NONDEL_OUT" "$UN_OUT")
+
     SCOPE_CREEP=()
     if [[ ${#ALLOWED_ARR[@]} -gt 0 && ${#ALL_CHANGED[@]} -gt 0 ]]; then
       for p in "${ALL_CHANGED[@]}"; do
@@ -2192,8 +2305,8 @@ case "$CMD" in
     fi
 
     SAFETY_HITS=()
-    if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
-      for p in "${ALL_CHANGED[@]}"; do
+    if [[ ${#NON_DEL_CHANGED[@]} -gt 0 ]]; then
+      for p in "${NON_DEL_CHANGED[@]}"; do
         if is_secret_path "$p"; then
           SAFETY_HITS+=("secret_path:${p}")
         fi
@@ -2205,7 +2318,7 @@ case "$CMD" in
       run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
     fi
     LEFTOVER_HITS=()
@@ -2233,7 +2346,7 @@ case "$CMD" in
           cand="${cand#b/}"
           CUR_FILE="$(norm_path "$cand")"
           SKIP_FILE=false
-          if [[ -z "$CUR_FILE" ]] || is_checkpoint_dir "$CUR_FILE" || [[ "$CUR_FILE" == *.md ]]; then
+          if [[ -z "$CUR_FILE" ]] || is_checkpoint_dir "$CUR_FILE" || is_md_file "$CUR_FILE"; then
             SKIP_FILE=true
           elif is_noise_file "$CUR_FILE"; then
             SKIP_FILE=true
@@ -2277,10 +2390,11 @@ case "$CMD" in
     if [[ ${#UN_SORTED[@]} -gt 0 ]]; then
       for u in "${UN_SORTED[@]}"; do
         if [[ ${#LEFTOVER_HITS[@]} -ge 10 && $SQL_HIT_COUNT -ge 10 ]]; then break; fi
-        if is_checkpoint_dir "$u" || [[ "$u" == *.md ]]; then continue; fi
+        if is_checkpoint_dir "$u" || is_md_file "$u"; then continue; fi
         is_noise_file "$u" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$u" "${IGNORE_ARR[@]}"; then continue; fi
         [[ -f "${REPO_ROOT}/${u}" ]] || continue
+        is_binary_file "${REPO_ROOT}/${u}" && continue
         u_is_test=false
         is_test_path "$u" && u_is_test=true
         lno=0
@@ -2300,12 +2414,13 @@ case "$CMD" in
     fi
 
     if [[ -n "$TARGET_REF" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
-      DEL_OUT="$_GIT_STDOUT"
+      DEL_TARGET="$TARGET_COMMIT_SHA"
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=D --name-only "$BASE_SHA" || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
-      DEL_OUT="$_GIT_STDOUT"
+      build_working_tree_oid "$REPO_ROOT" "MECHANICAL_FAIL"
+      DEL_TARGET="$_WT_TREE_OID"
     fi
+    run_git_cmd "$REPO_ROOT" diff -M --diff-filter=D --name-only "$BASE_SHA" "$DEL_TARGET" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
+    DEL_OUT="$_GIT_STDOUT"
     DEL_ARR=()
     while IFS= read -r line; do
       dp="$(norm_path "$line")"
@@ -2338,9 +2453,9 @@ case "$CMD" in
           fi
         fi
         if [[ -n "$TARGET_REF" ]]; then
-          if run_git_cmd "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/ship'; then grep_code=0; else grep_code=$?; fi
+          if run_git_cmd "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/ship' ':(exclude).b3/autodev'; then grep_code=0; else grep_code=$?; fi
         else
-          if run_git_cmd "$REPO_ROOT" grep -l -F -e "$tok" -- . ':(exclude).b3/ship'; then grep_code=0; else grep_code=$?; fi
+          if run_git_cmd "$REPO_ROOT" grep --untracked -l -F -e "$tok" -- . ':(exclude).b3/ship' ':(exclude).b3/autodev'; then grep_code=0; else grep_code=$?; fi
         fi
         grep_out="$_GIT_STDOUT"
         if [[ "$grep_code" -gt 1 ]]; then
@@ -2349,7 +2464,19 @@ case "$CMD" in
         fi
         grep_count=0
         if [[ "$grep_code" -eq 0 && -n "$grep_out" ]]; then
-          grep_count="$(printf '%s\n' "$grep_out" | wc -l | tr -d ' ')"
+          obs_cprefix="${TARGET_COMMIT_SHA}:"
+          while IFS= read -r g_row; do
+            g_row="$(trim_str "$g_row")"
+            [[ -n "$g_row" ]] || continue
+            if [[ -n "$TARGET_REF" && "$g_row" == "${obs_cprefix}"* ]]; then
+              g_row="${g_row#${obs_cprefix}}"
+            fi
+            g_row="$(norm_path "$g_row")"
+            [[ -n "$g_row" ]] || continue
+            is_checkpoint_dir "$g_row" && continue
+            if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$g_row" "${IGNORE_ARR[@]}"; then continue; fi
+            grep_count=$((grep_count + 1))
+          done <<< "$grep_out"
         fi
         if $exists_path && [[ "$grep_count" -gt 0 ]]; then
           OBS_HITS+=("${tok}(exists+${grep_count}f)")
@@ -2813,7 +2940,7 @@ case "$CMD" in
       exit 1
     fi
 
-    if ! validate_repo_write_path "$REPO_ROOT" "$RECEIPT_PATH"; then
+    if ! validate_repo_write_path "$REPO_ROOT" "$RECEIPT_PATH" || [[ -d "$_SAFE_FULL" ]]; then
       echo "VERIFY_RUN_FAIL: invalid receipt_path"
       exit 1
     fi
@@ -2825,7 +2952,7 @@ case "$CMD" in
     else
       CAND_LOG="${RECEIPT_REL}.log"
     fi
-    if ! validate_repo_write_path "$REPO_ROOT" "$CAND_LOG"; then
+    if ! validate_repo_write_path "$REPO_ROOT" "$CAND_LOG" || [[ -d "$_SAFE_FULL" ]]; then
       echo "VERIFY_RUN_FAIL: invalid log_path"
       exit 1
     fi
@@ -2839,7 +2966,7 @@ case "$CMD" in
 
     mkdir -p "$(dirname "$FULL_RECEIPT")"
 
-    OUT_TMP="${FULL_RECEIPT}.out.$$.${RANDOM}.tmp"
+    OUT_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-verify-out.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-verify-out.$$.${RANDOM}.tmp")"
     _CLEANUP_FILES+=("$OUT_TMP")
     set +e
     (cd "$REPO_ROOT" && sh -c "$VERIFY_CMD") >"$OUT_TMP" 2>&1
@@ -2975,11 +3102,13 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
+    assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "object" "SYMBOL_FAIL" "--base-sha"
+
     if [[ -n "$TARGET_REF" ]]; then
       run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
     fi
 
@@ -3119,13 +3248,70 @@ timestamp_utc=${TS_UTC}
     ORPHAN_INTERNAL=()
     REM_CHECKED="|"
 
+    _sym_find_exp() {
+      local kind="$1" f="$2" s="$3" idx
+      _SYM_FOUND_EXP="0"
+      if [[ "$kind" == "add" ]]; then
+        [[ ${#ADD_KEYS[@]} -gt 0 ]] || return 1
+        for ((idx = 0; idx < ${#ADD_KEYS[@]}; idx++)); do
+          if [[ "${ADD_KEYS[$idx]}" == "${f}|${s}" ]]; then
+            _SYM_FOUND_EXP="${ADD_EXPS[$idx]}"
+            return 0
+          fi
+        done
+      else
+        [[ ${#REM_KEYS[@]} -gt 0 ]] || return 1
+        for ((idx = 0; idx < ${#REM_KEYS[@]}; idx++)); do
+          if [[ "${REM_KEYS[$idx]}" == "${f}|${s}" ]]; then
+            _SYM_FOUND_EXP="${REM_EXPS[$idx]}"
+            return 0
+          fi
+        done
+      fi
+      return 1
+    }
+
+    _sym_exists_any() {
+      local kind="$1" s="$2" idx
+      _SYM_ANY_EXP="0"
+      local found=1
+      if [[ "$kind" == "add" ]]; then
+        [[ ${#ADD_KEYS[@]} -gt 0 ]] || return 1
+        for ((idx = 0; idx < ${#ADD_KEYS[@]}; idx++)); do
+          if [[ "${ADD_KEYS[$idx]}" == *"|${s}" ]]; then
+            found=0
+            [[ "${ADD_EXPS[$idx]}" == "1" ]] && _SYM_ANY_EXP="1"
+          fi
+        done
+      else
+        [[ ${#REM_KEYS[@]} -gt 0 ]] || return 1
+        for ((idx = 0; idx < ${#REM_KEYS[@]}; idx++)); do
+          if [[ "${REM_KEYS[$idx]}" == *"|${s}" ]]; then
+            found=0
+            [[ "${REM_EXPS[$idx]}" == "1" ]] && _SYM_ANY_EXP="1"
+          fi
+        done
+      fi
+      return $found
+    }
+
     if [[ ${#REM_KEYS[@]} -gt 0 ]]; then
       for ((idx = 0; idx < ${#REM_KEYS[@]}; idx++)); do
         k="${REM_KEYS[$idx]}"
         is_exp="${REM_EXPS[$idx]}"
         f="${k%%|*}"
         s_name="${k#*|}"
-        _sym_exists add "$f" "$s_name" && continue
+        in_same=false
+        if _sym_find_exp add "$f" "$s_name"; then
+          in_same=true
+          if [[ "$is_exp" != "1" || "$_SYM_FOUND_EXP" == "1" ]]; then
+            continue
+          fi
+        elif _sym_exists_any add "$s_name"; then
+          if [[ "$is_exp" != "1" || "$_SYM_ANY_EXP" == "1" ]]; then
+            continue
+          fi
+        fi
         REMOVED_SYMS+=("$s_name")
         [[ "$is_exp" == "1" ]] && EXPORTED_REMOVED+=("$s_name")
         if [[ "$REM_CHECKED" == *"|${s_name}|"* ]]; then continue; fi
@@ -3156,6 +3342,7 @@ timestamp_utc=${TS_UTC}
             if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$np" "${IGNORE_ARR[@]}"; then continue; fi
             is_noise_file "$np" && continue
             is_code_path "$np" || continue
+            if $in_same && [[ "$np" == "$f" ]]; then continue; fi
             hit_files+=("$np")
           done <<< "$g_out"
           if [[ ${#hit_files[@]} -gt 0 ]]; then
@@ -3176,7 +3363,7 @@ timestamp_utc=${TS_UTC}
         f="${k%%|*}"
         s_name="${k#*|}"
         is_test_path "$f" && continue
-        _sym_exists rem "$f" "$s_name" && continue
+        _sym_exists_any rem "$s_name" && continue
 
         if [[ -n "$TARGET_REF" ]]; then
           if run_git_cmd "$REPO_ROOT" grep -w -F -n -e "$s_name" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3' ':(exclude)*.md'; then gn_code=0; else gn_code=$?; fi

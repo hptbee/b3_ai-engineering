@@ -395,7 +395,104 @@ try {
         FailCheck 'standalone-review-loop-cycle' "symFail=$($psSymFail.Text) delta=$($psDelta.Text) symOk=$($psSymOk.Text) vc=$($psLoopVc.Text) shOk=$loopShOk"
     }
 
-    # --- 6. standalone-command-contracts ---
+    # --- 6. standalone-review-loop-optimizations (untracked snapshot/delta, parity, and fail-closed guards) ---
+    $r5 = Join-Path $sandbox 'opt-repo'
+    $r5Posix = $r5 -replace '\\', '/'
+    Init-TestRepo $r5
+    New-Item -ItemType Directory -Path (Join-Path $r5 'src') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r5 'src\main.ts'), "export const x = 1;`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $r5 'foo'), "placeholder`n", (New-Object System.Text.UTF8Encoding($false)))
+    Push-Location $r5
+    & git add .; & git commit -qm 'init'
+    $baseSha5 = (& git rev-parse HEAD).Trim()
+    # Delete tracked 'foo' and create untracked dir file 'foo/bar.ts' (1 line without trailing newline)
+    & git rm -q foo
+    New-Item -ItemType Directory -Path (Join-Path $r5 'foo') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r5 'foo\bar.ts'), 'export const bar = 1', (New-Object System.Text.UTF8Encoding($false)))
+    Pop-Location
+
+    # Untracked file created BEFORE snapshot: real git status stays untracked, immediate diff-scope -PrevSha must be delta_files=none
+    [IO.File]::WriteAllText((Join-Path $r5 'src\untracked.ts'), "export const u = 1;`n", (New-Object System.Text.UTF8Encoding($false)))
+    $snapU1 = (Invoke-PsGuard @('snapshot', '-RepoRoot', $r5)).Text.Trim()
+    Push-Location $r5
+    $gitStatusKeepUntr = ((& git status --short) -join "`n") -match '\?\?\s+src/untracked\.ts'
+    $stashKeepEmpty = -not (& git stash list)
+    Pop-Location
+    $psDeltaNone = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r5, '-BaseSha', $baseSha5, '-PrevSha', $snapU1)
+
+    # Edit untracked file -> appears in delta_files
+    [IO.File]::WriteAllText((Join-Path $r5 'src\untracked.ts'), "export const u = 2;`n", (New-Object System.Text.UTF8Encoding($false)))
+    $psDeltaEdit = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r5, '-BaseSha', $baseSha5, '-PrevSha', $snapU1)
+
+    # Snapshot again, delete untracked file + add brand-new untracked file -> both appear in delta_files
+    $snapU2 = (Invoke-PsGuard @('snapshot', '-RepoRoot', $r5)).Text.Trim()
+    Remove-Item -LiteralPath (Join-Path $r5 'src\untracked.ts') -Force
+    [IO.File]::WriteAllText((Join-Path $r5 'src\brand_new.ts'), "export const b = 1;`n", (New-Object System.Text.UTF8Encoding($false)))
+    $psDeltaDelNew = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r5, '-BaseSha', $baseSha5, '-PrevSha', $snapU2)
+
+    # Flag-injection guard & dir-as-receipt pre-execution guard & .git log_path guard
+    $psFlagInj = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r5, '-BaseSha', '--cached')
+    New-Item -ItemType Directory -Path (Join-Path $r5 '.b3\ship\dirrec') | Out-Null
+    $markerPs = Join-Path $r5 'should-not-exist-ps.txt'
+    $psDirRec = Invoke-PsGuard @('verify-run', '-RepoRoot', $r5, '-VerifyCmd', "echo bad > should-not-exist-ps.txt", '-ReceiptPath', '.b3/ship/dirrec')
+    $noSideEffPs = -not (Test-Path -LiteralPath $markerPs)
+    New-Item -ItemType Directory -Path (Join-Path $r5 '.b3\ship\ev') | Out-Null
+    $gitLogVariantsOk = $true
+    foreach ($badLogPath in @('.git/HEAD', '././.git/HEAD', './//.git/HEAD', '././//./.git/HEAD', '.GIT/HEAD')) {
+        [IO.File]::WriteAllText((Join-Path $r5 '.b3\ship\ev\gitlog.verify'), "schema=b3-verify-v1`ntask_id=T1`nscope=s`nhead_sha=$baseSha5`ntree_hash=$(('0' * 40))`nrelevant_paths=ALL`nexit_code=0`nstatus=PASS`ncommand=echo ok`nlog_path=$badLogPath`ntimestamp_utc=2026-01-01T00:00:00Z`n", (New-Object System.Text.UTF8Encoding($false)))
+        $psGl = Invoke-PsGuard @('verify-check', '-RepoRoot', $r5, '-ReceiptPath', '.b3/ship/ev/gitlog.verify')
+        if ($psGl.Code -ne 1 -or ($psGl.Text -notmatch 'VERIFY_CORRUPT: invalid log_path')) { $gitLogVariantsOk = $false }
+        if ($hasBash) {
+            $shGl = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r5Posix' --receipt-path '.b3/ship/ev/gitlog.verify'"
+            if ($shGl.Code -ne 1 -or ($shGl.Text -notmatch 'VERIFY_CORRUPT: invalid log_path')) { $gitLogVariantsOk = $false }
+        }
+    }
+
+    # Check PS/Bash measure-context strict parity including trailing backslash on -RepoRoot
+    $prevMcEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $mcPsRaw = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot "$root\" -Strict 2>&1
+    $mcPsExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevMcEap
+    $mcPsNorm = ($mcPsRaw | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
+
+    $optShOk = $true
+    if ($hasBash) {
+        $shSnap = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r5Posix'"
+        $snapShId = $shSnap.Text.Trim()
+        $shDeltaNone = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r5Posix' --base-sha '$baseSha5' --prev-sha '$snapShId'"
+        $shFlagInj = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r5Posix' --base-sha '--cached'"
+        $markerSh = Join-Path $r5 'should-not-exist-sh.txt'
+        $shDirRec = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r5Posix' --verify-cmd 'touch should-not-exist-sh.txt' --receipt-path '.b3/ship/dirrec'"
+        $noSideEffSh = -not (Test-Path -LiteralPath $markerSh)
+        $shNonCkVr = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r5Posix' --verify-cmd 'echo nonck-ok' --receipt-path '.b3/nonck/sub/r.verify' --relevant-paths 'foo/bar.ts'"
+        $shNonCkVc = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r5Posix' --receipt-path '.b3/nonck/sub/r.verify'"
+        $prevShMc = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $mcShRaw = & $gitBash -c "'$($root -replace '\\','/')/scripts/measure-context.sh' --strict" 2>&1
+        $mcShExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevShMc
+        $mcShNorm = ($mcShRaw | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
+        $optShOk = ($shSnap.Code -eq 0) -and ($snapShId -match '^[0-9a-f]{40}$') -and
+                   ($shDeltaNone.Code -eq 0) -and ($shDeltaNone.Text -match 'review_files=foo,foo/bar\.ts,src/brand_new\.ts') -and ($shDeltaNone.Text -match 'lines=3\b') -and ($shDeltaNone.Text -match 'delta_files=none') -and
+                   ($shFlagInj.Code -eq 1) -and ($shFlagInj.Text -match 'DIFF_SCOPE_FAIL:') -and
+                   ($shDirRec.Code -eq 1) -and $noSideEffSh -and
+                   ($shNonCkVr.Code -eq 0) -and ($shNonCkVc.Code -eq 0) -and ($shNonCkVc.Text -match 'VERIFY_VALID:') -and
+                   ($mcShExit -eq 0) -and ($mcPsNorm -ceq $mcShNorm)
+    }
+
+    if ($snapU1 -match '^[0-9a-f]{40}$' -and $gitStatusKeepUntr -and $stashKeepEmpty -and
+        $psDeltaNone.Code -eq 0 -and ($psDeltaNone.Text -match 'review_files=foo,foo/bar\.ts,src/untracked\.ts') -and ($psDeltaNone.Text -match 'lines=3\b') -and ($psDeltaNone.Text -match 'delta_files=none') -and
+        $psDeltaEdit.Code -eq 0 -and ($psDeltaEdit.Text -match 'delta_files=src/untracked\.ts') -and
+        $psDeltaDelNew.Code -eq 0 -and ($psDeltaDelNew.Text -match 'delta_files=src/brand_new\.ts,src/untracked\.ts') -and
+        $psFlagInj.Code -eq 1 -and ($psFlagInj.Text -match 'DIFF_SCOPE_FAIL:') -and
+        $psDirRec.Code -eq 1 -and $noSideEffPs -and
+        $gitLogVariantsOk -and
+        $mcPsExit -eq 0 -and ($mcPsNorm -match 'warnings\s*:\s*0') -and $optShOk) {
+        Pass 'standalone-review-loop-optimizations'
+    } else {
+        FailCheck 'standalone-review-loop-optimizations' "none=$($psDeltaNone.Text) edit=$($psDeltaEdit.Text) delNew=$($psDeltaDelNew.Text) flag=$($psFlagInj.Code) dir=$($psDirRec.Code)/$noSideEffPs gl=$gitLogVariantsOk mc=$mcPsExit shOk=$optShOk"
+    }
+
+    # --- 7. standalone-command-contracts ---
     $cmdImpl = Get-Content -LiteralPath (Join-Path $root 'commands\b3-implement.md') -Raw
     $csImpl = Get-Content -LiteralPath (Join-Path $root 'adapters\command-skills\b3-implement\SKILL.md') -Raw
     $cmdPlan = Get-Content -LiteralPath (Join-Path $root 'commands\b3-plan.md') -Raw
@@ -425,15 +522,23 @@ try {
                 ($agentsRaw -match 'skills/engineering/code-review/references/review-template\.md')
     $implSingleTaskOk = ($cmdImpl -match 'dispatch-naming\.md') -and ($cmdImpl -match 'b3-impl-t00N') -and ($cmdImpl -match 'B3_MODELS_PERSONAL') -and
                         ($csImpl -match 'dispatch-naming\.md') -and ($csImpl -match 'b3-impl-t00N') -and ($csImpl -match 'B3_MODELS_PERSONAL')
-    $revOk = ($cmdRev -match 'symbol-check') -and ($skRev -match 'Scope \(delta-first\)') -and ($skRev -match 'never auto-fix or start `/b3-review-loop`') -and $revTplOk
+    $revOk = ($cmdRev -match 'symbol-check') -and ($skRev -match 'Scope \(delta-first\)') -and ($skRev -match 'never auto-fix or start `/b3-review-loop`') -and ($skRev -match 'skip inside `/b3-review-loop`') -and $revTplOk
     $rlBytes = ([System.Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes((Join-Path $root 'review-loop\strategy.md')))).Replace("`r", '').Length
-    $rlOk = ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and ($strat -match 'dispatch fresh `b3-fixer`') -and ($rlBytes -le 5400)
+    $rlOk = ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and ($strat -match 'dispatch fresh `b3-fixer`') -and ($strat -match '`FAIL` on failed check') -and ($strat -match 'EVIDENCED RISK') -and ($rlBytes -le 5400)
     $verOk = ($cmdVer -match 'verify-run') -and ($skVer -match 'verify-check') -and ($skVer -match 'untrusted provenance')
+    $agentsContractOk = $true
+    foreach ($ra in @('b3-reviewer.md', 'b3-security-reviewer.md', 'b3-architecture-reviewer.md', 'b3-performance-reviewer.md')) {
+        $rat = Get-Content -LiteralPath (Join-Path $root "agents\$ra") -Raw
+        if ($rat -notmatch 'NO_BLOCKING_FINDINGS \| BLOCKING_FINDINGS \| INCOMPLETE') { $agentsContractOk = $false }
+    }
+    $revAgTxt = Get-Content -LiteralPath (Join-Path $root 'agents\b3-reviewer.md') -Raw
+    $fixAgTxt = Get-Content -LiteralPath (Join-Path $root 'agents\b3-fixer.md') -Raw
+    $agentsContractOk = $agentsContractOk -and ($revAgTxt -match 'skip `code-review/SKILL\.md`, `review-template\.md`') -and ($fixAgTxt -match 'verification/SKILL\.md.*on demand only')
 
-    if ($implDescNoShip -and $implSingleHop -and $implSingleTaskOk -and $planOk -and $dbgOk -and $revOk -and $rlOk -and $verOk) {
+    if ($implDescNoShip -and $implSingleHop -and $implSingleTaskOk -and $planOk -and $dbgOk -and $revOk -and $rlOk -and $verOk -and $agentsContractOk) {
         Pass 'standalone-command-contracts'
     } else {
-        FailCheck 'standalone-command-contracts' "desc=$implDescNoShip hop=$implSingleHop singleTask=$implSingleTaskOk plan=$planOk dbg=$dbgOk rev=$revOk rl=$rlOk($rlBytes) ver=$verOk"
+        FailCheck 'standalone-command-contracts' "desc=$implDescNoShip hop=$implSingleHop singleTask=$implSingleTaskOk plan=$planOk dbg=$dbgOk rev=$revOk rl=$rlOk($rlBytes) ver=$verOk ag=$agentsContractOk"
     }
 }
 finally {
