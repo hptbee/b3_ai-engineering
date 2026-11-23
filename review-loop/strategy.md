@@ -6,7 +6,7 @@ You are **orchestrator**: never review+fix in one pass, merge findings, and **al
 
 ## Roles & dispatch
 
-- Review: `agents/b3-reviewer.md` -> `skills/engineering/code-review/SKILL.md` | Specialists: `agents/b3-{security,architecture,performance}-reviewer.md` | Fix+Verify: `agents/b3-fixer.md` + `skills/engineering/verification/SKILL.md`.
+- Review: `agents/b3-reviewer.md` -> `skills/engineering/code-review/SKILL.md` | Specialists: `agents/b3-{security,architecture,performance}-reviewer.md` | Fix+Verify: `agents/b3-fixer.md` + `skills/engineering/verification/SKILL.md`. On dispatch, load [naming](../workflows/references/dispatch-naming.md) once; request `b3-*` aliases where supported, keep host IDs for resume.
 - **Reviewer:** always fresh (distinct from `impl_agent`; parallel read-only specialists ok). **Fix:** resume `impl_agent` with delta findings when present; standalone (no `impl_agent`), dispatch fresh `b3-fixer` with active `OPEN` findings + target files + verify cmd. Without subagents: strict hat-change + log `review_independence: SINGLE_AGENT_LIMIT`.
 - **Standalone state (no `/b3-ship` `RUN_DIR`):** save compact `.b3/ship/review-loop/<slug>/` (`state.md`: `base_sha`, `prev_sha`, `size_class`, `iter`, `OPEN`/`FIXED`, `closed:`; `logs/`; `evidence/verify.verify`); resume via `state.md` + `diff-scope -PrevSha` without re-reading untouched code.
 - **Parent -> Subagent:** pass `{base_sha}`, `review_files` (+ `delta_files` Iter 2+), `approach/T00N.md` or `state.md`, **active `OPEN`/unverified `FIXED` only**, and `closed:` IDs (no full files/history).
