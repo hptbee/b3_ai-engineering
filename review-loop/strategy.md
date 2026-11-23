@@ -14,8 +14,8 @@ You are **orchestrator**: never review+fix in one pass, merge findings, and **al
 
 ## 0. Target, Guard, size & status
 
-1. Run `b3-guard.{ps1,sh} diff-scope` (`-BaseSha`, optional `-PrevSha`; never `HEAD~1`) + `mechanical-check` (`-BaseSha`, `-AllowedPaths`, `-Obsoletes`) + `symbol-check` on refactors. Empty diff -> `UNKNOWN / INCOMPLETE`. Fix `scope_creep`/`leftovers`/`obsolete_hits` (`exit 2`) before review.
-2. **Sizing (`size_class`):** `NOISE_ONLY` (`files=0` + valid checks = `PASS`); `SMALL` (<=8f, <=300L, 1 area) / `MEDIUM` (<=20f, <=800L, <=2 areas) -> §1 (max **5** iter); `LARGE` (>MEDIUM or >=3 areas) / `VERY_LARGE` (>=50f or >=2000L) -> §2.
+1. Run `b3-guard.{ps1,sh} diff-scope` (`-BaseSha`, optional `-PrevSha`; never `HEAD~1`) + `mechanical-check` (`-BaseSha`, `-AllowedPaths`, `-Obsoletes`) + `symbol-check` on refactors. Empty first-pass diff -> `UNKNOWN / INCOMPLETE`; `CLEAN_AFTER_FIX` (valid `prev_sha` + nonempty `delta_files`) reviews removed changes and requires verified current tree before `PASS`. Fix `scope_creep`/`leftovers`/`obsolete_hits` (`exit 2`) before review.
+2. **Sizing (`size_class`):** `NOISE_ONLY` (`files=0` + valid checks = `PASS`); `CLEAN_AFTER_FIX` (zero current diff after fixer) -> §1 on `delta_files`; `SMALL` (<=8f, <=300L, 1 area) / `MEDIUM` (<=20f, <=800L, <=2 areas) -> §1 (max **5** iter); `LARGE` (>MEDIUM or >=3 areas) / `VERY_LARGE` (>=50f or >=2000L) -> §2.
 3. **Statuses (`R001`... monotonic):** `OPEN` = blocking `CONFIRMED` (`CRITICAL`/`HIGH`/`MEDIUM`, incl. `CONFIRMED REDUNDANCY` and hot-path `EVIDENCED RISK`); `FIXED` = edited, unverified (`VERIFIED`/`CLOSED`); `REJECTED` = `FALSE_POSITIVE` (+ reason); `ACCEPTED` = out-of-scope / `INTENTIONAL COMPLEXITY` (+ reason); `SPECULATIVE` = unproven / `LOW`-confidence / `LIKELY REDUNDANT` / `UNKNOWN` (non-blocking).
 
 ## 1. SMALL / MEDIUM — full-PR loop (max 5 iterations)
