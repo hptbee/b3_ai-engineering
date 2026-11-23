@@ -2091,20 +2091,21 @@ switch ($Command) {
             'b3-performance-reviewer'
         )
 
-        # Resolve B3Home cleanly (explicit -> script parent -> env B3_HOME -> product .b3/home)
-        if (-not $B3Home) {
+        # Resolve B3Home cleanly (explicit -> env B3_HOME -> product .b3/home -> script parent)
+        if (-not ($B3Home -and $B3Home.Trim())) {
             $scriptParent = Split-Path -Parent $PSScriptRoot
             $homePtr = Join-Path $RepoRoot '.b3\home'
-            if ((Test-Path -LiteralPath (Join-Path $scriptParent 'config\models.default.json')) -or (Test-Path -LiteralPath (Join-Path $scriptParent 'workflows\ship.md'))) {
-                $B3Home = $scriptParent
-            } elseif ($env:B3_HOME -and (Test-Path -LiteralPath $env:B3_HOME -PathType Container)) {
-                $B3Home = $env:B3_HOME
+            $envB3 = if ($env:B3_HOME) { $env:B3_HOME.Trim() } else { '' }
+            if ($envB3 -and (Test-Path -LiteralPath $envB3 -PathType Container)) {
+                $B3Home = $envB3
             } elseif (Test-Path -LiteralPath $homePtr -PathType Leaf) {
                 $ptrVal = ([IO.File]::ReadAllText($homePtr, [System.Text.Encoding]::UTF8)).Trim()
                 if ($ptrVal) { $B3Home = $ptrVal } else { $B3Home = $scriptParent }
             } else {
                 $B3Home = $scriptParent
             }
+        } else {
+            $B3Home = $B3Home.Trim()
         }
         $defaultPath = Join-Path $B3Home 'config\models.default.json'
 
@@ -2125,11 +2126,14 @@ switch ($Command) {
         $persLayer = Read-ModelConfigFile $PersonalConfig $canonicalRoles $warnings
         $projLayer = Read-ModelConfigFile $ProjectConfig $canonicalRoles $warnings
 
-        $explicitTrim = if ($ExplicitModel) { $ExplicitModel.Trim() } else { '' }
-        $roleTrim = if ($Role) { $Role.Trim() } else { '' }
-        if ($roleTrim -and ($roleTrim -match '[\x00-\x1f]')) {
+        if ($ExplicitModel -and ($ExplicitModel -match '[\x00-\x1f\x7f]')) {
+            Fail "CONFIG_ERROR: invalid --explicit-model value" 1
+        }
+        if ($Role -and ($Role -match '[\x00-\x1f\x7f]')) {
             Fail "CONFIG_ERROR: invalid --role value" 1
         }
+        $explicitTrim = if ($ExplicitModel) { $ExplicitModel.Trim() } else { '' }
+        $roleTrim = if ($Role) { $Role.Trim() } else { '' }
 
         $targetRoles = if ($roleTrim) { @($roleTrim) } else { $canonicalRoles }
         $rolesOrdered = [ordered]@{}

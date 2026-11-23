@@ -67,6 +67,8 @@ $expectedRoles = @(
 $sandbox = Join-Path $env:TEMP ('b3-model-cfg-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
 $prevModelsPersonal = $env:B3_MODELS_PERSONAL
+$prevB3Home = $env:B3_HOME
+Remove-Item Env:B3_HOME -ErrorAction SilentlyContinue
 
 try {
     $missingPers = Join-Path $sandbox 'missing-personal.json'
@@ -235,6 +237,59 @@ try {
             $badDetail = "rawCtrl:ps=$($rcPs.Code)/sh=$rcShOk"
         }
     }
+    if ($allBadRejected) {
+        $cliCasesPs = @(
+            @{ Tag = 'exp-nl';   Args = @('resolve-models', '-B3Home', $root, '-PersonalConfig', $missingPers, '-ProjectConfig', $missingProj, '-Role', 'main', '-ExplicitModel', ("gpt-5`nrole=b3-fixer model=evil effective=evil source=explicit")) },
+            @{ Tag = 'exp-01';   Args = @('resolve-models', '-B3Home', $root, '-PersonalConfig', $missingPers, '-ProjectConfig', $missingProj, '-Role', 'main', '-ExplicitModel', ("gpt-5" + [char]1)) },
+            @{ Tag = 'role-nl';  Args = @('resolve-models', '-B3Home', $root, '-PersonalConfig', $missingPers, '-ProjectConfig', $missingProj, '-Role', ("main`n")) },
+            @{ Tag = 'role-01';  Args = @('resolve-models', '-B3Home', $root, '-PersonalConfig', $missingPers, '-ProjectConfig', $missingProj, '-Role', ("main" + [char]1)) },
+            @{ Tag = 'role-esc'; Args = @('resolve-models', '-B3Home', $root, '-PersonalConfig', $missingPers, '-ProjectConfig', $missingProj, '-Role', ("main" + [char]0x1b + '[31m')) }
+        )
+        foreach ($cc in $cliCasesPs) {
+            $res = Invoke-GuardPs $cc.Args
+            if ($res.Code -ne 1 -or ($res.Text -notmatch 'CONFIG_ERROR:')) {
+                $allBadRejected = $false
+                $badDetail = "cli-ps:$($cc.Tag)($($res.Code))"
+                break
+            }
+        }
+        if ($allBadRejected -and $hasBash) {
+            $ctrlProbeSh = Join-Path $sandbox 'cli-ctrl-probe.sh'
+            $ctrlLines = @(
+                '#!/usr/bin/env bash',
+                "G='$guardShPosix'",
+                "B='$rootP'",
+                "P='$missingPersP'",
+                "J='$missingProjP'",
+                'run_bad() {',
+                '  local tag="$1"; shift',
+                '  local out rc',
+                '  out="$("$G" resolve-models --b3-home "$B" --personal-config "$P" --project-config "$J" "$@" 2>&1)"',
+                '  rc=$?',
+                '  if [[ $rc -ne 1 || "$out" != *CONFIG_ERROR:* ]]; then',
+                '    echo "FAIL:$tag:$rc:$out"',
+                '    exit 1',
+                '  fi',
+                '}',
+                'run_bad exp-nl   --role main --explicit-model $''gpt-5\nrole=b3-fixer model=evil effective=evil source=explicit''',
+                'run_bad exp-01   --role main --explicit-model $''gpt-5\x01''',
+                'run_bad role-nl  --role $''main\n''',
+                'run_bad role-01  --role $''main\x01''',
+                'run_bad role-esc --role $''main\x1b[31m''',
+                'echo "ALL_CLI_CTRL_BAD_OK"'
+            )
+            [IO.File]::WriteAllText($ctrlProbeSh, (($ctrlLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+            $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+            $shOut = & $gitBash ($ctrlProbeSh -replace '\\', '/') 2>&1
+            $shCode = $LASTEXITCODE
+            $ErrorActionPreference = $prevEap
+            $shTxt = ($shOut | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
+            if ($shCode -ne 0 -or ($shTxt -notmatch 'ALL_CLI_CTRL_BAD_OK')) {
+                $allBadRejected = $false
+                $badDetail = "cli-sh:$shCode`:$shTxt"
+            }
+        }
+    }
     if ($allBadRejected) { Pass 'model-config-invalid-json' }
     else { FailCheck 'model-config-invalid-json' "failed on $badDetail" }
 
@@ -273,6 +328,23 @@ try {
     $ipExit = $LASTEXITCODE
     $seededCreated = Test-Path -LiteralPath $seedTarget -PathType Leaf
     $noCopyInProd = -not (Test-Path -LiteralPath (Join-Path $prod8 '.b3\models.local.json'))
+    $emptySeedOk = $false
+    if ($seededCreated) {
+        $seededObj = (Get-Content -LiteralPath $seedTarget -Raw) | ConvertFrom-Json
+        $seedKeys = @($seededObj.models.PSObject.Properties)
+        $altDefFx = Join-Path $sandbox 'alt-def-c2'
+        New-Item -ItemType Directory -Path (Join-Path $altDefFx 'config') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $altDefFx 'config\models.default.json'), '{"version":1,"models":{"planning":"updated-shared-default"}}', (New-Object System.Text.UTF8Encoding($false)))
+        $c2InheritPs = Invoke-GuardPs @('resolve-models', '-B3Home', $altDefFx, '-PersonalConfig', $seedTarget, '-ProjectConfig', $missingProj, '-Role', 'planning', '-Json')
+        $c2InheritObj = $c2InheritPs.Text | ConvertFrom-Json
+        $c2AutoPers = Join-Path $sandbox 'c2-auto-pers.json'
+        [IO.File]::WriteAllText($c2AutoPers, '{"version":1,"models":{"planning":"auto"}}', (New-Object System.Text.UTF8Encoding($false)))
+        $c2AutoPs = Invoke-GuardPs @('resolve-models', '-B3Home', $altDefFx, '-PersonalConfig', $c2AutoPers, '-ProjectConfig', $missingProj, '-Role', 'planning', '-Json')
+        $c2AutoObj = $c2AutoPs.Text | ConvertFrom-Json
+        $emptySeedOk = ($seedKeys.Count -eq 0) -and
+                       ($c2InheritPs.Code -eq 0) -and ($c2InheritObj.roles.planning.model -eq 'updated-shared-default') -and ($c2InheritObj.roles.planning.source -eq 'default') -and
+                       ($c2AutoPs.Code -eq 0) -and ($c2AutoObj.roles.planning.model -eq 'auto') -and ($c2AutoObj.roles.planning.source -eq 'personal')
+    }
 
     # Customize personal file and re-run install-product (PS & Bash) and verify-mode + normal sync-skills
     Set-Content -LiteralPath $seedTarget '{"version":1,"models":{"main":"keep-custom-model"}}'
@@ -290,6 +362,27 @@ try {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $syncFx 'adapters\sync-skills.ps1') -HostName cursor | Out-Null
     $syncExit = $LASTEXITCODE
     $stillCustomAfterSync = ((Get-Content -LiteralPath $seedTarget -Raw) -match 'keep-custom-model')
+    $seedSyncPsFresh = Join-Path $sandbox 'seeded-sync-ps\.b3\models.local.json'
+    $env:B3_MODELS_PERSONAL = $seedSyncPsFresh
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $syncFx 'adapters\sync-skills.ps1') -HostName cursor | Out-Null
+    $syncPsFreshOk = (Test-Path -LiteralPath $seedSyncPsFresh -PathType Leaf) -and (@(((Get-Content -LiteralPath $seedSyncPsFresh -Raw) | ConvertFrom-Json).models.PSObject.Properties).Count -eq 0)
+
+    $env:B3_SKIP_MODEL_INIT = '1'
+    $giDedupOk = $true
+    foreach ($case in @(
+        @{ Name = 'ps-models-only'; Content = ".b3/models.local.json`n" },
+        @{ Name = 'ps-legacy-plus-models'; Content = ".b3/`n.b3/models.local.json`n" }
+    )) {
+        $giRepo = Join-Path $sandbox $case.Name
+        New-Item -ItemType Directory -Path $giRepo | Out-Null
+        [IO.File]::WriteAllText((Join-Path $giRepo '.gitignore'), $case.Content, (New-Object System.Text.UTF8Encoding($false)))
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $giRepo -B3Home $root -HostName cursor | Out-Null
+        $lines = @(Get-Content -LiteralPath (Join-Path $giRepo '.gitignore') | ForEach-Object { $_.Trim() })
+        $shipCnt = @($lines | Where-Object { $_ -eq '.b3/ship/' }).Count
+        $modCnt = @($lines | Where-Object { $_ -eq '.b3/models.local.json' }).Count
+        if ($shipCnt -ne 1 -or $modCnt -ne 1) { $giDedupOk = $false }
+    }
+    Remove-Item Env:B3_SKIP_MODEL_INIT -ErrorAction SilentlyContinue
 
     $shInitOk = $true
     if ($hasBash) {
@@ -305,7 +398,7 @@ try {
         $ipShPosix = $rootP + '/adapters/install-product.sh'
         & $gitBash -c "'$ipShPosix' --product-root '$p8ShP' --b3-home '$rootP' --host cursor" | Out-Null
         $cSh = $LASTEXITCODE
-        $shCreated = Test-Path -LiteralPath $seedSh -PathType Leaf
+        $shCreated = (Test-Path -LiteralPath $seedSh -PathType Leaf) -and (@(((Get-Content -LiteralPath $seedSh -Raw) | ConvertFrom-Json).models.PSObject.Properties).Count -eq 0)
         Set-Content -LiteralPath $seedSh '{"version":1,"models":{"main":"sh-custom"}}'
         & $gitBash -c "'$ipShPosix' --product-root '$p8ShP' --b3-home '$rootP' --host cursor" | Out-Null
         $shPreserved = ((Get-Content -LiteralPath $seedSh -Raw) -match 'sh-custom')
@@ -326,7 +419,7 @@ try {
 
             & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
             $syncShCode = $LASTEXITCODE
-            $syncShCreated = Test-Path -LiteralPath $seedSyncSh -PathType Leaf
+            $syncShCreated = (Test-Path -LiteralPath $seedSyncSh -PathType Leaf) -and (@(((Get-Content -LiteralPath $seedSyncSh -Raw) | ConvertFrom-Json).models.PSObject.Properties).Count -eq 0)
             Set-Content -LiteralPath $seedSyncSh '{"version":1,"models":{"main":"sync-sh-custom"}}'
             & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
             $syncShPreserved = ((Get-Content -LiteralPath $seedSyncSh -Raw) -match 'sync-sh-custom')
@@ -348,15 +441,33 @@ try {
             $legGiText = Get-Content -LiteralPath (Join-Path $prodLegSh '.gitignore') -Raw
             $legGiOk = ($legGiText -match '(?m)^\.b3/ship/\s*$') -and ($legGiText -match '(?m)^\.b3/models\.local\.json\s*$') -and ($legGiText -notmatch 'ship/n\.b3')
 
-            $shInitOk = $dryShClean -and $verShClean -and $skipShClean -and ($syncShCode -eq 0) -and $syncShCreated -and $syncShPreserved -and $drStdOutOk -and $legGiOk
+            $env:B3_SKIP_MODEL_INIT = '1'
+            $shDedupOk = $true
+            foreach ($case in @(
+                @{ Name = 'sh-models-only'; Content = ".b3/models.local.json`n" },
+                @{ Name = 'sh-legacy-plus-models'; Content = ".b3/`n.b3/models.local.json`n" }
+            )) {
+                $giRepo = Join-Path $sandbox $case.Name
+                New-Item -ItemType Directory -Path $giRepo | Out-Null
+                [IO.File]::WriteAllText((Join-Path $giRepo '.gitignore'), $case.Content, (New-Object System.Text.UTF8Encoding($false)))
+                $giP = $giRepo -replace '\\', '/'
+                & $gitBash -c "'$ipShPosix' --product-root '$giP' --b3-home '$rootP' --host cursor" | Out-Null
+                $lines = @(Get-Content -LiteralPath (Join-Path $giRepo '.gitignore') | ForEach-Object { $_.Trim() })
+                $shipCnt = @($lines | Where-Object { $_ -eq '.b3/ship/' }).Count
+                $modCnt = @($lines | Where-Object { $_ -eq '.b3/models.local.json' }).Count
+                if ($shipCnt -ne 1 -or $modCnt -ne 1) { $shDedupOk = $false }
+            }
+            Remove-Item Env:B3_SKIP_MODEL_INIT -ErrorAction SilentlyContinue
+
+            $shInitOk = $dryShClean -and $verShClean -and $skipShClean -and ($syncShCode -eq 0) -and $syncShCreated -and $syncShPreserved -and $drStdOutOk -and $legGiOk -and $shDedupOk
         } else {
             $shInitOk = $false
         }
     }
-    if ($ipExit -eq 0 -and $dryNotCreated -and $seededCreated -and $noCopyInProd -and $stillCustomAfterIp -and $syncExit -eq 0 -and $stillCustomAfterSync -and $shInitOk) {
+    if ($ipExit -eq 0 -and $dryNotCreated -and $seededCreated -and $emptySeedOk -and $noCopyInProd -and $stillCustomAfterIp -and $syncExit -eq 0 -and $stillCustomAfterSync -and $syncPsFreshOk -and $giDedupOk -and $shInitOk) {
         Pass 'model-config-install-init-and-preserve'
     } else {
-        FailCheck 'model-config-install-init-and-preserve' "ip=$ipExit dry=$dryNotCreated cr=$seededCreated noCp=$noCopyInProd keepIp=$stillCustomAfterIp sync=$syncExit keepSync=$stillCustomAfterSync sh=$shInitOk"
+        FailCheck 'model-config-install-init-and-preserve' "ip=$ipExit dry=$dryNotCreated cr=$seededCreated empty=$emptySeedOk noCp=$noCopyInProd keepIp=$stillCustomAfterIp sync=$syncExit keepSync=$stillCustomAfterSync sPs=$syncPsFreshOk giD=$giDedupOk sh=$shInitOk"
     }
 
     # --- 9. model-config-gitignore-behavior ---
@@ -392,17 +503,54 @@ try {
                     ($impShObj.roles.'b3-reviewer'.model -eq 'foo\bar\n1') -and
                     ($impPsObj.sources.personal_present) -and ($impShObj.sources.personal_present)
 
-        if ($parPs.Code -eq 0 -and $parSh.Code -eq 0 -and ($psCompact -eq $shCompact) -and $escMatch) {
+        # Test R001 B3_HOME env and product .b3/home precedence (env B3_HOME > .b3/home > script parent)
+        $altB3 = Join-Path $sandbox 'alt-b3home'
+        New-Item -ItemType Directory -Path (Join-Path $altB3 'config') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $altB3 'config\models.default.json'), '{"version":1,"models":{"main":"from-alt-b3home"}}', (New-Object System.Text.UTF8Encoding($false)))
+        $ptrProd = Join-Path $sandbox 'prod-alt-ptr'
+        New-Item -ItemType Directory -Path (Join-Path $ptrProd '.b3') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $ptrProd '.b3\home'), "$altB3`n", (New-Object System.Text.UTF8Encoding($false)))
+        $ptrProdP = $ptrProd -replace '\\', '/'
+
+        $env:B3_MODELS_PERSONAL = $missingPers
+        $env:B3_HOME = $altB3
+        $envWinPs = Invoke-GuardPs @('resolve-models', '-RepoRoot', $prod8, '-Role', 'main', '-Json')
+        $envWinSh = Invoke-GuardSh "resolve-models --repo-root '$($prod8 -replace '\\', '/')' --role main --json"
+        Remove-Item Env:B3_HOME -ErrorAction SilentlyContinue
+        $ptrWinPs = Invoke-GuardPs @('resolve-models', '-RepoRoot', $ptrProd, '-Role', 'main', '-Json')
+        $ptrWinSh = Invoke-GuardSh "resolve-models --repo-root '$ptrProdP' --role main --json"
+        $envWinOk = ($envWinPs.Code -eq 0) -and ($envWinSh.Code -eq 0) -and
+                    (($envWinPs.Text | ConvertFrom-Json).roles.main.model -eq 'from-alt-b3home') -and
+                    (($envWinSh.Text | ConvertFrom-Json).roles.main.model -eq 'from-alt-b3home')
+        $ptrWinOk = ($ptrWinPs.Code -eq 0) -and ($ptrWinSh.Code -eq 0) -and
+                    (($ptrWinPs.Text | ConvertFrom-Json).roles.main.model -eq 'from-alt-b3home') -and
+                    (($ptrWinSh.Text | ConvertFrom-Json).roles.main.model -eq 'from-alt-b3home')
+
+        if ($parPs.Code -eq 0 -and $parSh.Code -eq 0 -and ($psCompact -eq $shCompact) -and $escMatch -and $envWinOk -and $ptrWinOk) {
             Pass 'model-config-dual-shell-parity'
         } else {
-            FailCheck 'model-config-dual-shell-parity' "psCode=$($parPs.Code) shCode=$($parSh.Code) eq=$($psCompact -eq $shCompact) esc=$escMatch"
+            FailCheck 'model-config-dual-shell-parity' "psCode=$($parPs.Code) shCode=$($parSh.Code) eq=$($psCompact -eq $shCompact) esc=$escMatch envB3=$envWinOk ptrB3=$ptrWinOk"
         }
     } else {
         Pass 'model-config-dual-shell-parity'
     }
+
+    # --- 11. model-config-workflow-integration (ship.md, strategy.md, dispatch-naming.md, and docs/model-configuration.md) ---
+    $shipTxt = Get-Content -LiteralPath (Join-Path $root 'workflows\ship.md') -Raw
+    $stratTxt = Get-Content -LiteralPath (Join-Path $root 'review-loop\strategy.md') -Raw
+    $dnTxt = Get-Content -LiteralPath (Join-Path $root 'workflows\references\dispatch-naming.md') -Raw
+    $docTxt = Get-Content -LiteralPath (Join-Path $root 'docs\model-configuration.md') -Raw
+    $wfOk = ($shipTxt -match 'resolve-models') -and ($stratTxt -match 'resolve-models') -and ($dnTxt -match 'resolve-models') -and
+            ($docTxt -match 'Claude Code') -and ($docTxt -match 'Workflow Dispatch Integration')
+    if ($wfOk) {
+        Pass 'model-config-workflow-integration'
+    } else {
+        FailCheck 'model-config-workflow-integration' 'missing resolve-models dispatch contract or Claude Code documentation'
+    }
 }
 finally {
     if ($null -eq $prevModelsPersonal) { Remove-Item Env:B3_MODELS_PERSONAL -ErrorAction SilentlyContinue } else { $env:B3_MODELS_PERSONAL = $prevModelsPersonal }
+    if ($null -eq $prevB3Home) { Remove-Item Env:B3_HOME -ErrorAction SilentlyContinue } else { $env:B3_HOME = $prevB3Home }
     Pop-Location -ErrorAction SilentlyContinue
     Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue

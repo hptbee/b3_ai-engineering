@@ -409,8 +409,8 @@ if ! $DRY_RUN && ! $VERIFY_ONLY && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
       echo "model_config=${DEST_CFG} (kept existing)"
     else
       mkdir -p "$(dirname "$DEST_CFG")"
-      cp "$TEMPLATE_CFG" "$DEST_CFG"
-      echo "model_config=${DEST_CFG} (created from defaults)"
+      printf '{\n  "version": 1,\n  "_comment": "Personal B3 model overrides. Add only roles you want to override; omitted roles inherit config/models.default.json. See config/models.example.json.",\n  "models": {}\n}\n' > "$DEST_CFG"
+      echo "model_config=${DEST_CFG} (created empty overrides)"
     fi
   fi
 fi

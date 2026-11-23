@@ -158,12 +158,21 @@ update_b3_gitignore() {
   fi
   if grep -Eq '^[[:space:]]*\.b3/[[:space:]]*$' "$gi"; then
     local tmp="${gi}.b3tmp"
-    LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; print ".b3/models.local.json"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
+    if $has_models; then
+      LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
+    else
+      LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; print ".b3/models.local.json"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
+    fi
     echo "upgraded"
     return
   fi
   if $has_ship; then
     printf '\n.b3/models.local.json\n' >> "$gi"
+    echo "upgraded"
+    return
+  fi
+  if $has_models; then
+    printf '\n.b3/ship/\n' >> "$gi"
     echo "upgraded"
     return
   fi
@@ -191,7 +200,7 @@ print_dry_run_model_config() {
   if [[ -e "$dest" || -L "$dest" ]]; then
     echo "dry-run: keep existing personal model config $dest"
   else
-    echo "dry-run: seed personal model config at $dest from $template_cfg"
+    echo "dry-run: seed personal model config at $dest (empty overrides)"
   fi
 }
 
@@ -212,7 +221,7 @@ init_personal_model_config() {
     return 0
   fi
   mkdir -p "$(dirname "$dest")"
-  cp "$template_cfg" "$dest"
+  printf '{\n  "version": 1,\n  "_comment": "Personal B3 model overrides. Add only roles you want to override; omitted roles inherit config/models.default.json. See config/models.example.json.",\n  "models": {}\n}\n' > "$dest"
   echo "created:${dest}"
 }
 

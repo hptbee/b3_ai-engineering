@@ -2702,10 +2702,10 @@ timestamp_utc=${TS_UTC}
       RESOLVED_B3_HOME="$(trim_str "$B3_HOME_ARG")"
     else
       HOME_PTR="${REPO_ROOT}/.b3/home"
-      if [[ -f "${SCRIPT_PARENT}/config/models.default.json" || -f "${SCRIPT_PARENT}/workflows/ship.md" ]]; then
-        RESOLVED_B3_HOME="$SCRIPT_PARENT"
-      elif [[ -n "${B3_HOME:-}" && -d "${B3_HOME}" ]]; then
-        RESOLVED_B3_HOME="${B3_HOME}"
+      ENV_B3="$(trim_str "${B3_HOME:-}")"
+      ENV_B3_NORM="${ENV_B3//\\//}"
+      if [[ -n "$ENV_B3" && -d "$ENV_B3_NORM" ]]; then
+        RESOLVED_B3_HOME="$ENV_B3"
       elif [[ -f "$HOME_PTR" ]]; then
         PTR_VAL="$(trim_str "$(cat "$HOME_PTR")")"
         RESOLVED_B3_HOME="${PTR_VAL:-$SCRIPT_PARENT}"
@@ -2778,12 +2778,22 @@ timestamp_utc=${TS_UTC}
     load_model_layer "$PERSONAL_NORM" "$PERSONAL_NORM" "PERS"
     load_model_layer "$PROJECT_NORM" "$PROJECT_NORM" "PROJ"
 
-    EXPLICIT_TRIM="$(trim_str "$EXPLICIT_MODEL")"
-    ROLE_TRIM="$(trim_str "$ROLE_ARG")"
-    if [[ "$ROLE_ARG" == *$'\n'* || "$ROLE_ARG" == *$'\r'* || "$ROLE_ARG" == *$'\t'* ]]; then
+    has_ctrl_chars() {
+      local s="$1"
+      [[ -z "$s" ]] && return 1
+      [[ "$s" == *$'\n'* || "$s" == *$'\r'* ]] && return 0
+      [[ "$(printf '%s' "$s" | LC_ALL=C tr -d '\001-\037\177')" != "$s" ]]
+    }
+    if has_ctrl_chars "$EXPLICIT_MODEL"; then
+      echo "CONFIG_ERROR: invalid --explicit-model value"
+      exit 1
+    fi
+    if has_ctrl_chars "$ROLE_ARG"; then
       echo "CONFIG_ERROR: invalid --role value"
       exit 1
     fi
+    EXPLICIT_TRIM="$(trim_str "$EXPLICIT_MODEL")"
+    ROLE_TRIM="$(trim_str "$ROLE_ARG")"
 
     lookup_layer() {
       local role="$1" layer="$2" i

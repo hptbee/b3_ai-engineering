@@ -36,8 +36,9 @@ function Initialize-PersonalModelConfig([string]$HomeDir) {
     if ($parent -and -not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    Copy-Item -LiteralPath $templateCfg -Destination $dest
-    Write-Output "model_config=$dest (created from defaults)"
+    $seedJson = "{`n  `"version`": 1,`n  `"_comment`": `"Personal B3 model overrides. Add only roles you want to override; omitted roles inherit config/models.default.json. See config/models.example.json.`",`n  `"models`": {}`n}`n"
+    [System.IO.File]::WriteAllText($dest, $seedJson, [System.Text.UTF8Encoding]::new($false))
+    Write-Output "model_config=$dest (created empty overrides)"
 }
 
 function Test-IsLink([System.IO.FileSystemInfo]$Item) {

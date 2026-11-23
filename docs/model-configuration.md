@@ -11,7 +11,7 @@ Existing workflows, skills, commands, and committed `agents/*.md` files (`model:
 
 ## Quick Start
 
-1. Run [`adapters/sync-skills.{ps1,sh}`](../adapters/sync-skills.ps1) or [`adapters/install-product.{ps1,sh}`](../adapters/install-product.ps1) (automatically seeds `~/.b3/models.local.json` from `config/models.default.json` if missing, without overwriting existing settings), or copy `config/models.example.json` to `~/.b3/models.local.json`.
+1. Run [`adapters/sync-skills.{ps1,sh}`](../adapters/sync-skills.ps1) or [`adapters/install-product.{ps1,sh}`](../adapters/install-product.ps1) (automatically seeds `~/.b3/models.local.json` with empty `"models": {}` overrides if missing so omitted roles still inherit updates to `config/models.default.json`, without overwriting existing settings), or copy `config/models.example.json` to `~/.b3/models.local.json`.
 2. Edit only the roles you want to customize (omitted roles inherit lower layers):
 
 ```json
@@ -75,10 +75,16 @@ JSON resolution never writes unsolicited changes to IDE settings, CLI configs, o
 | **Cursor** | Supports explicit UI picker for `main` chat, and `model: <id>` frontmatter on local/user subagent files ([`adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md)). | Keeps `model: inherit` on committed `agents/*.md`; falls back to parent/Cursor picker when `"auto"` or subagent isolation is unavailable. |
 | **Antigravity** | Respects host UI model selection and any supported runtime subagent `Model` parameter during delegation; never auto-rewrites `~/.gemini/config/config.json`. | Falls back transparently to Antigravity's native selected model (`"auto"`). |
 | **Codex** | Can invoke Codex CLI explicitly with resolved preferences (`codex --model "$(./scripts/b3-guard.sh resolve-models --role main \| awk -F'[= ]+' '/^role=main/{print $4}')"` when non-`auto`); never modifies `~/.codex/config.toml`. | Uses Codex's configured default profile/model when `"auto"` or omitted. |
+| **Claude Code** | Can pass resolved non-`auto` models via `--model` on CLI launches or local/user subagent `model:` frontmatter; never edits `~/.claude/settings.json` or committed `agents/*.md`. | Keeps canonical `model: inherit` and Claude Code's native session/parent model when `"auto"` or UI-controlled. |
+
+## Workflow Dispatch Integration
+
+- [`workflows/ship.md`](../workflows/ship.md), [`review-loop/strategy.md`](../review-loop/strategy.md), and [`workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) direct orchestrators to resolve role models via `b3-guard.{ps1,sh} resolve-models` before subagent dispatch.
+- Resolved non-`"auto"` models are applied **only** where the active host exposes a supported runtime dispatch parameter; otherwise they serve as **preference-only** guidance with native/parent fallback (never faking a model switch or modifying user IDE configs).
 
 B3 never claims a requested model ran when the host platform controls selection externally.
 
 ## Updates & Resetting
 
 - **Surviving updates:** Because personal preferences live in Git-ignored `~/.b3/models.local.json` (and optional `<repo>/.b3/models.local.json`), `git pull`, `sync-skills`, and `install-product` never overwrite them.
-- **Reset to defaults:** Delete `~/.b3/models.local.json` (or `<repo>/.b3/models.local.json`), or copy `config/models.default.json` back over it.
+- **Reset to defaults:** Delete `~/.b3/models.local.json` (or `<repo>/.b3/models.local.json`), or set `"models": {}` so all roles inherit [`config/models.default.json`](../config/models.default.json) cleanly.

@@ -160,12 +160,17 @@ function Update-B3Gitignore([string]$Root) {
     $hasModels = ($text -match '(?m)^\s*\.b3/models\.local\.json\s*$')
     if ($hasShip -and $hasModels) { return 'present' }
     if ($text -match '(?m)^\s*\.b3/\s*$') {
-        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', ".b3/ship/`n.b3/models.local.json")
+        $replacement = if ($hasModels) { '.b3/ship/' } else { ".b3/ship/`n.b3/models.local.json" }
+        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', $replacement)
         Set-Content -LiteralPath $gi -Value $text -NoNewline
         return 'upgraded'
     }
     if ($hasShip) {
         Add-Content -LiteralPath $gi -Value "`n.b3/models.local.json"
+        return 'upgraded'
+    }
+    if ($hasModels) {
+        Add-Content -LiteralPath $gi -Value "`n.b3/ship/"
         return 'upgraded'
     }
     Add-Content -LiteralPath $gi -Value $block
@@ -187,14 +192,15 @@ function Initialize-PersonalModelConfig([string]$HomeDir, [switch]$IsDryRun) {
         return "kept:$dest"
     }
     if ($IsDryRun) {
-        Write-Output "dry-run: seed personal model config at $dest from $templateCfg"
+        Write-Output "dry-run: seed personal model config at $dest (empty overrides)"
         return "dry-run:$dest"
     }
     $parent = Split-Path -Parent $dest
     if ($parent -and -not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    Copy-Item -LiteralPath $templateCfg -Destination $dest
+    $seedJson = "{`n  `"version`": 1,`n  `"_comment`": `"Personal B3 model overrides. Add only roles you want to override; omitted roles inherit config/models.default.json. See config/models.example.json.`",`n  `"models`": {}`n}`n"
+    [System.IO.File]::WriteAllText($dest, $seedJson, [System.Text.UTF8Encoding]::new($false))
     return "created:$dest"
 }
 
