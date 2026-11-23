@@ -20,9 +20,15 @@ while [[ $# -gt 0 ]]; do
         echo "error: duplicate action '$1'" >&2; exit 1
       fi
       ACTION="$1"; ACTION_SET=true; shift ;;
-    --cursor-home) CURSOR_HOME="${2:-}"; shift 2 ;;
-    --b3-home) B3_HOME="${2:-}"; shift 2 ;;
-    --user-home) USER_HOME="${2:-}"; shift 2 ;;
+    --cursor-home)
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "error: option $1 requires a value" >&2; exit 1; }
+      CURSOR_HOME="$2"; shift 2 ;;
+    --b3-home)
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "error: option $1 requires a value" >&2; exit 1; }
+      B3_HOME="$2"; shift 2 ;;
+    --user-home)
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "error: option $1 requires a value" >&2; exit 1; }
+      USER_HOME="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     --force) FORCE=true; shift ;;
     -h|--help)
@@ -414,7 +420,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   else
     rm -f "$MANIFEST_FILE"
     for d in "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"; do
-      if [[ -d "$d" ]] && [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
+      if [[ -d "$d" && ! -L "$d" ]] && [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
         rmdir "$d"
       fi
     done

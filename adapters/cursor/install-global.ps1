@@ -46,8 +46,7 @@ function Get-TextSha256([string]$Text) {
 }
 
 function Get-FileSha256([string]$FilePath) {
-    $raw = [IO.File]::ReadAllText($FilePath, [System.Text.Encoding]::UTF8)
-    return Get-TextSha256 $raw
+    return (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
 function Test-IsReparseLink([string]$PathValue) {
@@ -309,7 +308,7 @@ if ($Action -eq 'uninstall') {
     } else {
         Remove-Item -LiteralPath $manifestFile -Force
         foreach ($subDir in @($skillsDest, $commandsDest, $agentsDest)) {
-            if (Test-Path -LiteralPath $subDir -PathType Container) {
+            if ((Test-Path -LiteralPath $subDir -PathType Container) -and -not (Test-IsReparseLink $subDir)) {
                 if (@(Get-ChildItem -LiteralPath $subDir -Force).Count -eq 0) {
                     Remove-Item -LiteralPath $subDir -Force
                 }
@@ -497,7 +496,9 @@ foreach ($sn in $sortedSkillNames) {
 
 foreach ($c in $expectedCommands) {
     $dest = Join-Path $commandsDest $c
-    if (Test-Path -LiteralPath $dest -PathType Leaf) {
+    if (Test-IsReparseLink $dest) {
+        Fail "existing link blocks command $dest"
+    } elseif (Test-Path -LiteralPath $dest -PathType Leaf) {
         $txt = [IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
         if ($txt -notmatch 'b3-global-cursor-managed:' -and -not $Force) {
             Fail "refusing to overwrite unmanaged command $dest (re-run with -Force to replace)"
@@ -509,7 +510,9 @@ foreach ($c in $expectedCommands) {
 
 foreach ($a in $expectedAgents) {
     $dest = Join-Path $agentsDest $a
-    if (Test-Path -LiteralPath $dest -PathType Leaf) {
+    if (Test-IsReparseLink $dest) {
+        Fail "existing link blocks agent $dest"
+    } elseif (Test-Path -LiteralPath $dest -PathType Leaf) {
         $txt = [IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
         if ($txt -notmatch 'b3-global-cursor-managed:' -and -not $Force) {
             Fail "refusing to overwrite unmanaged agent $dest (re-run with -Force to replace)"
@@ -519,7 +522,9 @@ foreach ($a in $expectedAgents) {
     }
 }
 
-if (Test-Path -LiteralPath $b3HomeFile) {
+if (Test-IsReparseLink $b3HomeFile) {
+    Fail "existing link blocks $b3HomeFile"
+} elseif (Test-Path -LiteralPath $b3HomeFile) {
     if (-not (Test-Path -LiteralPath $b3HomeFile -PathType Leaf)) { Fail "existing non-file path blocks $b3HomeFile" }
     $curHome = ([IO.File]::ReadAllText($b3HomeFile, [System.Text.Encoding]::UTF8)).Trim() -replace '\\', '/'
     $homeManaged = $manifest.Files.ContainsKey('b3-home') -and ($Action -eq 'update')
@@ -528,7 +533,9 @@ if (Test-Path -LiteralPath $b3HomeFile) {
     }
 }
 
-if (Test-Path -LiteralPath $userRulesFile) {
+if (Test-IsReparseLink $userRulesFile) {
+    Fail "existing link blocks $userRulesFile"
+} elseif (Test-Path -LiteralPath $userRulesFile) {
     if (-not (Test-Path -LiteralPath $userRulesFile -PathType Leaf)) { Fail "existing non-file path blocks $userRulesFile" }
     $txt = [IO.File]::ReadAllText($userRulesFile, [System.Text.Encoding]::UTF8)
     if ($txt -notmatch 'b3-global-cursor-managed:' -and -not $Force) {
