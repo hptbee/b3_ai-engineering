@@ -2448,16 +2448,24 @@ timestamp_utc=${TS_UTC}
     }
 
     json_escape() {
-      LC_ALL=C awk -v s="$1" 'BEGIN {
+      B3_JESC="$1" LC_ALL=C awk 'BEGIN {
+        for (c = 0; c < 32; c++) {
+          ch = sprintf("%c", c)
+          if (c == 8) esc[ch] = "\\b"
+          else if (c == 9) esc[ch] = "\\t"
+          else if (c == 10) esc[ch] = "\\n"
+          else if (c == 12) esc[ch] = "\\f"
+          else if (c == 13) esc[ch] = "\\r"
+          else esc[ch] = sprintf("\\u%04x", c)
+        }
+        s = ENVIRON["B3_JESC"]
         out = ""
         n = length(s)
         for (i = 1; i <= n; i++) {
           ch = substr(s, i, 1)
           if (ch == "\\") out = out "\\\\"
           else if (ch == "\"") out = out "\\\""
-          else if (ch == "\t") out = out "\\t"
-          else if (ch == "\r") out = out "\\r"
-          else if (ch == "\n") out = out "\\n"
+          else if (ch in esc) out = out esc[ch]
           else out = out ch
         }
         printf "%s", out
@@ -2467,10 +2475,16 @@ timestamp_utc=${TS_UTC}
     # Parse & strictly validate JSON model config using pure AWK recursive descent
     parse_model_json_awk() {
       local cfg_path="$1" norm_disp="$2"
-      LC_ALL=C awk -v disp="$norm_disp" '
-        BEGIN { src = "" }
+      B3_CFG_DISP="$norm_disp" LC_ALL=C awk '
+        BEGIN {
+          src = ""
+          disp = ENVIRON["B3_CFG_DISP"]
+          for (c = 0; c < 32; c++) ctrl[sprintf("%c", c)] = 1
+          for (i = 0; i < 10; i++) hexv[sprintf("%d", i)] = i
+          hexv["a"] = 10; hexv["b"] = 11; hexv["c"] = 12; hexv["d"] = 13; hexv["e"] = 14; hexv["f"] = 15
+          hexv["A"] = 10; hexv["B"] = 11; hexv["C"] = 12; hexv["D"] = 13; hexv["E"] = 14; hexv["F"] = 15
+        }
         {
-          gsub(/\r/, "", $0)
           src = (NR == 1 ? $0 : src "\n" $0)
         }
         function fail(msg) {
@@ -2484,14 +2498,51 @@ timestamp_utc=${TS_UTC}
             else break
           }
         }
-        function parse_string(    ch, out, esc, hx, i, hc) {
+        function hex4_val(hx,    i, c, v) {
+          v = 0
+          for (i = 1; i <= 4; i++) {
+            c = substr(hx, i, 1)
+            if (!(c in hexv)) fail("invalid \\uXXXX hex digit")
+            v = v * 16 + hexv[c]
+          }
+          return v
+        }
+        function utf8_from_cp(cp,    b1, b2, b3, b4, r1, r2, r3) {
+          if (cp < 128) return sprintf("%c", cp)
+          if (cp < 2048) {
+            b1 = 192 + int(cp / 64)
+            b2 = 128 + (cp % 64)
+            return sprintf("%c%c", b1, b2)
+          }
+          if (cp < 65536) {
+            b1 = 224 + int(cp / 4096)
+            r1 = cp % 4096
+            b2 = 128 + int(r1 / 64)
+            b3 = 128 + (r1 % 64)
+            return sprintf("%c%c%c", b1, b2, b3)
+          }
+          b1 = 240 + int(cp / 262144)
+          r1 = cp % 262144
+          b2 = 128 + int(r1 / 4096)
+          r2 = r1 % 4096
+          b3 = 128 + int(r2 / 64)
+          b4 = 128 + (r2 % 64)
+          return sprintf("%c%c%c%c", b1, b2, b3, b4)
+        }
+        function has_ctrl(s,    i) {
+          for (i = 1; i <= length(s); i++) {
+            if (substr(s, i, 1) in ctrl) return 1
+          }
+          return 0
+        }
+        function parse_string(    ch, out, esc, hx, hx2, cp, lo) {
           if (substr(src, pos, 1) != "\"") fail("expected string")
           pos++
           out = ""
           while (pos <= slen) {
             ch = substr(src, pos, 1)
             if (ch == "\"") { pos++; return out }
-            if (ch == "\n" || ch == "\r" || ch == "\t") fail("unescaped control character in string")
+            if (ch in ctrl) fail("unescaped control character in string")
             if (ch == "\\") {
               pos++
               if (pos > slen) fail("unterminated escape sequence")
@@ -2505,12 +2556,19 @@ timestamp_utc=${TS_UTC}
               else if (esc == "u") {
                 if (pos + 4 > slen) fail("invalid \\uXXXX escape")
                 hx = substr(src, pos + 1, 4)
-                for (i = 1; i <= 4; i++) {
-                  hc = substr(hx, i, 1)
-                  if (index("0123456789abcdefABCDEF", hc) == 0) fail("invalid \\uXXXX hex digit")
-                }
-                out = out "\\u" hx
+                cp = hex4_val(hx)
                 pos += 4
+                if (cp >= 55296 && cp <= 56319) {
+                  if (pos + 6 > slen || substr(src, pos + 1, 2) != "\\u") fail("unpaired high surrogate")
+                  hx2 = substr(src, pos + 3, 4)
+                  lo = hex4_val(hx2)
+                  if (lo < 56320 || lo > 57343) fail("invalid low surrogate")
+                  cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+                  pos += 6
+                } else if (cp >= 56320 && cp <= 57343) {
+                  fail("unpaired low surrogate")
+                }
+                out = out utf8_from_cp(cp)
               } else fail("invalid escape \\" esc)
               pos++
             } else {
@@ -2520,7 +2578,7 @@ timestamp_utc=${TS_UTC}
           }
           fail("unterminated string")
         }
-        function parse_number(    start, ch, sub_s) {
+        function parse_number(    start, ch) {
           start = pos
           if (substr(src, pos, 1) == "-") pos++
           if (pos > slen) fail("invalid number")
@@ -2544,49 +2602,11 @@ timestamp_utc=${TS_UTC}
           }
           return substr(src, start, pos - start)
         }
-        function skip_value(depth,    ch, first) {
-          if (depth > 32) fail("nesting too deep")
-          skip_ws()
-          if (pos > slen) fail("unexpected end of JSON")
-          ch = substr(src, pos, 1)
-          if (ch == "\"") { parse_string(); return "str" }
-          if (ch == "{") {
-            pos++; skip_ws()
-            if (pos <= slen && substr(src, pos, 1) == "}") { pos++; return "obj" }
-            while (1) {
-              skip_ws(); parse_string(); skip_ws()
-              if (substr(src, pos, 1) != ":") fail("expected colon in object")
-              pos++; skip_value(depth + 1); skip_ws()
-              if (pos > slen) fail("unterminated object")
-              ch = substr(src, pos, 1)
-              if (ch == ",") { pos++; continue }
-              if (ch == "}") { pos++; return "obj" }
-              fail("expected , or } in object")
-            }
-          }
-          if (ch == "[") {
-            pos++; skip_ws()
-            if (pos <= slen && substr(src, pos, 1) == "]") { pos++; return "arr" }
-            while (1) {
-              skip_value(depth + 1); skip_ws()
-              if (pos > slen) fail("unterminated array")
-              ch = substr(src, pos, 1)
-              if (ch == ",") { pos++; continue }
-              if (ch == "]") { pos++; return "arr" }
-              fail("expected , or ] in array")
-            }
-          }
-          if (substr(src, pos, 4) == "true") { pos += 4; return "bool" }
-          if (substr(src, pos, 5) == "false") { pos += 5; return "bool" }
-          if (substr(src, pos, 4) == "null") { pos += 4; return "null" }
-          if (ch == "-" || index("0123456789", ch) > 0) { parse_number(); return "num" }
-          fail("unexpected token at pos " pos)
-        }
         function trim(s) {
           gsub(/^[ \t\n\r]+|[ \t\n\r]+$/, "", s)
           return s
         }
-        function parse_models_obj(    mk, mv, ch, mv_trim, mk_trim) {
+        function parse_models_obj(    mk, mv, ch, mv_trim, mk_trim, mk_ci) {
           skip_ws()
           if (pos > slen || substr(src, pos, 1) != "{") fail("missing or non-object \x27models\x27")
           pos++; skip_ws()
@@ -2595,15 +2615,20 @@ timestamp_utc=${TS_UTC}
             skip_ws()
             mk = parse_string()
             mk_trim = trim(mk)
-            if (mk_trim == "" || mk ~ /[\n\r\t]/) fail("invalid role name \x27" mk "\x27")
+            if (mk_trim == "" || has_ctrl(mk)) fail("invalid role name \x27" mk "\x27")
             skip_ws()
             if (pos > slen || substr(src, pos, 1) != ":") fail("expected colon in models object")
             pos++; skip_ws()
             if (pos > slen || substr(src, pos, 1) != "\"") fail("model value for \x27" mk_trim "\x27 must be a non-empty string")
             mv = parse_string()
             mv_trim = trim(mv)
-            if (mv_trim == "" || mv ~ /[\n\r\t]/) fail("model value for \x27" mk_trim "\x27 must be a non-empty string")
-            if (!(mk_trim in m_seen)) { m_seen[mk_trim] = 1; m_order[++m_cnt] = mk_trim }
+            if (mv_trim == "" || has_ctrl(mv)) fail("model value for \x27" mk_trim "\x27 must be a non-empty string")
+            if (mk_trim in m_seen) fail("duplicate role key \x27" mk_trim "\x27")
+            mk_ci = tolower(mk_trim)
+            if (mk_ci in m_seen_ci) fail("duplicate role key \x27" mk_trim "\x27")
+            m_seen[mk_trim] = 1
+            m_seen_ci[mk_ci] = 1
+            m_order[++m_cnt] = mk_trim
             m_val[mk_trim] = mv_trim
             skip_ws()
             if (pos > slen) fail("unterminated models object")
@@ -2614,13 +2639,14 @@ timestamp_utc=${TS_UTC}
           }
         }
         END {
+          if (substr(src, 1, 3) == "\357\273\277") src = substr(src, 4)
           slen = length(src)
           pos = 1
           m_cnt = 0
           skip_ws()
           if (pos > slen || substr(src, pos, 1) != "{") fail("root must be a JSON object")
           pos++; skip_ws()
-          seen_ver = 0; ver_val = ""; seen_models = 0
+          seen_ver = 0; ver_val = ""; seen_models = 0; seen_comment = 0
           if (pos <= slen && substr(src, pos, 1) == "}") {
             pos++
           } else {
@@ -2632,6 +2658,7 @@ timestamp_utc=${TS_UTC}
               if (pos > slen || substr(src, pos, 1) != ":") fail("expected colon after key \x27" tk "\x27")
               pos++; skip_ws()
               if (tk == "version") {
+                if (seen_ver) fail("duplicate top-level key \x27version\x27")
                 if (pos > slen || (substr(src, pos, 1) != "-" && index("0123456789", substr(src, pos, 1)) == 0)) {
                   fail("missing or invalid \x27version\x27 (expected integer 1)")
                 }
@@ -2639,9 +2666,12 @@ timestamp_utc=${TS_UTC}
                 seen_ver = 1
                 if (ver_val != "1") fail("missing or invalid \x27version\x27 (expected integer 1)")
               } else if (tk == "_comment") {
+                if (seen_comment) fail("duplicate top-level key \x27_comment\x27")
+                seen_comment = 1
                 if (pos > slen || substr(src, pos, 1) != "\"") fail("\x27_comment\x27 must be a string")
                 parse_string()
               } else if (tk == "models") {
+                if (seen_models) fail("duplicate top-level key \x27models\x27")
                 seen_models = 1
                 parse_models_obj()
               }

@@ -1895,10 +1895,95 @@ switch ($Command) {
             return $fwd
         }
 
+        function Test-RawJsonControlOrLeadingZero([string]$RawText) {
+            $scopeStack = New-Object 'System.Collections.Generic.List[object]'
+            $inStr = $false
+            $esc = $false
+            $strStart = 0
+            for ($i = 0; $i -lt $RawText.Length; $i++) {
+                $ch = $RawText[$i]
+                if ($inStr) {
+                    if ([int][char]$ch -lt 32) {
+                        return 'unescaped control character in JSON string'
+                    }
+                    if ($esc) { $esc = $false; continue }
+                    if ($ch -ceq '\') { $esc = $true; continue }
+                    if ($ch -ceq '"') {
+                        $inStr = $false
+                        $j = $i + 1
+                        while ($j -lt $RawText.Length) {
+                            $w = [int][char]$RawText[$j]
+                            if ($w -eq 32 -or $w -eq 9 -or $w -eq 10 -or $w -eq 13) { $j++ } else { break }
+                        }
+                        if ($j -lt $RawText.Length -and $RawText[$j] -ceq ':') {
+                            if ($scopeStack.Count -gt 0) {
+                                $topScope = $scopeStack[$scopeStack.Count - 1]
+                                if ($null -ne $topScope) {
+                                    $rawInner = $RawText.Substring($strStart, $i - $strStart)
+                                    $dsb = New-Object System.Text.StringBuilder
+                                    $k = 0
+                                    while ($k -lt $rawInner.Length) {
+                                        $c = $rawInner[$k]
+                                        if ($c -cne '\') { [void]$dsb.Append($c); $k++; continue }
+                                        if ($k + 1 -ge $rawInner.Length) { break }
+                                        $nx = $rawInner[$k + 1]
+                                        switch -CaseSensitive ($nx) {
+                                            '"' { [void]$dsb.Append('"'); $k += 2 }
+                                            '\' { [void]$dsb.Append('\'); $k += 2 }
+                                            '/' { [void]$dsb.Append('/'); $k += 2 }
+                                            'b' { [void]$dsb.Append([char]8); $k += 2 }
+                                            'f' { [void]$dsb.Append([char]12); $k += 2 }
+                                            'n' { [void]$dsb.Append("`n"); $k += 2 }
+                                            'r' { [void]$dsb.Append("`r"); $k += 2 }
+                                            't' { [void]$dsb.Append("`t"); $k += 2 }
+                                            'u' {
+                                                if ($k + 6 -le $rawInner.Length -and $rawInner.Substring($k + 2, 4) -match '^[0-9a-fA-F]{4}$') {
+                                                    $cp = [Convert]::ToInt32($rawInner.Substring($k + 2, 4), 16)
+                                                    if ($cp -ge 0xD800 -and $cp -le 0xDBFF -and ($k + 12 -le $rawInner.Length) -and $rawInner.Substring($k + 6, 2) -ceq '\u' -and $rawInner.Substring($k + 8, 4) -match '^[0-9a-fA-F]{4}$') {
+                                                        $cp2 = [Convert]::ToInt32($rawInner.Substring($k + 8, 4), 16)
+                                                        if ($cp2 -ge 0xDC00 -and $cp2 -le 0xDFFF) {
+                                                            $fullCp = 0x10000 + (($cp - 0xD800) * 0x400) + ($cp2 - 0xDC00)
+                                                            [void]$dsb.Append([char]::ConvertFromUtf32($fullCp))
+                                                            $k += 12
+                                                            continue
+                                                        }
+                                                    }
+                                                    [void]$dsb.Append([char]$cp)
+                                                    $k += 6
+                                                } else {
+                                                    [void]$dsb.Append('\u')
+                                                    $k += 2
+                                                }
+                                            }
+                                            default { [void]$dsb.Append($nx); $k += 2 }
+                                        }
+                                    }
+                                    $keyTrim = $dsb.ToString().Trim()
+                                    if (-not $topScope.Add($keyTrim)) {
+                                        return "duplicate key '$keyTrim'"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    if ($ch -ceq '"') { $inStr = $true; $strStart = $i + 1 }
+                    elseif ($ch -ceq '{') { $scopeStack.Add((New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase))) }
+                    elseif ($ch -ceq '[') { $scopeStack.Add($null) }
+                    elseif ($ch -ceq '}' -or $ch -ceq ']') { if ($scopeStack.Count -gt 0) { $scopeStack.RemoveAt($scopeStack.Count - 1) } }
+                }
+            }
+            if ($RawText -match '"version"\s*:\s*-?0[0-9]') {
+                return "leading zero in 'version'"
+            }
+            return $null
+        }
+
         function Read-ModelConfigFile([string]$PathValue, [string[]]$KnownRoles, [System.Collections.Generic.List[string]]$WarningsOut) {
             $normPath = Format-FwdPath $PathValue
+            $emptyMap = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
             if (-not (Test-Path -LiteralPath $PathValue)) {
-                return [PSCustomObject]@{ Present = $false; Path = $normPath; Models = @{} }
+                return [PSCustomObject]@{ Present = $false; Path = $normPath; Models = $emptyMap }
             }
             if (-not (Test-Path -LiteralPath $PathValue -PathType Leaf)) {
                 Fail "CONFIG_ERROR: ${normPath}: path is not a regular file" 1
@@ -1908,8 +1993,15 @@ switch ($Command) {
             } catch {
                 Fail "CONFIG_ERROR: ${normPath}: cannot read file ($($_.Exception.Message))" 1
             }
+            if ($rawText.Length -gt 0 -and $rawText[0] -eq [char]0xFEFF) {
+                $rawText = $rawText.Substring(1)
+            }
             if (-not $rawText -or -not $rawText.Trim()) {
                 Fail "CONFIG_ERROR: ${normPath}: empty or invalid JSON" 1
+            }
+            $rawErr = Test-RawJsonControlOrLeadingZero $rawText
+            if ($rawErr) {
+                Fail "CONFIG_ERROR: ${normPath}: $rawErr" 1
             }
             try {
                 $parsed = $rawText | ConvertFrom-Json -ErrorAction Stop
@@ -1919,29 +2011,32 @@ switch ($Command) {
             if ($null -eq $parsed -or -not ($parsed -is [System.Management.Automation.PSCustomObject])) {
                 Fail "CONFIG_ERROR: ${normPath}: root must be a JSON object" 1
             }
-            $topProps = @($parsed.PSObject.Properties | ForEach-Object { $_.Name })
+            $topProps = @($parsed.PSObject.Properties)
             foreach ($tp in $topProps) {
-                if ($tp -notin @('version', 'models', '_comment')) {
-                    Fail "CONFIG_ERROR: ${normPath}: unsupported top-level key '$tp'" 1
+                if ($tp.Name -cnotin @('version', 'models', '_comment')) {
+                    Fail "CONFIG_ERROR: ${normPath}: unsupported top-level key '$($tp.Name)'" 1
                 }
             }
-            if ($topProps -contains '_comment' -and -not ($parsed._comment -is [string])) {
+            $comProp = @($topProps | Where-Object { $_.Name -ceq '_comment' })
+            if ($comProp.Count -gt 0 -and -not ($comProp[0].Value -is [string])) {
                 Fail "CONFIG_ERROR: ${normPath}: '_comment' must be a string" 1
             }
-            $verValid = ($topProps -contains 'version') -and
-                        (($parsed.version -is [int]) -or ($parsed.version -is [long])) -and
-                        ($parsed.version -eq 1)
+            $verProp = @($topProps | Where-Object { $_.Name -ceq 'version' })
+            $verValid = ($verProp.Count -eq 1) -and
+                        (($verProp[0].Value -is [int]) -or ($verProp[0].Value -is [long])) -and
+                        ($verProp[0].Value -eq 1)
             if (-not $verValid) {
                 Fail "CONFIG_ERROR: ${normPath}: missing or invalid 'version' (expected integer 1)" 1
             }
-            if (-not ($topProps -contains 'models') -or $null -eq $parsed.models -or -not ($parsed.models -is [System.Management.Automation.PSCustomObject])) {
+            $modProp = @($topProps | Where-Object { $_.Name -ceq 'models' })
+            if ($modProp.Count -ne 1 -or $null -eq $modProp[0].Value -or -not ($modProp[0].Value -is [System.Management.Automation.PSCustomObject])) {
                 Fail "CONFIG_ERROR: ${normPath}: missing or non-object 'models'" 1
             }
-            $modelsMap = @{}
-            foreach ($prop in @($parsed.models.PSObject.Properties)) {
+            $modelsMap = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+            foreach ($prop in @($modProp[0].Value.PSObject.Properties)) {
                 $k = [string]$prop.Name
                 $kTrim = $k.Trim()
-                if (-not $kTrim -or ($k -match '[\r\n\t]')) {
+                if (-not $kTrim -or ($k -match '[\x00-\x1f]')) {
                     Fail "CONFIG_ERROR: ${normPath}: invalid role name '$k'" 1
                 }
                 $v = $prop.Value
@@ -1949,10 +2044,10 @@ switch ($Command) {
                     Fail "CONFIG_ERROR: ${normPath}: model value for '$kTrim' must be a non-empty string" 1
                 }
                 $vTrim = $v.Trim()
-                if (-not $vTrim -or ($v -match '[\r\n\t]')) {
+                if (-not $vTrim -or ($v -match '[\x00-\x1f]')) {
                     Fail "CONFIG_ERROR: ${normPath}: model value for '$kTrim' must be a non-empty string" 1
                 }
-                if ($KnownRoles -notcontains $kTrim) {
+                if ($KnownRoles -cnotcontains $kTrim) {
                     $WarningsOut.Add("UNKNOWN_ROLE_WARNING: role=$kTrim file=$normPath")
                 }
                 $modelsMap[$kTrim] = $vTrim
@@ -2032,7 +2127,7 @@ switch ($Command) {
 
         $explicitTrim = if ($ExplicitModel) { $ExplicitModel.Trim() } else { '' }
         $roleTrim = if ($Role) { $Role.Trim() } else { '' }
-        if ($roleTrim -and ($roleTrim -match '[\r\n\t]')) {
+        if ($roleTrim -and ($roleTrim -match '[\x00-\x1f]')) {
             Fail "CONFIG_ERROR: invalid --role value" 1
         }
 

@@ -136,69 +136,107 @@ try {
     if ($precOk) { Pass 'model-config-project-override-and-precedence' }
     else { FailCheck 'model-config-project-override-and-precedence' "prec=$precOk sh=$r3ExpShOk" }
 
-    # --- 4. model-config-auto-fallback ("auto" overrides lower-layer concrete model back to platform_default) ---
+    # --- 4. model-config-auto-fallback ("auto" & \u0061uto override lower concrete model to platform_default; BOM supported) ---
     $proj4 = Join-Path $sandbox 'proj4.json'
     Set-Content -LiteralPath $proj4 '{"version":1,"models":{"b3-reviewer":"AUTO"}}'
     $proj4P = $proj4 -replace '\\', '/'
     $r4Ps = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $pers2, '-ProjectConfig', $proj4, '-Role', 'b3-reviewer', '-Json')
     $j4 = $r4Ps.Text | ConvertFrom-Json
+    $proj4Esc = Join-Path $sandbox 'proj4-u.json'
+    [IO.File]::WriteAllBytes($proj4Esc, [byte[]](0xEF,0xBB,0xBF) + [System.Text.Encoding]::UTF8.GetBytes('{"version":1,"models":{"b3-reviewer":"\u0061uto"}}'))
+    $proj4EscP = $proj4Esc -replace '\\', '/'
+    $r4EscPs = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $pers2, '-ProjectConfig', $proj4Esc, '-Role', 'b3-reviewer', '-Json')
+    $j4EscPs = $r4EscPs.Text | ConvertFrom-Json
     $r4ShOk = $true
     if ($hasBash) {
         $r4Sh = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$pers2P' --project-config '$proj4P' --role b3-reviewer --json"
         $j4s = $r4Sh.Text | ConvertFrom-Json
-        $r4ShOk = ($r4Sh.Code -eq 0) -and ($j4s.roles.'b3-reviewer'.model -eq 'auto') -and ($j4s.roles.'b3-reviewer'.effective -eq 'platform_default') -and ($j4s.roles.'b3-reviewer'.source -eq 'project')
+        $r4EscSh = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$pers2P' --project-config '$proj4EscP' --role b3-reviewer --json"
+        $j4EscSh = $r4EscSh.Text | ConvertFrom-Json
+        $r4ShOk = ($r4Sh.Code -eq 0) -and ($j4s.roles.'b3-reviewer'.model -eq 'auto') -and ($j4s.roles.'b3-reviewer'.effective -eq 'platform_default') -and ($j4s.roles.'b3-reviewer'.source -eq 'project') -and
+                  ($r4EscSh.Code -eq 0) -and ($j4EscSh.roles.'b3-reviewer'.model -eq 'auto') -and ($j4EscSh.roles.'b3-reviewer'.effective -eq 'platform_default')
     }
-    if ($r4Ps.Code -eq 0 -and $j4.roles.'b3-reviewer'.model -eq 'auto' -and $j4.roles.'b3-reviewer'.effective -eq 'platform_default' -and $j4.roles.'b3-reviewer'.source -eq 'project' -and $r4ShOk) {
+    if ($r4Ps.Code -eq 0 -and $j4.roles.'b3-reviewer'.model -eq 'auto' -and $j4.roles.'b3-reviewer'.effective -eq 'platform_default' -and $j4.roles.'b3-reviewer'.source -eq 'project' -and
+        $r4EscPs.Code -eq 0 -and $j4EscPs.roles.'b3-reviewer'.model -eq 'auto' -and $j4EscPs.roles.'b3-reviewer'.effective -eq 'platform_default' -and $r4ShOk) {
         Pass 'model-config-auto-fallback'
     } else {
-        FailCheck 'model-config-auto-fallback' "ps=$($r4Ps.Code) eff=$($j4.roles.'b3-reviewer'.effective) sh=$r4ShOk"
+        FailCheck 'model-config-auto-fallback' "ps=$($r4Ps.Code)/$($r4EscPs.Code) eff=$($j4.roles.'b3-reviewer'.effective) sh=$r4ShOk"
     }
 
-    # --- 5. model-config-unknown-roles (warns cleanly without failing) ---
+    # --- 5. model-config-unknown-roles (case-sensitive role matching & warnings without failing) ---
     $pers5 = Join-Path $sandbox 'pers5-unknown.json'
-    Set-Content -LiteralPath $pers5 '{"version":1,"models":{"main":"my-main","custom_role":"my-custom"}}'
+    Set-Content -LiteralPath $pers5 '{"version":1,"models":{"planning":"my-plan","Main":"wrong-case","custom_role":"my-custom"}}'
     $pers5P = $pers5 -replace '\\', '/'
     $r5Ps = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $pers5, '-ProjectConfig', $missingProj)
     $r5Query = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $pers5, '-ProjectConfig', $missingProj, '-Role', 'unregistered_role')
+    $r5CaseQ = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $missingPers, '-ProjectConfig', $missingProj, '-Role', 'Planning')
     $r5ShOk = $true
     if ($hasBash) {
         $r5Sh = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$pers5P' --project-config '$missingProjP'"
         $r5ShQ = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$pers5P' --project-config '$missingProjP' --role unregistered_role"
-        $r5ShOk = ($r5Sh.Code -eq 0) -and ($r5Sh.Text -match 'UNKNOWN_ROLE_WARNING: role=custom_role') -and
-                  ($r5ShQ.Code -eq 0) -and ($r5ShQ.Text -match 'role=unregistered_role model=auto effective=platform_default source=platform_default')
+        $r5ShCase = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$missingPersP' --project-config '$missingProjP' --role Planning"
+        $r5ShOk = ($r5Sh.Code -eq 0) -and ($r5Sh.Text -match 'UNKNOWN_ROLE_WARNING: role=custom_role') -and ($r5Sh.Text -match 'UNKNOWN_ROLE_WARNING: role=Main') -and
+                  ($r5Sh.Text -match 'role=planning model=my-plan effective=my-plan source=personal') -and
+                  ($r5ShQ.Code -eq 0) -and ($r5ShQ.Text -match 'role=unregistered_role model=auto effective=platform_default source=platform_default') -and
+                  ($r5ShCase.Code -eq 0) -and ($r5ShCase.Text -match 'role=Planning model=auto effective=platform_default source=platform_default')
     }
-    if ($r5Ps.Code -eq 0 -and ($r5Ps.Text -match 'UNKNOWN_ROLE_WARNING: role=custom_role') -and ($r5Ps.Text -match 'RESOLVE_MODELS_OK') -and
-        $r5Query.Code -eq 0 -and ($r5Query.Text -match 'role=unregistered_role model=auto effective=platform_default source=platform_default') -and $r5ShOk) {
+    if ($r5Ps.Code -eq 0 -and ($r5Ps.Text -match 'UNKNOWN_ROLE_WARNING: role=custom_role') -and ($r5Ps.Text -match 'UNKNOWN_ROLE_WARNING: role=Main') -and
+        ($r5Ps.Text -match 'role=planning model=my-plan effective=my-plan source=personal') -and ($r5Ps.Text -match 'RESOLVE_MODELS_OK') -and
+        $r5Query.Code -eq 0 -and ($r5Query.Text -match 'role=unregistered_role model=auto effective=platform_default source=platform_default') -and
+        $r5CaseQ.Code -eq 0 -and ($r5CaseQ.Text -match 'role=Planning model=auto effective=platform_default source=platform_default') -and $r5ShOk) {
         Pass 'model-config-unknown-roles'
     } else {
-        FailCheck 'model-config-unknown-roles' "ps=$($r5Ps.Code) q=$($r5Query.Code) sh=$r5ShOk"
+        FailCheck 'model-config-unknown-roles' "ps=$($r5Ps.Code) q=$($r5Query.Code) cq=$($r5CaseQ.Code) sh=$r5ShOk"
     }
 
-    # --- 6. model-config-invalid-json (malformed syntax, bad version, non-object models, empty/non-string value, extra top key) ---
+    # --- 6. model-config-invalid-json (malformed, wrong/cased/leading-zero version, control chars, dup keys, unsupported keys) ---
     $badCases = @{
         'malformed.json'    = '{ "version": 1, "models": {'
         'bad-ver-str.json'  = '{"version":"1","models":{"main":"auto"}}'
         'bad-ver-num.json'  = '{"version":2,"models":{"main":"auto"}}'
         'bad-ver-flt.json'  = '{"version":1.0,"models":{"main":"auto"}}'
+        'bad-ver-zero.json' = '{"version":01,"models":{"main":"auto"}}'
+        'bad-case-top.json' = '{"VERSION":1,"MODELS":{"main":"auto"}}'
         'bad-models.json'   = '{"version":1,"models":[]}'
         'empty-val.json'    = '{"version":1,"models":{"main":"   "}}'
         'num-val.json'      = '{"version":1,"models":{"main":123}}'
         'extra-top.json'    = '{"version":1,"unexpected":true,"models":{"main":"auto"}}'
+        'u-ctrl-val.json'   = '{"version":1,"models":{"main":"a\u000ab"}}'
+        'dup-role.json'     = '{"version":1,"models":{"main":"a","main":"b"}}'
+        'dup-role-ci.json'  = '{"version":1,"models":{"main":"a","Main":"b"}}'
+        'dup-top.json'      = '{"version":1,"version":1,"models":{"main":"auto"}}'
     }
     $allBadRejected = $true
+    $badDetail = ''
     foreach ($name in $badCases.Keys) {
         $bp = Join-Path $sandbox $name
-        Set-Content -LiteralPath $bp $badCases[$name]
+        [IO.File]::WriteAllText($bp, $badCases[$name], (New-Object System.Text.UTF8Encoding($false)))
         $bpP = $bp -replace '\\', '/'
         $bPs = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $bp, '-ProjectConfig', $missingProj)
-        if ($bPs.Code -ne 1 -or ($bPs.Text -notmatch 'CONFIG_ERROR:')) { $allBadRejected = $false; break }
+        if ($bPs.Code -ne 1 -or ($bPs.Text -notmatch 'CONFIG_ERROR:')) { $allBadRejected = $false; $badDetail = "ps:$name($($bPs.Code))"; break }
         if ($hasBash) {
             $bSh = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$bpP' --project-config '$missingProjP'"
-            if ($bSh.Code -ne 1 -or ($bSh.Text -notmatch 'CONFIG_ERROR:')) { $allBadRejected = $false; break }
+            if ($bSh.Code -ne 1 -or ($bSh.Text -notmatch 'CONFIG_ERROR:')) { $allBadRejected = $false; $badDetail = "sh:$name($($bSh.Code))"; break }
+        }
+    }
+    if ($allBadRejected) {
+        $rawCtrlPath = Join-Path $sandbox 'raw-ctrl.json'
+        $rawCtrlBytes = [System.Text.Encoding]::UTF8.GetBytes('{"version":1,"models":{"main":"a') + [byte[]]@(0x01) + [System.Text.Encoding]::UTF8.GetBytes('b"}}')
+        [IO.File]::WriteAllBytes($rawCtrlPath, $rawCtrlBytes)
+        $rawCtrlP = $rawCtrlPath -replace '\\', '/'
+        $rcPs = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $rawCtrlPath, '-ProjectConfig', $missingProj)
+        $rcShOk = $true
+        if ($hasBash) {
+            $rcSh = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$rawCtrlP' --project-config '$missingProjP'"
+            $rcShOk = ($rcSh.Code -eq 1) -and ($rcSh.Text -match 'CONFIG_ERROR:')
+        }
+        if ($rcPs.Code -ne 1 -or ($rcPs.Text -notmatch 'CONFIG_ERROR:') -or (-not $rcShOk)) {
+            $allBadRejected = $false
+            $badDetail = "rawCtrl:ps=$($rcPs.Code)/sh=$rcShOk"
         }
     }
     if ($allBadRejected) { Pass 'model-config-invalid-json' }
-    else { FailCheck 'model-config-invalid-json' 'at least one invalid config did not exit 1 with CONFIG_ERROR:' }
+    else { FailCheck 'model-config-invalid-json' "failed on $badDetail" }
 
     # --- 7. model-config-missing-files (missing all 3 layers falls back to platform_default cleanly) ---
     $fakeB3 = Join-Path $sandbox 'empty-b3'
@@ -271,16 +309,46 @@ try {
         Set-Content -LiteralPath $seedSh '{"version":1,"models":{"main":"sh-custom"}}'
         & $gitBash -c "'$ipShPosix' --product-root '$p8ShP' --b3-home '$rootP' --host cursor" | Out-Null
         $shPreserved = ((Get-Content -LiteralPath $seedSh -Raw) -match 'sh-custom')
+        $syncFxP = $syncFx -replace '\\', '/'
         if ($cSh -eq 0 -and $shCreated -and $shPreserved) {
-            # Also verify sync-skills.sh seeds if missing & preserves if present
+            # Also verify sync-skills.sh --dry-run / --verify do not create missing, normal seeds & preserves existing, and B3_SKIP_MODEL_INIT=1 skips
             $seedSyncSh = Join-Path $sandbox 'seeded-sync-sh\.b3\models.local.json'
-            $env:B3_MODELS_PERSONAL = ($seedSyncSh -replace '\\', '/')
-            $syncFxP = $syncFx -replace '\\', '/'
             Copy-Item -LiteralPath (Join-Path $root 'adapters\sync-skills.sh') -Destination (Join-Path $syncFx 'adapters\sync-skills.sh')
+            $env:B3_MODELS_PERSONAL = ($seedSyncSh -replace '\\', '/')
+            & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' --dry-run antigravity" | Out-Null
+            $dryShClean = -not (Test-Path -LiteralPath $seedSyncSh)
+            & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' --verify antigravity >/dev/null 2>&1"
+            $verShClean = -not (Test-Path -LiteralPath $seedSyncSh)
+            $env:B3_SKIP_MODEL_INIT = '1'
+            & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
+            Remove-Item Env:B3_SKIP_MODEL_INIT -ErrorAction SilentlyContinue
+            $skipShClean = -not (Test-Path -LiteralPath $seedSyncSh)
+
             & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
             $syncShCode = $LASTEXITCODE
             $syncShCreated = Test-Path -LiteralPath $seedSyncSh -PathType Leaf
-            $shInitOk = ($syncShCode -eq 0) -and $syncShCreated
+            Set-Content -LiteralPath $seedSyncSh '{"version":1,"models":{"main":"sync-sh-custom"}}'
+            & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
+            $syncShPreserved = ((Get-Content -LiteralPath $seedSyncSh -Raw) -match 'sync-sh-custom')
+
+            # Verify install-product.sh --dry-run emits dry-run notice to stdout cleanly and does not create target
+            $seedDrSh = Join-Path $sandbox 'seeded-dr-sh\.b3\models.local.json'
+            $env:B3_MODELS_PERSONAL = ($seedDrSh -replace '\\', '/')
+            $drOutSh = (& $gitBash -c "'$ipShPosix' --product-root '$p8ShP' --b3-home '$rootP' --host cursor --dry-run") -join "`n"
+            $drStdOutOk = ($LASTEXITCODE -eq 0) -and ($drOutSh -match 'dry-run: seed personal model config') -and (-not (Test-Path -LiteralPath $seedDrSh))
+
+            # Verify install-product.sh upgrades legacy .gitignore (bare .b3/ -> .b3/ship/ + .b3/models.local.json) cleanly without sed \n bug
+            $prodLegSh = Join-Path $sandbox 'prod-leg-gi'
+            New-Item -ItemType Directory -Path $prodLegSh | Out-Null
+            Set-Content -LiteralPath (Join-Path $prodLegSh '.gitignore') ".b3/`n"
+            $pLegP = $prodLegSh -replace '\\', '/'
+            $env:B3_SKIP_MODEL_INIT = '1'
+            & $gitBash -c "'$ipShPosix' --product-root '$pLegP' --b3-home '$rootP' --host cursor" | Out-Null
+            Remove-Item Env:B3_SKIP_MODEL_INIT -ErrorAction SilentlyContinue
+            $legGiText = Get-Content -LiteralPath (Join-Path $prodLegSh '.gitignore') -Raw
+            $legGiOk = ($legGiText -match '(?m)^\.b3/ship/\s*$') -and ($legGiText -match '(?m)^\.b3/models\.local\.json\s*$') -and ($legGiText -notmatch 'ship/n\.b3')
+
+            $shInitOk = $dryShClean -and $verShClean -and $skipShClean -and ($syncShCode -eq 0) -and $syncShCreated -and $syncShPreserved -and $drStdOutOk -and $legGiOk
         } else {
             $shInitOk = $false
         }
@@ -306,16 +374,28 @@ try {
         FailCheck 'model-config-gitignore-behavior' "b3Loc=$b3RepoIgnoresLocal b3Def=$b3DefaultTracked prodLoc=$prodIgnoresLocal prodHome=$prodHomeTracked"
     }
 
-    # --- 10. model-config-dual-shell-parity (PS vs Bash JSON equivalence) ---
+    # --- 10. model-config-dual-shell-parity (PS vs Bash JSON equivalence, implicit B3_MODELS_PERSONAL, and backslash escaping) ---
     if ($hasBash) {
         $parPs = Invoke-GuardPs @('resolve-models', '-B3Home', $root, '-PersonalConfig', $pers2, '-ProjectConfig', $proj4, '-Json')
         $parSh = Invoke-GuardSh "resolve-models --b3-home '$rootP' --personal-config '$pers2P' --project-config '$proj4P' --json"
         $psCompact = (($parPs.Text | ConvertFrom-Json) | ConvertTo-Json -Depth 6 -Compress)
         $shCompact = (($parSh.Text | ConvertFrom-Json) | ConvertTo-Json -Depth 6 -Compress)
-        if ($parPs.Code -eq 0 -and $parSh.Code -eq 0 -and $psCompact -eq $shCompact) {
+
+        # Test R001 json_escape parity on backslash/newline explicit model + implicit env B3_MODELS_PERSONAL & product .b3/home
+        $env:B3_MODELS_PERSONAL = $pers2
+        $impPs = Invoke-GuardPs @('resolve-models', '-RepoRoot', $prod8, '-Role', 'b3-reviewer', '-ExplicitModel', 'foo\bar\n1', '-Json')
+        $impSh = Invoke-GuardSh "resolve-models --repo-root '$($prod8 -replace '\\', '/')' --role b3-reviewer --explicit-model 'foo\bar\n1' --json"
+        $impPsObj = $impPs.Text | ConvertFrom-Json
+        $impShObj = $impSh.Text | ConvertFrom-Json
+        $escMatch = ($impPs.Code -eq 0) -and ($impSh.Code -eq 0) -and
+                    ($impPsObj.roles.'b3-reviewer'.model -eq 'foo\bar\n1') -and
+                    ($impShObj.roles.'b3-reviewer'.model -eq 'foo\bar\n1') -and
+                    ($impPsObj.sources.personal_present) -and ($impShObj.sources.personal_present)
+
+        if ($parPs.Code -eq 0 -and $parSh.Code -eq 0 -and ($psCompact -eq $shCompact) -and $escMatch) {
             Pass 'model-config-dual-shell-parity'
         } else {
-            FailCheck 'model-config-dual-shell-parity' "psCode=$($parPs.Code) shCode=$($parSh.Code) ps=$psCompact sh=$shCompact"
+            FailCheck 'model-config-dual-shell-parity' "psCode=$($parPs.Code) shCode=$($parSh.Code) eq=$($psCompact -eq $shCompact) esc=$escMatch"
         }
     } else {
         Pass 'model-config-dual-shell-parity'

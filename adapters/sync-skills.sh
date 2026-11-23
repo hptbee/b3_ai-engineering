@@ -401,7 +401,10 @@ esac
 if ! $DRY_RUN && ! $VERIFY_ONLY && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
   TEMPLATE_CFG="${ROOT}/config/models.default.json"
   if [[ -f "$TEMPLATE_CFG" ]]; then
-    DEST_CFG="${B3_MODELS_PERSONAL:-${HOME}/.b3/models.local.json}"
+    TRIM_PERS="${B3_MODELS_PERSONAL:-}"
+    TRIM_PERS="${TRIM_PERS#"${TRIM_PERS%%[![:space:]]*}"}"
+    TRIM_PERS="${TRIM_PERS%"${TRIM_PERS##*[![:space:]]}"}"
+    DEST_CFG="${TRIM_PERS:-${HOME}/.b3/models.local.json}"
     if [[ -e "$DEST_CFG" || -L "$DEST_CFG" ]]; then
       echo "model_config=${DEST_CFG} (kept existing)"
     else

@@ -158,7 +158,7 @@ update_b3_gitignore() {
   fi
   if grep -Eq '^[[:space:]]*\.b3/[[:space:]]*$' "$gi"; then
     local tmp="${gi}.b3tmp"
-    sed 's|^[[:space:]]*\.b3/[[:space:]]*$|.b3/ship/\n.b3/models.local.json|' "$gi" > "$tmp" && mv "$tmp" "$gi"
+    LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; print ".b3/models.local.json"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
     echo "upgraded"
     return
   fi
@@ -171,6 +171,30 @@ update_b3_gitignore() {
   echo "appended"
 }
 
+resolve_personal_model_dest() {
+  local raw="${B3_MODELS_PERSONAL:-}"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  if [[ -n "$raw" ]]; then
+    printf '%s' "$raw"
+  else
+    printf '%s' "${HOME}/.b3/models.local.json"
+  fi
+}
+
+print_dry_run_model_config() {
+  [[ "${B3_SKIP_MODEL_INIT:-}" == "1" ]] && return 0
+  local template_cfg="${B3_HOME}/config/models.default.json"
+  [[ -f "$template_cfg" ]] || return 0
+  local dest
+  dest="$(resolve_personal_model_dest)"
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    echo "dry-run: keep existing personal model config $dest"
+  else
+    echo "dry-run: seed personal model config at $dest from $template_cfg"
+  fi
+}
+
 init_personal_model_config() {
   if [[ "${B3_SKIP_MODEL_INIT:-}" == "1" ]]; then
     echo "skipped"
@@ -181,18 +205,10 @@ init_personal_model_config() {
     echo "no-template"
     return 0
   fi
-  local dest="${B3_MODELS_PERSONAL:-}"
-  if [[ -z "$dest" ]]; then
-    dest="${HOME}/.b3/models.local.json"
-  fi
+  local dest
+  dest="$(resolve_personal_model_dest)"
   if [[ -e "$dest" || -L "$dest" ]]; then
-    if $DRY_RUN; then echo "dry-run: keep existing personal model config $dest" >&2; fi
     echo "kept:${dest}"
-    return 0
-  fi
-  if $DRY_RUN; then
-    echo "dry-run: seed personal model config at $dest from $template_cfg" >&2
-    echo "dry-run:${dest}"
     return 0
   fi
   mkdir -p "$(dirname "$dest")"
@@ -267,7 +283,7 @@ if $DRY_RUN; then
       [[ -f "$CURSOR_README_TEMPLATE" ]] && echo "dry-run: write $CURSOR_README_DEST"
       ;;
   esac
-  init_personal_model_config >/dev/null
+  print_dry_run_model_config
   exit 0
 fi
 
