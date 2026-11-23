@@ -47,6 +47,20 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 
 ### Cursor
 
+**Global one-time install (recommended across all local repos):** makes all 7 commands, flattened 1-level skills, 5 subagents, global `b3-home`, and a compact `b3-user-rules.txt` User Rules template available under `~/.cursor/` without modifying individual repos (`-DryRun`/`--dry-run` and `-Force`/`--force` supported; guide: [`adapters/cursor/README.md`](adapters/cursor/README.md)):
+
+```powershell
+# Windows
+.\adapters\cursor\install-global.ps1
+.\adapters\cursor\install-global.ps1 verify
+```
+
+```bash
+# macOS / Linux / Git Bash
+./adapters/cursor/install-global.sh
+./adapters/cursor/install-global.sh verify
+```
+
 **Work inside this B3 repository:** `.cursor/rules/*.mdc` and `AGENTS.md` work on fresh clone. To expose `skills/`, `commands/`, and `agents/` on Cursor's native paths (gitignored links):
 
 ```powershell
@@ -61,7 +75,7 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 ./adapters/sync-skills.sh --verify cursor
 ```
 
-**Work in a separate product repository:**
+**Optional per-project attach (`install-product`):** for shared repo-committed `.b3/home` + `.cursor/commands/*.md` (without copying `skills/`):
 
 ```powershell
 # Windows
@@ -71,21 +85,6 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 ```bash
 # macOS / Linux
 ./adapters/install-product.sh --product-root /path/to/your-product --host cursor
-```
-
-The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md` (including `b3-ship.md`), and `.b3/ship/` in `.gitignore`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
-
-```powershell
-# Windows — replace the target with your B3 clone
-$skills = 'D:\Project\b3_ai-engineering\skills'
-$dest = Join-Path $env:USERPROFILE '.cursor\skills\b3-ai-engineering'
-New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
-if (-not (Test-Path -LiteralPath $dest)) { cmd /c mklink /J "$dest" "$skills" }
-```
-
-```bash
-# macOS / Linux
-ln -sfn /path/to/b3_ai-engineering/skills ~/.cursor/skills/b3-ai-engineering
 ```
 
 ### Codex

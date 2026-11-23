@@ -69,6 +69,6 @@ Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.c
 - **codex / antigravity:** writes gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`).
 - **claude:** writes thin `CLAUDE.md` (`@AGENTS.md`, when missing), gitignored flattened `.claude/skills/<name>`, and gitignored `.claude/agents` → `{B3_HOME}/agents`.
 
-For a machine-global Antigravity plugin (`~/.gemini/config/plugins/b3-ai-engineering/`), use `adapters/antigravity/install-plugin.{ps1,sh}`. See [`antigravity/README.md`](antigravity/README.md).
+For machine-global installations, use `adapters/cursor/install-global.{ps1,sh}` for Cursor (`~/.cursor/`, see [`cursor/README.md`](cursor/README.md)) and `adapters/antigravity/install-plugin.{ps1,sh}` for Antigravity (`~/.gemini/config/plugins/b3-ai-engineering/`, see [`antigravity/README.md`](antigravity/README.md)).
 
 Layout decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`).

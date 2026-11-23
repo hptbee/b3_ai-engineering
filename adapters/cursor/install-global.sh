@@ -119,19 +119,6 @@ sha256_file() {
   fi
 }
 
-sha256_stdin() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print tolower($1)}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 | awk '{print tolower($1)}'
-  elif command -v openssl >/dev/null 2>&1; then
-    openssl dgst -sha256 | awk '{print tolower($NF)}'
-  else
-    echo "error: missing sha256 utility (sha256sum/shasum/openssl)" >&2
-    return 1
-  fi
-}
-
 write_lf_file() {
   local dest="$1"
   local content="$2"
