@@ -147,19 +147,26 @@ function Update-B3Gitignore([string]$Root) {
     $gi = Join-Path $Root '.gitignore'
     $block = @"
 
-# B3: commit .b3/home; keep ship checkpoints local
+# B3: commit .b3/home; keep run checkpoints local
 .b3/ship/
+.b3/research-ship/
 "@
     if (-not (Test-Path -LiteralPath $gi)) {
         Set-Content -LiteralPath $gi -Value ($block.TrimStart() + "`n")
         return 'created'
     }
     $text = Get-Content -LiteralPath $gi -Raw
-    if ($text -match '(?m)^\s*\.b3/ship/\s*$') { return 'present' }
+    $hasShip = ($text -match '(?m)^\s*\.b3/ship/\s*$')
+    $hasResearch = ($text -match '(?m)^\s*\.b3/research-ship/\s*$')
+    if ($hasShip -and $hasResearch) { return 'present' }
     if ($text -match '(?m)^\s*\.b3/\s*$') {
-        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', '.b3/ship/')
+        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', ".b3/ship/`n.b3/research-ship/")
         Set-Content -LiteralPath $gi -Value $text -NoNewline
         return 'upgraded'
+    }
+    if ($hasShip -and -not $hasResearch) {
+        Add-Content -LiteralPath $gi -Value "`n.b3/research-ship/"
+        return 'appended'
     }
     Add-Content -LiteralPath $gi -Value $block
     return 'appended'
@@ -210,7 +217,7 @@ if ($DryRun) {
         if (Test-Path -LiteralPath $claudeMdDest) { Write-Output "dry-run: keep existing $claudeMdDest" }
         elseif (Test-Path -LiteralPath $claudeMdTemplate) { Write-Output "dry-run: write $claudeMdDest from $claudeMdTemplate" }
     }
-    Write-Output "dry-run: gitignore .b3/ship/ (see Update-B3Gitignore)"
+    Write-Output "dry-run: gitignore .b3/ship/ and .b3/research-ship/ (see Update-B3Gitignore)"
     if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: gitignore .agents/skills" }
     if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills and .claude/agents" }
     if (Test-Path -LiteralPath $b3Commands) {

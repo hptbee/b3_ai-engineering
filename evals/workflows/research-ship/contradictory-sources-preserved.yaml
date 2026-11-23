@@ -1,0 +1,9 @@
+id: research-ship-contradictory-sources-001
+artifact: workflows/research-ship.md
+intent: Genuine contradictions across schools or editions must stay explicit as UNRESOLVED instead of forcing false consensus
+scenario: |
+  Two primary classical sources disagree on a star interpretation condition across schools.
+  During Phase D Cross-Source Analysis and Phase E Independent Evidence Verification, the unit preserves both readings, their school attributions, and explicit dispute_status=UNRESOLVED without dropping unfavourable clauses.
+expected_outcome: PASS
+failure_mode: forced-consensus-or-dropped-dispute-polarity
+notes: Preserves contradictory school claims and explicit uncertainty in evidence-index.md

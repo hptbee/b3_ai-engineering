@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /b3-ship and /b3-review-loop (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree | evidence-check | merge-policy-check
 set -euo pipefail
 
 _CLEANUP_FILES=()
@@ -16,7 +16,7 @@ trap _cleanup_tmp EXIT
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree|evidence-check|merge-policy-check [options]" >&2
   exit 1
 fi
 shift
@@ -167,7 +167,7 @@ resolve_auto_base_sha() {
   while IFS= read -r line; do
     p="$(norm_path "$line")"
     [[ -z "$p" ]] && continue
-    [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+    is_checkpoint_dir "$p" && continue
     if [[ ${#ignored[@]} -gt 0 ]] && path_in_list "$p" "${ignored[@]}"; then continue; fi
     printf '%s' "HEAD"
     return 0
@@ -206,7 +206,165 @@ resolve_auto_base_for_target() {
 }
 
 is_checkpoint_dir() {
-  [[ "$1" == ".b3/ship" || "$1" == ".b3/ship/"* || "$1" == ".b3/autodev" || "$1" == ".b3/autodev/"* ]]
+  [[ "$1" == ".b3/ship" || "$1" == ".b3/ship/"* || "$1" == ".b3/research-ship" || "$1" == ".b3/research-ship/"* || "$1" == ".b3/autodev" || "$1" == ".b3/autodev/"* ]]
+}
+
+resolve_namespace_dir() {
+  local root="$1"
+  local ns="${2:-ship}"
+  ns="$(trim_str "$ns")"
+  [[ -n "$ns" ]] || ns="ship"
+  case "$ns" in
+    ship) printf '%s' "${root}/.b3/ship" ;;
+    research-ship) printf '%s' "${root}/.b3/research-ship" ;;
+    *) echo "INVALID_NAMESPACE: $ns" >&2; return 1 ;;
+  esac
+}
+
+check_contained_repo_path() {
+  local root="$1"
+  local raw="$2"
+  local p
+  p="$(norm_path "$raw")"
+  if [[ -z "$p" || "$p" == "." || "$p" == /* || "$p" == ~* || "$p" =~ ^[A-Za-z]: || "$p" =~ (^|/)\.\.(/|$) ]]; then
+    return 1
+  fi
+  local rem="${p#./}" seg_cur="$root" seg
+  while [[ -n "$rem" ]]; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    [[ -z "$seg" || "$seg" == "." ]] && continue
+    seg_cur="${seg_cur}/${seg}"
+    if [[ -L "$seg_cur" ]]; then
+      return 1
+    fi
+  done
+  local full canon_root probe canon_dir cr_low cd_low
+  full="$(resolve_target_path "$root" "$p")"
+  canon_root="$(cd "$root" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_root=""
+  canon_root="$(norm_path "$canon_root")"
+  probe="$(dirname "$full")"
+  while [[ ! -d "$probe" && "$probe" != "/" && "$probe" != "." ]]; do
+    probe="$(dirname "$probe")"
+  done
+  if [[ -n "$canon_root" ]]; then
+    if [[ ! -d "$probe" ]]; then
+      return 1
+    fi
+    canon_dir="$(cd "$probe" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || canon_dir=""
+    canon_dir="$(norm_path "$canon_dir")"
+    cr_low="$(printf '%s' "$canon_root" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    cd_low="$(printf '%s' "$canon_dir" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ -z "$cd_low" || ( "$cd_low" != "$cr_low" && "$cd_low" != "$cr_low/"* ) ]]; then
+      return 1
+    fi
+  fi
+  _CONTAINED_REL="$p"
+  _CONTAINED_FULL="$full"
+  return 0
+}
+
+compute_file_sha256() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print tolower($1)}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print tolower($1)}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print tolower($NF)}'
+  else
+    return 1
+  fi
+}
+
+parse_merge_policy_json() {
+  local pol_file="$1"
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+const fs = require("fs");
+let raw;
+try { raw = fs.readFileSync(0, "utf8"); } catch (e) { process.exit(2); }
+let obj;
+try { obj = JSON.parse(raw); } catch (e) { process.exit(2); }
+if (!obj || typeof obj !== "object" || Array.isArray(obj)) process.exit(2);
+let autoMerge = "disabled";
+if (Object.prototype.hasOwnProperty.call(obj, "auto_merge")) {
+  if (obj.auto_merge !== "disabled" && obj.auto_merge !== "authorized") process.exit(3);
+  autoMerge = obj.auto_merge;
+}
+let allowProt = false;
+if (Object.prototype.hasOwnProperty.call(obj, "allow_protected_paths")) {
+  if (typeof obj.allow_protected_paths !== "boolean") process.exit(2);
+  allowProt = obj.allow_protected_paths;
+}
+let reqCi = true;
+if (Object.prototype.hasOwnProperty.call(obj, "require_ci")) {
+  if (typeof obj.require_ci !== "boolean") process.exit(2);
+  reqCi = obj.require_ci;
+}
+let reqRev = true;
+if (Object.prototype.hasOwnProperty.call(obj, "require_review")) {
+  if (typeof obj.require_review !== "boolean") process.exit(2);
+  reqRev = obj.require_review;
+}
+let prot = [];
+if (Object.prototype.hasOwnProperty.call(obj, "protected_paths")) {
+  if (!Array.isArray(obj.protected_paths)) process.exit(2);
+  for (const x of obj.protected_paths) {
+    if (typeof x !== "string" || /[\r\n\0]/.test(x)) process.exit(2);
+    prot.push(x);
+  }
+}
+process.stdout.write("auto_merge=" + autoMerge + "\n");
+process.stdout.write("allow_protected_paths=" + (allowProt ? "true" : "false") + "\n");
+process.stdout.write("require_ci=" + (reqCi ? "true" : "false") + "\n");
+process.stdout.write("require_review=" + (reqRev ? "true" : "false") + "\n");
+for (const p of prot) process.stdout.write("protected_path=" + p + "\n");
+' < "$pol_file"
+    return $?
+  fi
+  local py_cmd=""
+  if command -v python3 >/dev/null 2>&1 && python3 --version >/dev/null 2>&1; then
+    py_cmd="python3"
+  elif command -v python >/dev/null 2>&1 && python --version >/dev/null 2>&1; then
+    py_cmd="python"
+  fi
+  if [[ -n "$py_cmd" ]]; then
+    "$py_cmd" -c '
+import json, sys
+try:
+    obj = json.load(sys.stdin)
+except Exception:
+    sys.exit(2)
+if not isinstance(obj, dict):
+    sys.exit(2)
+auto_merge = obj.get("auto_merge", "disabled")
+if auto_merge not in ("disabled", "authorized"):
+    sys.exit(3)
+for bkey, default in (("allow_protected_paths", False), ("require_ci", True), ("require_review", True)):
+    if bkey in obj and not isinstance(obj[bkey], bool):
+        sys.exit(2)
+prot = obj.get("protected_paths", [])
+if not isinstance(prot, list):
+    sys.exit(2)
+for p in prot:
+    if not isinstance(p, str) or any(c in p for c in ("\r", "\n", "\x00")):
+        sys.exit(2)
+print("auto_merge=" + auto_merge)
+print("allow_protected_paths=" + ("true" if obj.get("allow_protected_paths", False) else "false"))
+print("require_ci=" + ("true" if obj.get("require_ci", True) else "false"))
+print("require_review=" + ("true" if obj.get("require_review", True) else "false"))
+for p in prot:
+    print("protected_path=" + p)
+' < "$pol_file"
+    return $?
+  fi
+  return 2
 }
 
 is_secret_path() {
@@ -847,7 +1005,7 @@ case "$CMD" in
     while IFS= read -r line; do
       p="$(norm_path "$line")"
       [[ -z "$p" ]] && continue
-      [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+      is_checkpoint_dir "$p" && continue
       if path_in_list "$p" "${WATCHED_ARR[@]}"; then
         COMMITTED_HITS+=("$p")
       fi
@@ -874,7 +1032,7 @@ case "$CMD" in
       while IFS= read -r line; do
         p="$(norm_path "$line")"
         [[ -z "$p" ]] && continue
-        [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+        is_checkpoint_dir "$p" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then
           continue
         fi
@@ -1112,7 +1270,7 @@ case "$CMD" in
       [[ -n "${raw_path:-}" ]] || continue
       p="$(norm_path "$raw_path")"
       [[ -z "$p" ]] && continue
-      [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+      is_checkpoint_dir "$p" && continue
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
       if is_noise_file "$p"; then
         NOISE_ARR+=("$p")
@@ -1126,7 +1284,7 @@ case "$CMD" in
     while IFS= read -r line; do
       p="$(norm_path "$line")"
       [[ -z "$p" ]] && continue
-      [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+      is_checkpoint_dir "$p" && continue
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
       if is_noise_file "$p"; then
         NOISE_ARR+=("$p")
@@ -1155,7 +1313,7 @@ case "$CMD" in
       while IFS= read -r line; do
         p="$(norm_path "$line")"
         [[ -z "$p" ]] && continue
-        [[ "$p" == ".b3/ship" || "$p" == ".b3/ship/"* ]] && continue
+        is_checkpoint_dir "$p" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
         if is_noise_file "$p"; then continue; fi
         DELTA_ARR+=("$p")
@@ -1427,9 +1585,9 @@ case "$CMD" in
         fi
         set +e
         if [[ -n "$TARGET_REF" ]]; then
-          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/ship' 2>/dev/null)"
+          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/ship' ':(exclude).b3/research-ship' 2>/dev/null)"
         else
-          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" -- . ':(exclude).b3/ship' 2>/dev/null)"
+          grep_out="$(git -C "$REPO_ROOT" grep -l -F -e "$tok" -- . ':(exclude).b3/ship' ':(exclude).b3/research-ship' 2>/dev/null)"
         fi
         grep_code=$?
         set -e
@@ -1643,11 +1801,13 @@ case "$CMD" in
     REPO_ROOT="."
     SLUG=""
     TS=""
+    NAMESPACE="ship"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --slug) SLUG="${2:-}"; shift 2 ;;
         --timestamp) TS="${2:-}"; shift 2 ;;
+        --namespace) NAMESPACE="${2:-}"; shift 2 ;;
         *) echo "NEW_RUN_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
@@ -1666,8 +1826,8 @@ case "$CMD" in
       exit 1
     fi
 
-    SHIP_DIR="${REPO_ROOT}/.b3/ship"
-    RUNS_DIR="${SHIP_DIR}/runs"
+    NS_DIR="$(resolve_namespace_dir "$REPO_ROOT" "$NAMESPACE")"
+    RUNS_DIR="${NS_DIR}/runs"
     mkdir -p "$RUNS_DIR"
 
     BASE_ID="${TS}-${CLEAN_SLUG}"
@@ -1679,22 +1839,27 @@ case "$CMD" in
     done
 
     mkdir -p "${RUNS_DIR}/${CANDIDATE}"
-    write_atomic_lf_file "${SHIP_DIR}/CURRENT" "${CANDIDATE}"$'\n'
+    write_atomic_lf_file "${NS_DIR}/CURRENT" "${CANDIDATE}"$'\n'
     printf '%s\n' "$CANDIDATE"
     ;;
 
   resolve-run)
     REPO_ROOT="."
     RUN_ID=""
+    NAMESPACE="ship"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --run-id) RUN_ID="${2:-}"; shift 2 ;;
+        --namespace) NAMESPACE="${2:-}"; shift 2 ;;
         *) echo "RESOLVE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
-    SHIP_DIR="${REPO_ROOT}/.b3/ship"
-    RUNS_DIR="${SHIP_DIR}/runs"
+    NS_TRIM="$(trim_str "$NAMESPACE")"
+    [[ -n "$NS_TRIM" ]] || NS_TRIM="ship"
+    NS_DIR="$(resolve_namespace_dir "$REPO_ROOT" "$NS_TRIM")"
+    NS_REL=".b3/${NS_TRIM}"
+    RUNS_DIR="${NS_DIR}/runs"
     AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
     AUTODEV_RUNS_DIR="${AUTODEV_DIR}/runs"
 
@@ -1702,10 +1867,10 @@ case "$CMD" in
       RUN_ID="$(trim_str "$RUN_ID")"
       valid_run_id "$RUN_ID" || { echo "RESOLVE_FAIL: invalid run id '$RUN_ID'"; exit 1; }
       if [[ -d "${RUNS_DIR}/${RUN_ID}" ]]; then
-        printf '.b3/ship/runs/%s\n' "$RUN_ID"
+        printf '%s/runs/%s\n' "$NS_REL" "$RUN_ID"
         exit 0
       fi
-      if [[ -d "${AUTODEV_RUNS_DIR}/${RUN_ID}" ]]; then
+      if [[ "$NS_TRIM" == "ship" && -d "${AUTODEV_RUNS_DIR}/${RUN_ID}" ]]; then
         printf '.b3/autodev/runs/%s\n' "$RUN_ID"
         exit 0
       fi
@@ -1713,32 +1878,34 @@ case "$CMD" in
       exit 1
     fi
 
-    CUR_FILE="${SHIP_DIR}/CURRENT"
+    CUR_FILE="${NS_DIR}/CURRENT"
     if [[ -f "$CUR_FILE" ]]; then
-      CUR_ID="$(read_current_run_id "$SHIP_DIR")"
+      CUR_ID="$(read_current_run_id "$NS_DIR")"
       valid_run_id "$CUR_ID" || { echo "RESOLVE_FAIL: CURRENT contains invalid run id '$CUR_ID'"; exit 1; }
       [[ -d "${RUNS_DIR}/${CUR_ID}" ]] || { echo "RESOLVE_FAIL: CURRENT points to missing run '$CUR_ID'"; exit 1; }
-      printf '.b3/ship/runs/%s\n' "$CUR_ID"
+      printf '%s/runs/%s\n' "$NS_REL" "$CUR_ID"
       exit 0
     fi
 
-    if [[ -f "${SHIP_DIR}/progress.md" ]]; then
-      printf '.b3/ship\n'
-      exit 0
-    fi
+    if [[ "$NS_TRIM" == "ship" ]]; then
+      if [[ -f "${NS_DIR}/progress.md" ]]; then
+        printf '.b3/ship\n'
+        exit 0
+      fi
 
-    AD_CUR_FILE="${AUTODEV_DIR}/CURRENT"
-    if [[ -f "$AD_CUR_FILE" ]]; then
-      AD_CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
-      valid_run_id "$AD_CUR_ID" || { echo "RESOLVE_FAIL: CURRENT contains invalid run id '$AD_CUR_ID'"; exit 1; }
-      [[ -d "${AUTODEV_RUNS_DIR}/${AD_CUR_ID}" ]] || { echo "RESOLVE_FAIL: CURRENT points to missing run '$AD_CUR_ID'"; exit 1; }
-      printf '.b3/autodev/runs/%s\n' "$AD_CUR_ID"
-      exit 0
-    fi
+      AD_CUR_FILE="${AUTODEV_DIR}/CURRENT"
+      if [[ -f "$AD_CUR_FILE" ]]; then
+        AD_CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+        valid_run_id "$AD_CUR_ID" || { echo "RESOLVE_FAIL: CURRENT contains invalid run id '$AD_CUR_ID'"; exit 1; }
+        [[ -d "${AUTODEV_RUNS_DIR}/${AD_CUR_ID}" ]] || { echo "RESOLVE_FAIL: CURRENT points to missing run '$AD_CUR_ID'"; exit 1; }
+        printf '.b3/autodev/runs/%s\n' "$AD_CUR_ID"
+        exit 0
+      fi
 
-    if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
-      printf '.b3/autodev\n'
-      exit 0
+      if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+        printf '.b3/autodev\n'
+        exit 0
+      fi
     fi
 
     echo "NO_ACTIVE_RUN"
@@ -1747,15 +1914,19 @@ case "$CMD" in
 
   list-runs)
     REPO_ROOT="."
+    NAMESPACE="ship"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --namespace) NAMESPACE="${2:-}"; shift 2 ;;
         *) echo "LIST_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
-    SHIP_DIR="${REPO_ROOT}/.b3/ship"
-    RUNS_DIR="${SHIP_DIR}/runs"
-    CUR_ID="$(read_current_run_id "$SHIP_DIR")"
+    NS_TRIM="$(trim_str "$NAMESPACE")"
+    [[ -n "$NS_TRIM" ]] || NS_TRIM="ship"
+    NS_DIR="$(resolve_namespace_dir "$REPO_ROOT" "$NS_TRIM")"
+    RUNS_DIR="${NS_DIR}/runs"
+    CUR_ID="$(read_current_run_id "$NS_DIR")"
 
     RUN_NAMES=()
     if [[ -d "$RUNS_DIR" ]]; then
@@ -1776,36 +1947,38 @@ case "$CMD" in
       exit 0
     fi
 
-    if [[ -f "${SHIP_DIR}/progress.md" ]]; then
-      ST="$(read_run_status "$SHIP_DIR")"
-      printf '* legacy [%s]\n' "$ST"
-      exit 0
-    fi
+    if [[ "$NS_TRIM" == "ship" ]]; then
+      if [[ -f "${NS_DIR}/progress.md" ]]; then
+        ST="$(read_run_status "$NS_DIR")"
+        printf '* legacy [%s]\n' "$ST"
+        exit 0
+      fi
 
-    AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
-    AUTODEV_RUNS_DIR="${AUTODEV_DIR}/runs"
-    AD_CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
-    AD_NAMES=()
-    if [[ -d "$AUTODEV_RUNS_DIR" ]]; then
-      while IFS= read -r d; do
-        [[ -n "$d" ]] && AD_NAMES+=("$d")
-      done < <(find "$AUTODEV_RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
-    fi
-    if [[ ${#AD_NAMES[@]} -gt 0 ]]; then
-      for id in "${AD_NAMES[@]}"; do
-        ST="$(read_run_status "${AUTODEV_RUNS_DIR}/${id}")"
-        MARK="  "
-        if [[ -n "$AD_CUR_ID" && "$id" == "$AD_CUR_ID" ]]; then
-          MARK="* "
-        fi
-        printf '%s%s [%s] (legacy-autodev)\n' "$MARK" "$id" "$ST"
-      done
-      exit 0
-    fi
-    if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
-      ST="$(read_run_status "$AUTODEV_DIR")"
-      printf '* legacy (legacy-autodev) [%s]\n' "$ST"
-      exit 0
+      AUTODEV_DIR="${REPO_ROOT}/.b3/autodev"
+      AUTODEV_RUNS_DIR="${AUTODEV_DIR}/runs"
+      AD_CUR_ID="$(read_current_run_id "$AUTODEV_DIR")"
+      AD_NAMES=()
+      if [[ -d "$AUTODEV_RUNS_DIR" ]]; then
+        while IFS= read -r d; do
+          [[ -n "$d" ]] && AD_NAMES+=("$d")
+        done < <(find "$AUTODEV_RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | LC_ALL=C sort -r)
+      fi
+      if [[ ${#AD_NAMES[@]} -gt 0 ]]; then
+        for id in "${AD_NAMES[@]}"; do
+          ST="$(read_run_status "${AUTODEV_RUNS_DIR}/${id}")"
+          MARK="  "
+          if [[ -n "$AD_CUR_ID" && "$id" == "$AD_CUR_ID" ]]; then
+            MARK="* "
+          fi
+          printf '%s%s [%s] (legacy-autodev)\n' "$MARK" "$id" "$ST"
+        done
+        exit 0
+      fi
+      if [[ -f "${AUTODEV_DIR}/progress.md" ]]; then
+        ST="$(read_run_status "$AUTODEV_DIR")"
+        printf '* legacy (legacy-autodev) [%s]\n' "$ST"
+        exit 0
+      fi
     fi
 
     echo "NO_RUNS"
@@ -1814,10 +1987,12 @@ case "$CMD" in
   prune)
     REPO_ROOT="."
     KEEP=10
+    NAMESPACE="ship"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --keep) KEEP="${2:-}"; shift 2 ;;
+        --namespace) NAMESPACE="${2:-}"; shift 2 ;;
         *) echo "PRUNE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
@@ -1826,14 +2001,14 @@ case "$CMD" in
       exit 1
     fi
 
-    SHIP_DIR="${REPO_ROOT}/.b3/ship"
-    RUNS_DIR="${SHIP_DIR}/runs"
+    NS_DIR="$(resolve_namespace_dir "$REPO_ROOT" "$NAMESPACE")"
+    RUNS_DIR="${NS_DIR}/runs"
     if [[ ! -d "$RUNS_DIR" ]]; then
       echo "PRUNE_OK: 0 removed"
       exit 0
     fi
 
-    CUR_ID="$(read_current_run_id "$SHIP_DIR")"
+    CUR_ID="$(read_current_run_id "$NS_DIR")"
     RUN_NAMES=()
     while IFS= read -r d; do
       [[ -n "$d" ]] && RUN_NAMES+=("$d")
@@ -2364,6 +2539,364 @@ timestamp_utc=${TS_UTC}
     fi
 
     printf 'WORKTREE_OK: root=%s head=%s\n' "$ACTUAL_ROOT_NORM" "$HEAD_RAW"
+    exit 0
+    ;;
+
+  evidence-check)
+    REPO_ROOT="."
+    SOURCE_PATHS=""
+    MANIFEST_PATH=""
+    WRITE_MANIFEST=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --source-paths) SOURCE_PATHS="${2:-}"; shift 2 ;;
+        --manifest-path) MANIFEST_PATH="${2:-}"; shift 2 ;;
+        --write-manifest) WRITE_MANIFEST=true; shift ;;
+        *) echo "EVIDENCE_MISSING: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+
+    if ! check_contained_repo_path "$REPO_ROOT" "$MANIFEST_PATH"; then
+      echo "EVIDENCE_MISSING: invalid manifest path"
+      exit 1
+    fi
+    MANIFEST_REL="$_CONTAINED_REL"
+    MANIFEST_FULL="$_CONTAINED_FULL"
+
+    SRC_RAW=()
+    while IFS= read -r sp; do [[ -n "$sp" ]] && SRC_RAW+=("$sp"); done < <(split_csv_lines "$SOURCE_PATHS" true)
+
+    if $WRITE_MANIFEST; then
+      if [[ ${#SRC_RAW[@]} -lt 1 ]]; then
+        echo "EVIDENCE_MISSING: missing --source-paths"
+        exit 1
+      fi
+      CHECKED_SRC=()
+      for sp in "${SRC_RAW[@]}"; do
+        if ! check_contained_repo_path "$REPO_ROOT" "$sp"; then
+          echo "EVIDENCE_MISSING: invalid path $sp"
+          exit 1
+        fi
+        CHECKED_SRC+=("$_CONTAINED_REL")
+      done
+      SORTED_SRC=()
+      while IFS= read -r sp; do [[ -n "$sp" ]] && SORTED_SRC+=("$sp"); done < <(printf '%s\n' "${CHECKED_SRC[@]}" | LC_ALL=C sort -u)
+
+      MISSING_ARR=()
+      ENTRY_LINES=()
+      for rel in "${SORTED_SRC[@]}"; do
+        full="$(resolve_target_path "$REPO_ROOT" "$rel")"
+        if [[ ! -f "$full" ]]; then
+          MISSING_ARR+=("$rel")
+        else
+          h="$(compute_file_sha256 "$full")" || { echo "EVIDENCE_MISSING: sha256 tool unavailable"; exit 1; }
+          ENTRY_LINES+=("file=${h} ${rel}")
+        fi
+      done
+      if [[ ${#MISSING_ARR[@]} -gt 0 ]]; then
+        echo "EVIDENCE_MISSING: $(printf '%s\n' "${MISSING_ARR[@]}" | paste -sd ',' -)"
+        exit 1
+      fi
+
+      HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse --verify --quiet HEAD 2>/dev/null || true)"
+      HEAD_SHA="$(trim_str "$HEAD_SHA")"
+      [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || HEAD_SHA="NO_HEAD"
+      TS_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      BODY_STR="schema=b3-evidence-v1
+head_sha=${HEAD_SHA}
+timestamp_utc=${TS_UTC}"
+      for el in "${ENTRY_LINES[@]}"; do
+        BODY_STR="${BODY_STR}
+${el}"
+      done
+      BODY_STR="${BODY_STR}
+"
+      write_atomic_lf_file "$MANIFEST_FULL" "$BODY_STR"
+      printf 'EVIDENCE_WRITTEN: %d files -> %s\n' "${#ENTRY_LINES[@]}" "$MANIFEST_REL"
+      exit 0
+    fi
+
+    if [[ ! -f "$MANIFEST_FULL" ]]; then
+      echo "EVIDENCE_MISSING: missing manifest (${MANIFEST_REL})"
+      exit 1
+    fi
+
+    HAS_SCHEMA=false
+    HAS_HEAD=false
+    HAS_TS=false
+    SEEN_ENTRIES="|"
+    ENT_RELS=()
+    ENT_HASHES=()
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+      ln="$(trim_str "$raw_line")"
+      [[ -z "$ln" ]] && continue
+      if [[ "$ln" == "schema=b3-evidence-v1" ]]; then
+        HAS_SCHEMA=true; continue
+      elif [[ "$ln" =~ ^head_sha=([0-9a-f]{40}|NO_HEAD)$ ]]; then
+        HAS_HEAD=true; continue
+      elif [[ "$ln" =~ ^timestamp_utc=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+        HAS_TS=true; continue
+      elif [[ "$ln" =~ ^file=([0-9a-f]{64})[[:space:]]+(.+)$ ]]; then
+        h="${BASH_REMATCH[1]}"
+        rp="$(trim_str "${BASH_REMATCH[2]}")"
+        if ! check_contained_repo_path "$REPO_ROOT" "$rp"; then
+          echo "EVIDENCE_MISSING: invalid path $rp"
+          exit 1
+        fi
+        rel="$_CONTAINED_REL"
+        if [[ "$SEEN_ENTRIES" == *"|${rel}|"* ]]; then
+          echo "EVIDENCE_MISSING: duplicate entry $rel"
+          exit 1
+        fi
+        SEEN_ENTRIES="${SEEN_ENTRIES}${rel}|"
+        ENT_RELS+=("$rel")
+        ENT_HASHES+=("$h")
+      else
+        echo "EVIDENCE_MISSING: invalid manifest (${MANIFEST_REL})"
+        exit 1
+      fi
+    done < "$MANIFEST_FULL"
+
+    if ! $HAS_SCHEMA || ! $HAS_HEAD || ! $HAS_TS || [[ ${#ENT_RELS[@]} -lt 1 ]]; then
+      echo "EVIDENCE_MISSING: invalid manifest (${MANIFEST_REL})"
+      exit 1
+    fi
+
+    if [[ ${#SRC_RAW[@]} -gt 0 ]]; then
+      UNCOVERED=()
+      for sp in "${SRC_RAW[@]}"; do
+        if ! check_contained_repo_path "$REPO_ROOT" "$sp"; then
+          echo "EVIDENCE_MISSING: invalid path $sp"
+          exit 1
+        fi
+        rel="$_CONTAINED_REL"
+        if [[ "$SEEN_ENTRIES" != *"|${rel}|"* ]]; then
+          UNCOVERED+=("$rel")
+        fi
+      done
+      if [[ ${#UNCOVERED[@]} -gt 0 ]]; then
+        echo "EVIDENCE_MISSING: uncovered $(printf '%s\n' "${UNCOVERED[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        exit 1
+      fi
+    fi
+
+    MISS_FILES=()
+    STALE_FILES=()
+    for ((idx = 0; idx < ${#ENT_RELS[@]}; idx++)); do
+      rel="${ENT_RELS[$idx]}"
+      exp_h="${ENT_HASHES[$idx]}"
+      if ! check_contained_repo_path "$REPO_ROOT" "$rel"; then
+        echo "EVIDENCE_MISSING: invalid path $rel"
+        exit 1
+      fi
+      full="$_CONTAINED_FULL"
+      if [[ ! -f "$full" ]]; then
+        MISS_FILES+=("$rel")
+      else
+        cur_h="$(compute_file_sha256 "$full")" || { echo "EVIDENCE_MISSING: sha256 tool unavailable"; exit 1; }
+        if [[ "$cur_h" != "$exp_h" ]]; then
+          STALE_FILES+=("$rel")
+        fi
+      fi
+    done
+
+    if [[ ${#MISS_FILES[@]} -gt 0 ]]; then
+      echo "EVIDENCE_MISSING: $(printf '%s\n' "${MISS_FILES[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+      exit 1
+    fi
+    if [[ ${#STALE_FILES[@]} -gt 0 ]]; then
+      echo "EVIDENCE_STALE: $(printf '%s\n' "${STALE_FILES[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+      exit 2
+    fi
+    printf 'EVIDENCE_FRESH: %d files\n' "${#ENT_RELS[@]}"
+    exit 0
+    ;;
+
+  merge-policy-check)
+    REPO_ROOT="."
+    POLICY_PATH=""
+    PR_STATE="NONE"
+    CI_STATUS="UNKNOWN"
+    REVIEW_STATUS="UNKNOWN"
+    BLOCKING_FINDINGS="0"
+    GOV_STATUS="CLEAR"
+    CHANGED_PATHS=""
+    POST_MERGE=false
+    MERGED_SHA=""
+    MAIN_REF="HEAD"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+        --policy-path) POLICY_PATH="${2:-}"; shift 2 ;;
+        --pr-state) PR_STATE="${2:-}"; shift 2 ;;
+        --ci-status) CI_STATUS="${2:-}"; shift 2 ;;
+        --review-status) REVIEW_STATUS="${2:-}"; shift 2 ;;
+        --blocking-findings) BLOCKING_FINDINGS="${2:-}"; shift 2 ;;
+        --governance-status) GOV_STATUS="${2:-}"; shift 2 ;;
+        --changed-paths) CHANGED_PATHS="${2:-}"; shift 2 ;;
+        --post-merge) POST_MERGE=true; shift ;;
+        --merged-sha) MERGED_SHA="${2:-}"; shift 2 ;;
+        --main-ref) MAIN_REF="${2:-}"; shift 2 ;;
+        *) echo "MERGE_BLOCKED: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+
+    PR_STATE="$(trim_str "$PR_STATE")"; [[ -n "$PR_STATE" ]] || PR_STATE="NONE"
+    CI_STATUS="$(trim_str "$CI_STATUS")"; [[ -n "$CI_STATUS" ]] || CI_STATUS="UNKNOWN"
+    REVIEW_STATUS="$(trim_str "$REVIEW_STATUS")"; [[ -n "$REVIEW_STATUS" ]] || REVIEW_STATUS="UNKNOWN"
+    GOV_STATUS="$(trim_str "$GOV_STATUS")"; [[ -n "$GOV_STATUS" ]] || GOV_STATUS="CLEAR"
+    BLOCKING_FINDINGS="$(trim_str "$BLOCKING_FINDINGS")"; [[ -n "$BLOCKING_FINDINGS" ]] || BLOCKING_FINDINGS="0"
+
+    case "$PR_STATE" in OPEN|MERGED|CLOSED|NONE) ;; *) echo "MERGE_BLOCKED: invalid_pr_state=$PR_STATE"; exit 1 ;; esac
+    case "$CI_STATUS" in PASS|FAIL|PENDING|UNKNOWN) ;; *) echo "MERGE_BLOCKED: invalid_ci_status=$CI_STATUS"; exit 1 ;; esac
+    case "$REVIEW_STATUS" in PASS|BLOCKED|PENDING|UNKNOWN) ;; *) echo "MERGE_BLOCKED: invalid_review_status=$REVIEW_STATUS"; exit 1 ;; esac
+    case "$GOV_STATUS" in
+      CLEAR|BLOCKED|MISSING_OWNER_DECISION|WITHHELD_PROMOTION|UNAUTHORIZED_AUTHORITY|INVALID_EDITORIAL_REVIEW|UNAUTHORIZED_REVIEWER) ;;
+      *) echo "MERGE_BLOCKED: invalid_governance=$GOV_STATUS"; exit 1 ;;
+    esac
+    if [[ ! "$BLOCKING_FINDINGS" =~ ^[0-9]+$ ]]; then
+      echo "MERGE_BLOCKED: invalid_blocking_findings=$BLOCKING_FINDINGS"
+      exit 1
+    fi
+
+    if $POST_MERGE; then
+      if [[ "$PR_STATE" != "MERGED" ]]; then
+        echo "POST_MERGE_FAILED: pr_state=$PR_STATE"
+        exit 1
+      fi
+      MERGED_SHA="$(trim_str "$MERGED_SHA")"
+      MAIN_REF="$(trim_str "$MAIN_REF")"; [[ -n "$MAIN_REF" ]] || MAIN_REF="HEAD"
+      if [[ -z "$MERGED_SHA" || "$MERGED_SHA" == -* || -z "$MAIN_REF" || "$MAIN_REF" == -* ]]; then
+        echo "POST_MERGE_FAILED: invalid_ref"
+        exit 1
+      fi
+      RES_MERGED="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${MERGED_SHA}^{commit}" 2>/dev/null || true)"
+      RES_MERGED="$(trim_str "$RES_MERGED")"
+      RES_MAIN="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "${MAIN_REF}^{commit}" 2>/dev/null || true)"
+      RES_MAIN="$(trim_str "$RES_MAIN")"
+      if [[ ! "$RES_MERGED" =~ ^[0-9a-f]{40}$ || ! "$RES_MAIN" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "POST_MERGE_FAILED: unresolvable_commit"
+        exit 1
+      fi
+      if ! git -C "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$RES_MAIN" 2>/dev/null; then
+        echo "POST_MERGE_FAILED: sha_not_in_main(sha=${RES_MERGED},main_ref=${MAIN_REF})"
+        exit 1
+      fi
+      printf 'POST_MERGE_VERIFIED: sha=%s main_ref=%s runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED\n' "$RES_MERGED" "$MAIN_REF"
+      exit 0
+    fi
+
+    AUTO_MERGE="disabled"
+    ALLOW_PROT="false"
+    REQ_CI="true"
+    REQ_REV="true"
+    PROT_ARR=()
+
+    POL_FULL=""
+    POLICY_PATH="$(trim_str "$POLICY_PATH")"
+    if [[ -n "$POLICY_PATH" ]]; then
+      if ! check_contained_repo_path "$REPO_ROOT" "$POLICY_PATH"; then
+        echo "MERGE_BLOCKED: invalid_policy_path"
+        exit 1
+      fi
+      POL_FULL="$_CONTAINED_FULL"
+      if [[ ! -f "$POL_FULL" ]]; then
+        echo "MERGE_BLOCKED: missing_policy"
+        exit 1
+      fi
+    elif [[ -e "${REPO_ROOT}/.b3/research-policy.json" || -L "${REPO_ROOT}/.b3/research-policy.json" ]]; then
+      if ! check_contained_repo_path "$REPO_ROOT" ".b3/research-policy.json"; then
+        echo "MERGE_BLOCKED: invalid_policy_path"
+        exit 1
+      fi
+      POL_FULL="$_CONTAINED_FULL"
+      if [[ ! -f "$POL_FULL" ]]; then
+        echo "MERGE_BLOCKED: invalid_policy_path"
+        exit 1
+      fi
+    fi
+
+    if [[ -n "$POL_FULL" ]]; then
+      set +e
+      PARSED_POL="$(parse_merge_policy_json "$POL_FULL")"
+      POL_RC=$?
+      set -e
+      if [[ $POL_RC -eq 3 ]]; then
+        echo "MERGE_BLOCKED: invalid_auto_merge"
+        exit 1
+      elif [[ $POL_RC -ne 0 ]]; then
+        echo "MERGE_BLOCKED: invalid_policy_json"
+        exit 1
+      fi
+      while IFS= read -r pline; do
+        case "$pline" in
+          auto_merge=*) AUTO_MERGE="${pline#auto_merge=}" ;;
+          allow_protected_paths=*) ALLOW_PROT="${pline#allow_protected_paths=}" ;;
+          require_ci=*) REQ_CI="${pline#require_ci=}" ;;
+          require_review=*) REQ_REV="${pline#require_review=}" ;;
+          protected_path=*)
+            np="$(norm_path "${pline#protected_path=}")"
+            [[ -n "$np" ]] && PROT_ARR+=("$np")
+            ;;
+        esac
+      done <<< "$PARSED_POL"
+    fi
+
+    if [[ "$GOV_STATUS" != "CLEAR" ]]; then
+      echo "MERGE_BLOCKED: governance=$GOV_STATUS"
+      exit 1
+    fi
+
+    CHANGED_ARR=()
+    while IFS= read -r cp; do [[ -n "$cp" ]] && CHANGED_ARR+=("$cp"); done < <(split_csv_lines "$CHANGED_PATHS" true)
+    if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#CHANGED_ARR[@]} -gt 0 ]]; then
+      PROT_HITS=()
+      for cp in "${CHANGED_ARR[@]}"; do
+        if path_in_list "$cp" "${PROT_ARR[@]}"; then
+          PROT_HITS+=("$cp")
+          continue
+        fi
+        for pp in "${PROT_ARR[@]}"; do
+          if [[ "$pp" == "$cp/"* ]]; then
+            PROT_HITS+=("$cp")
+            break
+          fi
+        done
+      done
+      if [[ ${#PROT_HITS[@]} -gt 0 ]]; then
+        echo "MERGE_BLOCKED: protected_paths=$(printf '%s\n' "${PROT_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        exit 1
+      fi
+    fi
+
+    if [[ "$BLOCKING_FINDINGS" -gt 0 ]]; then
+      echo "MERGE_BLOCKED: blocking_findings=$BLOCKING_FINDINGS"
+      exit 1
+    fi
+    if [[ "$REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
+      echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
+      exit 1
+    fi
+    if [[ "$REQ_REV" == "true" && "$REVIEW_STATUS" != "PASS" ]]; then
+      echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
+      exit 1
+    fi
+    if [[ "$PR_STATE" != "OPEN" ]]; then
+      echo "MERGE_BLOCKED: pr_state=$PR_STATE"
+      exit 1
+    fi
+    if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#CHANGED_ARR[@]} -eq 0 ]]; then
+      echo "MERGE_BLOCKED: missing_changed_paths"
+      exit 1
+    fi
+    if [[ "$AUTO_MERGE" != "authorized" ]]; then
+      echo "PR_READY: auto_merge=disabled"
+      exit 2
+    fi
+
+    echo "MERGE_AUTHORIZED: auto_merge=authorized ci=PASS review=PASS governance=CLEAR"
     exit 0
     ;;
 

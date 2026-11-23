@@ -1,0 +1,9 @@
+id: research-ship-withheld-no-promote-001
+artifact: workflows/references/research-ship-gates.md
+intent: WITHHELD content must never be promoted to RELEASED without explicit release governance clearance
+scenario: |
+  Tests and source notes pass, but an attempted release change includes a record classified WITHHELD (WITHHELD_PROMOTION) or modifies protected authority paths without allow_protected_paths.
+  merge-policy-check exits 1 with MERGE_BLOCKED and refuses promotion.
+expected_outcome: BLOCKED
+failure_mode: withheld-record-promoted-on-green-tests
+notes: Enforces VERIFIED != RELEASED and protected_paths guard

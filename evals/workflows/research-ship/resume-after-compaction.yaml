@@ -1,0 +1,9 @@
+id: research-ship-resume-compaction-001
+artifact: workflows/references/research-ship-resume.md
+intent: Resuming an interrupted research run after context compaction preserves completed verified units and continues from the next eligible unit
+scenario: |
+  U001 is completed with a fresh b3-evidence-v1 manifest while U002 is in_progress after context compaction.
+  /b3-research-ship resume resolves .b3/research-ship/runs/<run_id>, verifies Git ancestry and evidence-check freshness (exit 0), skips re-running U001, and resumes U002.
+expected_outcome: PASS
+failure_mode: full-campaign-restart-after-compaction
+notes: Tests compact durable state under .b3/research-ship/

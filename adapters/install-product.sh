@@ -145,21 +145,36 @@ install_flat_skills() {
 update_b3_gitignore() {
   local gi="${PRODUCT_ROOT}/.gitignore"
   if [[ ! -f "$gi" ]]; then
-    printf '# B3: commit .b3/home; keep ship checkpoints local\n.b3/ship/\n' > "$gi"
+    printf '# B3: commit .b3/home; keep run checkpoints local\n.b3/ship/\n.b3/research-ship/\n' > "$gi"
     echo "created"
     return
   fi
-  if grep -Eq '^[[:space:]]*\.b3/ship/[[:space:]]*$' "$gi"; then
+  local has_ship=false has_research=false
+  grep -Eq '^[[:space:]]*\.b3/ship/[[:space:]]*$' "$gi" && has_ship=true
+  grep -Eq '^[[:space:]]*\.b3/research-ship/[[:space:]]*$' "$gi" && has_research=true
+  if $has_ship && $has_research; then
     echo "present"
     return
   fi
   if grep -Eq '^[[:space:]]*\.b3/[[:space:]]*$' "$gi"; then
     local tmp="${gi}.b3tmp"
-    sed 's|^[[:space:]]*\.b3/[[:space:]]*$|.b3/ship/|' "$gi" > "$tmp" && mv "$tmp" "$gi"
+    awk '{
+      if ($0 ~ /^[[:space:]]*\.b3\/[[:space:]]*$/) {
+        print ".b3/ship/"
+        print ".b3/research-ship/"
+      } else {
+        print
+      }
+    }' "$gi" > "$tmp" && mv "$tmp" "$gi"
     echo "upgraded"
     return
   fi
-  printf '\n# B3: commit .b3/home; keep ship checkpoints local\n.b3/ship/\n' >> "$gi"
+  if $has_ship && ! $has_research; then
+    printf '\n.b3/research-ship/\n' >> "$gi"
+    echo "appended"
+    return
+  fi
+  printf '\n# B3: commit .b3/home; keep run checkpoints local\n.b3/ship/\n.b3/research-ship/\n' >> "$gi"
   echo "appended"
 }
 
@@ -207,7 +222,7 @@ if $DRY_RUN; then
     if [[ -f "$CLAUDE_MD_DEST" ]]; then echo "dry-run: keep existing $CLAUDE_MD_DEST"
     elif [[ -f "$CLAUDE_MD_TEMPLATE" ]]; then echo "dry-run: write $CLAUDE_MD_DEST from $CLAUDE_MD_TEMPLATE"; fi
   fi
-  echo "dry-run: gitignore .b3/ship/"
+  echo "dry-run: gitignore .b3/ship/ and .b3/research-ship/ (see update_b3_gitignore)"
   if [[ -d "$COMMANDS_SRC" ]]; then
     for src in "$COMMANDS_SRC"/*.md; do
       [[ -f "$src" ]] || continue
