@@ -33,6 +33,44 @@ run_git_cmd() {
   return $rc
 }
 
+run_git_cmd_stdin() {
+  local root="$1"
+  local stdin_text="$2"
+  shift 2
+  local errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$errf")
+  _GIT_STDOUT=""
+  _GIT_STDERR=""
+  if _GIT_STDOUT="$(printf '%s' "$stdin_text" | git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f "$errf"
+  return $rc
+}
+
+run_git_cmd_stdin_file() {
+  local root="$1"
+  local stdin_file="$2"
+  shift 2
+  local errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$errf")
+  _GIT_STDOUT=""
+  _GIT_STDERR=""
+  if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" < "$stdin_file" 2>"$errf")"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
+  rm -f "$errf"
+  return $rc
+}
+
 git_err_detail() {
   local d
   d="$(trim_str "$_GIT_STDERR")"
@@ -329,6 +367,176 @@ write_atomic_lf_file() {
   mv -f "$tmp" "$dest"
 }
 
+resolve_symlink_oid() {
+  local root="$1"
+  local rel_p="$2"
+  local full="${root}/${rel_p}"
+  local sha
+  if [[ -L "$full" ]]; then
+    local tgt
+    tgt="$(readlink "$full")"
+    if ! run_git_cmd_stdin "$root" "$tgt" hash-object --stdin; then
+      echo "GIT_ERROR: git hash-object symlink failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git hash-object symlink failed for ${rel_p}: $sha"
+      return 1
+    fi
+    printf '%s' "$sha"
+    return 0
+  elif [[ -f "$full" ]]; then
+    if ! run_git_cmd "$root" hash-object -- "$rel_p"; then
+      echo "GIT_ERROR: git hash-object failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git hash-object failed for ${rel_p}: $sha"
+      return 1
+    fi
+    printf '%s' "$sha"
+    return 0
+  fi
+  return 2
+}
+
+resolve_submodule_entry() {
+  local root="$1"
+  local rel_p="$2"
+  local fallback_oid="${3:-}"
+  local depth="${4:-0}"
+  local sub_full="${root}/${rel_p}"
+  local zero_oid="0000000000000000000000000000000000000000"
+  local has_fb=false
+  if [[ -n "$fallback_oid" && "$fallback_oid" != "$zero_oid" && "$fallback_oid" =~ ^[0-9a-f]{40}$ ]]; then
+    has_fb=true
+  fi
+
+  if [[ -d "$sub_full" && -e "${sub_full}/.git" ]]; then
+    local sub_head="" has_head=false sh_out
+    if run_git_cmd "$sub_full" rev-parse HEAD; then
+      sh_out="$(trim_str "$_GIT_STDOUT")"
+      if [[ "$sh_out" =~ ^[0-9a-f]{40}$ ]]; then
+        sub_head="$sh_out"
+        has_head=true
+      fi
+    fi
+    if ! $has_head; then
+      if $has_fb; then sub_head="$fallback_oid"; else sub_head="UNBORN"; fi
+    fi
+
+    if ! run_git_cmd "$sub_full" status --porcelain -uall --ignore-submodules=none; then
+      echo "GIT_ERROR: submodule status failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    local st_out="$_GIT_STDOUT"
+    local -a st_lines=()
+    local raw_st clean_st trimmed_st
+    while IFS= read -r raw_st; do
+      clean_st="${raw_st%$'\r'}"
+      trimmed_st="$(trim_str "$clean_st")"
+      [[ -n "$trimmed_st" ]] && st_lines+=("$clean_st")
+    done <<< "$st_out"
+
+    if [[ ${#st_lines[@]} -eq 0 ]]; then
+      printf '160000 commit %s' "$sub_head"
+      return 0
+    fi
+
+    local dirty_buf="" sl
+    while IFS= read -r sl; do
+      [[ -n "$sl" ]] && dirty_buf="${dirty_buf}S ${sl}"$'\n'
+    done < <(printf '%s\n' "${st_lines[@]}" | LC_ALL=C sort)
+
+    local s_wt="" s_ca="" s_un=""
+    if $has_head; then
+      run_git_cmd "$sub_full" diff --no-renames --name-only --ignore-submodules=none HEAD || { echo "GIT_ERROR: submodule diff failed for ${rel_p}: $(git_err_detail)"; return 1; }
+      s_wt="$_GIT_STDOUT"
+    fi
+    run_git_cmd "$sub_full" diff --no-renames --cached --name-only || { echo "GIT_ERROR: submodule diff cached failed for ${rel_p}: $(git_err_detail)"; return 1; }
+    s_ca="$_GIT_STDOUT"
+    run_git_cmd "$sub_full" ls-files --others --exclude-standard || { echo "GIT_ERROR: submodule ls-files failed for ${rel_p}: $(git_err_detail)"; return 1; }
+    s_un="$_GIT_STDOUT"
+
+    local -a s_cands=()
+    local line sp
+    while IFS= read -r line; do
+      sp="$(norm_path "$line")"
+      [[ -n "$sp" ]] && s_cands+=("$sp")
+    done < <(printf '%s\n%s\n%s\n' "$s_wt" "$s_ca" "$s_un")
+
+    if [[ ${#s_cands[@]} -gt 0 ]]; then
+      local sp_full f_sha n_tag nh
+      while IFS= read -r sp; do
+        [[ -n "$sp" ]] || continue
+        sp_full="${sub_full}/${sp}"
+        if [[ -L "$sp_full" ]]; then
+          local l_sha="" rc_l=0
+          if l_sha="$(resolve_symlink_oid "$sub_full" "$sp")"; then
+            dirty_buf="${dirty_buf}C ${sp} 120000:${l_sha}"$'\n'
+          else
+            rc_l=$?
+            if [[ $rc_l -eq 1 ]]; then echo "$l_sha"; return 1; fi
+            dirty_buf="${dirty_buf}C ${sp} DELETED"$'\n'
+          fi
+        elif [[ -f "$sp_full" ]]; then
+          if ! run_git_cmd "$sub_full" hash-object -- "$sp"; then
+            echo "GIT_ERROR: submodule hash-object failed for ${rel_p}/${sp}: $(git_err_detail)"
+            return 1
+          fi
+          f_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ ! "$f_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GIT_ERROR: submodule hash-object failed for ${rel_p}/${sp}: $f_sha"
+            return 1
+          fi
+          dirty_buf="${dirty_buf}C ${sp} ${f_sha}"$'\n'
+        elif [[ -d "$sp_full" ]]; then
+          if [[ -e "${sp_full}/.git" ]]; then
+            if [[ "$depth" -ge 5 ]]; then
+              echo "GIT_ERROR: nested submodule depth exceeded for ${rel_p}/${sp}"
+              return 1
+            fi
+            local nested_val="" rc_n=0
+            if nested_val="$(resolve_submodule_entry "$sub_full" "$sp" "" $((depth + 1)))"; then
+              n_tag="$nested_val"
+            else
+              rc_n=$?
+              if [[ $rc_n -eq 1 ]]; then echo "$nested_val"; return 1; fi
+              n_tag="DIR"
+            fi
+          else
+            n_tag="DIR"
+          fi
+          dirty_buf="${dirty_buf}D ${sp} ${n_tag}"$'\n'
+        else
+          dirty_buf="${dirty_buf}C ${sp} DELETED"$'\n'
+        fi
+      done < <(printf '%s\n' "${s_cands[@]}" | LC_ALL=C sort -u)
+    fi
+
+    if ! run_git_cmd_stdin "$root" "$dirty_buf" hash-object --stdin; then
+      echo "GIT_ERROR: git hash-object submodule digest failed for ${rel_p}: $(git_err_detail)"
+      return 1
+    fi
+    local d_sha
+    d_sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$d_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git hash-object submodule digest failed for ${rel_p}: $d_sha"
+      return 1
+    fi
+    printf '160000 commit %s+dirty:%s' "$sub_head" "$d_sha"
+    return 0
+  fi
+
+  if $has_fb; then
+    printf '160000 commit %s' "$fallback_oid"
+    return 0
+  fi
+  return 2
+}
+
 compute_tree_fingerprint() {
   local root="$1"
   local rel_csv="$2"
@@ -342,6 +550,17 @@ compute_tree_fingerprint() {
   if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
     echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"
     return 1
+  fi
+
+  local is_win_os=false
+  case "$(uname -s 2>/dev/null || printf '')" in
+    MINGW*|MSYS*|CYGWIN*) is_win_os=true ;;
+  esac
+  local core_filemode=false
+  if run_git_cmd "$root" config --bool core.filemode; then
+    [[ "$(trim_str "$_GIT_STDOUT")" == "true" ]] && core_filemode=true
+  else
+    ! $is_win_os && core_filemode=true
   fi
 
   local -a ign_arr=()
@@ -372,74 +591,217 @@ compute_tree_fingerprint() {
     clean_ign_csv="$(printf '%s\n' "${ign_arr[@]}" | paste -sd ',' -)"
   fi
 
-  local ls_out wt_dirty staged_dirty untracked
+  local ls_out diff_head_raw diff_cached_raw diff_idx_wt_raw untracked
   if [[ ${#clean_rel[@]} -gt 0 ]]; then
     run_git_cmd "$root" ls-tree -r HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
     ls_out="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --no-renames --name-only HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff HEAD failed: $(git_err_detail)"; return 1; }
-    wt_dirty="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --no-renames --cached --name-only -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; return 1; }
-    staged_dirty="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+    diff_head_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+    diff_cached_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+    diff_idx_wt_raw="$_GIT_STDOUT"
     run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
     untracked="$_GIT_STDOUT"
   else
     run_git_cmd "$root" ls-tree -r HEAD || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
     ls_out="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --no-renames --name-only HEAD || { echo "GIT_ERROR: git diff HEAD failed: $(git_err_detail)"; return 1; }
-    wt_dirty="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --no-renames --cached --name-only || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; return 1; }
-    staged_dirty="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+    diff_head_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+    diff_cached_raw="$_GIT_STDOUT"
+    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+    diff_idx_wt_raw="$_GIT_STDOUT"
     run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
     untracked="$_GIT_STDOUT"
   fi
 
-  local -a candidates=()
-  local line p
-  while IFS= read -r line; do
-    p="$(norm_path "$line")"
-    [[ -n "$p" ]] || continue
-    is_checkpoint_dir "$p" && continue
-    if [[ ${#ign_arr[@]} -gt 0 ]] && path_in_list "$p" "${ign_arr[@]}"; then continue; fi
-    if [[ ${#clean_rel[@]} -gt 0 ]] && ! path_in_list "$p" "${clean_rel[@]}"; then continue; fi
-    candidates+=("$p")
-  done < <(printf '%s\n%s\n%s\n' "$wt_dirty" "$staged_dirty" "$untracked")
+  local tasks_raw
+  tasks_raw="$({
+    printf '__HEAD__\n%s\n' "$diff_head_raw"
+    printf '__CACHED__\n%s\n' "$diff_cached_raw"
+    printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
+    printf '__UNTRACKED__\n%s\n' "$untracked"
+  } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
+    function norm_p(s) {
+      gsub(/\r/, "", s)
+      gsub(/\\/, "/", s)
+      sub(/^[ \t]+/, "", s)
+      sub(/[ \t]+$/, "", s)
+      sub(/^\.\//, "", s)
+      while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
+      return s
+    }
+    function is_cp(s) {
+      return (s ~ /^\.b3\/(ship|autodev)(\/|$)/)
+    }
+    function in_list(s, arr, n,    i, pat) {
+      for (i = 1; i <= n; i++) {
+        pat = arr[i]
+        if (pat == "") continue
+        if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
+      }
+      return 0
+    }
+    function accept_path(fp) {
+      if (fp == "" || is_cp(fp)) return 0
+      if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
+      if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
+      return 1
+    }
+    function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
+      if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
+      ti = index(line, "\t")
+      if (ti < 3) return
+      meta = substr(line, 2, ti - 2)
+      nmp = split(meta, mp, /[ \t]+/)
+      if (nmp < 5) return
+      nm = mp[2]; noid = mp[4]
+      if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
+      fp = norm_p(substr(line, ti + 1))
+      if (!accept_path(fp)) return
+      if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
+      out_m[fp] = nm
+      out_o[fp] = noid
+    }
+    BEGIN {
+      split("", ign_arr); split("", rel_arr)
+      split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", untr)
+      n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
+      n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
+      sec = ""
+    }
+    { gsub(/\r$/, "", $0) }
+    $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__UNTRACKED__" { sec = $0; next }
+    $0 == "" { next }
+    sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
+    sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
+    sec == "__IDXWT__" {
+      if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
+      ti = index($0, "\t")
+      if (ti < 3) next
+      fp = norm_p(substr($0, ti + 1))
+      if (accept_path(fp)) iw[fp] = 1
+      next
+    }
+    sec == "__UNTRACKED__" {
+      fp = norm_p($0)
+      if (accept_path(fp)) untr[fp] = 1
+      next
+    }
+    END {
+      z = "0000000000000000000000000000000000000000"
+      for (fp in h_m) {
+        m = h_m[fp]; oid = h_o[fp]
+        if (m == "000000") continue
+        if (m == "160000") {
+          fb = (oid != z ? oid : ((fp in c_m && c_m[fp] == "160000" && c_o[fp] != z) ? c_o[fp] : "-"))
+          printf "SUB\t%s\t%s\n", fb, fp
+          continue
+        }
+        if (m == "120000") {
+          if (oid != z) continue
+          if ((fp in c_m) && c_m[fp] == "120000" && c_o[fp] != z && !(fp in iw)) continue
+          printf "LINK\t-\t%s\n", fp
+          continue
+        }
+        if (oid != z) continue
+        if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) continue
+        printf "BLOB\t%s\t%s\n", m, fp
+      }
+      for (fp in untr) {
+        if (!(fp in h_m) || h_m[fp] == "000000") {
+          printf "UNTR\t-\t%s\n", fp
+        }
+      }
+    }
+  ')"
 
-  local -a sorted_changed=()
-  if [[ ${#candidates[@]} -gt 0 ]]; then
-    while IFS= read -r p; do [[ -n "$p" ]] && sorted_changed+=("$p"); done < <(printf '%s\n' "${candidates[@]}" | LC_ALL=C sort -u)
-  fi
-
-  local overlay_lines="" w_sha
-  if [[ ${#sorted_changed[@]} -gt 0 ]]; then
-    for p in "${sorted_changed[@]}"; do
-      if [[ -f "${root}/${p}" ]]; then
-        if ! run_git_cmd "$root" hash-object -- "$p"; then
-          echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
-          return 1
+  local resolved_lines="" kind arg p full_p res_val rc_r=0 w_sha l_sha u_mode
+  while IFS=$'\t' read -r kind arg p; do
+    [[ -n "$kind" && -n "$p" ]] || continue
+    full_p="${root}/${p}"
+    case "$kind" in
+      SUB)
+        [[ "$arg" == "-" ]] && arg=""
+        if res_val="$(resolve_submodule_entry "$root" "$p" "$arg")"; then
+          resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+        else
+          rc_r=$?
+          if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
         fi
-        w_sha="$(trim_str "$_GIT_STDOUT")"
-        if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
-          echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
-          return 1
+        ;;
+      LINK)
+        if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
+          resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
+        else
+          rc_r=$?
+          if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
         fi
-        overlay_lines="${overlay_lines}${p}"$'\t'"${w_sha}"$'\n'
-      else
-        overlay_lines="${overlay_lines}${p}"$'\t'"DELETED"$'\n'
-      fi
-    done
-  fi
+        ;;
+      BLOB)
+        if [[ -f "$full_p" ]]; then
+          if ! run_git_cmd "$root" hash-object -- "$p"; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+            return 1
+          fi
+          w_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+            return 1
+          fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"${arg} blob ${w_sha}"$'\n'
+        else
+          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
+        fi
+        ;;
+      UNTR)
+        if [[ -L "$full_p" ]]; then
+          if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
+            resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
+          else
+            rc_r=$?
+            if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+          fi
+        elif [[ -f "$full_p" ]]; then
+          if ! run_git_cmd "$root" hash-object -- "$p"; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+            return 1
+          fi
+          w_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+            return 1
+          fi
+          u_mode="100644"
+          if ! $is_win_os && $core_filemode && [[ -x "$full_p" ]]; then u_mode="100755"; fi
+          resolved_lines="${resolved_lines}${p}"$'\t'"${u_mode} blob ${w_sha}"$'\n'
+        elif [[ -d "$full_p" && -e "${full_p}/.git" ]]; then
+          if res_val="$(resolve_submodule_entry "$root" "$p" "")"; then
+            resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+          else
+            rc_r=$?
+            if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+          fi
+        fi
+        ;;
+    esac
+  done <<< "$tasks_raw"
 
-  local git_dir tmp_fp tree_hash
-  git_dir="$(resolve_git_dir "$root")" || { echo "GIT_ERROR: unable to resolve .git dir"; return 1; }
-  tmp_fp="${git_dir}/b3-tree-fp-$$-${RANDOM}.tmp"
+  local tmp_fp tree_hash
+  tmp_fp="$(mktemp "${TMPDIR:-/tmp}/b3-tree-fp.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-tree-fp.$$.${RANDOM}.tmp")"
   _CLEANUP_FILES+=("$tmp_fp")
 
   {
     printf 'PATHS=%s\n' "$paths_csv"
     {
-      printf '%s\n' "$ls_out"
-      printf '__OVERLAY__\n'
-      printf '%s' "$overlay_lines"
+      printf '__LS__\n%s\n' "$ls_out"
+      printf '__HEAD__\n%s\n' "$diff_head_raw"
+      printf '__CACHED__\n%s\n' "$diff_cached_raw"
+      printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
+      printf '__RESOLVED__\n%s' "$resolved_lines"
     } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
       function norm_p(s) {
         gsub(/\r/, "", s)
@@ -461,43 +823,111 @@ compute_tree_fingerprint() {
         }
         return 0
       }
+      function accept_path(fp) {
+        if (fp == "" || is_cp(fp)) return 0
+        if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
+        if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
+        return 1
+      }
+      function entry_type(m) {
+        if (m == "160000") return "commit"
+        if (m == "000000") return "deleted"
+        if (m == "040000") return "tree"
+        return "blob"
+      }
+      function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
+        if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
+        ti = index(line, "\t")
+        if (ti < 3) return
+        meta = substr(line, 2, ti - 2)
+        nmp = split(meta, mp, /[ \t]+/)
+        if (nmp < 5) return
+        nm = mp[2]; noid = mp[4]
+        if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
+        fp = norm_p(substr(line, ti + 1))
+        if (!accept_path(fp)) return
+        if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
+        out_m[fp] = nm
+        out_o[fp] = noid
+      }
       BEGIN {
+        split("", ign_arr); split("", rel_arr)
+        split("", eff); split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", res)
         n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
         n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
-        in_ov = 0
+        sec = ""
       }
-      $0 == "__OVERLAY__" { in_ov = 1; next }
       { gsub(/\r$/, "", $0) }
-      !in_ov {
-        if ($0 == "") next
+      $0 == "__LS__" || $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__RESOLVED__" { sec = $0; next }
+      $0 == "" { next }
+      sec == "__LS__" {
         ti = index($0, "\t")
         if (ti < 2) next
         meta = substr($0, 1, ti - 1)
         nm = split(meta, mp, /[ \t]+/)
-        if (nm < 3 || mp[2] != "blob" || mp[3] !~ /^[0-9a-f]{40}$/) next
+        if (nm < 3 || mp[1] !~ /^[0-9]{6}$/ || (mp[2] != "blob" && mp[2] != "commit") || mp[3] !~ /^[0-9a-f]{40}$/) next
         fp = norm_p(substr($0, ti + 1))
-        if (fp == "" || is_cp(fp)) next
-        if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) next
-        if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) next
-        eff[fp] = mp[3]
+        if (!accept_path(fp)) next
+        eff[fp] = mp[1] " " mp[2] " " mp[3]
         next
       }
-      in_ov {
-        if ($0 == "") next
+      sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
+      sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
+      sec == "__IDXWT__" {
+        if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
+        ti = index($0, "\t")
+        if (ti < 3) next
+        fp = norm_p(substr($0, ti + 1))
+        if (accept_path(fp)) iw[fp] = 1
+        next
+      }
+      sec == "__RESOLVED__" {
         ti = index($0, "\t")
         if (ti < 2) next
         fp = substr($0, 1, ti - 1)
-        val = substr($0, ti + 1)
-        if (val == "DELETED") delete eff[fp]
-        else eff[fp] = val
+        res[fp] = substr($0, ti + 1)
+        next
       }
       END {
-        for (fp in eff) printf "%s\t%s\n", fp, eff[fp]
+        z = "0000000000000000000000000000000000000000"
+        for (fp in h_m) {
+          m = h_m[fp]; oid = h_o[fp]
+          if (m == "000000") {
+            delete eff[fp]
+          } else if (fp in res) {
+            if (res[fp] == "DELETED") delete eff[fp]
+            else eff[fp] = res[fp]
+          } else if (oid != z) {
+            eff[fp] = m " blob " oid
+          } else if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) {
+            eff[fp] = m " blob " c_o[fp]
+          } else {
+            delete eff[fp]
+          }
+        }
+        for (fp in res) {
+          if (!(fp in h_m) || h_m[fp] == "000000") {
+            if (res[fp] == "DELETED") delete eff[fp]
+            else eff[fp] = res[fp]
+          }
+        }
+        for (fp in c_m) {
+          cm = c_m[fp]
+          has_e = (fp in eff)
+          em = ""
+          if (has_e) { split(eff[fp], e_p, " "); em = e_p[1] }
+          if ((cm == "000000" && has_e) || (cm != "000000" && (!has_e || em != cm))) {
+            printf "I\t%s\t%s %s %s\n", fp, cm, entry_type(cm), c_o[fp]
+          }
+        }
+        for (fp in eff) {
+          printf "E\t%s\t%s\n", fp, eff[fp]
+        }
       }
-    ' | LC_ALL=C sort -t $'\t' -k1,1 | LC_ALL=C awk -F '\t' '{ printf "F %s %s\n", $1, $2 }'
+    ' | LC_ALL=C sort -t $'\t' -k1,1 -k2,2 | LC_ALL=C awk -F '\t' '{ printf "%s %s %s\n", $1, $3, $2 }'
   } > "$tmp_fp"
 
-  if ! run_git_cmd "$root" hash-object -- "$tmp_fp"; then
+  if ! run_git_cmd_stdin_file "$root" "$tmp_fp" hash-object --stdin; then
     echo "GIT_ERROR: git hash-object manifest failed: $(git_err_detail)"
     rm -f "$tmp_fp"
     return 1
@@ -1110,7 +1540,7 @@ case "$CMD" in
 
     REQUIRE_RECEIPT="$(trim_str "$REQUIRE_RECEIPT")"
     if [[ -n "$REQUIRE_RECEIPT" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only -- "${STAGED_ARR[@]}" || { echo "GIT_ERROR: git diff index-vs-wt failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only -- "${STAGED_ARR[@]}" || { echo "GIT_ERROR: git diff index-vs-wt failed: $(git_err_detail)"; exit 1; }
       IDX_VS_WT="$_GIT_STDOUT"
       run_git_cmd "$REPO_ROOT" diff --no-renames --cached --diff-filter=D --name-only || { echo "GIT_ERROR: git diff cached delete failed: $(git_err_detail)"; exit 1; }
       STAGED_DEL="$_GIT_STDOUT"
@@ -1185,12 +1615,12 @@ case "$CMD" in
         done < <(split_csv_lines "$_VR_REL_PATHS" true | LC_ALL=C sort -u)
       fi
       if $SCOPE_ALL; then
-        run_git_cmd "$REPO_ROOT" diff --no-renames --name-only || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
+        run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
         UNSTAGED_RAW="$_GIT_STDOUT"
         run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
         UNTRACKED_RAW="$_GIT_STDOUT"
       else
-        run_git_cmd "$REPO_ROOT" diff --no-renames --name-only -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
+        run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
         UNSTAGED_RAW="$_GIT_STDOUT"
         run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
         UNTRACKED_RAW="$_GIT_STDOUT"

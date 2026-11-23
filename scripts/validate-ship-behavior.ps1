@@ -1242,6 +1242,453 @@ try {
         FailCheck 'guard-partial-staged-bypass' "b1=(${pBlk1Exit}:$pBlk1) b2=(${pBlk2Exit}:$pBlk2) okSc=$pOkScopedExit blkAll=(${pBlkAllExit}:$pBlkAll) ignMm=$pBlkIgnMismatchExit ign=$pOkAllIgnExit stgIgn=$pBlkStgIgnExit sh=$partShOk"
     }
 
+    # --- guard-verify-mode-type-submodule (chmod, symlink/type changes, submodule gitlink + dirty state, legacy migration) ---
+    $subOrigin = Join-Path $sandbox 'sub-origin'
+    New-Item -ItemType Directory -Path $subOrigin -Force | Out-Null
+    Push-Location $subOrigin
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    [IO.File]::WriteAllText((Join-Path $subOrigin 's.txt'), "sub-v1`n", (New-Object System.Text.UTF8Encoding($false)))
+    git add s.txt; git commit -qm 'sub-v1'
+    $sub1 = (git rev-parse HEAD).Trim()
+    [IO.File]::WriteAllText((Join-Path $subOrigin 's.txt'), "sub-v2`n", (New-Object System.Text.UTF8Encoding($false)))
+    git add s.txt; git commit -qm 'sub-v2'
+    $sub2 = (git rev-parse HEAD).Trim()
+    Pop-Location
+
+    $mtRepo = Join-Path $sandbox 'mode-type-sub-repo'
+    New-Item -ItemType Directory -Path (Join-Path $mtRepo 'scripts') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $mtRepo 'deps') -Force | Out-Null
+    Push-Location $mtRepo
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    $utf8NoBomMt = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'scripts\run.sh'), "#!/bin/sh`necho run`n", $utf8NoBomMt)
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'other.txt'), "other`n", $utf8NoBomMt)
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'unrelated.txt'), "unrelated-0`n", $utf8NoBomMt)
+    git add .; git commit -qm 'init'
+
+    $guardShMt = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+    $mtRepoP = $mtRepo -replace '\\', '/'
+    $hasShMt = Test-Path -LiteralPath $gitBash
+
+    # 1. Executable bit (chmod +x) + forward ancestry + index-vs-WT mode divergence
+    $rChmod = '.b3/ship/runs/r1/evidence/chmod.verify'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo m0' -ReceiptPath $rChmod -TaskId CHM -RelevantPaths 'scripts/run.sh'
+    $cmShInitOk = $true
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rChmod'"
+        $cmShInitOk = ($LASTEXITCODE -eq 0)
+    }
+    git update-index --chmod=+x scripts/run.sh
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rChmod
+    $cmStalePs = $LASTEXITCODE
+    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'scripts/run.sh' -RequireVerifyReceipt $rChmod
+    $cmPcBlkPs = $LASTEXITCODE
+    $cmStaleSh = 2; $cmPcBlkSh = 1
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rChmod'"
+        $cmStaleSh = $LASTEXITCODE
+        $null = & $gitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'scripts/run.sh' --require-verify-receipt '$rChmod'"
+        $cmPcBlkSh = $LASTEXITCODE
+    }
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo m1-ps' -ReceiptPath $rChmod -TaskId CHM -RelevantPaths 'scripts/run.sh'
+    $cmRun1PsEx = $LASTEXITCODE
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-run --repo-root '$mtRepoP' --verify-cmd 'echo m1' --receipt-path '$rChmod' --task-id CHM --relevant-paths 'scripts/run.sh'"
+    }
+    $cmPcOkPs = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'scripts/run.sh' -RequireVerifyReceipt $rChmod) -join "`n")
+    $cmPcOkPsEx = $LASTEXITCODE
+    $cmPcOkSh = 'PRECOMMIT_OK'; $cmPcOkShEx = 0
+    if ($hasShMt) {
+        $cmPcOkSh = (& $gitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'scripts/run.sh' --require-verify-receipt '$rChmod'") -join "`n"
+        $cmPcOkShEx = $LASTEXITCODE
+    }
+    git commit -qm 'chmod-x'
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rChmod
+    $cmAfterPs = $LASTEXITCODE
+    $cmAfterSh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rChmod'"
+        $cmAfterSh = $LASTEXITCODE
+    }
+    # Index-vs-WT mode divergence + Windows core.filemode=true untracked script parity (R003)
+    $rIdxMode = '.b3/ship/runs/r1/evidence/idx-mode.verify'
+    git config core.filemode true
+    git update-index --chmod=-x scripts/run.sh
+    git commit -qm 'chmod-644'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo idxm' -ReceiptPath $rIdxMode -TaskId IDXM -RelevantPaths 'scripts/run.sh'
+    git update-index --chmod=+x scripts/run.sh
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rIdxMode
+    $cmIdxStalePs = $LASTEXITCODE
+    $cmIdxStaleSh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rIdxMode'"
+        $cmIdxStaleSh = $LASTEXITCODE
+    }
+    git reset -q HEAD scripts/run.sh
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'scripts\untr.sh'), "#!/bin/sh`necho u`n", $utf8NoBomMt)
+    $rUntrFm = '.b3/ship/runs/r1/evidence/untr-fm.verify'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo ufm' -ReceiptPath $rUntrFm -TaskId UFM
+    $untrFmShOk = $true
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rUntrFm'"
+        $untrFmShOk = ($LASTEXITCODE -eq 0)
+    }
+    Remove-Item -LiteralPath (Join-Path $mtRepo 'scripts\untr.sh') -Force
+    git config core.filemode false
+    $chmodOk = $cmShInitOk -and ($cmRun1PsEx -eq 0) -and ($cmStalePs -eq 2) -and ($cmStaleSh -eq 2) -and
+               ($cmPcBlkPs -eq 1) -and ($cmPcBlkSh -eq 1) -and
+               ($cmPcOkPsEx -eq 0) -and ($cmPcOkPs -eq 'PRECOMMIT_OK') -and
+               ($cmPcOkShEx -eq 0) -and ($cmPcOkSh -eq 'PRECOMMIT_OK') -and
+               ($cmAfterPs -eq 0) -and ($cmAfterSh -eq 0) -and
+               ($cmIdxStalePs -eq 2) -and ($cmIdxStaleSh -eq 2) -and $untrFmShOk
+
+    # 2. Symlink & type changes (120000 <-> 100644 with identical bytes + target content edit)
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'lnk'), 'scripts/run.sh', $utf8NoBomMt)
+    $lnkSha = (git hash-object -w -- lnk).Trim()
+    git update-index --add --cacheinfo "120000,$lnkSha,lnk"
+    $rSym = '.b3/ship/runs/r1/evidence/sym.verify'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s0' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
+    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
+    $symPc1Ps = $LASTEXITCODE
+    $symPc1Sh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'lnk' --require-verify-receipt '$rSym'"
+        $symPc1Sh = $LASTEXITCODE
+    }
+    git commit -qm 'add-lnk'
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $symAfter1Ps = $LASTEXITCODE
+    $symAfter1Sh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSym'"
+        $symAfter1Sh = $LASTEXITCODE
+    }
+    # Type change 120000 -> 100644 keeping identical bytes ('scripts/run.sh')
+    git update-index --force-remove lnk
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'lnk'), 'scripts/run.sh', $utf8NoBomMt)
+    git add lnk
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $symTypeStalePs = $LASTEXITCODE
+    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
+    $symTypeBlkPs = $LASTEXITCODE
+    $symTypeStaleSh = 2; $symTypeBlkSh = 1
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSym'"
+        $symTypeStaleSh = $LASTEXITCODE
+        $null = & $gitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'lnk' --require-verify-receipt '$rSym'"
+        $symTypeBlkSh = $LASTEXITCODE
+    }
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s1' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
+    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
+    $symPc2Ps = $LASTEXITCODE
+    $symPc2Sh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'lnk' --require-verify-receipt '$rSym'"
+        $symPc2Sh = $LASTEXITCODE
+    }
+    git commit -qm 'lnk-to-file'
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $symAfter2Ps = $LASTEXITCODE
+    $symAfter2Sh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSym'"
+        $symAfter2Sh = $LASTEXITCODE
+    }
+    # Convert 100644 -> 120000 and verify target change invalidates receipt
+    git update-index --force-remove lnk
+    git update-index --add --cacheinfo "120000,$lnkSha,lnk"
+    git commit -qm 'file-to-lnk'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s2-ps' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
+    $symRun2PsEx = $LASTEXITCODE
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-run --repo-root '$mtRepoP' --verify-cmd 'echo s2' --receipt-path '$rSym' --task-id SYM --relevant-paths 'lnk'"
+    }
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $symBackValidPs = $LASTEXITCODE
+    $symBackValidSh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSym'"
+        $symBackValidSh = $LASTEXITCODE
+    }
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'lnk'), 'other.txt', $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $symTargetStalePs = $LASTEXITCODE
+    $symTargetStaleSh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSym'"
+        $symTargetStaleSh = $LASTEXITCODE
+    }
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'lnk'), 'scripts/run.sh', $utf8NoBomMt)
+    $symOk = ($symPc1Ps -eq 0) -and ($symPc1Sh -eq 0) -and ($symAfter1Ps -eq 0) -and ($symAfter1Sh -eq 0) -and
+             ($symTypeStalePs -eq 2) -and ($symTypeStaleSh -eq 2) -and ($symTypeBlkPs -eq 1) -and ($symTypeBlkSh -eq 1) -and
+             ($symPc2Ps -eq 0) -and ($symPc2Sh -eq 0) -and ($symAfter2Ps -eq 0) -and ($symAfter2Sh -eq 0) -and
+             ($symRun2PsEx -eq 0) -and ($symBackValidPs -eq 0) -and ($symBackValidSh -eq 0) -and
+             ($symTargetStalePs -eq 2) -and ($symTargetStaleSh -eq 2)
+
+    # 3. Submodule gitlink updates + dirty submodule + scoped forward ancestry
+    $prevSubEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        git -c protocol.file.allow=always submodule add -q "$subOrigin" deps/sub 2>&1 | Out-Null
+        git -C deps/sub checkout -q $sub1 2>&1 | Out-Null
+        git add .gitmodules deps/sub 2>&1 | Out-Null
+        git commit -qm 'add-sub1' 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $prevSubEap
+    }
+    $rSubAll = '.b3/ship/runs/r1/evidence/sub-all.verify'
+    $rSubSc = '.b3/ship/runs/r1/evidence/sub-scoped.verify'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-all' -ReceiptPath $rSubAll -TaskId SUBA
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-sc' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $subInitShOk = $true
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubAll'"
+        $a = $LASTEXITCODE
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subInitShOk = ($a -eq 0) -and ($LASTEXITCODE -eq 0)
+    }
+    # Move submodule pointer unstaged -> both ALL & scoped must become VERIFY_STALE
+    $prevSubEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { git -C deps/sub checkout -q $sub2 2>&1 | Out-Null } finally { $ErrorActionPreference = $prevSubEap }
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubAll
+    $subMvAllPs = $LASTEXITCODE
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subMvScPs = $LASTEXITCODE
+    $subMvAllSh = 2; $subMvScSh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubAll'"
+        $subMvAllSh = $LASTEXITCODE
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subMvScSh = $LASTEXITCODE
+    }
+    # Re-verify moved submodule while unstaged with staged sibling -> precommit blocks unstaged move -> git add deps/sub -> precommit OK -> commit -> stays VERIFY_VALID
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'other.txt'), "other-with-sub`n", $utf8NoBomMt)
+    git add other.txt
+    $rSubPair = '.b3/ship/runs/r1/evidence/sub-pair.verify'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-pair' -ReceiptPath $rSubPair -TaskId SUBP -RelevantPaths 'deps/sub,other.txt'
+    $subUnstPc = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'deps/sub,other.txt' -RequireVerifyReceipt $rSubPair) -join "`n")
+    $subUnstPcEx = $LASTEXITCODE
+    git reset -q HEAD other.txt
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'other.txt'), "other`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-mv' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    git add deps/sub
+    $subStgPcPs = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'deps/sub' -RequireVerifyReceipt $rSubSc) -join "`n")
+    $subStgPcPsEx = $LASTEXITCODE
+    $subStgPcSh = 'PRECOMMIT_OK'; $subStgPcShEx = 0
+    if ($hasShMt) {
+        $subStgPcSh = (& $gitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'deps/sub' --require-verify-receipt '$rSubSc'") -join "`n"
+        $subStgPcShEx = $LASTEXITCODE
+    }
+    git commit -qm 'bump-sub2'
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subCommitValidPs = $LASTEXITCODE
+    $subCommitValidSh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subCommitValidSh = $LASTEXITCODE
+    }
+    # Dirty files inside submodule -> VERIFY_STALE, re-verify dirty, edit dirty -> VERIFY_STALE again
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'deps\sub\s.txt'), "dirty-1`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subDirty1Ps = $LASTEXITCODE
+    $subDirty1Sh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subDirty1Sh = $LASTEXITCODE
+    }
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-dirty1' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $subDirtyShParity = $true
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subDirtyShParity = ($LASTEXITCODE -eq 0)
+    }
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'deps\sub\s.txt'), "dirty-2`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subDirty2Ps = $LASTEXITCODE
+    $subDirty2Sh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subDirty2Sh = $LASTEXITCODE
+    }
+    # Clean submodule, verify untracked file inside sub (R005), nested dirty repo (R002), uninitialized submodule, and forward ancestry
+    $prevSubEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { git -C deps/sub checkout -q -- s.txt 2>&1 | Out-Null } finally { $ErrorActionPreference = $prevSubEap }
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-clean' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    # Untracked file inside submodule -> VERIFY_STALE, re-verify, edit untracked file -> VERIFY_STALE
+    $subUntrFile = Join-Path $mtRepo 'deps\sub\sub-untr.txt'
+    [IO.File]::WriteAllText($subUntrFile, "u-sub-1`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subUntr1Ps = $LASTEXITCODE
+    $subUntr1Sh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subUntr1Sh = $LASTEXITCODE
+    }
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-untr1' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    [IO.File]::WriteAllText($subUntrFile, "u-sub-2`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subUntr2Ps = $LASTEXITCODE
+    $subUntr2Sh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subUntr2Sh = $LASTEXITCODE
+    }
+    Remove-Item -LiteralPath $subUntrFile -Force
+    # Nested git repo inside deps/sub (R002)
+    $nestedRepo = Join-Path $mtRepo 'deps\sub\inner-nested'
+    New-Item -ItemType Directory -Path $nestedRepo -Force | Out-Null
+    Push-Location $nestedRepo
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    [IO.File]::WriteAllText((Join-Path $nestedRepo 'i.txt'), "in-1`n", $utf8NoBomMt)
+    git add i.txt; git commit -qm 'inner-1'
+    [IO.File]::WriteAllText((Join-Path $nestedRepo 'i.txt'), "in-dirty-1`n", $utf8NoBomMt)
+    Pop-Location
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-nested' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $subNestParSh = $true
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subNestParSh = ($LASTEXITCODE -eq 0)
+    }
+    [IO.File]::WriteAllText((Join-Path $nestedRepo 'i.txt'), "in-dirty-2`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subNestEditPs = $LASTEXITCODE
+    $subNestEditSh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subNestEditSh = $LASTEXITCODE
+    }
+    [IO.File]::WriteAllText((Join-Path $nestedRepo 'untr-in.txt'), "u1`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-nested-untr' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    [IO.File]::WriteAllText((Join-Path $nestedRepo 'untr-in.txt'), "u2`n", $utf8NoBomMt)
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subNestUntrPs = $LASTEXITCODE
+    $subNestUntrSh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subNestUntrSh = $LASTEXITCODE
+    }
+    Remove-Item -LiteralPath $nestedRepo -Recurse -Force
+    # Uninitialized submodule (160000 gitlink in HEAD, empty dir on disk without .git)
+    New-Item -ItemType Directory -Path (Join-Path $mtRepo 'deps\uninit') -Force | Out-Null
+    git update-index --add --cacheinfo "160000,$sub1,deps/uninit"
+    git commit -qm 'add-uninit-sub'
+    $rSubUninit = '.b3/ship/runs/r1/evidence/sub-uninit.verify'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-uninit' -ReceiptPath $rSubUninit -TaskId SUBU -RelevantPaths 'deps/uninit'
+    $subUninitSh = $true
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubUninit'"
+        $subUninitSh = ($LASTEXITCODE -eq 0)
+    }
+    git update-index --cacheinfo "160000,$sub2,deps/uninit"
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubUninit
+    $subUninitBumpPs = $LASTEXITCODE
+    $subUninitBumpSh = 2
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubUninit'"
+        $subUninitBumpSh = $LASTEXITCODE
+    }
+    git commit -qm 'bump-uninit-sub'
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-clean' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    [IO.File]::WriteAllText((Join-Path $mtRepo 'unrelated.txt'), "unrelated-1`n", $utf8NoBomMt)
+    git add unrelated.txt; git commit -qm 'unrelated-commit'
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $subFwdPs = $LASTEXITCODE
+    $subFwdSh = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
+        $subFwdSh = $LASTEXITCODE
+    }
+    # Relative --repo-root regression test (R001 in PS & SH)
+    Push-Location $sandbox
+    $relName = 'mode-type-sub-repo'
+    $rRel = '.b3/ship/runs/r1/evidence/rel-root.verify'
+    $relOk = $true
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $relName -VerifyCmd 'echo rel' -ReceiptPath $rRel -TaskId REL -RelevantPaths 'deps/sub'
+    $relPsEx = $LASTEXITCODE
+    if ($hasShMt) {
+        $null = & $gitBash -c "cd '$($sandbox -replace '\\', '/')' && '$guardShMt' verify-check --repo-root '$relName' --receipt-path '$rRel'"
+        $relShVcEx = $LASTEXITCODE
+        $null = & $gitBash -c "cd '$($sandbox -replace '\\', '/')' && '$guardShMt' verify-run --repo-root '$relName' --verify-cmd 'echo rel-sh' --receipt-path '$rRel' --task-id REL --relevant-paths 'deps/sub'"
+        $relShVrEx = $LASTEXITCODE
+        $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $relName -ReceiptPath $rRel
+        $relPsAfterSh = $LASTEXITCODE
+        $relOk = ($relPsEx -eq 0) -and ($relShVcEx -eq 0) -and ($relShVrEx -eq 0) -and ($relPsAfterSh -eq 0)
+    } else {
+        $relOk = ($relPsEx -eq 0)
+    }
+    Pop-Location
+    $subOk = $subInitShOk -and ($subMvAllPs -eq 2) -and ($subMvScPs -eq 2) -and ($subMvAllSh -eq 2) -and ($subMvScSh -eq 2) -and
+             ($subUnstPcEx -eq 1) -and ($subUnstPc -match 'unstaged changes in receipt scope.*deps/sub') -and
+             ($subStgPcPsEx -eq 0) -and ($subStgPcPs -eq 'PRECOMMIT_OK') -and
+             ($subStgPcShEx -eq 0) -and ($subStgPcSh -eq 'PRECOMMIT_OK') -and
+             ($subCommitValidPs -eq 0) -and ($subCommitValidSh -eq 0) -and
+             ($subDirty1Ps -eq 2) -and ($subDirty1Sh -eq 2) -and $subDirtyShParity -and
+             ($subDirty2Ps -eq 2) -and ($subDirty2Sh -eq 2) -and
+             ($subUntr1Ps -eq 2) -and ($subUntr1Sh -eq 2) -and ($subUntr2Ps -eq 2) -and ($subUntr2Sh -eq 2) -and
+             $subNestParSh -and ($subNestEditPs -eq 2) -and ($subNestEditSh -eq 2) -and ($subNestUntrPs -eq 2) -and ($subNestUntrSh -eq 2) -and
+             $subUninitSh -and ($subUninitBumpPs -eq 2) -and ($subUninitBumpSh -eq 2) -and
+             ($subFwdPs -eq 0) -and ($subFwdSh -eq 0) -and $relOk
+
+    # 4. Old-receipt migration behavior: pre-upgrade 'PATHS=ALL\nF <path> <sha>\n' hash fails closed as VERIFY_STALE (2) and migrates on verify-run
+    $mtHead = (git rev-parse HEAD).Trim()
+    $legSb = New-Object System.Text.StringBuilder
+    [void]$legSb.Append("PATHS=ALL`n")
+    $lsPairs = @(git ls-tree -r HEAD | ForEach-Object {
+        $ti = $_.IndexOf("`t")
+        if ($ti -gt 0) {
+            $mp = $_.Substring(0, $ti).Trim() -split '\s+'
+            if ($mp.Count -ge 3 -and $mp[1] -eq 'blob') {
+                [PSCustomObject]@{ P = $_.Substring($ti + 1); Oid = $mp[2] }
+            }
+        }
+    } | Sort-Object P)
+    foreach ($lp in $lsPairs) { [void]$legSb.Append("F $($lp.P) $($lp.Oid)`n") }
+    $legTmp = Join-Path $mtRepo '.b3\ship\runs\r1\evidence\legacy-fp.tmp'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $legTmp) -Force | Out-Null
+    [IO.File]::WriteAllText($legTmp, $legSb.ToString(), $utf8NoBomMt)
+    $legHash = (git hash-object -- $legTmp).Trim()
+    Remove-Item -LiteralPath $legTmp -Force
+    $rLegacy = '.b3/ship/runs/r1/evidence/legacy.verify'
+    $legacyBody = @(
+        'schema=b3-verify-v1',
+        'task_id=LEG',
+        'scope=full',
+        "head_sha=$mtHead",
+        "tree_hash=$legHash",
+        'relevant_paths=ALL',
+        'exit_code=0',
+        'status=PASS',
+        'command=echo legacy',
+        'log_path=none',
+        'timestamp_utc=2026-01-01T00:00:00Z'
+    ) -join "`n"
+    [IO.File]::WriteAllText((Join-Path $mtRepo $rLegacy), "$legacyBody`n", $utf8NoBomMt)
+    $legCheckPs = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rLegacy) -join "`n")
+    $legCheckPsEx = $LASTEXITCODE
+    $legCheckSh = 'VERIFY_STALE:'; $legCheckShEx = 2
+    if ($hasShMt) {
+        $legCheckSh = (& $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rLegacy'") -join "`n"
+        $legCheckShEx = $LASTEXITCODE
+    }
+    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo migrated' -ReceiptPath $rLegacy -TaskId LEG
+    $legMigRunEx = $LASTEXITCODE
+    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rLegacy
+    $legMigPsEx = $LASTEXITCODE
+    $legMigShEx = 0
+    if ($hasShMt) {
+        $null = & $gitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rLegacy'"
+        $legMigShEx = $LASTEXITCODE
+    }
+    $migOk = ($legCheckPsEx -eq 2) -and ($legCheckPs -match 'VERIFY_STALE:') -and
+             ($legCheckShEx -eq 2) -and ($legCheckSh -match 'VERIFY_STALE:') -and
+             ($legMigRunEx -eq 0) -and ($legMigPsEx -eq 0) -and ($legMigShEx -eq 0)
+
+    Pop-Location
+    if ($chmodOk -and $symOk -and $subOk -and $migOk) {
+        Pass 'guard-verify-mode-type-submodule'
+    } else {
+        FailCheck 'guard-verify-mode-type-submodule' "chmod=$chmodOk sym=$symOk sub=$subOk mig=$migOk"
+    }
+
     # --- guard-safety-tripwires (secrets, destructive SQL non-test vs test, mass delete + AllowMassDelete, MERGE_HEAD) ---
     $stRepo = Join-Path $sandbox 'safety-repo'
     New-Item -ItemType Directory -Path $stRepo | Out-Null

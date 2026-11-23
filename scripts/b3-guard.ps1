@@ -101,11 +101,15 @@ function Format-WinArg([string]$Arg) {
     return $sb.ToString()
 }
 
-function Invoke-GitCommand([string]$Root, [string[]]$GitArgs) {
+function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '') {
+    $useStdIn = $PSBoundParameters.ContainsKey('StdInText')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'git'
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    if ($useStdIn) {
+        $psi.RedirectStandardInput = $true
+    }
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -123,8 +127,17 @@ function Invoke-GitCommand([string]$Root, [string[]]$GitArgs) {
     }
     try {
         $errTask = $proc.StandardError.ReadToEndAsync()
-        $stdout = $proc.StandardOutput.ReadToEnd()
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        if ($useStdIn) {
+            $inBytes = $utf8.GetBytes($StdInText)
+            if ($inBytes.Length -gt 0) {
+                $proc.StandardInput.BaseStream.Write($inBytes, 0, $inBytes.Length)
+                $proc.StandardInput.BaseStream.Flush()
+            }
+            $proc.StandardInput.Close()
+        }
         $proc.WaitForExit()
+        $stdout = $outTask.GetAwaiter().GetResult()
         $stderr = $errTask.GetAwaiter().GetResult()
         $code = $proc.ExitCode
     } finally {
@@ -345,12 +358,165 @@ function Write-AtomicLfFile([string]$DestPath, [string]$Text) {
     }
 }
 
+function Get-GitEntryType([string]$Mode) {
+    switch ($Mode) {
+        '160000' { return 'commit' }
+        '000000' { return 'deleted' }
+        '040000' { return 'tree' }
+        default  { return 'blob' }
+    }
+}
+
+function Parse-GitRawDiff([string]$RawOut, [string[]]$IgnPaths, [string[]]$CleanRel) {
+    $map = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    if (-not $RawOut) { return $map }
+    foreach ($rawLine in ($RawOut -split "\r?\n")) {
+        if (-not $rawLine -or -not $rawLine.StartsWith(':') -or $rawLine.StartsWith('::')) { continue }
+        $tabIdx = $rawLine.IndexOf("`t")
+        if ($tabIdx -lt 2) { continue }
+        $meta = $rawLine.Substring(1, $tabIdx - 1).Trim() -split '\s+'
+        if ($meta.Count -lt 5) { continue }
+        $newMode = $meta[1]
+        $newOid = $meta[3]
+        if ($newMode -cnotmatch '^[0-9]{6}$' -or $newOid -cnotmatch '^[0-9a-f]{40}$') { continue }
+        $p = Normalize-PathValue ($rawLine.Substring($tabIdx + 1))
+        if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
+        if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
+        if ($CleanRel.Count -gt 0 -and -not (Test-PathMatch $p $CleanRel)) { continue }
+        if ($map.ContainsKey($p) -and $newMode -ceq '000000' -and $map[$p].NewMode -cne '000000') { continue }
+        $map[$p] = @{
+            NewMode = $newMode
+            NewOid  = $newOid
+            Status  = $meta[4]
+        }
+    }
+    return $map
+}
+
+function Get-SymlinkBlobOid([string]$Root, [string]$RelPath) {
+    $full = Join-Path $Root ($RelPath -replace '/', '\')
+    $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+    if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        $isSym = (-not $item.PSObject.Properties['LinkType']) -or ($item.LinkType -ceq 'SymbolicLink')
+        if ($isSym -and $item.PSObject.Properties['Target'] -and $item.Target) {
+            $tgt = ([string](@($item.Target)[0])) -replace '\\', '/'
+            $sRes = Invoke-GitCommand $Root @('hash-object', '--stdin') $tgt
+            $sSha = $sRes.StdOut.Trim()
+            if ($sRes.ExitCode -ne 0 -or $sSha -notmatch '^[0-9a-f]{40}$') {
+                $detail = if ($sRes.StdErr.Trim()) { $sRes.StdErr.Trim() } else { $sSha }
+                Fail "GIT_ERROR: git hash-object symlink failed for ${RelPath}: $detail" 1
+            }
+            return $sSha
+        }
+    }
+    if (Test-Path -LiteralPath $full -PathType Leaf) {
+        $wRes = Invoke-GitCommand $Root @('hash-object', '--', $RelPath)
+        $wSha = $wRes.StdOut.Trim()
+        if ($wRes.ExitCode -ne 0 -or $wSha -notmatch '^[0-9a-f]{40}$') {
+            $detail = if ($wRes.StdErr.Trim()) { $wRes.StdErr.Trim() } else { $wSha }
+            Fail "GIT_ERROR: git hash-object failed for ${RelPath}: $detail" 1
+        }
+        return $wSha
+    }
+    return $null
+}
+
+function Get-SubmoduleEntryIdentity([string]$Root, [string]$RelPath, [string]$FallbackOid, [int]$Depth = 0) {
+    $subFull = Join-Path $Root ($RelPath -replace '/', '\')
+    $zeroOid = '0000000000000000000000000000000000000000'
+    $hasFallback = ($FallbackOid -and $FallbackOid -cne $zeroOid -and $FallbackOid -cmatch '^[0-9a-f]{40}$')
+    $subGit = Join-Path $subFull '.git'
+    if ((Test-Path -LiteralPath $subFull -PathType Container) -and (Test-Path -LiteralPath $subGit)) {
+        $shRes = Invoke-GitCommand $subFull @('rev-parse', 'HEAD')
+        $shTrim = $shRes.StdOut.Trim()
+        $hasHead = ($shRes.ExitCode -eq 0 -and $shTrim -cmatch '^[0-9a-f]{40}$')
+        $subHead = if ($hasHead) { $shTrim } elseif ($hasFallback) { $FallbackOid } else { 'UNBORN' }
+
+        $stRes = Invoke-GitCommand $subFull @('status', '--porcelain', '-uall', '--ignore-submodules=none')
+        if ($stRes.ExitCode -ne 0) {
+            $detail = if ($stRes.StdErr.Trim()) { $stRes.StdErr.Trim() } else { $stRes.StdOut.Trim() }
+            Fail "GIT_ERROR: submodule status failed for ${RelPath}: $detail" 1
+        }
+        $stList = New-Object System.Collections.Generic.List[string]
+        foreach ($rawSt in ($stRes.StdOut -split "\r?\n")) {
+            $cleanSt = ([string]$rawSt).TrimEnd("`r")
+            if ($cleanSt -and $cleanSt.Trim()) {
+                $stList.Add($cleanSt)
+            }
+        }
+        if ($stList.Count -eq 0) {
+            return "160000 commit $subHead"
+        }
+
+        $sbDirty = New-Object System.Text.StringBuilder
+        foreach ($sl in @(Sort-Ordinal $stList.ToArray())) {
+            [void]$sbDirty.Append("S $sl`n")
+        }
+        $sWt = if ($hasHead) { @(Invoke-GitLines $subFull @('diff', '--no-renames', '--name-only', '--ignore-submodules=none', 'HEAD')) } else { @() }
+        $sCa = @(Invoke-GitLines $subFull @('diff', '--no-renames', '--cached', '--name-only'))
+        $sUn = @(Invoke-GitLines $subFull @('ls-files', '--others', '--exclude-standard'))
+        $sCand = New-Object System.Collections.Generic.List[string]
+        foreach ($sp in (@($sWt) + @($sCa) + @($sUn))) {
+            if ($sp) { $sCand.Add($sp) }
+        }
+        foreach ($sp in @(Sort-Ordinal $sCand.ToArray())) {
+            $spFull = Join-Path $subFull ($sp -replace '/', '\')
+            $spItem = Get-Item -LiteralPath $spFull -Force -ErrorAction SilentlyContinue
+            if ($spItem -and (($spItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+                $lSha = Get-SymlinkBlobOid $subFull $sp
+                if ($lSha) { [void]$sbDirty.Append("C $sp 120000:$lSha`n") }
+                else { [void]$sbDirty.Append("C $sp DELETED`n") }
+            } elseif (Test-Path -LiteralPath $spFull -PathType Leaf) {
+                $fRes = Invoke-GitCommand $subFull @('hash-object', '--', $sp)
+                $fSha = $fRes.StdOut.Trim()
+                if ($fRes.ExitCode -ne 0 -or $fSha -notmatch '^[0-9a-f]{40}$') {
+                    $detail = if ($fRes.StdErr.Trim()) { $fRes.StdErr.Trim() } else { $fSha }
+                    Fail "GIT_ERROR: submodule hash-object failed for ${RelPath}/${sp}: $detail" 1
+                }
+                [void]$sbDirty.Append("C $sp $fSha`n")
+            } elseif (Test-Path -LiteralPath $spFull -PathType Container) {
+                if (Test-Path -LiteralPath (Join-Path $spFull '.git')) {
+                    if ($Depth -ge 5) {
+                        Fail "GIT_ERROR: nested submodule depth exceeded for ${RelPath}/${sp}" 1
+                    }
+                    $nestedIdentity = Get-SubmoduleEntryIdentity $subFull $sp '' ($Depth + 1)
+                    $nestedTag = if ($nestedIdentity) { $nestedIdentity } else { 'DIR' }
+                    [void]$sbDirty.Append("D $sp $nestedTag`n")
+                } else {
+                    [void]$sbDirty.Append("D $sp DIR`n")
+                }
+            } else {
+                [void]$sbDirty.Append("C $sp DELETED`n")
+            }
+        }
+        $dRes = Invoke-GitCommand $Root @('hash-object', '--stdin') $sbDirty.ToString()
+        $dSha = $dRes.StdOut.Trim()
+        if ($dRes.ExitCode -ne 0 -or $dSha -notmatch '^[0-9a-f]{40}$') {
+            $detail = if ($dRes.StdErr.Trim()) { $dRes.StdErr.Trim() } else { $dSha }
+            Fail "GIT_ERROR: git hash-object submodule digest failed for ${RelPath}: $detail" 1
+        }
+        return "160000 commit ${subHead}+dirty:${dSha}"
+    }
+    if ($hasFallback) {
+        return "160000 commit $FallbackOid"
+    }
+    return $null
+}
+
 function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnPaths) {
     $headRes = Invoke-GitCommand $Root @('rev-parse', 'HEAD')
     $headSha = $headRes.StdOut.Trim()
     if ($headRes.ExitCode -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') {
         $detail = if ($headRes.StdErr.Trim()) { $headRes.StdErr.Trim() } else { $headSha }
         Fail "GIT_ERROR: git rev-parse HEAD failed: $detail" 1
+    }
+
+    $fmRes = Invoke-GitCommand $Root @('config', '--bool', 'core.filemode')
+    $isWinOs = ($env:OS -eq 'Windows_NT')
+    $coreFilemode = if ($fmRes.ExitCode -eq 0) {
+        ($fmRes.StdOut.Trim() -ceq 'true')
+    } else {
+        (-not $isWinOs)
     }
 
     $cleanRel = @()
@@ -385,72 +551,151 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
         $tabIdx = $rawLine.IndexOf("`t")
         if ($tabIdx -lt 1) { continue }
         $meta = $rawLine.Substring(0, $tabIdx).Trim() -split '\s+'
-        if ($meta.Count -lt 3 -or $meta[1] -cne 'blob' -or $meta[2] -cnotmatch '^[0-9a-f]{40}$') { continue }
+        if ($meta.Count -lt 3 -or $meta[0] -cnotmatch '^[0-9]{6}$' -or ($meta[1] -cne 'blob' -and $meta[1] -cne 'commit') -or $meta[2] -cnotmatch '^[0-9a-f]{40}$') { continue }
         $p = Normalize-PathValue ($rawLine.Substring($tabIdx + 1))
         if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
         if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
         if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
-        $effective[$p] = $meta[2]
+        $effective[$p] = "$($meta[0]) $($meta[1]) $($meta[2])"
     }
 
-    if ($cleanRel.Count -gt 0) {
-        $wtDirty = @(Invoke-GitLines $Root (@('diff', '--no-renames', '--name-only', 'HEAD', '--') + $cleanRel))
-        $stagedDirty = @(Invoke-GitLines $Root (@('diff', '--no-renames', '--cached', '--name-only', '--') + $cleanRel))
-        $untracked = @(Invoke-GitLines $Root (@('ls-files', '--others', '--exclude-standard', '--') + $cleanRel))
-    } else {
-        $wtDirty = @(Invoke-GitLines $Root @('diff', '--no-renames', '--name-only', 'HEAD'))
-        $stagedDirty = @(Invoke-GitLines $Root @('diff', '--no-renames', '--cached', '--name-only'))
-        $untracked = @(Invoke-GitLines $Root @('ls-files', '--others', '--exclude-standard'))
+    $scopeSuffix = if ($cleanRel.Count -gt 0) { @('--') + $cleanRel } else { @() }
+    $hdRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none', 'HEAD') + $scopeSuffix)
+    if ($hdRes.ExitCode -ne 0) {
+        $detail = if ($hdRes.StdErr.Trim()) { $hdRes.StdErr.Trim() } else { $hdRes.StdOut.Trim() }
+        Fail "GIT_ERROR: git diff --raw HEAD failed: $detail" 1
     }
-
-    $candidates = New-Object System.Collections.Generic.List[string]
-    foreach ($p in (@($wtDirty) + @($stagedDirty) + @($untracked))) {
-        if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
-        if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
-        if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
-        $candidates.Add($p)
+    $caRes = Invoke-GitCommand $Root (@('diff', '--cached', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
+    if ($caRes.ExitCode -ne 0) {
+        $detail = if ($caRes.StdErr.Trim()) { $caRes.StdErr.Trim() } else { $caRes.StdOut.Trim() }
+        Fail "GIT_ERROR: git diff --cached --raw failed: $detail" 1
     }
-    $sortedChanged = @(Sort-Ordinal $candidates.ToArray())
+    $iwRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
+    if ($iwRes.ExitCode -ne 0) {
+        $detail = if ($iwRes.StdErr.Trim()) { $iwRes.StdErr.Trim() } else { $iwRes.StdOut.Trim() }
+        Fail "GIT_ERROR: git diff --raw index-wt failed: $detail" 1
+    }
+    $untracked = @(Invoke-GitLines $Root (@('ls-files', '--others', '--exclude-standard') + $scopeSuffix))
 
-    foreach ($p in $sortedChanged) {
+    $headDiff = Parse-GitRawDiff $hdRes.StdOut $IgnPaths $cleanRel
+    $cachedDiff = Parse-GitRawDiff $caRes.StdOut $IgnPaths $cleanRel
+    $idxWtDiff = Parse-GitRawDiff $iwRes.StdOut $IgnPaths $cleanRel
+
+    $zeroOid = '0000000000000000000000000000000000000000'
+    foreach ($p in @(Sort-Ordinal @($headDiff.Keys))) {
+        $entry = $headDiff[$p]
+        $m = $entry.NewMode
+        $oid = $entry.NewOid
         $full = Join-Path $Root ($p -replace '/', '\')
-        if (Test-Path -LiteralPath $full -PathType Leaf) {
+        if ($m -ceq '000000') {
+            if ($effective.ContainsKey($p)) { $effective.Remove($p) }
+            continue
+        }
+        if ($m -ceq '160000') {
+            $fbOid = if ($oid -cne $zeroOid) {
+                $oid
+            } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq '160000' -and $cachedDiff[$p].NewOid -cne $zeroOid) {
+                $cachedDiff[$p].NewOid
+            } else {
+                ''
+            }
+            $subVal = Get-SubmoduleEntryIdentity $Root $p $fbOid
+            if ($subVal) {
+                $effective[$p] = $subVal
+            } elseif ($effective.ContainsKey($p)) {
+                $effective.Remove($p)
+            }
+            continue
+        }
+        if ($m -ceq '120000') {
+            if ($oid -cne $zeroOid) {
+                $effective[$p] = "120000 blob $oid"
+            } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq '120000' -and $cachedDiff[$p].NewOid -cne $zeroOid -and (-not $idxWtDiff.ContainsKey($p))) {
+                $effective[$p] = "120000 blob $($cachedDiff[$p].NewOid)"
+            } else {
+                $lSha = Get-SymlinkBlobOid $Root $p
+                if ($lSha) {
+                    $effective[$p] = "120000 blob $lSha"
+                } elseif ($effective.ContainsKey($p)) {
+                    $effective.Remove($p)
+                }
+            }
+            continue
+        }
+        if ($oid -cne $zeroOid) {
+            $effective[$p] = "$m blob $oid"
+        } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq $m -and $cachedDiff[$p].NewOid -cne $zeroOid -and (-not $idxWtDiff.ContainsKey($p))) {
+            $effective[$p] = "$m blob $($cachedDiff[$p].NewOid)"
+        } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
             $wRes = Invoke-GitCommand $Root @('hash-object', '--', $p)
             $wSha = $wRes.StdOut.Trim()
             if ($wRes.ExitCode -ne 0 -or $wSha -notmatch '^[0-9a-f]{40}$') {
                 $detail = if ($wRes.StdErr.Trim()) { $wRes.StdErr.Trim() } else { $wSha }
                 Fail "GIT_ERROR: git hash-object failed for ${p}: $detail" 1
             }
-            $effective[$p] = $wSha
-        } else {
-            if ($effective.ContainsKey($p)) { $effective.Remove($p) }
+            $effective[$p] = "$m blob $wSha"
+        } elseif ($effective.ContainsKey($p)) {
+            $effective.Remove($p)
+        }
+    }
+
+    foreach ($p in @(Sort-Ordinal $untracked)) {
+        if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
+        if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
+        if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
+        if ($headDiff.ContainsKey($p) -and $headDiff[$p].NewMode -cne '000000') { continue }
+        $full = Join-Path $Root ($p -replace '/', '\')
+        $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+        if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -and ((-not $item.PSObject.Properties['LinkType']) -or ($item.LinkType -ceq 'SymbolicLink'))) {
+            $lSha = Get-SymlinkBlobOid $Root $p
+            if ($lSha) { $effective[$p] = "120000 blob $lSha" }
+        } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
+            $wRes = Invoke-GitCommand $Root @('hash-object', '--', $p)
+            $wSha = $wRes.StdOut.Trim()
+            if ($wRes.ExitCode -ne 0 -or $wSha -notmatch '^[0-9a-f]{40}$') {
+                $detail = if ($wRes.StdErr.Trim()) { $wRes.StdErr.Trim() } else { $wSha }
+                Fail "GIT_ERROR: git hash-object failed for ${p}: $detail" 1
+            }
+            $uMode = '100644'
+            if ($coreFilemode -and (-not $isWinOs) -and (Get-Command test -ErrorAction SilentlyContinue)) {
+                & test -x $full 2>$null
+                if ($LASTEXITCODE -eq 0) { $uMode = '100755' }
+            }
+            $effective[$p] = "$uMode blob $wSha"
+        } elseif ((Test-Path -LiteralPath $full -PathType Container) -and (Test-Path -LiteralPath (Join-Path $full '.git'))) {
+            $subVal = Get-SubmoduleEntryIdentity $Root $p ''
+            if ($subVal) { $effective[$p] = $subVal }
+        }
+    }
+
+    $indexDiv = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    foreach ($p in @(Sort-Ordinal @($cachedDiff.Keys))) {
+        $c = $cachedDiff[$p]
+        $hasEff = $effective.ContainsKey($p)
+        $effMode = if ($hasEff) { ($effective[$p] -split ' ', 2)[0] } else { '' }
+        if (($c.NewMode -ceq '000000' -and $hasEff) -or
+            ($c.NewMode -cne '000000' -and ((-not $hasEff) -or ($effMode -cne $c.NewMode)))) {
+            $cType = Get-GitEntryType $c.NewMode
+            $indexDiv[$p] = "$($c.NewMode) $cType $($c.NewOid)"
         }
     }
 
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append("PATHS=$pathsCsv`n")
     foreach ($ep in @(Sort-Ordinal @($effective.Keys))) {
-        [void]$sb.Append("F $ep $($effective[$ep])`n")
+        [void]$sb.Append("E $($effective[$ep]) $ep`n")
+    }
+    foreach ($ip in @(Sort-Ordinal @($indexDiv.Keys))) {
+        [void]$sb.Append("I $($indexDiv[$ip]) $ip`n")
     }
 
-    $gitDir = Get-ResolvedGitDir $Root
-    if (-not $gitDir) { Fail 'GIT_ERROR: unable to resolve .git dir' 1 }
-    $tmpFp = Join-Path $gitDir ("b3-tree-fp-${PID}-" + ([guid]::NewGuid().ToString('N').Substring(0, 8)) + '.tmp')
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    try {
-        [IO.File]::WriteAllText($tmpFp, $sb.ToString(), $utf8NoBom)
-        $thRes = Invoke-GitCommand $Root @('hash-object', '--', $tmpFp)
-        $treeHash = $thRes.StdOut.Trim()
-        if ($thRes.ExitCode -ne 0 -or $treeHash -notmatch '^[0-9a-f]{40}$') {
-            $detail = if ($thRes.StdErr.Trim()) { $thRes.StdErr.Trim() } else { $treeHash }
-            Fail "GIT_ERROR: git hash-object manifest failed: $detail" 1
-        }
-        return @{ HeadSha = $headSha; TreeHash = $treeHash; PathsCsv = $pathsCsv }
-    } finally {
-        if (Test-Path -LiteralPath $tmpFp) {
-            Remove-Item -LiteralPath $tmpFp -Force -ErrorAction SilentlyContinue
-        }
+    $thRes = Invoke-GitCommand $Root @('hash-object', '--stdin') -StdInText ($sb.ToString())
+    $treeHash = $thRes.StdOut.Trim()
+    if ($thRes.ExitCode -ne 0 -or $treeHash -notmatch '^[0-9a-f]{40}$') {
+        $detail = if ($thRes.StdErr.Trim()) { $thRes.StdErr.Trim() } else { $treeHash }
+        Fail "GIT_ERROR: git hash-object manifest failed: $detail" 1
     }
+    return @{ HeadSha = $headSha; TreeHash = $treeHash; PathsCsv = $pathsCsv }
 }
 
 function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPaths, [string]$ExpectedCmdArg = '', [string]$ReqRelPathsArg = '') {
@@ -788,7 +1033,7 @@ switch ($Command) {
 
         if ($RequireVerifyReceipt -and $RequireVerifyReceipt.Trim()) {
             $wtMismatch = New-Object System.Collections.Generic.List[string]
-            $idxVsWt = @(Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--name-only', '--') + $staged))
+            $idxVsWt = @(Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $staged))
             foreach ($p in $idxVsWt) { $wtMismatch.Add($p) }
             $stagedDel = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--cached', '--diff-filter=D', '--name-only'))
             foreach ($d in $stagedDel) {
@@ -829,9 +1074,9 @@ switch ($Command) {
                 if ($scopePaths -contains '.') { $scopeAll = $true }
             }
             $unstagedRaw = @(if ($scopeAll) {
-                Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--name-only')
+                Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--ignore-submodules=none', '--name-only')
             } else {
-                Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--name-only', '--') + $scopePaths)
+                Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $scopePaths)
             })
             $untrackedScopeRaw = @(if ($scopeAll) {
                 Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')
