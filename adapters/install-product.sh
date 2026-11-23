@@ -145,13 +145,13 @@ install_flat_skills() {
 update_b3_gitignore() {
   local gi="${PRODUCT_ROOT}/.gitignore"
   if [[ ! -f "$gi" ]]; then
-    printf '# B3: commit .b3/home; keep ship checkpoints and local model overrides private\n.b3/ship/\n.b3/models.local.json\n' > "$gi"
+    printf '# B3: commit .b3/home; keep ship checkpoints and local model preferences private\n.b3/ship/\n.b3/models.md\n' > "$gi"
     echo "created"
     return
   fi
   local has_ship=false has_models=false
   grep -Eq '^[[:space:]]*\.b3/ship/[[:space:]]*$' "$gi" && has_ship=true
-  grep -Eq '^[[:space:]]*\.b3/models\.local\.json[[:space:]]*$' "$gi" && has_models=true
+  grep -Eq '^[[:space:]]*\.b3/models\.md[[:space:]]*$' "$gi" && has_models=true
   if $has_ship && $has_models; then
     echo "present"
     return
@@ -161,13 +161,13 @@ update_b3_gitignore() {
     if $has_models; then
       LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
     else
-      LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; print ".b3/models.local.json"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
+      LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; print ".b3/models.md"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
     fi
     echo "upgraded"
     return
   fi
   if $has_ship; then
-    printf '\n.b3/models.local.json\n' >> "$gi"
+    printf '\n.b3/models.md\n' >> "$gi"
     echo "upgraded"
     return
   fi
@@ -176,7 +176,7 @@ update_b3_gitignore() {
     echo "upgraded"
     return
   fi
-  printf '\n# B3: commit .b3/home; keep ship checkpoints and local model overrides private\n.b3/ship/\n.b3/models.local.json\n' >> "$gi"
+  printf '\n# B3: commit .b3/home; keep ship checkpoints and local model preferences private\n.b3/ship/\n.b3/models.md\n' >> "$gi"
   echo "appended"
 }
 
@@ -187,30 +187,30 @@ resolve_personal_model_dest() {
   if [[ -n "$raw" ]]; then
     printf '%s' "$raw"
   else
-    printf '%s' "${HOME}/.b3/models.local.json"
+    printf '%s' "${HOME}/.b3/models.md"
   fi
 }
 
-print_dry_run_model_config() {
+print_dry_run_model_prefs() {
   [[ "${B3_SKIP_MODEL_INIT:-}" == "1" ]] && return 0
-  local template_cfg="${B3_HOME}/config/models.default.json"
-  [[ -f "$template_cfg" ]] || return 0
+  local template_md="${B3_HOME}/config/models.example.md"
+  [[ -f "$template_md" ]] || return 0
   local dest
   dest="$(resolve_personal_model_dest)"
   if [[ -e "$dest" || -L "$dest" ]]; then
-    echo "dry-run: keep existing personal model config $dest"
+    echo "dry-run: keep existing personal model preferences $dest"
   else
-    echo "dry-run: seed personal model config at $dest (empty overrides)"
+    echo "dry-run: initialize personal model preferences at $dest from $template_md"
   fi
 }
 
-init_personal_model_config() {
+init_personal_model_prefs() {
   if [[ "${B3_SKIP_MODEL_INIT:-}" == "1" ]]; then
     echo "skipped"
     return 0
   fi
-  local template_cfg="${B3_HOME}/config/models.default.json"
-  if [[ ! -f "$template_cfg" ]]; then
+  local template_md="${B3_HOME}/config/models.example.md"
+  if [[ ! -f "$template_md" ]]; then
     echo "no-template"
     return 0
   fi
@@ -221,7 +221,7 @@ init_personal_model_config() {
     return 0
   fi
   mkdir -p "$(dirname "$dest")"
-  printf '{\n  "version": 1,\n  "_comment": "Personal B3 model overrides. Add only roles you want to override; omitted roles inherit config/models.default.json. See config/models.example.json.",\n  "models": {}\n}\n' > "$dest"
+  cp "$template_md" "$dest"
   echo "created:${dest}"
 }
 
@@ -269,7 +269,7 @@ if $DRY_RUN; then
     if [[ -f "$CLAUDE_MD_DEST" ]]; then echo "dry-run: keep existing $CLAUDE_MD_DEST"
     elif [[ -f "$CLAUDE_MD_TEMPLATE" ]]; then echo "dry-run: write $CLAUDE_MD_DEST from $CLAUDE_MD_TEMPLATE"; fi
   fi
-  echo "dry-run: gitignore .b3/ship/ and .b3/models.local.json"
+  echo "dry-run: gitignore .b3/ship/ and .b3/models.md"
   if [[ -d "$COMMANDS_SRC" ]]; then
     for src in "$COMMANDS_SRC"/*.md; do
       [[ -f "$src" ]] || continue
@@ -292,7 +292,7 @@ if $DRY_RUN; then
       [[ -f "$CURSOR_README_TEMPLATE" ]] && echo "dry-run: write $CURSOR_README_DEST"
       ;;
   esac
-  print_dry_run_model_config
+  print_dry_run_model_prefs
   exit 0
 fi
 
@@ -335,7 +335,7 @@ case "$HOST_NAME" in
     ;;
 esac
 
-MODEL_CFG_STATUS="$(init_personal_model_config)"
+MODEL_PREF_STATUS="$(init_personal_model_prefs)"
 
 echo "installed B3 pointer in $PRODUCT_ROOT"
 echo "B3_HOME=$B3_HOME"
@@ -344,7 +344,7 @@ echo "agents.md=$AGENTS_MD_DEST"
 [[ "$HOST_NAME" == "claude" ]] && echo "claude.md=$CLAUDE_MD_DEST"
 echo "gitignore.b3=$IGNORE_PLAN"
 echo "gitignore.skills=$SKILL_IGNORE_PLAN"
-echo "model_config=$MODEL_CFG_STATUS"
+echo "model_preferences=$MODEL_PREF_STATUS"
 echo "host=$HOST_NAME"
 case "$HOST_NAME" in
   codex) echo "skills=$AGENTS_DEST (flattened symlinks + \$b3-ship; gitignored, not copied)" ;;

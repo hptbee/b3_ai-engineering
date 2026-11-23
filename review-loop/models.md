@@ -1,6 +1,6 @@
 # Model / role slots & Cost-Preserving Quality Tiering
 
-Portable contract. This file does **not** name vendor models. Hosts differ (Cursor, Codex, Claude Code, Antigravity). Shared JSON defaults live in [`../config/models.default.json`](../config/models.default.json), personal overrides in `~/.b3/models.local.json`, and precedence/platform limits in [`../docs/model-configuration.md`](../docs/model-configuration.md) (audit with `b3-guard resolve-models`). Where programmatic switching is unsupported, hosts keep native selection.
+Portable contract. This file does **not** name vendor models. Hosts differ (Cursor, Codex, Claude Code, Antigravity). Optional personal/project Markdown preferences live in `~/.b3/models.md` and `<project>/.b3/models.md` (template: [`../config/models.example.md`](../config/models.example.md); guide: [`../docs/model-preferences.md`](../docs/model-preferences.md)). Where unsupported, hosts inherit their native model.
 
 ## Three slots (`/b3-review-loop`)
 

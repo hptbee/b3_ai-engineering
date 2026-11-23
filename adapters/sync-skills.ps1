@@ -18,27 +18,26 @@ function Fail([string]$Message) {
     exit 1
 }
 
-function Initialize-PersonalModelConfig([string]$HomeDir) {
+function Initialize-PersonalModelPreferences([string]$HomeDir) {
     if ($DryRun -or $VerifyOnly -or $env:B3_SKIP_MODEL_INIT -eq '1') { return }
-    $templateCfg = Join-Path $HomeDir 'config\models.default.json'
-    if (-not (Test-Path -LiteralPath $templateCfg -PathType Leaf)) { return }
+    $templateMd = Join-Path $HomeDir 'config\models.example.md'
+    if (-not (Test-Path -LiteralPath $templateMd -PathType Leaf)) { return }
     $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
         $env:B3_MODELS_PERSONAL.Trim()
     } else {
         $uHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-        Join-Path $uHome '.b3\models.local.json'
+        Join-Path $uHome '.b3\models.md'
     }
     if (Test-Path -LiteralPath $dest) {
-        Write-Output "model_config=$dest (kept existing)"
+        Write-Output "model_preferences=$dest (kept existing)"
         return
     }
     $parent = Split-Path -Parent $dest
     if ($parent -and -not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
     }
-    $seedJson = "{`n  `"version`": 1,`n  `"_comment`": `"Personal B3 model overrides. Add only roles you want to override; omitted roles inherit config/models.default.json. See config/models.example.json.`",`n  `"models`": {}`n}`n"
-    [System.IO.File]::WriteAllText($dest, $seedJson, [System.Text.UTF8Encoding]::new($false))
-    Write-Output "model_config=$dest (created empty overrides)"
+    Copy-Item -LiteralPath $templateMd -Destination $dest
+    Write-Output "model_preferences=$dest (created from example)"
 }
 
 function Test-IsLink([System.IO.FileSystemInfo]$Item) {
@@ -357,7 +356,7 @@ if ($HostName -eq 'antigravity') {
 
     $check = Test-AntigravityManifest $root $antigravityManifest
     if (-not $check.Ok) { Fail "manifest written but verification failed: $($check.Reason)" }
-    Initialize-PersonalModelConfig $root
+    Initialize-PersonalModelPreferences $root
     Write-Output "synced: $antigravityManifest (antigravity); $($check.Count) SKILL.md entries visible"
     Write-Output "note: this proves .agents/skills.json resolves to 1-level SKILL.md entries, not Antigravity runtime discovery"
     exit 0
@@ -391,7 +390,7 @@ if ($HostName -eq 'cursor') {
     Sync-DirectoryLink $cursorSkillsDest $skillsSource 'cursor skills'
     Sync-DirectoryLink $cursorCommandsDest $commandsSource 'cursor commands'
     Sync-DirectoryLink $cursorAgentsDest $agentsSource 'cursor agents'
-    Initialize-PersonalModelConfig $root
+    Initialize-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Cursor runtime skill discovery"
     exit 0
 }
@@ -415,7 +414,7 @@ if ($HostName -eq 'codex') {
     }
 
     Sync-FlatSkillIndex $codexSkillsDest $expectedFlatSkills 'codex'
-    Initialize-PersonalModelConfig $root
+    Initialize-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Codex runtime skill discovery"
     exit 0
 }
@@ -439,7 +438,7 @@ if ($HostName -eq 'claude') {
 
     Sync-FlatSkillIndex $claudeSkillsDest $expectedFlatSkills 'claude'
     Sync-DirectoryLink $claudeAgentsDest $agentsSource 'claude agents'
-    Initialize-PersonalModelConfig $root
+    Initialize-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Claude Code runtime skill discovery"
     exit 0
 }

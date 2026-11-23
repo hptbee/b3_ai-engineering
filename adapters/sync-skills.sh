@@ -399,18 +399,18 @@ case "$TARGET" in
 esac
 
 if ! $DRY_RUN && ! $VERIFY_ONLY && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
-  TEMPLATE_CFG="${ROOT}/config/models.default.json"
-  if [[ -f "$TEMPLATE_CFG" ]]; then
+  TEMPLATE_MD="${ROOT}/config/models.example.md"
+  if [[ -f "$TEMPLATE_MD" ]]; then
     TRIM_PERS="${B3_MODELS_PERSONAL:-}"
     TRIM_PERS="${TRIM_PERS#"${TRIM_PERS%%[![:space:]]*}"}"
     TRIM_PERS="${TRIM_PERS%"${TRIM_PERS##*[![:space:]]}"}"
-    DEST_CFG="${TRIM_PERS:-${HOME}/.b3/models.local.json}"
-    if [[ -e "$DEST_CFG" || -L "$DEST_CFG" ]]; then
-      echo "model_config=${DEST_CFG} (kept existing)"
+    DEST_PREFS="${TRIM_PERS:-${HOME}/.b3/models.md}"
+    if [[ -e "$DEST_PREFS" || -L "$DEST_PREFS" ]]; then
+      echo "model_preferences=${DEST_PREFS} (kept existing)"
     else
-      mkdir -p "$(dirname "$DEST_CFG")"
-      printf '{\n  "version": 1,\n  "_comment": "Personal B3 model overrides. Add only roles you want to override; omitted roles inherit config/models.default.json. See config/models.example.json.",\n  "models": {}\n}\n' > "$DEST_CFG"
-      echo "model_config=${DEST_CFG} (created empty overrides)"
+      mkdir -p "$(dirname "$DEST_PREFS")"
+      cp "$TEMPLATE_MD" "$DEST_PREFS"
+      echo "model_preferences=${DEST_PREFS} (created from example)"
     fi
   fi
 fi

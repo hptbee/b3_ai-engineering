@@ -16,7 +16,7 @@ Reviewer also has `readonly: true`. Orchestrator is the parent `/b3-review-loop`
 
 ## Optional tiered model routing
 
-For shared JSON preferences (`main`, `planning`, `b3-reviewer`, `b3-fixer`, etc.), configure `~/.b3/models.local.json` (or repo `.b3/models.local.json`) per [`../../docs/model-configuration.md`](../../docs/model-configuration.md) instead of modifying tracked `agents/*.md`. When using Cursor-native subagent overrides directly, set `model:` only in your own user-level `~/.cursor/agents/*.md` or local un-synced `.cursor/agents/*.md` files (never commit vendor model IDs):
+For advisory cross-host preferences, use `~/.b3/models.md` or `<project>/.b3/models.md` ([`../../docs/model-preferences.md`](../../docs/model-preferences.md)) instead of modifying tracked `agents/*.md`. When configuring Cursor-native subagent overrides directly, set `model:` only in your own user-level `~/.cursor/agents/*.md` or local `.cursor/agents/*.md` files (never commit vendor model IDs):
 
 | Role / Execution | `model:` intent |
 | --- | --- |
