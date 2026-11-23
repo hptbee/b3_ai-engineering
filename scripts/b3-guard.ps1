@@ -272,7 +272,7 @@ function Assert-SnapshotSafe([string]$Root, [string]$FailPrefix) {
     $links = Invoke-GitCommand $Root @('ls-files', '--stage')
     if ($links.ExitCode -ne 0) { Fail "${FailPrefix}: unable to inspect submodules" 1 }
     foreach ($entry in ($links.StdOut -split "\r?\n")) {
-        if ($entry -cnotmatch '^160000 [0-9a-f]{40} [0-3]`t(.+)$') { continue }
+        if ($entry -cnotmatch '^160000 [0-9a-f]{40} [0-3]\t(.+)$') { continue }
         $rel = $Matches[1]
         $sub = Join-Path $Root ($rel -replace '/', '\')
         if (-not (Test-Path -LiteralPath (Join-Path $sub '.git'))) { continue }
