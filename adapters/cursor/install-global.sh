@@ -16,9 +16,7 @@ FORCE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     install|update|verify|uninstall)
-      if $ACTION_SET; then
-        echo "error: duplicate action '$1'" >&2; exit 1
-      fi
+      if $ACTION_SET; then echo "error: duplicate action '$1'" >&2; exit 1; fi
       ACTION="$1"; ACTION_SET=true; shift ;;
     --cursor-home)
       [[ $# -ge 2 && -n "${2:-}" ]] || { echo "error: option $1 requires a value" >&2; exit 1; }
@@ -38,10 +36,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-IS_WINDOWS=false
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=true ;;
-esac
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/global-common.sh
+source "${SCRIPT_DIR}/../lib/global-common.sh"
 
 _CLEANUP_DIRS=()
 _cleanup_tmp() {
@@ -54,236 +51,25 @@ _cleanup_tmp() {
 }
 trap _cleanup_tmp EXIT
 
-trim_crlf() {
-  printf '%s' "$1" | LC_ALL=C tr -d '\r'
-}
-
-canon_existing_dir() {
-  local d="$1"
-  (cd "$d" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))
-}
-
-canon_path_allow_missing() {
-  local p="$1"
-  p="${p//\\//}"
-  while [[ "$p" == */ && "$p" != "/" && ! "$p" =~ ^[A-Za-z]:/$ ]]; do
-    p="${p%/}"
-  done
-  if [[ -L "$p" ]]; then
-    local base parent resolved
-    base="$(basename "$p")"
-    parent="$(dirname "$p")"
-    if [[ -d "$parent" ]]; then
-      resolved="$(canon_existing_dir "$parent")"
-      resolved="${resolved%/}"
-      printf '%s/%s' "$resolved" "$base"
-    else
-      printf '%s' "$p"
-    fi
-    return
-  fi
-  if [[ -d "$p" ]]; then
-    canon_existing_dir "$p"
-    return
-  fi
-  local cur="$p"
-  local suffix=""
-  while [[ ! -d "$cur" ]]; do
-    local base parent
-    base="$(basename "$cur")"
-    parent="$(dirname "$cur")"
-    [[ "$parent" == "$cur" ]] && break
-    if [[ -z "$suffix" ]]; then
-      suffix="$base"
-    else
-      suffix="${base}/${suffix}"
-    fi
-    cur="$parent"
-  done
-  if [[ -d "$cur" ]]; then
-    local resolved
-    resolved="$(canon_existing_dir "$cur")"
-    resolved="${resolved%/}"
-    if [[ -n "$suffix" ]]; then
-      printf '%s/%s' "$resolved" "$suffix"
-    else
-      printf '%s' "$resolved"
-    fi
-  else
-    printf '%s' "$p"
-  fi
-}
-
-norm_cmp_path() {
-  local p="${1//\\//}"
-  p="${p%/}"
-  if $IS_WINDOWS; then
-    printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]'
-  else
-    printf '%s' "$p"
-  fi
-}
-
-sha256_file() {
-  local f="$1"
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$f" | awk '{print tolower($1)}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$f" | awk '{print tolower($1)}'
-  elif command -v openssl >/dev/null 2>&1; then
-    openssl dgst -sha256 "$f" | awk '{print tolower($NF)}'
-  else
-    echo "error: missing sha256 utility (sha256sum/shasum/openssl)" >&2
-    return 1
-  fi
-}
-
-write_lf_file() {
-  local dest="$1"
-  local content="$2"
-  mkdir -p "$(dirname "$dest")"
-  local tmp="${dest}.tmp.$$.${RANDOM}"
-  printf '%s' "$content" | LC_ALL=C tr -d '\r' > "$tmp"
-  mv -f "$tmp" "$dest"
-}
-
-install_file_atomic() {
-  local src="$1" dest="$2"
-  mkdir -p "$(dirname "$dest")"
-  local tmp="${dest}.tmp.$$.${RANDOM}"
-  cp "$src" "$tmp"
-  mv -f "$tmp" "$dest"
-}
-
-is_link_entry() {
-  local p="$1"
-  [[ -L "$p" ]]
-}
-
-remove_link_only() {
-  local p="$1"
-  if ! is_link_entry "$p"; then
-    echo "error: refusing to remove non-link entry: $p" >&2
-    exit 1
-  fi
-  if $IS_WINDOWS && [[ -d "$p" || ! -e "$p" ]]; then
-    local win_p
-    win_p="$(cygpath -w "$p")"
-    if MSYS_NO_PATHCONV=1 cmd.exe /c rmdir "$win_p" >/dev/null 2>&1; then
-      return 0
-    fi
-  fi
-  rm -f "$p"
-}
-
-create_dir_link() {
-  local dest="$1"
-  local target="$2"
-  mkdir -p "$(dirname "$dest")"
-  if $IS_WINDOWS; then
-    local win_d win_t
-    win_d="$(cygpath -w "$dest")"
-    win_t="$(cygpath -w "$target")"
-    MSYS_NO_PATHCONV=1 cmd.exe /c mklink /J "$win_d" "$win_t" >/dev/null || {
-      echo "error: could not create junction $dest -> $target" >&2
-      exit 1
-    }
-  else
-    ln -s "$target" "$dest"
-  fi
-}
-
-link_target_ok() {
-  local dest="$1"
-  local expected="$2"
-  [[ -L "$dest" && -d "$dest" ]] || return 1
-  local rd re
-  rd="$(cd -P "$dest" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-  re="$(cd -P "$expected" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-  [[ -n "$rd" && "$(norm_cmp_path "$rd")" == "$(norm_cmp_path "$re")" ]]
-}
-
-link_matches_expected_or_dangling() {
-  local dest="$1" expected="$2"
-  is_link_entry "$dest" || return 1
-  if [[ -d "$dest" ]]; then
-    link_target_ok "$dest" "$expected"
-    return $?
-  fi
-  local rl
-  rl="$(readlink "$dest" 2>/dev/null)" || return 1
-  if $IS_WINDOWS && command -v cygpath >/dev/null 2>&1; then
-    rl="$(cygpath -m "$rl" 2>/dev/null || printf '%s' "$rl")"
-  elif [[ "$rl" != /* && ! "$rl" =~ ^[A-Za-z]: ]]; then
-    local parent
-    parent="$(canon_path_allow_missing "$(dirname "$dest")")"
-    rl="${parent%/}/${rl}"
-  fi
-  local exp_norm rl_norm
-  exp_norm="$(canon_path_allow_missing "$expected")"
-  rl_norm="$(canon_path_allow_missing "$rl")"
-  [[ "$(norm_cmp_path "$rl_norm")" == "$(norm_cmp_path "$exp_norm")" ]]
-}
-
-validate_frontmatter() {
-  local f="$1"
-  awk '
-    { sub(/\r$/, "") }
-    NR == 1 { if ($0 != "---") exit 2; in_fm = 1; next }
-    in_fm && $0 == "---" { done = 1; exit 0 }
-    END { if (!done) exit 2 }
-  ' "$f" || {
-    echo "error: canonical markdown missing/unclosed YAML frontmatter: $f" >&2
-    exit 1
-  }
-}
-
-skill_name_from_file() {
-  local f="$1"
-  local name
-  name="$(awk '
-    { sub(/\r$/, "") }
-    NR == 1 && $0 == "---" { in_fm = 1; next }
-    in_fm && $0 == "---" { exit }
-    in_fm && $0 ~ /^[[:space:]]*name:[[:space:]]*[a-z0-9-]+[[:space:]]*$/ {
-      sub(/^[[:space:]]*name:[[:space:]]*/, "", $0)
-      gsub(/[[:space:]]+$/, "", $0)
-      print $0
-      exit
-    }
-  ' "$f")"
-  if [[ -n "$name" ]]; then
-    printf '%s' "$name"
-  else
-    basename "$(dirname "$f")"
-  fi
-}
-
 render_managed_doc() {
-  local src_file="$1"
-  local header_line1="$2"
-  local header_line2="$3"
-  validate_frontmatter "$src_file"
-  awk -v h1="$header_line1" -v h2="$header_line2" '
+  local src_file="$1" h1="$2" h2="$3"
+  awk -v fpath="$src_file" -v h1="$h1" -v h2="$h2" '
     { sub(/\r$/, "") }
-    NR == 1 { print; in_fm = 1; next }
+    NR == 1 {
+      if ($0 != "---") { print "error: canonical markdown missing YAML frontmatter: " fpath > "/dev/stderr"; exit 2 }
+      print; in_fm = 1; next
+    }
     in_fm && $0 == "---" {
-      print
-      print h1
-      print ""
-      print h2
-      in_fm = 0
-      in_body = 1
-      started = 0
-      next
+      print; print h1; print ""; print h2
+      in_fm = 0; done_fm = 1; in_body = 1; started = 0; next
     }
     in_fm { print; next }
     in_body {
       if (!started && $0 == "") next
-      started = 1
-      lines[++n] = $0
+      started = 1; lines[++n] = $0
     }
     END {
+      if (!done_fm) { print "error: canonical markdown missing/unclosed YAML frontmatter: " fpath > "/dev/stderr"; exit 2 }
       while (n > 0 && lines[n] == "") n--
       if (n > 0) {
         print ""
@@ -296,42 +82,48 @@ render_managed_doc() {
 check_coexistence() {
   local user_home="$1"
   shift
-  local skill_names=("$@")
   local sub
   for sub in ".agents/skills" ".claude/skills"; do
-    local other_root="${user_home}/${sub}"
-    [[ -d "$other_root" ]] || continue
-    local overlap=0 sn
-    if [[ ${#skill_names[@]} -gt 0 ]]; then
-      for sn in "${skill_names[@]}"; do
-        if [[ -e "${other_root}/${sn}" || -L "${other_root}/${sn}" ]]; then
-          overlap=$((overlap + 1))
-        fi
-      done
-    fi
-    if [[ $overlap -gt 0 ]]; then
-      echo "COEXISTENCE_WARNING: ~/${sub} contains ${overlap} overlapping B3 skill(s); Cursor cross-loads ~/${sub} and may show duplicates."
+    count_skill_overlaps "${user_home}/${sub}" "$@"
+    if [[ $OVERLAP_COUNT -gt 0 ]]; then
+      echo "COEXISTENCE_WARNING: ~/${sub} contains ${OVERLAP_COUNT} overlapping B3 skill(s); Cursor cross-loads ~/${sub} and may show duplicates."
     fi
   done
 }
 
-# Resolve directories
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -z "$B3_HOME" ]]; then
-  B3_HOME="$(canon_existing_dir "${SCRIPT_DIR}/../..")"
-else
-  [[ -d "$B3_HOME" ]] || { echo "error: B3Home directory not found: $B3_HOME" >&2; exit 1; }
-  B3_HOME="$(canon_existing_dir "$B3_HOME")"
-fi
+uninstall_managed_file() {
+  local path="$1" exp_sha="$2" require_marker="$3" label="$4"
+  if is_link_entry "$path"; then
+    echo "warning: skipping symlinked ${label}: $path" >&2
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+  [[ -f "$path" ]] || return 0
+  if [[ "$require_marker" == "true" ]] && ! grep -q 'b3-global-cursor-managed:' "$path"; then
+    echo "warning: skipping unmanaged ${label}: $path" >&2
+    return 0
+  fi
+  if ! $FORCE && [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$path")" != "$exp_sha" ]]; then
+    echo "warning: skipping modified ${label}: $path (re-run with --force to remove)" >&2
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+  if $DRY_RUN; then echo "dry-run: remove $path"; else rm -f "$path"; fi
+  REMOVED=$((REMOVED + 1))
+}
 
-if [[ -z "$USER_HOME" ]]; then
-  USER_HOME="$HOME"
-fi
+assert_managed_doc_preflight() {
+  local path="$1" label="$2"
+  assert_regular_file_or_missing "$path" "$label"
+  if [[ -f "$path" ]] && ! $FORCE && ! grep -q 'b3-global-cursor-managed:' "$path"; then
+    echo "error: refusing to overwrite unmanaged ${label} $path (re-run with --force to replace)" >&2
+    exit 1
+  fi
+}
+
+if [[ -z "$USER_HOME" ]]; then USER_HOME="$HOME"; fi
 USER_HOME="$(canon_path_allow_missing "$USER_HOME")"
-
-if [[ -z "$CURSOR_HOME" ]]; then
-  CURSOR_HOME="${USER_HOME}/.cursor"
-fi
+if [[ -z "$CURSOR_HOME" ]]; then CURSOR_HOME="${USER_HOME}/.cursor"; fi
 CURSOR_HOME="$(canon_path_allow_missing "$CURSOR_HOME")"
 
 SKILLS_DEST="${CURSOR_HOME}/skills"
@@ -344,128 +136,40 @@ MANIFEST_FILE="${CURSOR_HOME}/.b3-global-manifest"
 EXPECTED_COMMANDS=("b3-plan.md" "b3-implement.md" "b3-debug.md" "b3-review.md" "b3-verify.md" "b3-review-loop.md" "b3-ship.md")
 EXPECTED_AGENTS=("b3-reviewer.md" "b3-fixer.md" "b3-security-reviewer.md" "b3-architecture-reviewer.md" "b3-performance-reviewer.md")
 
-# Read existing manifest into parallel indexed arrays (Bash 3.2 safe)
-M_EXISTS=false
-M_SKILL_NAMES=()
-M_SKILL_TARGETS=()
-M_CMD_NAMES=()
-M_CMD_SHAS=()
-M_AGENT_NAMES=()
-M_AGENT_SHAS=()
-M_FILE_NAMES=()
-M_FILE_SHAS=()
-
-load_manifest() {
-  [[ -f "$MANIFEST_FILE" ]] || return 0
-  M_EXISTS=true
-  local raw k v1 v2
-  while IFS= read -r raw || [[ -n "$raw" ]]; do
-    raw="$(trim_crlf "$raw")"
-    [[ -n "$raw" ]] || continue
-    [[ "$raw" == schema=* || "$raw" == b3_home=* ]] && continue
-    IFS='|' read -r k v1 v2 <<< "$raw"
-    case "$k" in
-      skill) M_SKILL_NAMES+=("$v1"); M_SKILL_TARGETS+=("$v2") ;;
-      command) M_CMD_NAMES+=("$v1"); M_CMD_SHAS+=("$v2") ;;
-      agent) M_AGENT_NAMES+=("$v1"); M_AGENT_SHAS+=("$v2") ;;
-      file) M_FILE_NAMES+=("$v1"); M_FILE_SHAS+=("$v2") ;;
-    esac
-  done < "$MANIFEST_FILE"
-}
-
-manifest_has_skill() {
-  local target="$1" s
-  if [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
-    for s in "${M_SKILL_NAMES[@]}"; do
-      [[ "$s" == "$target" ]] && return 0
-    done
-  fi
-  return 1
-}
-
-manifest_file_sha() {
-  local target="$1" i
-  if [[ ${#M_FILE_NAMES[@]} -gt 0 ]]; then
-    for ((i = 0; i < ${#M_FILE_NAMES[@]}; i++)); do
-      if [[ "${M_FILE_NAMES[$i]}" == "$target" ]]; then
-        printf '%s' "${M_FILE_SHAS[$i]}"
-        return 0
-      fi
-    done
-  fi
-  return 1
-}
-
-manifest_skill_target() {
-  local target="$1" i
-  if [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
-    for ((i = 0; i < ${#M_SKILL_NAMES[@]}; i++)); do
-      if [[ "${M_SKILL_NAMES[$i]}" == "$target" ]]; then
-        printf '%s' "${M_SKILL_TARGETS[$i]}"
-        return 0
-      fi
-    done
-  fi
-  return 1
-}
-
-manifest_cmd_sha() {
-  local target="$1" i
-  if [[ ${#M_CMD_NAMES[@]} -gt 0 ]]; then
-    for ((i = 0; i < ${#M_CMD_NAMES[@]}; i++)); do
-      if [[ "${M_CMD_NAMES[$i]}" == "$target" ]]; then
-        printf '%s' "${M_CMD_SHAS[$i]}"
-        return 0
-      fi
-    done
-  fi
-  return 1
-}
-
-manifest_agent_sha() {
-  local target="$1" i
-  if [[ ${#M_AGENT_NAMES[@]} -gt 0 ]]; then
-    for ((i = 0; i < ${#M_AGENT_NAMES[@]}; i++)); do
-      if [[ "${M_AGENT_NAMES[$i]}" == "$target" ]]; then
-        printf '%s' "${M_AGENT_SHAS[$i]}"
-        return 0
-      fi
-    done
-  fi
-  return 1
-}
-
 # --- Uninstall ---
 if [[ "$ACTION" == "uninstall" ]]; then
   if is_link_entry "$CURSOR_HOME"; then
-    echo "error: refusing to uninstall link-based CursorHome: $CURSOR_HOME" >&2
-    exit 1
+    echo "error: refusing to uninstall link-based CursorHome: $CURSOR_HOME" >&2; exit 1
   fi
   if is_link_entry "$MANIFEST_FILE"; then
-    echo "error: refusing to read link-based manifest: $MANIFEST_FILE" >&2
-    exit 1
+    echo "error: refusing to read link-based manifest: $MANIFEST_FILE" >&2; exit 1
   fi
-  load_manifest
+  manifest_load "$MANIFEST_FILE"
   if ! $M_EXISTS; then
     echo "nothing installed (no manifest at $MANIFEST_FILE)"
     exit 0
   fi
+  if $M_CORRUPT || [[ "$M_SCHEMA" != "b3-cursor-global-v1" ]]; then
+    echo "error: refusing to uninstall invalid or corrupt B3 manifest at $MANIFEST_FILE" >&2
+    exit 1
+  fi
+
   REMOVED=0
   SKIPPED=0
   if is_link_entry "$SKILLS_DEST"; then
     echo "warning: skipping symlinked skills directory: $SKILLS_DEST" >&2
     SKIPPED=$((SKIPPED + 1))
-  elif [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
-    for sk in "${M_SKILL_NAMES[@]}"; do
+  elif [[ ${#M_KINDS[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
+      [[ "${M_KINDS[$i]}" == "skill" ]] || continue
+      sk="${M_KEYS[$i]}"
+      exp_target="${M_VALS[$i]}"
       p="${SKILLS_DEST}/${sk}"
       if is_link_entry "$p"; then
-        if ! $FORCE; then
-          exp_target="$(manifest_skill_target "$sk" 2>/dev/null || true)"
-          if [[ -n "$exp_target" ]] && ! link_matches_expected_or_dangling "$p" "$exp_target"; then
-            echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
-            SKIPPED=$((SKIPPED + 1))
-            continue
-          fi
+        if ! $FORCE && [[ -n "$exp_target" ]] && ! link_matches_expected_or_dangling "$p" "$exp_target"; then
+          echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
+          SKIPPED=$((SKIPPED + 1))
+          continue
         fi
         if $DRY_RUN; then echo "dry-run: remove skill link $p"; else remove_link_only "$p"; fi
         REMOVED=$((REMOVED + 1))
@@ -474,101 +178,40 @@ if [[ "$ACTION" == "uninstall" ]]; then
       fi
     done
   fi
+
   if is_link_entry "$COMMANDS_DEST"; then
     echo "warning: skipping symlinked commands directory: $COMMANDS_DEST" >&2
     SKIPPED=$((SKIPPED + 1))
-  elif [[ ${#M_CMD_NAMES[@]} -gt 0 ]]; then
-    for cmd in "${M_CMD_NAMES[@]}"; do
-      p="${COMMANDS_DEST}/${cmd}"
-      if is_link_entry "$p"; then
-        echo "warning: skipping symlinked command path: $p" >&2
-        SKIPPED=$((SKIPPED + 1))
-        continue
-      fi
-      if [[ -f "$p" ]]; then
-        if grep -q 'b3-global-cursor-managed:' "$p"; then
-          exp_sha="$(manifest_cmd_sha "$cmd" 2>/dev/null || true)"
-          if ! $FORCE && [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
-            echo "warning: skipping modified command file: $p (re-run with --force to remove)" >&2
-            SKIPPED=$((SKIPPED + 1))
-            continue
-          fi
-          if $DRY_RUN; then echo "dry-run: remove command $p"; else rm -f "$p"; fi
-          REMOVED=$((REMOVED + 1))
-        else
-          echo "warning: skipping unmanaged command file: $p" >&2
-        fi
-      fi
+  elif [[ ${#M_KINDS[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
+      [[ "${M_KINDS[$i]}" == "command" ]] || continue
+      uninstall_managed_file "${COMMANDS_DEST}/${M_KEYS[$i]}" "${M_VALS[$i]}" "true" "command file"
     done
   fi
+
   if is_link_entry "$AGENTS_DEST"; then
     echo "warning: skipping symlinked agents directory: $AGENTS_DEST" >&2
     SKIPPED=$((SKIPPED + 1))
-  elif [[ ${#M_AGENT_NAMES[@]} -gt 0 ]]; then
-    for ag in "${M_AGENT_NAMES[@]}"; do
-      p="${AGENTS_DEST}/${ag}"
-      if is_link_entry "$p"; then
-        echo "warning: skipping symlinked agent path: $p" >&2
-        SKIPPED=$((SKIPPED + 1))
-        continue
-      fi
-      if [[ -f "$p" ]]; then
-        if grep -q 'b3-global-cursor-managed:' "$p"; then
-          exp_sha="$(manifest_agent_sha "$ag" 2>/dev/null || true)"
-          if ! $FORCE && [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
-            echo "warning: skipping modified agent file: $p (re-run with --force to remove)" >&2
-            SKIPPED=$((SKIPPED + 1))
-            continue
-          fi
-          if $DRY_RUN; then echo "dry-run: remove agent $p"; else rm -f "$p"; fi
-          REMOVED=$((REMOVED + 1))
-        else
-          echo "warning: skipping unmanaged agent file: $p" >&2
-        fi
-      fi
+  elif [[ ${#M_KINDS[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
+      [[ "${M_KINDS[$i]}" == "agent" ]] || continue
+      uninstall_managed_file "${AGENTS_DEST}/${M_KEYS[$i]}" "${M_VALS[$i]}" "true" "agent file"
     done
   fi
-  if exp_rules_sha="$(manifest_file_sha "b3-user-rules.txt" 2>/dev/null)"; then
-    if is_link_entry "$USER_RULES_FILE"; then
-      echo "warning: skipping symlinked file path: $USER_RULES_FILE" >&2
-      SKIPPED=$((SKIPPED + 1))
-    elif [[ -f "$USER_RULES_FILE" ]]; then
-      if grep -q 'b3-global-cursor-managed:' "$USER_RULES_FILE"; then
-        if ! $FORCE && [[ -n "$exp_rules_sha" ]] && [[ "$(sha256_file "$USER_RULES_FILE")" != "$exp_rules_sha" ]]; then
-          echo "warning: skipping modified file: $USER_RULES_FILE (re-run with --force to remove)" >&2
-          SKIPPED=$((SKIPPED + 1))
-        else
-          if $DRY_RUN; then echo "dry-run: remove $USER_RULES_FILE"; else rm -f "$USER_RULES_FILE"; fi
-          REMOVED=$((REMOVED + 1))
-        fi
-      else
-        echo "warning: skipping unmanaged file: $USER_RULES_FILE" >&2
-      fi
-    fi
+
+  if exp_rules_sha="$(manifest_get "file" "b3-user-rules.txt" 2>/dev/null)"; then
+    uninstall_managed_file "$USER_RULES_FILE" "$exp_rules_sha" "true" "file"
   fi
-  if exp_home_sha="$(manifest_file_sha "b3-home" 2>/dev/null)"; then
-    if is_link_entry "$B3_HOME_FILE"; then
-      echo "warning: skipping symlinked file path: $B3_HOME_FILE" >&2
-      SKIPPED=$((SKIPPED + 1))
-    elif [[ -f "$B3_HOME_FILE" ]]; then
-      cur_sha="$(sha256_file "$B3_HOME_FILE")"
-      if ! $FORCE && [[ -n "$exp_home_sha" ]] && [[ "$cur_sha" != "$exp_home_sha" ]]; then
-        echo "warning: skipping modified b3-home: $B3_HOME_FILE (re-run with --force to remove)" >&2
-        SKIPPED=$((SKIPPED + 1))
-      else
-        if $DRY_RUN; then echo "dry-run: remove $B3_HOME_FILE"; else rm -f "$B3_HOME_FILE"; fi
-        REMOVED=$((REMOVED + 1))
-      fi
-    fi
+  if exp_home_sha="$(manifest_get "file" "b3-home" 2>/dev/null)"; then
+    uninstall_managed_file "$B3_HOME_FILE" "$exp_home_sha" "false" "b3-home"
+  fi
+
+  if ! $DRY_RUN; then
+    for d in "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"; do
+      if [[ -d "$d" && ! -L "$d" ]] && [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then rmdir "$d"; fi
+    done
   fi
   if [[ $SKIPPED -gt 0 ]]; then
-    if ! $DRY_RUN; then
-      for d in "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"; do
-        if [[ -d "$d" && ! -L "$d" ]] && [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
-          rmdir "$d"
-        fi
-      done
-    fi
     echo "UNINSTALL_CONFLICT: removed=$REMOVED skipped=$SKIPPED cursor_home=$CURSOR_HOME (re-run with --force to remove modified managed entries)"
     exit 1
   fi
@@ -577,9 +220,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   else
     rm -f "$MANIFEST_FILE"
     for d in "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"; do
-      if [[ -d "$d" && ! -L "$d" ]] && [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
-        rmdir "$d"
-      fi
+      if [[ -d "$d" && ! -L "$d" ]] && [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then rmdir "$d"; fi
     done
   fi
   echo "UNINSTALL_OK: removed=$REMOVED cursor_home=$CURSOR_HOME"
@@ -587,6 +228,13 @@ if [[ "$ACTION" == "uninstall" ]]; then
 fi
 
 # --- Validate canonical B3_HOME (install / update / verify) ---
+if [[ -z "$B3_HOME" ]]; then
+  B3_HOME="$(canon_existing_dir "${SCRIPT_DIR}/../..")"
+else
+  [[ -d "$B3_HOME" ]] || { echo "error: B3Home directory not found: $B3_HOME" >&2; exit 1; }
+  B3_HOME="$(canon_existing_dir "$B3_HOME")"
+fi
+
 WORKFLOW="${B3_HOME}/workflows/ship.md"
 SKILLS_SRC="${B3_HOME}/skills"
 COMMANDS_SRC="${B3_HOME}/commands"
@@ -600,7 +248,6 @@ RULES_SRC="${B3_HOME}/rules"
 [[ -n "$(find "$RULES_SRC" -maxdepth 1 -name '*.md' -type f -print -quit 2>/dev/null || true)" ]] || {
   echo "error: B3_HOME missing rules/*.md under: $RULES_SRC" >&2; exit 1
 }
-
 for c in "${EXPECTED_COMMANDS[@]}"; do
   [[ -f "${COMMANDS_SRC}/${c}" ]] || { echo "error: B3_HOME missing canonical command: $c" >&2; exit 1; }
 done
@@ -610,32 +257,22 @@ done
 
 SKILL_NAMES=()
 SKILL_TARGETS=()
-while IFS= read -r sf; do
-  [[ -n "$sf" ]] || continue
-  sname="$(skill_name_from_file "$sf")"
-  sdir="$(canon_existing_dir "$(dirname "$sf")")"
-  if [[ ${#SKILL_NAMES[@]} -gt 0 ]]; then
-    for existing in "${SKILL_NAMES[@]}"; do
-      if [[ "$existing" == "$sname" ]]; then
-        echo "error: duplicate canonical skill name '$sname' at $sf" >&2
-        exit 1
-      fi
-    done
+while IFS=$'\t' read -r sname sdir; do
+  [[ -n "$sname" ]] || continue
+  if [[ ${#SKILL_NAMES[@]} -gt 0 ]] && array_contains "$sname" "${SKILL_NAMES[@]}"; then
+    echo "error: duplicate canonical skill name '$sname' at $sdir" >&2
+    exit 1
   fi
   SKILL_NAMES+=("$sname")
   SKILL_TARGETS+=("$sdir")
-done < <(find "$SKILLS_SRC" -name 'SKILL.md' -type f | LC_ALL=C sort)
-
+done < <(discover_skills_tsv "$SKILLS_SRC")
 [[ ${#SKILL_NAMES[@]} -ge 1 ]] || { echo "error: B3_HOME has no SKILL.md under: $SKILLS_SRC" >&2; exit 1; }
 
-# Sort skills deterministically by skill name
 SORTED_IDX=()
 while IFS= read -r entry; do
   [[ -n "$entry" ]] && SORTED_IDX+=("${entry%%|*}")
 done < <(
-  for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
-    printf '%s|%s\n' "$i" "${SKILL_NAMES[$i]}"
-  done | LC_ALL=C sort -t '|' -k2,2
+  for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do printf '%s|%s\n' "$i" "${SKILL_NAMES[$i]}"; done | LC_ALL=C sort -t '|' -k2,2
 )
 
 RENDER_DIR="$(mktemp -d)"
@@ -647,7 +284,6 @@ for c in "${EXPECTED_COMMANDS[@]}"; do
   h2="**Global B3_HOME fallback:** if \`B3_HOME\` env and project \`.b3/home\` are absent, read \`~/.cursor/b3-home\` (\`${B3_HOME}\`). Project \`AGENTS.md\` and \`.cursor/rules/*.mdc\` override global defaults on project requirements."
   render_managed_doc "${COMMANDS_SRC}/${c}" "$h1" "$h2" > "${RENDER_DIR}/commands/${c}"
 done
-
 for a in "${EXPECTED_AGENTS[@]}"; do
   h1="<!-- b3-global-cursor-managed: source=${B3_HOME}/agents/${a} -->"
   h2="**Global B3_HOME:** resolve \`B3_HOME\` env, project \`.b3/home\`, or \`~/.cursor/b3-home\` (\`${B3_HOME}\`)."
@@ -663,73 +299,46 @@ B3 Engineering Baseline (personal/global; project AGENTS.md and .cursor/rules/*.
 4. Provenance: cite official docs vs practice vs preference; never copy external repos verbatim without provenance.
 5. Delegation: independent review and fixer roles stay separate; report host limit honestly if subagent isolation is unavailable.
 ' "$B3_HOME" "$B3_HOME" > "${RENDER_DIR}/b3-user-rules.txt"
-
 printf '%s\n' "$B3_HOME" > "${RENDER_DIR}/b3-home"
 
-load_manifest
-
-in_current_skills() {
-  local target="$1" s
-  for s in "${SKILL_NAMES[@]}"; do
-    [[ "$s" == "$target" ]] && return 0
-  done
-  return 1
-}
-
-in_expected_commands() {
-  local target="$1" c
-  for c in "${EXPECTED_COMMANDS[@]}"; do
-    [[ "$c" == "$target" ]] && return 0
-  done
-  return 1
-}
-
-in_expected_agents() {
-  local target="$1" a
-  for a in "${EXPECTED_AGENTS[@]}"; do
-    [[ "$a" == "$target" ]] && return 0
-  done
-  return 1
-}
+if is_link_entry "$MANIFEST_FILE"; then
+  M_EXISTS=false; M_CORRUPT=false; M_SCHEMA=""; M_KINDS=(); M_KEYS=(); M_VALS=()
+else
+  manifest_load "$MANIFEST_FILE"
+fi
 
 # --- Verify ---
 if [[ "$ACTION" == "verify" ]]; then
   ERRS=()
-  if is_link_entry "$CURSOR_HOME"; then
-    ERRS+=("cursor_home is a link (expected regular directory): $CURSOR_HOME")
-  fi
-  if is_link_entry "$SKILLS_DEST"; then
-    ERRS+=("skills directory is a link (expected regular directory): $SKILLS_DEST")
-  fi
-  if is_link_entry "$COMMANDS_DEST"; then
-    ERRS+=("commands directory is a link (expected regular directory): $COMMANDS_DEST")
-  fi
-  if is_link_entry "$AGENTS_DEST"; then
-    ERRS+=("agents directory is a link (expected regular directory): $AGENTS_DEST")
-  fi
+  is_link_entry "$CURSOR_HOME" && ERRS+=("cursor_home is a link (expected regular directory): $CURSOR_HOME")
+  is_link_entry "$SKILLS_DEST" && ERRS+=("skills directory is a link (expected regular directory): $SKILLS_DEST")
+  is_link_entry "$COMMANDS_DEST" && ERRS+=("commands directory is a link (expected regular directory): $COMMANDS_DEST")
+  is_link_entry "$AGENTS_DEST" && ERRS+=("agents directory is a link (expected regular directory): $AGENTS_DEST")
+
   if is_link_entry "$MANIFEST_FILE"; then
     ERRS+=("manifest is a link (expected regular file): $MANIFEST_FILE")
   elif ! $M_EXISTS; then
     ERRS+=("missing manifest: $MANIFEST_FILE")
+  elif $M_CORRUPT || [[ "$M_SCHEMA" != "b3-cursor-global-v1" ]]; then
+    ERRS+=("invalid or corrupt manifest at $MANIFEST_FILE")
   fi
+
   LEGACY_LINK="${SKILLS_DEST}/b3-ai-engineering"
   if [[ -e "$LEGACY_LINK" || -L "$LEGACY_LINK" ]]; then
     ERRS+=("legacy b3-ai-engineering entry still exists at $LEGACY_LINK (run with --force to migrate)")
   fi
-  if [[ -L "$B3_HOME_FILE" ]]; then
-    ERRS+=("b3-home is a link (expected regular file): $B3_HOME_FILE")
-  elif [[ ! -f "$B3_HOME_FILE" ]]; then
-    ERRS+=("missing b3-home file: $B3_HOME_FILE")
-  elif [[ "$(sha256_file "$B3_HOME_FILE")" != "$(sha256_file "${RENDER_DIR}/b3-home")" ]]; then
-    ERRS+=("b3-home mismatch at $B3_HOME_FILE")
-  fi
-  if [[ -L "$USER_RULES_FILE" ]]; then
-    ERRS+=("b3-user-rules.txt is a link (expected regular file): $USER_RULES_FILE")
-  elif [[ ! -f "$USER_RULES_FILE" ]]; then
-    ERRS+=("missing b3-user-rules.txt: $USER_RULES_FILE")
-  elif [[ "$(sha256_file "$USER_RULES_FILE")" != "$(sha256_file "${RENDER_DIR}/b3-user-rules.txt")" ]]; then
-    ERRS+=("stale or modified b3-user-rules.txt at $USER_RULES_FILE")
-  fi
+
+  verify_file_match() {
+    local actual="$1" expected="$2" label="$3"
+    if [[ -L "$actual" ]]; then ERRS+=("${label} is a link (expected regular file): $actual")
+    elif [[ ! -f "$actual" ]]; then ERRS+=("missing ${label}: $actual")
+    elif [[ "$(sha256_file "$actual")" != "$(sha256_file "$expected")" ]]; then ERRS+=("stale or modified ${label} at $actual")
+    fi
+  }
+
+  verify_file_match "$B3_HOME_FILE" "${RENDER_DIR}/b3-home" "b3-home"
+  verify_file_match "$USER_RULES_FILE" "${RENDER_DIR}/b3-user-rules.txt" "b3-user-rules.txt"
+
   for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
     sn="${SKILL_NAMES[$i]}"
     st="${SKILL_TARGETS[$i]}"
@@ -738,9 +347,11 @@ if [[ "$ACTION" == "verify" ]]; then
       ERRS+=("invalid or missing skill link: $dest -> $st")
     fi
   done
-  if [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
-    for old_sk in "${M_SKILL_NAMES[@]}"; do
-      if ! in_current_skills "$old_sk"; then
+  if [[ ${#M_KINDS[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
+      [[ "${M_KINDS[$i]}" == "skill" ]] || continue
+      old_sk="${M_KEYS[$i]}"
+      if ! array_contains "$old_sk" "${SKILL_NAMES[@]}"; then
         old_path="${SKILLS_DEST}/${old_sk}"
         if [[ -e "$old_path" || -L "$old_path" ]]; then
           ERRS+=("stale managed skill entry present: $old_path")
@@ -748,33 +359,14 @@ if [[ "$ACTION" == "verify" ]]; then
       fi
     done
   fi
-  for c in "${EXPECTED_COMMANDS[@]}"; do
-    dest="${COMMANDS_DEST}/${c}"
-    if [[ -L "$dest" ]]; then
-      ERRS+=("command is a link (expected regular file): $dest")
-    elif [[ ! -f "$dest" ]]; then
-      ERRS+=("missing command: $dest")
-    elif [[ "$(sha256_file "$dest")" != "$(sha256_file "${RENDER_DIR}/commands/${c}")" ]]; then
-      ERRS+=("stale or modified command: $dest")
-    fi
-  done
-  for a in "${EXPECTED_AGENTS[@]}"; do
-    dest="${AGENTS_DEST}/${a}"
-    if [[ -L "$dest" ]]; then
-      ERRS+=("agent is a link (expected regular file): $dest")
-    elif [[ ! -f "$dest" ]]; then
-      ERRS+=("missing agent: $dest")
-    elif [[ "$(sha256_file "$dest")" != "$(sha256_file "${RENDER_DIR}/agents/${a}")" ]]; then
-      ERRS+=("stale or modified agent: $dest")
-    fi
-  done
+
+  for c in "${EXPECTED_COMMANDS[@]}"; do verify_file_match "${COMMANDS_DEST}/${c}" "${RENDER_DIR}/commands/${c}" "command"; done
+  for a in "${EXPECTED_AGENTS[@]}"; do verify_file_match "${AGENTS_DEST}/${a}" "${RENDER_DIR}/agents/${a}" "agent"; done
 
   check_coexistence "$USER_HOME" "${SKILL_NAMES[@]}"
 
   if [[ ${#ERRS[@]} -gt 0 ]]; then
-    for e in "${ERRS[@]}"; do
-      echo "VERIFY_ERROR: $e"
-    done
+    for e in "${ERRS[@]}"; do echo "VERIFY_ERROR: $e"; done
     echo "VERIFY_FAIL: errors=${#ERRS[@]}"
     exit 1
   fi
@@ -784,28 +376,16 @@ if [[ "$ACTION" == "verify" ]]; then
 fi
 
 # --- Preflight all conflicts before modifying disk (install / update) ---
-for container_dir in "$CURSOR_HOME" "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"; do
-  if [[ -e "$container_dir" || -L "$container_dir" ]]; then
-    if is_link_entry "$container_dir"; then
-      echo "error: refusing to traverse link directory: $container_dir" >&2
-      exit 1
-    fi
-    if [[ ! -d "$container_dir" ]]; then
-      echo "error: existing non-directory path blocks directory: $container_dir" >&2
-      exit 1
-    fi
-  fi
-done
-if [[ -e "$MANIFEST_FILE" || -L "$MANIFEST_FILE" ]]; then
-  if is_link_entry "$MANIFEST_FILE"; then
-    echo "error: existing link blocks $MANIFEST_FILE" >&2
-    exit 1
-  fi
-  if [[ ! -f "$MANIFEST_FILE" ]]; then
-    echo "error: existing non-file path blocks $MANIFEST_FILE" >&2
-    exit 1
-  fi
+assert_regular_dir_or_missing "$CURSOR_HOME" "cursor_home"
+assert_regular_dir_or_missing "$SKILLS_DEST" "skills"
+assert_regular_dir_or_missing "$COMMANDS_DEST" "commands"
+assert_regular_dir_or_missing "$AGENTS_DEST" "agents"
+assert_regular_file_or_missing "$MANIFEST_FILE" "manifest"
+if $M_EXISTS && { $M_CORRUPT || [[ "$M_SCHEMA" != "b3-cursor-global-v1" ]]; }; then
+  echo "error: refusing to ${ACTION}: invalid or corrupt B3 manifest at $MANIFEST_FILE" >&2
+  exit 1
 fi
+
 LEGACY_LINK="${SKILLS_DEST}/b3-ai-engineering"
 REMOVE_LEGACY=false
 if [[ -e "$LEGACY_LINK" || -L "$LEGACY_LINK" ]]; then
@@ -817,14 +397,19 @@ if [[ -e "$LEGACY_LINK" || -L "$LEGACY_LINK" ]]; then
   fi
 fi
 
+SKILL_OK_FLAGS=()
 for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
   sn="${SKILL_NAMES[$i]}"
   st="${SKILL_TARGETS[$i]}"
   dest="${SKILLS_DEST}/${sn}"
+  SKILL_OK_FLAGS[$i]="0"
   if [[ -e "$dest" || -L "$dest" ]]; then
-    if link_target_ok "$dest" "$st"; then continue; fi
+    if link_target_ok "$dest" "$st"; then
+      SKILL_OK_FLAGS[$i]="1"
+      continue
+    fi
     is_managed=false
-    if [[ "$ACTION" == "update" ]] && manifest_has_skill "$sn"; then is_managed=true; fi
+    if [[ "$ACTION" == "update" ]] && manifest_has "skill" "$sn"; then is_managed=true; fi
     if is_link_entry "$dest"; then
       if $is_managed || $FORCE; then continue; fi
       echo "error: conflicting link at $dest (does not point to $st). Re-run with --force or update." >&2
@@ -842,61 +427,19 @@ for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
   fi
 done
 
-for c in "${EXPECTED_COMMANDS[@]}"; do
-  dest="${COMMANDS_DEST}/${c}"
-  if [[ -L "$dest" ]]; then
-    echo "error: existing link blocks command $dest" >&2
-    exit 1
-  elif [[ -f "$dest" ]]; then
-    if ! grep -q 'b3-global-cursor-managed:' "$dest" && ! $FORCE; then
-      echo "error: refusing to overwrite unmanaged command $dest (re-run with --force to replace)" >&2
-      exit 1
-    fi
-  elif [[ -e "$dest" ]]; then
-    echo "error: existing non-file path blocks command $dest" >&2
-    exit 1
-  fi
-done
+for c in "${EXPECTED_COMMANDS[@]}"; do assert_managed_doc_preflight "${COMMANDS_DEST}/${c}" "command"; done
+for a in "${EXPECTED_AGENTS[@]}"; do assert_managed_doc_preflight "${AGENTS_DEST}/${a}" "agent"; done
+assert_managed_doc_preflight "$USER_RULES_FILE" "user rules"
 
-for a in "${EXPECTED_AGENTS[@]}"; do
-  dest="${AGENTS_DEST}/${a}"
-  if [[ -L "$dest" ]]; then
-    echo "error: existing link blocks agent $dest" >&2
-    exit 1
-  elif [[ -f "$dest" ]]; then
-    if ! grep -q 'b3-global-cursor-managed:' "$dest" && ! $FORCE; then
-      echo "error: refusing to overwrite unmanaged agent $dest (re-run with --force to replace)" >&2
-      exit 1
-    fi
-  elif [[ -e "$dest" ]]; then
-    echo "error: existing non-file path blocks agent $dest" >&2
-    exit 1
-  fi
-done
-
-if [[ -L "$B3_HOME_FILE" ]]; then
-  echo "error: existing link blocks $B3_HOME_FILE" >&2
-  exit 1
-elif [[ -e "$B3_HOME_FILE" ]]; then
-  [[ -f "$B3_HOME_FILE" ]] || { echo "error: existing non-file path blocks $B3_HOME_FILE" >&2; exit 1; }
+assert_regular_file_or_missing "$B3_HOME_FILE" "b3-home"
+if [[ -f "$B3_HOME_FILE" ]]; then
   cur_home="$(trim_crlf "$(cat "$B3_HOME_FILE")")"
   cur_home="${cur_home//\\//}"
   cur_home="${cur_home%/}"
   home_managed=false
-  if [[ "$ACTION" == "update" ]] && manifest_file_sha "b3-home" >/dev/null 2>&1; then home_managed=true; fi
+  if [[ "$ACTION" == "update" ]] && manifest_has "file" "b3-home"; then home_managed=true; fi
   if [[ "$(norm_cmp_path "$cur_home")" != "$(norm_cmp_path "$B3_HOME")" ]] && ! $home_managed && ! $FORCE; then
     echo "error: refusing to overwrite unmanaged $B3_HOME_FILE (points to $cur_home; re-run with --force)" >&2
-    exit 1
-  fi
-fi
-
-if [[ -L "$USER_RULES_FILE" ]]; then
-  echo "error: existing link blocks $USER_RULES_FILE" >&2
-  exit 1
-elif [[ -e "$USER_RULES_FILE" ]]; then
-  [[ -f "$USER_RULES_FILE" ]] || { echo "error: existing non-file path blocks $USER_RULES_FILE" >&2; exit 1; }
-  if ! grep -q 'b3-global-cursor-managed:' "$USER_RULES_FILE" && ! $FORCE; then
-    echo "error: refusing to overwrite unmanaged $USER_RULES_FILE (re-run with --force)" >&2
     exit 1
   fi
 fi
@@ -907,9 +450,11 @@ if $DRY_RUN; then
   echo "dry-run: ensure $CURSOR_HOME, write $B3_HOME_FILE ($B3_HOME), $USER_RULES_FILE"
   echo "dry-run: link ${#SKILL_NAMES[@]} flattened skills under $SKILLS_DEST"
   echo "dry-run: write ${#EXPECTED_COMMANDS[@]} commands under $COMMANDS_DEST and ${#EXPECTED_AGENTS[@]} agents under $AGENTS_DEST"
-  if [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
-    for old_sk in "${M_SKILL_NAMES[@]}"; do
-      if ! in_current_skills "$old_sk"; then
+  if [[ ${#M_KINDS[@]} -gt 0 ]]; then
+    for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
+      [[ "${M_KINDS[$i]}" == "skill" ]] || continue
+      old_sk="${M_KEYS[$i]}"
+      if ! array_contains "$old_sk" "${SKILL_NAMES[@]}"; then
         echo "dry-run: prune removed skill ${SKILLS_DEST}/${old_sk}"
       fi
     done
@@ -920,7 +465,6 @@ if $DRY_RUN; then
 fi
 
 mkdir -p "$CURSOR_HOME" "$SKILLS_DEST" "$COMMANDS_DEST" "$AGENTS_DEST"
-
 if $REMOVE_LEGACY; then
   remove_link_only "$LEGACY_LINK"
   echo "migrated: removed legacy link $LEGACY_LINK"
@@ -934,7 +478,7 @@ for idx in "${SORTED_IDX[@]}"; do
   sn="${SKILL_NAMES[$idx]}"
   st="${SKILL_TARGETS[$idx]}"
   dest="${SKILLS_DEST}/${sn}"
-  if ! link_target_ok "$dest" "$st"; then
+  if [[ "${SKILL_OK_FLAGS[$idx]}" != "1" ]]; then
     if is_link_entry "$dest"; then
       remove_link_only "$dest"
     elif [[ -d "$dest" ]]; then
@@ -946,53 +490,39 @@ for idx in "${SORTED_IDX[@]}"; do
 "
 done
 
-if [[ ${#M_SKILL_NAMES[@]} -gt 0 ]]; then
-  for old_sk in "${M_SKILL_NAMES[@]}"; do
-    if ! in_current_skills "$old_sk"; then
+if [[ ${#M_KINDS[@]} -gt 0 ]]; then
+  for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
+    [[ "${M_KINDS[$i]}" == "skill" ]] || continue
+    old_sk="${M_KEYS[$i]}"
+    if ! array_contains "$old_sk" "${SKILL_NAMES[@]}"; then
       old_path="${SKILLS_DEST}/${old_sk}"
-      if is_link_entry "$old_path"; then
-        remove_link_only "$old_path"
-      elif [[ -e "$old_path" ]]; then
-        echo "warning: skipping prune of non-link directory $old_path" >&2
+      if is_link_entry "$old_path"; then remove_link_only "$old_path"
+      elif [[ -e "$old_path" ]]; then echo "warning: skipping prune of non-link directory $old_path" >&2
       fi
     fi
   done
 fi
 
 for c in "${EXPECTED_COMMANDS[@]}"; do
-  dest="${COMMANDS_DEST}/${c}"
   tmp_src="${RENDER_DIR}/commands/${c}"
-  install_file_atomic "$tmp_src" "$dest"
-  c_sha="$(sha256_file "$tmp_src")"
-  MANIFEST_BODY="${MANIFEST_BODY}command|${c}|${c_sha}
+  install_file_atomic "$tmp_src" "${COMMANDS_DEST}/${c}"
+  MANIFEST_BODY="${MANIFEST_BODY}command|${c}|$(sha256_file "$tmp_src")
 "
 done
-if [[ ${#M_CMD_NAMES[@]} -gt 0 ]]; then
-  for old_cmd in "${M_CMD_NAMES[@]}"; do
-    if ! in_expected_commands "$old_cmd"; then
-      old_path="${COMMANDS_DEST}/${old_cmd}"
-      if [[ -f "$old_path" ]] && grep -q 'b3-global-cursor-managed:' "$old_path"; then
-        rm -f "$old_path"
-      fi
-    fi
-  done
-fi
-
 for a in "${EXPECTED_AGENTS[@]}"; do
-  dest="${AGENTS_DEST}/${a}"
   tmp_src="${RENDER_DIR}/agents/${a}"
-  install_file_atomic "$tmp_src" "$dest"
-  a_sha="$(sha256_file "$tmp_src")"
-  MANIFEST_BODY="${MANIFEST_BODY}agent|${a}|${a_sha}
+  install_file_atomic "$tmp_src" "${AGENTS_DEST}/${a}"
+  MANIFEST_BODY="${MANIFEST_BODY}agent|${a}|$(sha256_file "$tmp_src")
 "
 done
-if [[ ${#M_AGENT_NAMES[@]} -gt 0 ]]; then
-  for old_ag in "${M_AGENT_NAMES[@]}"; do
-    if ! in_expected_agents "$old_ag"; then
-      old_path="${AGENTS_DEST}/${old_ag}"
-      if [[ -f "$old_path" ]] && grep -q 'b3-global-cursor-managed:' "$old_path"; then
-        rm -f "$old_path"
-      fi
+if [[ ${#M_KINDS[@]} -gt 0 ]]; then
+  for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
+    if [[ "${M_KINDS[$i]}" == "command" ]] && ! array_contains "${M_KEYS[$i]}" "${EXPECTED_COMMANDS[@]}"; then
+      old_path="${COMMANDS_DEST}/${M_KEYS[$i]}"
+      [[ -f "$old_path" ]] && grep -q 'b3-global-cursor-managed:' "$old_path" && rm -f "$old_path" || true
+    elif [[ "${M_KINDS[$i]}" == "agent" ]] && ! array_contains "${M_KEYS[$i]}" "${EXPECTED_AGENTS[@]}"; then
+      old_path="${AGENTS_DEST}/${M_KEYS[$i]}"
+      [[ -f "$old_path" ]] && grep -q 'b3-global-cursor-managed:' "$old_path" && rm -f "$old_path" || true
     fi
   done
 fi
@@ -1003,10 +533,9 @@ MANIFEST_BODY="${MANIFEST_BODY}file|b3-home|$(sha256_file "${RENDER_DIR}/b3-home
 install_file_atomic "${RENDER_DIR}/b3-user-rules.txt" "$USER_RULES_FILE"
 MANIFEST_BODY="${MANIFEST_BODY}file|b3-user-rules.txt|$(sha256_file "${RENDER_DIR}/b3-user-rules.txt")
 "
-
 write_lf_file "$MANIFEST_FILE" "$MANIFEST_BODY"
 
 check_coexistence "$USER_HOME" "${SKILL_NAMES[@]}"
-ACTION_UPPER="$(printf '%s' "$ACTION" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+ACTION_UPPER="$(to_upper "$ACTION")"
 echo "${ACTION_UPPER}_OK: skills=${#SKILL_NAMES[@]} commands=${#EXPECTED_COMMANDS[@]} agents=${#EXPECTED_AGENTS[@]} cursor_home=$CURSOR_HOME b3_home=$B3_HOME"
 echo "note: Cursor global User Rules must be pasted once manually from $USER_RULES_FILE into Cursor Settings > Rules > User Rules (runtime discovery UNKNOWN / INCOMPLETE until verified in Cursor)."

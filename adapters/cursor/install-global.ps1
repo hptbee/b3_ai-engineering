@@ -13,192 +13,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-
-function Fail([string]$Message) {
-    Write-Error $Message
-    exit 1
-}
-
-function Normalize-Path([string]$PathValue) {
-    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PathValue).TrimEnd('\', '/')
-}
-
-function Write-Utf8NoBom([string]$DestPath, [string]$Content) {
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    $lf = $Content.Replace("`r`n", "`n").Replace("`r", "`n")
-    $parent = Split-Path -Parent $DestPath
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    [IO.File]::WriteAllText($DestPath, $lf, $utf8NoBom)
-}
-
-function Get-TextSha256([string]$Text) {
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    $bytes = $utf8NoBom.GetBytes($Text.Replace("`r`n", "`n").Replace("`r", "`n"))
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $hash = $sha.ComputeHash($bytes)
-        return ([BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
-    } finally {
-        $sha.Dispose()
-    }
-}
-
-function Get-FileSha256([string]$FilePath) {
-    return (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
-}
-
-function Test-IsReparseLink([string]$PathValue) {
-    $item = Get-Item -LiteralPath $PathValue -Force -ErrorAction SilentlyContinue
-    if (-not $item) { return $false }
-    if ($item.LinkType -in @('Junction', 'SymbolicLink')) { return $true }
-    return (($item.Attributes.ToString()) -match 'ReparsePoint')
-}
-
-function Remove-LinkOnly([string]$LinkPath) {
-    $item = Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue
-    if (-not $item) { return }
-    if (-not (Test-IsReparseLink $LinkPath)) {
-        Fail "refusing to remove non-link entry: $LinkPath"
-    }
-    if ($item.PSIsContainer) {
-        if ($env:OS -eq 'Windows_NT') {
-            & cmd.exe /c rmdir "`"$LinkPath`"" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $LinkPath)) {
-                Fail "could not remove junction/symlink directory: $LinkPath"
-            }
-        } else {
-            Remove-Item -LiteralPath $LinkPath -Force
-        }
-    } else {
-        Remove-Item -LiteralPath $LinkPath -Force
-    }
-}
-
-function Create-DirLink([string]$DestPath, [string]$TargetPath) {
-    $parent = Split-Path -Parent $DestPath
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    if ($env:OS -eq 'Windows_NT') {
-        New-Item -ItemType Junction -Path $DestPath -Target $TargetPath | Out-Null
-    } else {
-        New-Item -ItemType SymbolicLink -Path $DestPath -Target $TargetPath | Out-Null
-    }
-}
-
-function Test-LinkTarget([string]$LinkPath, [string]$ExpectedDir) {
-    if (-not (Test-IsReparseLink $LinkPath)) { return $false }
-    try {
-        $expectedFull = [IO.Path]::GetFullPath($ExpectedDir).TrimEnd('\', '/')
-        $item = Get-Item -LiteralPath $LinkPath -Force
-        if (-not $item.PSIsContainer) { return $false }
-        $candidate = $null
-        if ($item.Target) {
-            $raw = [string](@($item.Target)[0])
-            if ($raw) {
-                if (-not [IO.Path]::IsPathRooted($raw)) {
-                    $raw = Join-Path (Split-Path -Parent $LinkPath) $raw
-                }
-                $candidate = [IO.Path]::GetFullPath($raw).TrimEnd('\', '/')
-            }
-        }
-        if (-not $candidate -and (Test-Path -LiteralPath $LinkPath -PathType Container)) {
-            $candidate = (Resolve-Path -LiteralPath $LinkPath).Path.TrimEnd('\', '/')
-        }
-        if (-not $candidate) { return $false }
-        if ($env:OS -eq 'Windows_NT') {
-            return $candidate.Equals($expectedFull, [System.StringComparison]::OrdinalIgnoreCase)
-        }
-        return $candidate -ceq $expectedFull
-    } catch {
-        return $false
-    }
-}
-
-function Split-Frontmatter([string]$FilePath) {
-    $raw = ([IO.File]::ReadAllText($FilePath, [System.Text.Encoding]::UTF8)).Replace("`r`n", "`n").Replace("`r", "`n")
-    $lines = $raw -split "`n"
-    if ($lines.Count -lt 3 -or $lines[0].Trim() -ne '---') {
-        Fail "canonical markdown missing YAML frontmatter: $FilePath"
-    }
-    $endIdx = -1
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].Trim() -eq '---') {
-            $endIdx = $i
-            break
-        }
-    }
-    if ($endIdx -lt 0) {
-        Fail "canonical markdown unclosed YAML frontmatter: $FilePath"
-    }
-    $fmLines = @($lines[0..$endIdx])
-    $bodyLines = @()
-    if ($endIdx + 1 -lt $lines.Count) {
-        $bodyLines = @($lines[($endIdx + 1)..($lines.Count - 1)])
-    }
-    $body = (($bodyLines -join "`n").TrimStart("`n")).TrimEnd()
-    return [PSCustomObject]@{
-        Frontmatter = ($fmLines -join "`n")
-        FmLines     = $fmLines
-        Body        = $body
-    }
-}
-
-function Get-SkillNameFromFile([string]$SkillFile) {
-    $parsed = Split-Frontmatter $SkillFile
-    foreach ($line in $parsed.FmLines) {
-        if ($line -match '^\s*name:\s*([a-z0-9-]+)\s*$') {
-            return $Matches[1]
-        }
-    }
-    return (Split-Path -Leaf (Split-Path -Parent $SkillFile))
-}
-
-function Read-Manifest([string]$ManifestPath) {
-    $entries = [PSCustomObject]@{
-        Exists   = $false
-        B3Home   = ''
-        Skills   = @{}
-        Commands = @{}
-        Agents   = @{}
-        Files    = @{}
-    }
-    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-        return $entries
-    }
-    $entries.Exists = $true
-    $lines = ([IO.File]::ReadAllText($ManifestPath, [System.Text.Encoding]::UTF8)).Replace("`r`n", "`n").Split("`n")
-    foreach ($line in $lines) {
-        $t = $line.Trim()
-        if (-not $t) { continue }
-        if ($t -match '^b3_home=(.+)$') {
-            $entries.B3Home = $Matches[1].Trim()
-            continue
-        }
-        $parts = $t -split '\|', 3
-        if ($parts.Count -lt 3) { continue }
-        switch ($parts[0]) {
-            'skill'   { $entries.Skills[$parts[1]] = $parts[2] }
-            'command' { $entries.Commands[$parts[1]] = $parts[2] }
-            'agent'   { $entries.Agents[$parts[1]] = $parts[2] }
-            'file'    { $entries.Files[$parts[1]] = $parts[2] }
-        }
-    }
-    return $entries
-}
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\global-common.ps1')
 
 function Check-CrossHostCoexistence([string]$UserHomeDir, [string[]]$SkillNames) {
     foreach ($sub in @('.agents\skills', '.claude\skills')) {
-        $otherRoot = Join-Path $UserHomeDir $sub
-        if (-not (Test-Path -LiteralPath $otherRoot -PathType Container)) { continue }
-        $overlaps = New-Object System.Collections.Generic.List[string]
-        foreach ($sn in $SkillNames) {
-            if (Test-Path -LiteralPath (Join-Path $otherRoot $sn)) {
-                $overlaps.Add($sn)
-            }
-        }
+        $overlaps = Get-SkillOverlaps (Join-Path $UserHomeDir $sub) $SkillNames
         if ($overlaps.Count -gt 0) {
             $subDisp = '~/' + ($sub -replace '\\', '/')
             Write-Output "COEXISTENCE_WARNING: $subDisp contains $($overlaps.Count) overlapping B3 skill(s); Cursor cross-loads $subDisp and may show duplicates."
@@ -206,21 +25,44 @@ function Check-CrossHostCoexistence([string]$UserHomeDir, [string[]]$SkillNames)
     }
 }
 
-$scriptRoot = $PSScriptRoot
-if (-not $B3Home) {
-    $B3Home = Split-Path -Parent (Split-Path -Parent $scriptRoot)
+function Uninstall-ManagedFile([string]$Path, [string]$ExpectedSha, [bool]$RequireMarker, [string]$Label, [ref]$Removed, [ref]$Skipped) {
+    if (Test-IsReparseLink $Path) {
+        Write-Warning "skipping symlinked ${Label}: $Path"
+        $Skipped.Value++
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    if ($RequireMarker) {
+        $txt = [IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+        if ($txt -notmatch 'b3-global-cursor-managed:') {
+            Write-Warning "skipping unmanaged ${Label}: $Path"
+            return
+        }
+    }
+    if (-not $Force -and $ExpectedSha -and ((Get-FileSha256 $Path) -ne $ExpectedSha)) {
+        Write-Warning "skipping modified ${Label}: $Path (re-run with -Force to remove)"
+        $Skipped.Value++
+        return
+    }
+    if ($DryRun) { Write-Output "dry-run: remove $Path" } else { Remove-Item -LiteralPath $Path -Force }
+    $Removed.Value++
 }
-if (-not (Test-Path -LiteralPath $B3Home -PathType Container)) {
-    Fail "B3Home directory not found: $B3Home"
-}
-$B3Home = (Resolve-Path -LiteralPath $B3Home).Path.TrimEnd('\', '/')
-$b3HomeForward = $B3Home -replace '\\', '/'
 
+function Assert-ManagedDocPreflight([string]$Path, [string]$Label) {
+    Assert-RegularFileOrMissing $Path $Label
+    if ((Test-Path -LiteralPath $Path -PathType Leaf) -and -not $Force) {
+        $txt = [IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+        if ($txt -notmatch 'b3-global-cursor-managed:') {
+            Fail "refusing to overwrite unmanaged ${Label} $Path (re-run with -Force to replace)"
+        }
+    }
+}
+
+$scriptRoot = $PSScriptRoot
 if (-not $UserHome) {
     $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
 }
 $UserHome = Normalize-Path $UserHome
-
 if (-not $CursorHome) {
     $CursorHome = Join-Path $UserHome '.cursor'
 }
@@ -238,16 +80,15 @@ $expectedAgents = @('b3-reviewer.md', 'b3-fixer.md', 'b3-security-reviewer.md', 
 
 # --- Uninstall ---
 if ($Action -eq 'uninstall') {
-    if (Test-IsReparseLink $CursorHome) {
-        Fail "refusing to uninstall link-based CursorHome: $CursorHome"
-    }
-    if (Test-IsReparseLink $manifestFile) {
-        Fail "refusing to read link-based manifest: $manifestFile"
-    }
-    $manifest = Read-Manifest $manifestFile
+    if (Test-IsReparseLink $CursorHome) { Fail "refusing to uninstall link-based CursorHome: $CursorHome" }
+    if (Test-IsReparseLink $manifestFile) { Fail "refusing to read link-based manifest: $manifestFile" }
+    $manifest = Read-B3Manifest $manifestFile
     if (-not $manifest.Exists) {
         Write-Output "nothing installed (no manifest at $manifestFile)"
         exit 0
+    }
+    if ($manifest.Corrupt -or $manifest.Schema -ne 'b3-cursor-global-v1') {
+        Fail "refusing to uninstall invalid or corrupt B3 manifest at $manifestFile"
     }
     $removed = 0
     $skipped = 0
@@ -255,10 +96,10 @@ if ($Action -eq 'uninstall') {
         Write-Warning "skipping symlinked skills directory: $skillsDest"
         $skipped++
     } else {
-        foreach ($sk in @($manifest.Skills.Keys | Sort-Object)) {
+        foreach ($sk in (Sort-OrdinalStrings @($manifest.Sections.skill.Keys))) {
             $p = Join-Path $skillsDest $sk
             if (Test-IsReparseLink $p) {
-                $expTarget = $manifest.Skills[$sk]
+                $expTarget = $manifest.Sections.skill[$sk]
                 if (-not $Force -and $expTarget -and -not (Test-LinkTarget $p $expTarget)) {
                     Write-Warning "skipping retargeted skill link: $p (expected $expTarget; re-run with -Force to remove)"
                     $skipped++
@@ -275,103 +116,28 @@ if ($Action -eq 'uninstall') {
         Write-Warning "skipping symlinked commands directory: $commandsDest"
         $skipped++
     } else {
-        foreach ($cmd in @($manifest.Commands.Keys | Sort-Object)) {
-            $p = Join-Path $commandsDest $cmd
-            if (Test-IsReparseLink $p) {
-                Write-Warning "skipping symlinked command path: $p"
-                $skipped++
-                continue
-            }
-            if (Test-Path -LiteralPath $p -PathType Leaf) {
-                $txt = [IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)
-                if ($txt -match 'b3-global-cursor-managed:') {
-                    $expSha = $manifest.Commands[$cmd]
-                    if (-not $Force -and $expSha -and ((Get-FileSha256 $p) -ne $expSha)) {
-                        Write-Warning "skipping modified command file: $p (re-run with -Force to remove)"
-                        $skipped++
-                        continue
-                    }
-                    if ($DryRun) { Write-Output "dry-run: remove command $p" } else { Remove-Item -LiteralPath $p -Force }
-                    $removed++
-                } else {
-                    Write-Warning "skipping unmanaged command file: $p"
-                }
-            }
+        foreach ($cmd in (Sort-OrdinalStrings @($manifest.Sections.command.Keys))) {
+            Uninstall-ManagedFile (Join-Path $commandsDest $cmd) $manifest.Sections.command[$cmd] $true 'command file' ([ref]$removed) ([ref]$skipped)
         }
     }
     if (Test-IsReparseLink $agentsDest) {
         Write-Warning "skipping symlinked agents directory: $agentsDest"
         $skipped++
     } else {
-        foreach ($ag in @($manifest.Agents.Keys | Sort-Object)) {
-            $p = Join-Path $agentsDest $ag
-            if (Test-IsReparseLink $p) {
-                Write-Warning "skipping symlinked agent path: $p"
-                $skipped++
-                continue
-            }
-            if (Test-Path -LiteralPath $p -PathType Leaf) {
-                $txt = [IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)
-                if ($txt -match 'b3-global-cursor-managed:') {
-                    $expSha = $manifest.Agents[$ag]
-                    if (-not $Force -and $expSha -and ((Get-FileSha256 $p) -ne $expSha)) {
-                        Write-Warning "skipping modified agent file: $p (re-run with -Force to remove)"
-                        $skipped++
-                        continue
-                    }
-                    if ($DryRun) { Write-Output "dry-run: remove agent $p" } else { Remove-Item -LiteralPath $p -Force }
-                    $removed++
-                } else {
-                    Write-Warning "skipping unmanaged agent file: $p"
-                }
-            }
+        foreach ($ag in (Sort-OrdinalStrings @($manifest.Sections.agent.Keys))) {
+            Uninstall-ManagedFile (Join-Path $agentsDest $ag) $manifest.Sections.agent[$ag] $true 'agent file' ([ref]$removed) ([ref]$skipped)
         }
     }
-    if ($manifest.Files.ContainsKey('b3-user-rules.txt')) {
-        if (Test-IsReparseLink $userRulesFile) {
-            Write-Warning "skipping symlinked file path: $userRulesFile"
-            $skipped++
-        } elseif (Test-Path -LiteralPath $userRulesFile -PathType Leaf) {
-            $txt = [IO.File]::ReadAllText($userRulesFile, [System.Text.Encoding]::UTF8)
-            if ($txt -match 'b3-global-cursor-managed:') {
-                $expSha = $manifest.Files['b3-user-rules.txt']
-                if (-not $Force -and $expSha -and ((Get-FileSha256 $userRulesFile) -ne $expSha)) {
-                    Write-Warning "skipping modified file: $userRulesFile (re-run with -Force to remove)"
-                    $skipped++
-                } else {
-                    if ($DryRun) { Write-Output "dry-run: remove $userRulesFile" } else { Remove-Item -LiteralPath $userRulesFile -Force }
-                    $removed++
-                }
-            } else {
-                Write-Warning "skipping unmanaged file: $userRulesFile"
-            }
-        }
+    if ($manifest.Sections.file.ContainsKey('b3-user-rules.txt')) {
+        Uninstall-ManagedFile $userRulesFile $manifest.Sections.file['b3-user-rules.txt'] $true 'file' ([ref]$removed) ([ref]$skipped)
     }
-    if ($manifest.Files.ContainsKey('b3-home')) {
-        if (Test-IsReparseLink $b3HomeFile) {
-            Write-Warning "skipping symlinked file path: $b3HomeFile"
-            $skipped++
-        } elseif (Test-Path -LiteralPath $b3HomeFile -PathType Leaf) {
-            $curSha = Get-FileSha256 $b3HomeFile
-            if (-not $Force -and $manifest.Files['b3-home'] -and ($curSha -ne $manifest.Files['b3-home'])) {
-                Write-Warning "skipping modified b3-home: $b3HomeFile (re-run with -Force to remove)"
-                $skipped++
-            } else {
-                if ($DryRun) { Write-Output "dry-run: remove $b3HomeFile" } else { Remove-Item -LiteralPath $b3HomeFile -Force }
-                $removed++
-            }
-        }
+    if ($manifest.Sections.file.ContainsKey('b3-home')) {
+        Uninstall-ManagedFile $b3HomeFile $manifest.Sections.file['b3-home'] $false 'b3-home' ([ref]$removed) ([ref]$skipped)
+    }
+    if (-not $DryRun) {
+        foreach ($subDir in @($skillsDest, $commandsDest, $agentsDest)) { Remove-EmptyRegularDir $subDir }
     }
     if ($skipped -gt 0) {
-        if (-not $DryRun) {
-            foreach ($subDir in @($skillsDest, $commandsDest, $agentsDest)) {
-                if ((Test-Path -LiteralPath $subDir -PathType Container) -and -not (Test-IsReparseLink $subDir)) {
-                    if (@(Get-ChildItem -LiteralPath $subDir -Force).Count -eq 0) {
-                        Remove-Item -LiteralPath $subDir -Force
-                    }
-                }
-            }
-        }
         Write-Output "UNINSTALL_CONFLICT: removed=$removed skipped=$skipped cursor_home=$CursorHome (re-run with -Force to remove modified managed entries)"
         exit 1
     }
@@ -379,19 +145,18 @@ if ($Action -eq 'uninstall') {
         Write-Output "dry-run: remove manifest $manifestFile"
     } else {
         Remove-Item -LiteralPath $manifestFile -Force
-        foreach ($subDir in @($skillsDest, $commandsDest, $agentsDest)) {
-            if ((Test-Path -LiteralPath $subDir -PathType Container) -and -not (Test-IsReparseLink $subDir)) {
-                if (@(Get-ChildItem -LiteralPath $subDir -Force).Count -eq 0) {
-                    Remove-Item -LiteralPath $subDir -Force
-                }
-            }
-        }
+        foreach ($subDir in @($skillsDest, $commandsDest, $agentsDest)) { Remove-EmptyRegularDir $subDir }
     }
     Write-Output "UNINSTALL_OK: removed=$removed cursor_home=$CursorHome"
     exit 0
 }
 
 # --- Validate canonical B3_HOME (install / update / verify) ---
+if (-not $B3Home) { $B3Home = Split-Path -Parent (Split-Path -Parent $scriptRoot) }
+if (-not (Test-Path -LiteralPath $B3Home -PathType Container)) { Fail "B3Home directory not found: $B3Home" }
+$B3Home = Normalize-Path (Resolve-Path -LiteralPath $B3Home).Path
+$b3HomeForward = To-Forward $B3Home
+
 $workflowPath = Join-Path $B3Home 'workflows\ship.md'
 $skillsSrc = Join-Path $B3Home 'skills'
 $commandsSrc = Join-Path $B3Home 'commands'
@@ -405,57 +170,43 @@ if (-not (Test-Path -LiteralPath $agentsSrc -PathType Container)) { Fail "B3_HOM
 if (@(Get-ChildItem -LiteralPath $rulesSrc -Filter '*.md' -File -ErrorAction SilentlyContinue).Count -lt 1) {
     Fail "B3_HOME missing rules/*.md under: $rulesSrc"
 }
-
 foreach ($c in $expectedCommands) {
-    if (-not (Test-Path -LiteralPath (Join-Path $commandsSrc $c) -PathType Leaf)) {
-        Fail "B3_HOME missing canonical command: $c"
-    }
+    if (-not (Test-Path -LiteralPath (Join-Path $commandsSrc $c) -PathType Leaf)) { Fail "B3_HOME missing canonical command: $c" }
 }
 foreach ($a in $expectedAgents) {
-    if (-not (Test-Path -LiteralPath (Join-Path $agentsSrc $a) -PathType Leaf)) {
-        Fail "B3_HOME missing canonical agent: $a"
-    }
+    if (-not (Test-Path -LiteralPath (Join-Path $agentsSrc $a) -PathType Leaf)) { Fail "B3_HOME missing canonical agent: $a" }
 }
-
-$skillFiles = @(Get-ChildItem -LiteralPath $skillsSrc -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
-if ($skillFiles.Count -lt 1) { Fail "B3_HOME has no SKILL.md under: $skillsSrc" }
 
 $skillTargets = @{}
-foreach ($sf in $skillFiles) {
-    $sname = Get-SkillNameFromFile $sf.FullName
-    if ($skillTargets.ContainsKey($sname)) {
-        Fail "duplicate canonical skill name '$sname' at $($sf.FullName)"
-    }
-    $skillTargets[$sname] = (Split-Path -Parent $sf.FullName)
+if ((Add-CanonicalSkills $skillsSrc $skillTargets $null) -lt 1) {
+    Fail "B3_HOME has no SKILL.md under: $skillsSrc"
 }
-$sortedSkillNames = @($skillTargets.Keys | Sort-Object)
+$sortedSkillNames = Sort-OrdinalStrings @($skillTargets.Keys)
 
 $renderedCommands = @{}
 foreach ($c in $expectedCommands) {
-    $parsed = Split-Frontmatter (Join-Path $commandsSrc $c)
-    $content = @(
+    $parsed = Split-YamlFrontmatter (Join-Path $commandsSrc $c) -RequireFrontmatter
+    $renderedCommands[$c] = (@(
         $parsed.Frontmatter,
         "<!-- b3-global-cursor-managed: source=$b3HomeForward/commands/$c -->",
         '',
         "**Global B3_HOME fallback:** if ``B3_HOME`` env and project ``.b3/home`` are absent, read ``~/.cursor/b3-home`` (``$b3HomeForward``). Project ``AGENTS.md`` and ``.cursor/rules/*.mdc`` override global defaults on project requirements.",
         '',
         $parsed.Body
-    ) -join "`n"
-    $renderedCommands[$c] = $content.TrimEnd() + "`n"
+    ) -join "`n").TrimEnd() + "`n"
 }
 
 $renderedAgents = @{}
 foreach ($a in $expectedAgents) {
-    $parsed = Split-Frontmatter (Join-Path $agentsSrc $a)
-    $content = @(
+    $parsed = Split-YamlFrontmatter (Join-Path $agentsSrc $a) -RequireFrontmatter
+    $renderedAgents[$a] = (@(
         $parsed.Frontmatter,
         "<!-- b3-global-cursor-managed: source=$b3HomeForward/agents/$a -->",
         '',
         "**Global B3_HOME:** resolve ``B3_HOME`` env, project ``.b3/home``, or ``~/.cursor/b3-home`` (``$b3HomeForward``).",
         '',
         $parsed.Body
-    ) -join "`n"
-    $renderedAgents[$a] = $content.TrimEnd() + "`n"
+    ) -join "`n").TrimEnd() + "`n"
 }
 
 $renderedUserRules = (@(
@@ -470,45 +221,47 @@ $renderedUserRules = (@(
 ) -join "`n") + "`n"
 $renderedB3Home = "$b3HomeForward`n"
 
-$manifest = Read-Manifest $manifestFile
+$manifest = if (Test-IsReparseLink $manifestFile) {
+    [PSCustomObject]@{ Exists = $false; Corrupt = $false; Schema = ''; Sections = @{ skill=@{}; command=@{}; agent=@{}; file=@{} } }
+} else {
+    Read-B3Manifest $manifestFile
+}
 
 # --- Verify ---
 if ($Action -eq 'verify') {
     $errors = New-Object System.Collections.Generic.List[string]
-    if (Test-IsReparseLink $CursorHome) {
-        $errors.Add("cursor_home is a link (expected regular directory): $CursorHome")
-    }
-    if (Test-IsReparseLink $skillsDest) {
-        $errors.Add("skills directory is a link (expected regular directory): $skillsDest")
-    }
-    if (Test-IsReparseLink $commandsDest) {
-        $errors.Add("commands directory is a link (expected regular directory): $commandsDest")
-    }
-    if (Test-IsReparseLink $agentsDest) {
-        $errors.Add("agents directory is a link (expected regular directory): $agentsDest")
+    foreach ($pair in @(
+        @{ Path = $CursorHome; Label = 'cursor_home' },
+        @{ Path = $skillsDest; Label = 'skills directory' },
+        @{ Path = $commandsDest; Label = 'commands directory' },
+        @{ Path = $agentsDest; Label = 'agents directory' }
+    )) {
+        if (Test-IsReparseLink $pair.Path) {
+            $errors.Add("$($pair.Label) is a link (expected regular directory): $($pair.Path)")
+        }
     }
     if (Test-IsReparseLink $manifestFile) {
         $errors.Add("manifest is a link (expected regular file): $manifestFile")
     } elseif (-not $manifest.Exists) {
         $errors.Add("missing manifest: $manifestFile")
+    } elseif ($manifest.Corrupt -or $manifest.Schema -ne 'b3-cursor-global-v1') {
+        $errors.Add("invalid or corrupt manifest at $manifestFile")
     }
     $legacySkillDir = Join-Path $skillsDest 'b3-ai-engineering'
     if ((Test-Path -LiteralPath $legacySkillDir) -or (Test-IsReparseLink $legacySkillDir)) {
         $errors.Add("legacy b3-ai-engineering entry still exists at $legacySkillDir (run with -Force to migrate)")
     }
-    if (Test-IsReparseLink $b3HomeFile) {
-        $errors.Add("b3-home is a link (expected regular file): $b3HomeFile")
-    } elseif (-not (Test-Path -LiteralPath $b3HomeFile -PathType Leaf)) {
-        $errors.Add("missing b3-home file: $b3HomeFile")
-    } elseif ((Get-FileSha256 $b3HomeFile) -ne (Get-TextSha256 $renderedB3Home)) {
-        $errors.Add("b3-home mismatch at $b3HomeFile")
-    }
-    if (Test-IsReparseLink $userRulesFile) {
-        $errors.Add("b3-user-rules.txt is a link (expected regular file): $userRulesFile")
-    } elseif (-not (Test-Path -LiteralPath $userRulesFile -PathType Leaf)) {
-        $errors.Add("missing b3-user-rules.txt: $userRulesFile")
-    } elseif ((Get-FileSha256 $userRulesFile) -ne (Get-TextSha256 $renderedUserRules)) {
-        $errors.Add("stale or modified b3-user-rules.txt at $userRulesFile")
+    foreach ($fchk in @(
+        @{ Path = $b3HomeFile; Expected = $renderedB3Home; Label = 'b3-home' },
+        @{ Path = $userRulesFile; Expected = $renderedUserRules; Label = 'b3-user-rules.txt' }
+    )) {
+        if (Test-IsReparseLink $fchk.Path) {
+            $errors.Add("$($fchk.Label) is a link (expected regular file): $($fchk.Path)")
+        } elseif (-not (Test-Path -LiteralPath $fchk.Path -PathType Leaf)) {
+            $errors.Add("missing $($fchk.Label): $($fchk.Path)")
+        } elseif ((Get-FileSha256 $fchk.Path) -ne (Get-TextSha256 $fchk.Expected)) {
+            $errors.Add("stale or modified $($fchk.Label) at $($fchk.Path)")
+        }
     }
     foreach ($sn in $sortedSkillNames) {
         $dest = Join-Path $skillsDest $sn
@@ -516,7 +269,7 @@ if ($Action -eq 'verify') {
             $errors.Add("invalid or missing skill link: $dest -> $($skillTargets[$sn])")
         }
     }
-    foreach ($oldSk in $manifest.Skills.Keys) {
+    foreach ($oldSk in $manifest.Sections.skill.Keys) {
         if (-not $skillTargets.ContainsKey($oldSk)) {
             $oldPath = Join-Path $skillsDest $oldSk
             if ((Test-Path -LiteralPath $oldPath) -or (Test-IsReparseLink $oldPath)) {
@@ -526,23 +279,15 @@ if ($Action -eq 'verify') {
     }
     foreach ($c in $expectedCommands) {
         $dest = Join-Path $commandsDest $c
-        if (Test-IsReparseLink $dest) {
-            $errors.Add("command is a link (expected regular file): $dest")
-        } elseif (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
-            $errors.Add("missing command: $dest")
-        } elseif ((Get-FileSha256 $dest) -ne (Get-TextSha256 $renderedCommands[$c])) {
-            $errors.Add("stale or modified command: $dest")
-        }
+        if (Test-IsReparseLink $dest) { $errors.Add("command is a link (expected regular file): $dest") }
+        elseif (-not (Test-Path -LiteralPath $dest -PathType Leaf)) { $errors.Add("missing command: $dest") }
+        elseif ((Get-FileSha256 $dest) -ne (Get-TextSha256 $renderedCommands[$c])) { $errors.Add("stale or modified command: $dest") }
     }
     foreach ($a in $expectedAgents) {
         $dest = Join-Path $agentsDest $a
-        if (Test-IsReparseLink $dest) {
-            $errors.Add("agent is a link (expected regular file): $dest")
-        } elseif (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
-            $errors.Add("missing agent: $dest")
-        } elseif ((Get-FileSha256 $dest) -ne (Get-TextSha256 $renderedAgents[$a])) {
-            $errors.Add("stale or modified agent: $dest")
-        }
+        if (Test-IsReparseLink $dest) { $errors.Add("agent is a link (expected regular file): $dest") }
+        elseif (-not (Test-Path -LiteralPath $dest -PathType Leaf)) { $errors.Add("missing agent: $dest") }
+        elseif ((Get-FileSha256 $dest) -ne (Get-TextSha256 $renderedAgents[$a])) { $errors.Add("stale or modified agent: $dest") }
     }
 
     Check-CrossHostCoexistence $UserHome $sortedSkillNames
@@ -558,21 +303,15 @@ if ($Action -eq 'verify') {
 }
 
 # --- Preflight all conflicts before any disk mutation (install / update) ---
-foreach ($containerDir in @($CursorHome, $skillsDest, $commandsDest, $agentsDest)) {
-    if ((Test-Path -LiteralPath $containerDir) -or (Test-IsReparseLink $containerDir)) {
-        if (Test-IsReparseLink $containerDir) {
-            Fail "refusing to traverse link directory: $containerDir"
-        }
-        if (-not (Test-Path -LiteralPath $containerDir -PathType Container)) {
-            Fail "existing non-directory path blocks directory: $containerDir"
-        }
-    }
+Assert-RegularDirOrMissing $CursorHome 'cursor_home'
+Assert-RegularDirOrMissing $skillsDest 'skills'
+Assert-RegularDirOrMissing $commandsDest 'commands'
+Assert-RegularDirOrMissing $agentsDest 'agents'
+Assert-RegularFileOrMissing $manifestFile 'manifest'
+if ($manifest.Exists -and ($manifest.Corrupt -or $manifest.Schema -ne 'b3-cursor-global-v1')) {
+    Fail "refusing to ${Action}: invalid or corrupt B3 manifest at $manifestFile"
 }
-if (Test-IsReparseLink $manifestFile) {
-    Fail "existing link blocks $manifestFile"
-} elseif ((Test-Path -LiteralPath $manifestFile) -and -not (Test-Path -LiteralPath $manifestFile -PathType Leaf)) {
-    Fail "existing non-file path blocks $manifestFile"
-}
+
 $legacySkillDir = Join-Path $skillsDest 'b3-ai-engineering'
 $removeLegacyLink = $false
 if ((Test-Path -LiteralPath $legacySkillDir) -or (Test-IsReparseLink $legacySkillDir)) {
@@ -584,11 +323,15 @@ if ((Test-Path -LiteralPath $legacySkillDir) -or (Test-IsReparseLink $legacySkil
     }
 }
 
+$skillAlreadyOk = @{}
 foreach ($sn in $sortedSkillNames) {
     $dest = Join-Path $skillsDest $sn
     if ((Test-Path -LiteralPath $dest) -or (Test-IsReparseLink $dest)) {
-        if (Test-LinkTarget $dest $skillTargets[$sn]) { continue }
-        $isManaged = $manifest.Skills.ContainsKey($sn) -and ($Action -eq 'update')
+        if (Test-LinkTarget $dest $skillTargets[$sn]) {
+            $skillAlreadyOk[$sn] = $true
+            continue
+        }
+        $isManaged = $manifest.Sections.skill.ContainsKey($sn) -and ($Action -eq 'update')
         if (Test-IsReparseLink $dest) {
             if ($isManaged -or $Force) { continue }
             Fail "conflicting link at $dest (does not point to $($skillTargets[$sn])). Re-run with -Force or update."
@@ -603,66 +346,26 @@ foreach ($sn in $sortedSkillNames) {
     }
 }
 
-foreach ($c in $expectedCommands) {
-    $dest = Join-Path $commandsDest $c
-    if (Test-IsReparseLink $dest) {
-        Fail "existing link blocks command $dest"
-    } elseif (Test-Path -LiteralPath $dest -PathType Leaf) {
-        $txt = [IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
-        if ($txt -notmatch 'b3-global-cursor-managed:' -and -not $Force) {
-            Fail "refusing to overwrite unmanaged command $dest (re-run with -Force to replace)"
-        }
-    } elseif (Test-Path -LiteralPath $dest) {
-        Fail "existing non-file path blocks command $dest"
-    }
-}
+foreach ($c in $expectedCommands) { Assert-ManagedDocPreflight (Join-Path $commandsDest $c) 'command' }
+foreach ($a in $expectedAgents) { Assert-ManagedDocPreflight (Join-Path $agentsDest $a) 'agent' }
+Assert-ManagedDocPreflight $userRulesFile 'user rules'
 
-foreach ($a in $expectedAgents) {
-    $dest = Join-Path $agentsDest $a
-    if (Test-IsReparseLink $dest) {
-        Fail "existing link blocks agent $dest"
-    } elseif (Test-Path -LiteralPath $dest -PathType Leaf) {
-        $txt = [IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
-        if ($txt -notmatch 'b3-global-cursor-managed:' -and -not $Force) {
-            Fail "refusing to overwrite unmanaged agent $dest (re-run with -Force to replace)"
-        }
-    } elseif (Test-Path -LiteralPath $dest) {
-        Fail "existing non-file path blocks agent $dest"
-    }
-}
-
-if (Test-IsReparseLink $b3HomeFile) {
-    Fail "existing link blocks $b3HomeFile"
-} elseif (Test-Path -LiteralPath $b3HomeFile) {
-    if (-not (Test-Path -LiteralPath $b3HomeFile -PathType Leaf)) { Fail "existing non-file path blocks $b3HomeFile" }
+Assert-RegularFileOrMissing $b3HomeFile 'b3-home'
+if (Test-Path -LiteralPath $b3HomeFile -PathType Leaf) {
     $curHome = ([IO.File]::ReadAllText($b3HomeFile, [System.Text.Encoding]::UTF8)).Trim() -replace '\\', '/'
-    $homeManaged = $manifest.Files.ContainsKey('b3-home') -and ($Action -eq 'update')
+    $homeManaged = $manifest.Sections.file.ContainsKey('b3-home') -and ($Action -eq 'update')
     if ($curHome -ne $b3HomeForward -and -not $homeManaged -and -not $Force) {
         Fail "refusing to overwrite unmanaged $b3HomeFile (points to $curHome; re-run with -Force)"
     }
 }
 
-if (Test-IsReparseLink $userRulesFile) {
-    Fail "existing link blocks $userRulesFile"
-} elseif (Test-Path -LiteralPath $userRulesFile) {
-    if (-not (Test-Path -LiteralPath $userRulesFile -PathType Leaf)) { Fail "existing non-file path blocks $userRulesFile" }
-    $txt = [IO.File]::ReadAllText($userRulesFile, [System.Text.Encoding]::UTF8)
-    if ($txt -notmatch 'b3-global-cursor-managed:' -and -not $Force) {
-        Fail "refusing to overwrite unmanaged $userRulesFile (re-run with -Force)"
-    }
-}
-
 # --- Execute install / update (or print DryRun plan) ---
-$manifestLines = New-Object System.Collections.Generic.List[string]
-$manifestLines.Add('schema=b3-cursor-global-v1')
-$manifestLines.Add("b3_home=$b3HomeForward")
-
 if ($DryRun) {
     if ($removeLegacyLink) { Write-Output "dry-run: remove legacy link $legacySkillDir" }
     Write-Output "dry-run: ensure $CursorHome, write $b3HomeFile ($b3HomeForward), $userRulesFile"
     Write-Output "dry-run: link $($sortedSkillNames.Count) flattened skills under $skillsDest"
     Write-Output "dry-run: write $($expectedCommands.Count) commands under $commandsDest and $($expectedAgents.Count) agents under $agentsDest"
-    foreach ($oldSk in @($manifest.Skills.Keys | Sort-Object)) {
+    foreach ($oldSk in (Sort-OrdinalStrings @($manifest.Sections.skill.Keys))) {
         if (-not $skillTargets.ContainsKey($oldSk)) { Write-Output "dry-run: prune removed skill $(Join-Path $skillsDest $oldSk)" }
     }
     Check-CrossHostCoexistence $UserHome $sortedSkillNames
@@ -671,42 +374,34 @@ if ($DryRun) {
 }
 
 foreach ($d in @($CursorHome, $skillsDest, $commandsDest, $agentsDest)) {
-    if (-not (Test-Path -LiteralPath $d -PathType Container)) {
-        New-Item -ItemType Directory -Path $d -Force | Out-Null
-    }
+    if (-not (Test-Path -LiteralPath $d -PathType Container)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 }
-
 if ($removeLegacyLink) {
     Remove-LinkOnly $legacySkillDir
     Write-Output "migrated: removed legacy link $legacySkillDir"
 }
 
+$manifestLines = New-Object System.Collections.Generic.List[string]
+$manifestLines.Add('schema=b3-cursor-global-v1')
+$manifestLines.Add("b3_home=$b3HomeForward")
+
 foreach ($sn in $sortedSkillNames) {
     $dest = Join-Path $skillsDest $sn
     $src = $skillTargets[$sn]
-    $srcFwd = $src -replace '\\', '/'
-    if (Test-LinkTarget $dest $src) {
-        $manifestLines.Add("skill|$sn|$srcFwd")
-        continue
+    $srcFwd = To-Forward $src
+    if (-not $skillAlreadyOk.ContainsKey($sn)) {
+        if (Test-IsReparseLink $dest) { Remove-LinkOnly $dest }
+        elseif (Test-Path -LiteralPath $dest -PathType Container) { Remove-Item -LiteralPath $dest -Recurse -Force }
+        Create-DirLink $dest $src
     }
-    if (Test-IsReparseLink $dest) {
-        Remove-LinkOnly $dest
-    } elseif (Test-Path -LiteralPath $dest -PathType Container) {
-        Remove-Item -LiteralPath $dest -Recurse -Force
-    }
-    Create-DirLink $dest $src
     $manifestLines.Add("skill|$sn|$srcFwd")
 }
 
-# Prune stale skills from previous manifest
-foreach ($oldSk in @($manifest.Skills.Keys | Sort-Object)) {
+foreach ($oldSk in (Sort-OrdinalStrings @($manifest.Sections.skill.Keys))) {
     if (-not $skillTargets.ContainsKey($oldSk)) {
         $oldPath = Join-Path $skillsDest $oldSk
-        if (Test-IsReparseLink $oldPath) {
-            Remove-LinkOnly $oldPath
-        } elseif (Test-Path -LiteralPath $oldPath) {
-            Write-Warning "skipping prune of non-link directory $oldPath"
-        }
+        if (Test-IsReparseLink $oldPath) { Remove-LinkOnly $oldPath }
+        elseif (Test-Path -LiteralPath $oldPath) { Write-Warning "skipping prune of non-link directory $oldPath" }
     }
 }
 
@@ -716,26 +411,22 @@ foreach ($c in $expectedCommands) {
     Write-Utf8NoBom $dest $body
     $manifestLines.Add("command|$c|$(Get-TextSha256 $body)")
 }
-foreach ($oldCmd in @($manifest.Commands.Keys | Sort-Object)) {
-    if ($oldCmd -notin $expectedCommands) {
-        $oldPath = Join-Path $commandsDest $oldCmd
-        if ((Test-Path -LiteralPath $oldPath -PathType Leaf) -and ([IO.File]::ReadAllText($oldPath, [System.Text.Encoding]::UTF8) -match 'b3-global-cursor-managed:')) {
-            Remove-Item -LiteralPath $oldPath -Force
-        }
-    }
-}
-
 foreach ($a in $expectedAgents) {
     $dest = Join-Path $agentsDest $a
     $body = $renderedAgents[$a]
     Write-Utf8NoBom $dest $body
     $manifestLines.Add("agent|$a|$(Get-TextSha256 $body)")
 }
-foreach ($oldAg in @($manifest.Agents.Keys | Sort-Object)) {
-    if ($oldAg -notin $expectedAgents) {
-        $oldPath = Join-Path $agentsDest $oldAg
-        if ((Test-Path -LiteralPath $oldPath -PathType Leaf) -and ([IO.File]::ReadAllText($oldPath, [System.Text.Encoding]::UTF8) -match 'b3-global-cursor-managed:')) {
-            Remove-Item -LiteralPath $oldPath -Force
+foreach ($pruneSpec in @(
+    @{ Keys = @($manifest.Sections.command.Keys); Expected = $expectedCommands; Dir = $commandsDest },
+    @{ Keys = @($manifest.Sections.agent.Keys); Expected = $expectedAgents; Dir = $agentsDest }
+)) {
+    foreach ($oldName in $pruneSpec.Keys) {
+        if ($oldName -notin $pruneSpec.Expected) {
+            $oldPath = Join-Path $pruneSpec.Dir $oldName
+            if ((Test-Path -LiteralPath $oldPath -PathType Leaf) -and ([IO.File]::ReadAllText($oldPath, [System.Text.Encoding]::UTF8) -match 'b3-global-cursor-managed:')) {
+                Remove-Item -LiteralPath $oldPath -Force
+            }
         }
     }
 }
