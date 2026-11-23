@@ -36,8 +36,8 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
 
 ## 2. Posting review / comments to GitHub PR
 
-1. **External write gate:** Post to GitHub **only** when the user explicitly asked to post/comment on the PR (or confirms after reviewing the chat report).
-2. **Verdict & signal gate:** Default to `COMMENT` (`--comment` / `"event": "COMMENT"`); never submit `APPROVE` or `REQUEST_CHANGES` unless explicitly instructed. Post **only `CONFIRMED` findings** with concrete `file:line` evidence (plus optional short **Questions for author**) — never post `SPECULATIVE` guesses to a PR.
+1. **Output template & external write gate:** Render both chat PR review reports and GitHub summary comments using [`review-template.md`](review-template.md) with fixed severity `CRITICAL` | `HIGH` | `MEDIUM` | `LOW` (never `Must/Should` or `P0/P1/P2`). Post to GitHub **only** when the user explicitly asked to post/comment on the PR (or confirms after reviewing the chat report).
+2. **Verdict & signal gate:** Default to `COMMENT` (`--comment` / `"event": "COMMENT"`); never submit `APPROVE` or `REQUEST_CHANGES` unless explicitly instructed. Post **only `CONFIRMED` findings** with concrete `file:line` evidence (plus optional short **Questions for author**) — omit `SPECULATIVE` guesses from GitHub comments.
 3. **Shell-safe summary comment:** Write Markdown to a temp file and pass `--body-file`; delete the temp file afterwards. Never pass multiline Markdown with backticks or `$` via inline `-b "..."`.
    ```sh
    gh pr review <id> --comment --body-file <temp_file>
@@ -48,9 +48,9 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
    {
      "commit_id": "<headRefOid>",
      "event": "COMMENT",
-     "body": "<summary>",
+     "body": "<rendered review-template summary>",
      "comments": [
-       {"path": "<file>", "line": 42, "side": "RIGHT", "body": "**[HIGH]** <issue + fix>"}
+       {"path": "<file>", "line": 42, "side": "RIGHT", "body": "**[HIGH] (`R001`, `correctness`)** <issue + invariant + evidence>. **Fix:** <fix>"}
      ]
    }
    ```

@@ -12,4 +12,5 @@ This is an on-demand contract for B3 orchestrators, **not** a global rule. Read 
 - Read once per dispatch phase (on demand, not globally or per subagent): check `<project>/.b3/models.md`, then `~/.b3/models.md` (or `B3_MODELS_PERSONAL`).
 - Applies advisories for `planning`, `implementation`, `b3-reviewer`, `b3-fixer`, and specialist review agents (`b3-security-reviewer`, `b3-architecture-reviewer`, `b3-performance-reviewer`).
 - Precedence: explicit user selection > `<project>/.b3/models.md` > `~/.b3/models.md` > native `auto`.
+- Dispatch `b3-impl-<task-id>` even for single-task builds when the host supports subagents so a custom `implementation` model applies independently of `main` rather than falling back inline.
 - Apply a preferred model **only** when the active host supports selecting a model on dispatch; otherwise inherit the native/parent model. Never block work on missing or malformed preference files, never edit IDE settings or committed `agents/*.md` (`model: inherit`), and never claim a model switch occurred without evidence.

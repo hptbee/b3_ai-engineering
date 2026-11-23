@@ -21,7 +21,7 @@ B3 model preferences are an optional, human- and AI-readable convenience file. T
 3. `~/.b3/models.md` (or `B3_MODELS_PERSONAL`).
 4. Native platform default (`auto`).
 
-To avoid always-on context bloat, `AGENTS.md` and `rules/*.md` do not load model preferences. Orchestrators load [`workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) at dispatch and read `.b3/models.md` / `~/.b3/models.md` at most once per dispatch phase across `/b3-ship`, `/b3-review-loop`, planning/implementation, and review/fix dispatch. Missing, partial, or malformed preference files fall back to native model selection and never block work.
+To avoid always-on context bloat, `AGENTS.md` and `rules/*.md` do not load model preferences. Orchestrators load [`workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) at dispatch and read `.b3/models.md` / `~/.b3/models.md` at most once per dispatch phase across `/b3-ship`, `/b3-review-loop`, planning/implementation, and review/fix dispatch. `/b3-ship` dispatches `b3-impl-t00N` even for 1-task builds (and standalone `/b3-implement` dispatches when `implementation` differs from `main`) so configuring `main` as Model A and `implementation` as Model B executes Build on Model B where supported. Missing, partial, or malformed preference files fall back to native model selection and never block work.
 
 ## Platform Behavior & Honest Limits
 

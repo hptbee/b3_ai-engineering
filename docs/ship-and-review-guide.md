@@ -33,8 +33,8 @@ flowchart TD
     WaveCheck{"2+ ready tasks?"}
     WaveCheck -->|"Yes"| GuardWave["b3-guard check-wave (-WaveReads, -ExpectedBaseSha) + check-worktree"]
     GuardWave -->|"WAVE_OK"| Parallel["Build Parallel Wave (2-3 subagents; save impl_agent in progress.md)"]
-    GuardWave -->|"WAVE_CONFLICT / BASE_MISMATCH"| SeqImpl["Build Single Task (sequential degrade)"]
-    WaveCheck -->|"No"| SeqImpl
+    GuardWave -->|"WAVE_CONFLICT / BASE_MISMATCH"| SeqImpl["Build Single Task (1 b3-impl-t00N subagent; save impl_agent)"]
+    WaveCheck -->|"No (1 task)"| SeqImpl
 
     Parallel --> Hub["Parent Hub Relay: merge discoveries & change_requests + verify-run"]
     SeqImpl --> TaskVerify["Verify: b3-guard verify-run (writes b3-verify-v1 evidence receipt)"]
@@ -145,7 +145,7 @@ flowchart TD
 
 ## 4. Standalone `/b3-review` — 3-Mode Flow (Local, GitHub PR & Safe Posting)
 
-Standalone `/b3-review` ([`../commands/b3-review.md`](../commands/b3-review.md), [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md)) routes into 3 explicit modes and only loads [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md) when a GitHub PR or PR comment is involved (`0` extra bytes on local reviews).
+Standalone `/b3-review` ([`../commands/b3-review.md`](../commands/b3-review.md), [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md)) routes into 3 explicit modes, renders every chat report and GitHub PR summary with the shared [`../skills/engineering/code-review/references/review-template.md`](../skills/engineering/code-review/references/review-template.md) (`CRITICAL` | `HIGH` | `MEDIUM` | `LOW`), and only loads [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md) when a GitHub PR or PR comment is involved (`0` extra bytes on local reviews).
 
 ```mermaid
 flowchart TD
@@ -226,8 +226,8 @@ Hệ thống tách biệt **suy luận sâu (Deep)**, **thực thi chuẩn (Stan
 
 ## Related canonical documents
 
-- Core `/b3-ship` procedure: [`../workflows/ship.md`](../workflows/ship.md)
+- Core `/b3-ship` procedure & PR template: [`../workflows/ship.md`](../workflows/ship.md), [`../workflows/references/pr-template.md`](../workflows/references/pr-template.md)
 - Core `/b3-review-loop` procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md)
-- Core `/b3-review` skill & GitHub PR ref: [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md), [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md)
+- Core `/b3-review` skill, shared template & GitHub PR ref: [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md), [`../skills/engineering/code-review/references/review-template.md`](../skills/engineering/code-review/references/review-template.md), [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md)
 - Deterministic CLI reference: [`../scripts/README.md`](../scripts/README.md)
 - Architecture decisions: [`../research/decisions/decision-012-autodev-v2-hardening.md`](../research/decisions/decision-012-autodev-v2-hardening.md), [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md), [`../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md`](../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md), [`../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md`](../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md), [`../research/decisions/decision-016-standalone-commands-quality-and-context.md`](../research/decisions/decision-016-standalone-commands-quality-and-context.md)
