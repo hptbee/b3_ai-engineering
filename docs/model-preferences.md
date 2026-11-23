@@ -8,9 +8,11 @@ B3 model preferences are an optional, human- and AI-readable convenience file. T
 
 ## Customization
 
-1. Copy [`config/models.example.md`](../config/models.example.md) to `~/.b3/models.md` (or `<project>/.b3/models.md`), or let [`adapters/install-product.{ps1,sh}`](../adapters/install-product.ps1) / [`adapters/sync-skills.{ps1,sh}`](../adapters/sync-skills.ps1) create `~/.b3/models.md` if missing.
+1. Copy [`config/models.example.md`](../config/models.example.md) to `~/.b3/models.md` (or `<project>/.b3/models.md`). Alternatively, the unified [`install-global.ps1`](../adapters/install-global.ps1) / [`install-global.sh`](../adapters/install-global.sh) seeds a missing file on successful `install`/`update`; [`install-product`](../adapters/install-product.ps1) and [`sync-skills`](../adapters/sync-skills.ps1) can also initialize it.
 2. Replace `auto` for any role you want to customize (for example, `planning`, `implementation`, `b3-reviewer`, `b3-fixer`, or specialist reviewers). Readable model names or host-recognized IDs are both fine.
 3. Existing `~/.b3/models.md` files are never overwritten by B3 updates or installers. Set `B3_SKIP_MODEL_INIT=1` to skip auto-creating `~/.b3/models.md`.
+
+**Global install behavior:** The unified dispatcher supports Cursor, Antigravity, or both. The optional file is created once per successful `install`/`update`, respects `-UserHome` / `--user-home` and the `B3_MODELS_PERSONAL` explicit path override, and is never overwritten. `B3_SKIP_MODEL_INIT=1` disables initialization. `-DryRun` / `--dry-run` only previews; `verify` / `uninstall` neither create nor remove preferences. The direct Cursor global installer and direct Antigravity plugin manager do not seed it: use the unified dispatcher or copy the example manually. The file remains advisory, not a model-routing API.
 
 ## Precedence & On-Demand Loading
 
