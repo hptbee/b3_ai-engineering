@@ -28,6 +28,8 @@ Installs under `~/.cursor/` via [`install-global.ps1`](install-global.ps1) / [`i
 ./adapters/cursor/install-global.sh uninstall
 ```
 
+To manage Cursor together with Antigravity from one shared canonical `B3_HOME`, you can also use the unified dispatcher ([`../install-global.ps1`](../install-global.ps1) / [`../install-global.sh`](../install-global.sh)) with `-HostName cursor` or `-HostName all` (`--host cursor|all`); see [`../antigravity/README.md`](../antigravity/README.md) for Antigravity checks.
+
 - Pass `-DryRun` / `--dry-run` to preview changes without touching disk.
 - Pass `-Force` / `--force` to replace conflicting same-named unmanaged files or migrate a legacy `~/.cursor/skills/b3-ai-engineering` link. Unrelated user files (`~/.cursor/skills/my-*`, custom commands/agents) are never removed or modified.
 

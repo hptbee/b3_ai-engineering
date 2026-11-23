@@ -45,9 +45,31 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 
 > **Coexistence note:** Do not activate conflicting skill discovery roots in the same checkout. Cursor cross-loads `.agents/skills` and `.claude/skills`, and Antigravity reads both `.agents/skills.json` and `.agents/skills`. `sync-skills` guards against conflicts unless `-Force` / `--force` is passed.
 
+### Global machine-wide install (Cursor & Antigravity)
+
+Install once across all local repositories without copying `skills/` or modifying individual repos (`cursor`, `antigravity`, or `all`; supports `install`, `verify`, `update`, `uninstall`, `-DryRun`/`--dry-run`, `-Force`/`--force`):
+
+```powershell
+# Windows PowerShell
+.\adapters\install-global.ps1 -HostName cursor
+.\adapters\install-global.ps1 -HostName antigravity
+.\adapters\install-global.ps1 -HostName all
+.\adapters\install-global.ps1 verify -HostName all
+```
+
+```bash
+# macOS / Linux / Git Bash
+./adapters/install-global.sh --host cursor
+./adapters/install-global.sh --host antigravity
+./adapters/install-global.sh --host all
+./adapters/install-global.sh verify --host all
+```
+
+Details, project overrides, and manual host runtime smoke checklists: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/antigravity/README.md`](adapters/antigravity/README.md).
+
 ### Cursor
 
-**Global one-time install (recommended across all local repos):** makes all 7 commands, flattened 1-level skills, 5 subagents, global `b3-home`, and a compact `b3-user-rules.txt` User Rules template available under `~/.cursor/` without modifying individual repos (`-DryRun`/`--dry-run` and `-Force`/`--force` supported; guide: [`adapters/cursor/README.md`](adapters/cursor/README.md)):
+**Global one-time install:** makes all 7 commands, flattened 1-level skills, 5 subagents, global `b3-home`, and a compact `b3-user-rules.txt` User Rules template available under `~/.cursor/` (or via `.\adapters\install-global.ps1 -HostName cursor`):
 
 ```powershell
 # Windows
@@ -141,14 +163,16 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 ./adapters/install-product.sh --product-root /path/to/your-product --host antigravity
 ```
 
-- **Machine-global plugin:** Generate `~/.gemini/config/plugins/b3-ai-engineering/` (rules, 1-level skill links, and isolated `agents/*.md` subagents) via:
+- **Machine-global plugin:** Manage `~/.gemini/config/plugins/b3-ai-engineering/` (rules, 1-level skill links, command skills, and isolated `agents/*.md` subagents; or use `.\adapters\install-global.ps1 -HostName antigravity`) via:
 
 ```powershell
 .\adapters\antigravity\install-plugin.ps1
+.\adapters\antigravity\install-plugin.ps1 verify
 ```
 
 ```bash
 ./adapters/antigravity/install-plugin.sh
+./adapters/antigravity/install-plugin.sh verify
 ```
 
 More detail: [`adapters/README.md`](adapters/README.md), [`research/decisions/decision-011-product-repo-attach.md`](research/decisions/decision-011-product-repo-attach.md), [`research/decisions/decision-013-host-neutral-multi-host-layout.md`](research/decisions/decision-013-host-neutral-multi-host-layout.md).
