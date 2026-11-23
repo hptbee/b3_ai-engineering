@@ -16,6 +16,7 @@ Progressive-disclosure references for `/b3-ship` (opened only on template creati
 - [`references/research-ship-templates.md`](references/research-ship-templates.md) — `.b3/research-ship/` run `progress.md`, `research-plan.md`, `evidence-index.md`, and `.b3/research-policy.json` schema
 - [`references/research-ship-resume.md`](references/research-ship-resume.md) — `.b3/research-ship/` Git, PR, and `evidence-check` freshness resume + read-only `status`
 - [`references/research-ship-gates.md`](references/research-ship-gates.md) — independent source verification, dual technical/editorial gates, PR lifecycle, and `merge-policy-check` / post-merge checks
+- [`references/dispatch-naming.md`](references/dispatch-naming.md) — on-demand subagent logical alias & host-safe fallback contract (loaded only at dispatch)
 - Deterministic helper CLI (not an orchestrator): [`../scripts/README.md`](../scripts/README.md) (`b3-guard.{ps1,sh}`)
 - Visual diagrams & walkthrough: [`../docs/ship-and-review-guide.md`](../docs/ship-and-review-guide.md)
 

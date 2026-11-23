@@ -17,3 +17,7 @@ Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verifica
 Backlog (not created): frontend/test/UX reviewers — use `code-review` dimensions until isolation is needed in real use.
 
 Do not treat this folder as a swarm. Independent review actually working in hosts (auto-delegation) is **NOT VERIFIED** in this change; files live in canonical `agents/` and are mapped onto host discovery paths via `adapters/`.
+
+## Dispatch naming
+
+When dispatching, load [`workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) once. Use stable `b3-*` logical aliases where supported; keep host-returned agent IDs for resume. This is not an always-on rule.
