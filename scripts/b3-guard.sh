@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /b3-ship and /b3-review-loop (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree | resolve-models
 set -euo pipefail
 
 _CLEANUP_FILES=()
@@ -16,7 +16,7 @@ trap _cleanup_tmp EXIT
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree|resolve-models [options]" >&2
   exit 1
 fi
 shift
@@ -2364,6 +2364,487 @@ timestamp_utc=${TS_UTC}
     fi
 
     printf 'WORKTREE_OK: root=%s head=%s\n' "$ACTUAL_ROOT_NORM" "$HEAD_RAW"
+    exit 0
+    ;;
+
+  resolve-models)
+    REPO_ROOT="."
+    B3_HOME_ARG=""
+    PERSONAL_CFG=""
+    PROJECT_CFG=""
+    ROLE_ARG=""
+    EXPLICIT_MODEL=""
+    AS_JSON=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root)
+          [[ $# -ge 2 ]] || { echo "CONFIG_ERROR: option --repo-root requires a value"; exit 1; }
+          REPO_ROOT="$2"; shift 2 ;;
+        --b3-home)
+          [[ $# -ge 2 ]] || { echo "CONFIG_ERROR: option --b3-home requires a value"; exit 1; }
+          B3_HOME_ARG="$2"; shift 2 ;;
+        --personal-config)
+          [[ $# -ge 2 ]] || { echo "CONFIG_ERROR: option --personal-config requires a value"; exit 1; }
+          PERSONAL_CFG="$2"; shift 2 ;;
+        --project-config)
+          [[ $# -ge 2 ]] || { echo "CONFIG_ERROR: option --project-config requires a value"; exit 1; }
+          PROJECT_CFG="$2"; shift 2 ;;
+        --role)
+          [[ $# -ge 2 ]] || { echo "CONFIG_ERROR: option --role requires a value"; exit 1; }
+          ROLE_ARG="$2"; shift 2 ;;
+        --explicit-model)
+          [[ $# -ge 2 ]] || { echo "CONFIG_ERROR: option --explicit-model requires a value"; exit 1; }
+          EXPLICIT_MODEL="$2"; shift 2 ;;
+        --json) AS_JSON=true; shift ;;
+        *) echo "CONFIG_ERROR: unknown option $1" >&2; exit 1 ;;
+      esac
+    done
+
+    canon_fwd_path() {
+      local p="${1//\\//}"
+      if [[ "$p" =~ ^([a-z]):(.*)$ ]]; then
+        local d
+        d="$(printf '%s' "${BASH_REMATCH[1]}" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+        p="${d}:${BASH_REMATCH[2]}"
+      fi
+      while [[ "$p" == */ && "$p" != "/" && ! "$p" =~ ^[A-Za-z]:/$ ]]; do
+        p="${p%/}"
+      done
+      if [[ -d "$p" ]]; then
+        local r
+        r="$(cd "$p" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || r="$p"
+        r="${r//\\//}"
+        if [[ "$r" =~ ^([a-z]):(.*)$ ]]; then
+          local d
+          d="$(printf '%s' "${BASH_REMATCH[1]}" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+          r="${d}:${BASH_REMATCH[2]}"
+        fi
+        printf '%s' "${r%/}"
+        return
+      fi
+      local cur="$p" suffix=""
+      while [[ ! -d "$cur" ]]; do
+        local base parent
+        base="$(basename "$cur")"
+        parent="$(dirname "$cur")"
+        [[ "$parent" == "$cur" ]] && break
+        if [[ -z "$suffix" ]]; then suffix="$base"; else suffix="${base}/${suffix}"; fi
+        cur="$parent"
+      done
+      if [[ -d "$cur" ]]; then
+        local resolved
+        resolved="$(cd "$cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || resolved="$cur"
+        resolved="${resolved//\\//}"
+        if [[ "$resolved" =~ ^([a-z]):(.*)$ ]]; then
+          local d
+          d="$(printf '%s' "${BASH_REMATCH[1]}" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+          resolved="${d}:${BASH_REMATCH[2]}"
+        fi
+        resolved="${resolved%/}"
+        if [[ -n "$suffix" ]]; then printf '%s/%s' "$resolved" "$suffix"; else printf '%s' "$resolved"; fi
+      else
+        printf '%s' "$p"
+      fi
+    }
+
+    json_escape() {
+      LC_ALL=C awk -v s="$1" 'BEGIN {
+        out = ""
+        n = length(s)
+        for (i = 1; i <= n; i++) {
+          ch = substr(s, i, 1)
+          if (ch == "\\") out = out "\\\\"
+          else if (ch == "\"") out = out "\\\""
+          else if (ch == "\t") out = out "\\t"
+          else if (ch == "\r") out = out "\\r"
+          else if (ch == "\n") out = out "\\n"
+          else out = out ch
+        }
+        printf "%s", out
+      }'
+    }
+
+    # Parse & strictly validate JSON model config using pure AWK recursive descent
+    parse_model_json_awk() {
+      local cfg_path="$1" norm_disp="$2"
+      LC_ALL=C awk -v disp="$norm_disp" '
+        BEGIN { src = "" }
+        {
+          gsub(/\r/, "", $0)
+          src = (NR == 1 ? $0 : src "\n" $0)
+        }
+        function fail(msg) {
+          print "CONFIG_ERROR: " disp ": " msg > "/dev/stderr"
+          exit 2
+        }
+        function skip_ws() {
+          while (pos <= slen) {
+            ch = substr(src, pos, 1)
+            if (ch == " " || ch == "\t" || ch == "\n" || ch == "\r") pos++
+            else break
+          }
+        }
+        function parse_string(    ch, out, esc, hx, i, hc) {
+          if (substr(src, pos, 1) != "\"") fail("expected string")
+          pos++
+          out = ""
+          while (pos <= slen) {
+            ch = substr(src, pos, 1)
+            if (ch == "\"") { pos++; return out }
+            if (ch == "\n" || ch == "\r" || ch == "\t") fail("unescaped control character in string")
+            if (ch == "\\") {
+              pos++
+              if (pos > slen) fail("unterminated escape sequence")
+              esc = substr(src, pos, 1)
+              if (esc == "\"" || esc == "\\" || esc == "/") out = out esc
+              else if (esc == "b") out = out "\b"
+              else if (esc == "f") out = out "\f"
+              else if (esc == "n") out = out "\n"
+              else if (esc == "r") out = out "\r"
+              else if (esc == "t") out = out "\t"
+              else if (esc == "u") {
+                if (pos + 4 > slen) fail("invalid \\uXXXX escape")
+                hx = substr(src, pos + 1, 4)
+                for (i = 1; i <= 4; i++) {
+                  hc = substr(hx, i, 1)
+                  if (index("0123456789abcdefABCDEF", hc) == 0) fail("invalid \\uXXXX hex digit")
+                }
+                out = out "\\u" hx
+                pos += 4
+              } else fail("invalid escape \\" esc)
+              pos++
+            } else {
+              out = out ch
+              pos++
+            }
+          }
+          fail("unterminated string")
+        }
+        function parse_number(    start, ch, sub_s) {
+          start = pos
+          if (substr(src, pos, 1) == "-") pos++
+          if (pos > slen) fail("invalid number")
+          ch = substr(src, pos, 1)
+          if (ch == "0") {
+            pos++
+            if (pos <= slen && index("0123456789", substr(src, pos, 1)) > 0) fail("leading zero in number")
+          } else if (index("123456789", ch) > 0) {
+            while (pos <= slen && index("0123456789", substr(src, pos, 1)) > 0) pos++
+          } else fail("invalid number")
+          if (pos <= slen && substr(src, pos, 1) == ".") {
+            pos++
+            if (pos > slen || index("0123456789", substr(src, pos, 1)) == 0) fail("invalid fraction in number")
+            while (pos <= slen && index("0123456789", substr(src, pos, 1)) > 0) pos++
+          }
+          if (pos <= slen && (substr(src, pos, 1) == "e" || substr(src, pos, 1) == "E")) {
+            pos++
+            if (pos <= slen && (substr(src, pos, 1) == "+" || substr(src, pos, 1) == "-")) pos++
+            if (pos > slen || index("0123456789", substr(src, pos, 1)) == 0) fail("invalid exponent in number")
+            while (pos <= slen && index("0123456789", substr(src, pos, 1)) > 0) pos++
+          }
+          return substr(src, start, pos - start)
+        }
+        function skip_value(depth,    ch, first) {
+          if (depth > 32) fail("nesting too deep")
+          skip_ws()
+          if (pos > slen) fail("unexpected end of JSON")
+          ch = substr(src, pos, 1)
+          if (ch == "\"") { parse_string(); return "str" }
+          if (ch == "{") {
+            pos++; skip_ws()
+            if (pos <= slen && substr(src, pos, 1) == "}") { pos++; return "obj" }
+            while (1) {
+              skip_ws(); parse_string(); skip_ws()
+              if (substr(src, pos, 1) != ":") fail("expected colon in object")
+              pos++; skip_value(depth + 1); skip_ws()
+              if (pos > slen) fail("unterminated object")
+              ch = substr(src, pos, 1)
+              if (ch == ",") { pos++; continue }
+              if (ch == "}") { pos++; return "obj" }
+              fail("expected , or } in object")
+            }
+          }
+          if (ch == "[") {
+            pos++; skip_ws()
+            if (pos <= slen && substr(src, pos, 1) == "]") { pos++; return "arr" }
+            while (1) {
+              skip_value(depth + 1); skip_ws()
+              if (pos > slen) fail("unterminated array")
+              ch = substr(src, pos, 1)
+              if (ch == ",") { pos++; continue }
+              if (ch == "]") { pos++; return "arr" }
+              fail("expected , or ] in array")
+            }
+          }
+          if (substr(src, pos, 4) == "true") { pos += 4; return "bool" }
+          if (substr(src, pos, 5) == "false") { pos += 5; return "bool" }
+          if (substr(src, pos, 4) == "null") { pos += 4; return "null" }
+          if (ch == "-" || index("0123456789", ch) > 0) { parse_number(); return "num" }
+          fail("unexpected token at pos " pos)
+        }
+        function trim(s) {
+          gsub(/^[ \t\n\r]+|[ \t\n\r]+$/, "", s)
+          return s
+        }
+        function parse_models_obj(    mk, mv, ch, mv_trim, mk_trim) {
+          skip_ws()
+          if (pos > slen || substr(src, pos, 1) != "{") fail("missing or non-object \x27models\x27")
+          pos++; skip_ws()
+          if (pos <= slen && substr(src, pos, 1) == "}") { pos++; return }
+          while (1) {
+            skip_ws()
+            mk = parse_string()
+            mk_trim = trim(mk)
+            if (mk_trim == "" || mk ~ /[\n\r\t]/) fail("invalid role name \x27" mk "\x27")
+            skip_ws()
+            if (pos > slen || substr(src, pos, 1) != ":") fail("expected colon in models object")
+            pos++; skip_ws()
+            if (pos > slen || substr(src, pos, 1) != "\"") fail("model value for \x27" mk_trim "\x27 must be a non-empty string")
+            mv = parse_string()
+            mv_trim = trim(mv)
+            if (mv_trim == "" || mv ~ /[\n\r\t]/) fail("model value for \x27" mk_trim "\x27 must be a non-empty string")
+            if (!(mk_trim in m_seen)) { m_seen[mk_trim] = 1; m_order[++m_cnt] = mk_trim }
+            m_val[mk_trim] = mv_trim
+            skip_ws()
+            if (pos > slen) fail("unterminated models object")
+            ch = substr(src, pos, 1)
+            if (ch == ",") { pos++; continue }
+            if (ch == "}") { pos++; return }
+            fail("expected , or } in models object")
+          }
+        }
+        END {
+          slen = length(src)
+          pos = 1
+          m_cnt = 0
+          skip_ws()
+          if (pos > slen || substr(src, pos, 1) != "{") fail("root must be a JSON object")
+          pos++; skip_ws()
+          seen_ver = 0; ver_val = ""; seen_models = 0
+          if (pos <= slen && substr(src, pos, 1) == "}") {
+            pos++
+          } else {
+            while (1) {
+              skip_ws()
+              tk = parse_string()
+              if (tk != "version" && tk != "models" && tk != "_comment") fail("unsupported top-level key \x27" tk "\x27")
+              skip_ws()
+              if (pos > slen || substr(src, pos, 1) != ":") fail("expected colon after key \x27" tk "\x27")
+              pos++; skip_ws()
+              if (tk == "version") {
+                if (pos > slen || (substr(src, pos, 1) != "-" && index("0123456789", substr(src, pos, 1)) == 0)) {
+                  fail("missing or invalid \x27version\x27 (expected integer 1)")
+                }
+                ver_val = parse_number()
+                seen_ver = 1
+                if (ver_val != "1") fail("missing or invalid \x27version\x27 (expected integer 1)")
+              } else if (tk == "_comment") {
+                if (pos > slen || substr(src, pos, 1) != "\"") fail("\x27_comment\x27 must be a string")
+                parse_string()
+              } else if (tk == "models") {
+                seen_models = 1
+                parse_models_obj()
+              }
+              skip_ws()
+              if (pos > slen) fail("unterminated root object")
+              ch = substr(src, pos, 1)
+              if (ch == ",") { pos++; continue }
+              if (ch == "}") { pos++; break }
+              fail("expected , or } in root object")
+            }
+          }
+          skip_ws()
+          if (pos <= slen) fail("trailing characters after JSON root")
+          if (!seen_ver) fail("missing or invalid \x27version\x27 (expected integer 1)")
+          if (!seen_models) fail("missing or non-object \x27models\x27")
+          for (i = 1; i <= m_cnt; i++) {
+            k = m_order[i]
+            printf "%s\t%s\n", k, m_val[k]
+          }
+        }
+      ' "$cfg_path"
+    }
+
+    SCRIPT_DIR_SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SCRIPT_PARENT="$(cd "${SCRIPT_DIR_SELF}/.." && pwd)"
+    RESOLVED_B3_HOME=""
+    if [[ -n "$(trim_str "$B3_HOME_ARG")" ]]; then
+      RESOLVED_B3_HOME="$(trim_str "$B3_HOME_ARG")"
+    else
+      HOME_PTR="${REPO_ROOT}/.b3/home"
+      if [[ -f "${SCRIPT_PARENT}/config/models.default.json" || -f "${SCRIPT_PARENT}/workflows/ship.md" ]]; then
+        RESOLVED_B3_HOME="$SCRIPT_PARENT"
+      elif [[ -n "${B3_HOME:-}" && -d "${B3_HOME}" ]]; then
+        RESOLVED_B3_HOME="${B3_HOME}"
+      elif [[ -f "$HOME_PTR" ]]; then
+        PTR_VAL="$(trim_str "$(cat "$HOME_PTR")")"
+        RESOLVED_B3_HOME="${PTR_VAL:-$SCRIPT_PARENT}"
+      else
+        RESOLVED_B3_HOME="$SCRIPT_PARENT"
+      fi
+    fi
+
+    if [[ -z "$PERSONAL_CFG" ]]; then
+      if [[ -n "${B3_MODELS_PERSONAL:-}" && -n "$(trim_str "$B3_MODELS_PERSONAL")" ]]; then
+        PERSONAL_CFG="$(trim_str "$B3_MODELS_PERSONAL")"
+      else
+        PERSONAL_CFG="${HOME}/.b3/models.local.json"
+      fi
+    fi
+    if [[ -z "$PROJECT_CFG" ]]; then
+      PROJECT_CFG="${REPO_ROOT}/.b3/models.local.json"
+    fi
+
+    DEFAULT_CFG="$(canon_fwd_path "${RESOLVED_B3_HOME}/config/models.default.json")"
+    PERSONAL_NORM="$(canon_fwd_path "$PERSONAL_CFG")"
+    PROJECT_NORM="$(canon_fwd_path "$PROJECT_CFG")"
+
+    CANONICAL_ROLES=("main" "planning" "implementation" "debugging" "b3-reviewer" "b3-fixer" "b3-security-reviewer" "b3-architecture-reviewer" "b3-performance-reviewer")
+    WARNINGS=()
+
+    is_known_role() {
+      local cand="$1" r
+      for r in "${CANONICAL_ROLES[@]}"; do
+        [[ "$r" == "$cand" ]] && return 0
+      done
+      return 1
+    }
+
+    DEF_KEYS=(); DEF_VALS=(); DEF_PRESENT=false
+    PERS_KEYS=(); PERS_VALS=(); PERS_PRESENT=false
+    PROJ_KEYS=(); PROJ_VALS=(); PROJ_PRESENT=false
+
+    load_model_layer() {
+      local fpath="$1" norm_p="$2" prefix="$3"
+      if [[ ! -e "$fpath" && ! -L "$fpath" ]]; then return 0; fi
+      if [[ ! -f "$fpath" ]]; then
+        echo "CONFIG_ERROR: ${norm_p}: path is not a regular file"
+        exit 1
+      fi
+      if [[ "$prefix" == "DEF" ]]; then DEF_PRESENT=true
+      elif [[ "$prefix" == "PERS" ]]; then PERS_PRESENT=true
+      elif [[ "$prefix" == "PROJ" ]]; then PROJ_PRESENT=true
+      fi
+      local parsed_err tmp_kv
+      tmp_kv="$(mktemp)"; _CLEANUP_FILES+=("$tmp_kv")
+      if ! parsed_err="$(parse_model_json_awk "$fpath" "$norm_p" 2>&1 > "$tmp_kv")"; then
+        printf '%s\n' "$parsed_err"
+        exit 1
+      fi
+      local k v
+      while IFS=$'\t' read -r k v; do
+        [[ -n "$k" ]] || continue
+        if ! is_known_role "$k"; then
+          WARNINGS+=("UNKNOWN_ROLE_WARNING: role=${k} file=${norm_p}")
+        fi
+        if [[ "$prefix" == "DEF" ]]; then DEF_KEYS+=("$k"); DEF_VALS+=("$v")
+        elif [[ "$prefix" == "PERS" ]]; then PERS_KEYS+=("$k"); PERS_VALS+=("$v")
+        elif [[ "$prefix" == "PROJ" ]]; then PROJ_KEYS+=("$k"); PROJ_VALS+=("$v")
+        fi
+      done < "$tmp_kv"
+    }
+
+    load_model_layer "$DEFAULT_CFG" "$DEFAULT_CFG" "DEF"
+    load_model_layer "$PERSONAL_NORM" "$PERSONAL_NORM" "PERS"
+    load_model_layer "$PROJECT_NORM" "$PROJECT_NORM" "PROJ"
+
+    EXPLICIT_TRIM="$(trim_str "$EXPLICIT_MODEL")"
+    ROLE_TRIM="$(trim_str "$ROLE_ARG")"
+    if [[ "$ROLE_ARG" == *$'\n'* || "$ROLE_ARG" == *$'\r'* || "$ROLE_ARG" == *$'\t'* ]]; then
+      echo "CONFIG_ERROR: invalid --role value"
+      exit 1
+    fi
+
+    lookup_layer() {
+      local role="$1" layer="$2" i
+      if [[ "$layer" == "PROJ" && ${#PROJ_KEYS[@]} -gt 0 ]]; then
+        for i in "${!PROJ_KEYS[@]}"; do [[ "${PROJ_KEYS[$i]}" == "$role" ]] && { printf '%s' "${PROJ_VALS[$i]}"; return 0; }; done
+      elif [[ "$layer" == "PERS" && ${#PERS_KEYS[@]} -gt 0 ]]; then
+        for i in "${!PERS_KEYS[@]}"; do [[ "${PERS_KEYS[$i]}" == "$role" ]] && { printf '%s' "${PERS_VALS[$i]}"; return 0; }; done
+      elif [[ "$layer" == "DEF" && ${#DEF_KEYS[@]} -gt 0 ]]; then
+        for i in "${!DEF_KEYS[@]}"; do [[ "${DEF_KEYS[$i]}" == "$role" ]] && { printf '%s' "${DEF_VALS[$i]}"; return 0; }; done
+      fi
+      return 1
+    }
+
+    resolve_one_role() {
+      local role="$1" raw="" src="platform_default"
+      if [[ -n "$EXPLICIT_TRIM" ]]; then
+        raw="$EXPLICIT_TRIM"; src="explicit"
+      elif raw="$(lookup_layer "$role" "PROJ")"; then
+        src="project"
+      elif raw="$(lookup_layer "$role" "PERS")"; then
+        src="personal"
+      elif raw="$(lookup_layer "$role" "DEF")"; then
+        src="default"
+      else
+        raw="auto"; src="platform_default"
+      fi
+      local low
+      low="$(printf '%s' "$raw" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      if [[ "$low" == "auto" ]]; then
+        RES_MODEL="auto"
+        RES_EFF="platform_default"
+      else
+        RES_MODEL="$raw"
+        RES_EFF="$raw"
+      fi
+      RES_SRC="$src"
+    }
+
+    TARGET_ROLES=()
+    if [[ -n "$ROLE_TRIM" ]]; then
+      TARGET_ROLES=("$ROLE_TRIM")
+    else
+      TARGET_ROLES=("${CANONICAL_ROLES[@]}")
+    fi
+
+    if $AS_JSON; then
+      printf '{\n  "version": 1,\n  "sources": {\n'
+      if [[ -n "$EXPLICIT_TRIM" ]]; then
+        printf '    "explicit": "%s",\n' "$(json_escape "$EXPLICIT_TRIM")"
+      else
+        printf '    "explicit": null,\n'
+      fi
+      printf '    "project": "%s",\n' "$(json_escape "$PROJECT_NORM")"
+      printf '    "personal": "%s",\n' "$(json_escape "$PERSONAL_NORM")"
+      printf '    "default": "%s",\n' "$(json_escape "$DEFAULT_CFG")"
+      printf '    "project_present": %s,\n' "$($PROJ_PRESENT && echo true || echo false)"
+      printf '    "personal_present": %s,\n' "$($PERS_PRESENT && echo true || echo false)"
+      printf '    "default_present": %s\n' "$($DEF_PRESENT && echo true || echo false)"
+      printf '  },\n  "warnings": ['
+      if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+        printf '\n'
+        for wi in "${!WARNINGS[@]}"; do
+          sep=","
+          [[ "$wi" -eq $((${#WARNINGS[@]} - 1)) ]] && sep=""
+          printf '    "%s"%s\n' "$(json_escape "${WARNINGS[$wi]}")" "$sep"
+        done
+        printf '  '
+      fi
+      printf '],\n  "roles": {\n'
+      for ri in "${!TARGET_ROLES[@]}"; do
+        rn="${TARGET_ROLES[$ri]}"
+        resolve_one_role "$rn"
+        sep=","
+        [[ "$ri" -eq $((${#TARGET_ROLES[@]} - 1)) ]] && sep=""
+        printf '    "%s": { "model": "%s", "effective": "%s", "source": "%s" }%s\n' \
+          "$(json_escape "$rn")" "$(json_escape "$RES_MODEL")" "$(json_escape "$RES_EFF")" "$(json_escape "$RES_SRC")" "$sep"
+      done
+      printf '  }\n}\n'
+      exit 0
+    fi
+
+    if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+      for w in "${WARNINGS[@]}"; do printf '%s\n' "$w"; done
+    fi
+    for rn in "${TARGET_ROLES[@]}"; do
+      resolve_one_role "$rn"
+      printf 'role=%s model=%s effective=%s source=%s\n' "$rn" "$RES_MODEL" "$RES_EFF" "$RES_SRC"
+    done
+    if [[ -z "$ROLE_TRIM" ]]; then
+      echo "RESOLVE_MODELS_OK"
+    fi
     exit 0
     ;;
 

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree', 'resolve-models')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -31,7 +31,13 @@ param(
     [string]$WaveReads = '',
     [string]$ExpectedBaseSha = '',
     [string]$ExpectedRoot = '',
-    [string]$ExpectedCmd = ''
+    [string]$ExpectedCmd = '',
+    [string]$B3Home = '',
+    [string]$PersonalConfig = '',
+    [string]$ProjectConfig = '',
+    [string]$Role = '',
+    [string]$ExplicitModel = '',
+    [switch]$Json
 )
 
 $ErrorActionPreference = 'Stop'
@@ -1871,6 +1877,198 @@ switch ($Command) {
         }
 
         Write-Output "WORKTREE_OK: root=$actualRootNorm head=$headRaw"
+        exit 0
+    }
+
+    'resolve-models' {
+        function Format-FwdPath([string]$RawPath) {
+            if (-not $RawPath) { return '' }
+            $full = try {
+                $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RawPath)
+            } catch {
+                $RawPath
+            }
+            $fwd = ($full -replace '\\', '/').TrimEnd('/')
+            if ($fwd -match '^([a-z]):(.*)$') {
+                $fwd = $Matches[1].ToUpperInvariant() + ':' + $Matches[2]
+            }
+            return $fwd
+        }
+
+        function Read-ModelConfigFile([string]$PathValue, [string[]]$KnownRoles, [System.Collections.Generic.List[string]]$WarningsOut) {
+            $normPath = Format-FwdPath $PathValue
+            if (-not (Test-Path -LiteralPath $PathValue)) {
+                return [PSCustomObject]@{ Present = $false; Path = $normPath; Models = @{} }
+            }
+            if (-not (Test-Path -LiteralPath $PathValue -PathType Leaf)) {
+                Fail "CONFIG_ERROR: ${normPath}: path is not a regular file" 1
+            }
+            try {
+                $rawText = [IO.File]::ReadAllText($PathValue, [System.Text.Encoding]::UTF8)
+            } catch {
+                Fail "CONFIG_ERROR: ${normPath}: cannot read file ($($_.Exception.Message))" 1
+            }
+            if (-not $rawText -or -not $rawText.Trim()) {
+                Fail "CONFIG_ERROR: ${normPath}: empty or invalid JSON" 1
+            }
+            try {
+                $parsed = $rawText | ConvertFrom-Json -ErrorAction Stop
+            } catch {
+                Fail "CONFIG_ERROR: ${normPath}: invalid JSON ($($_.Exception.Message))" 1
+            }
+            if ($null -eq $parsed -or -not ($parsed -is [System.Management.Automation.PSCustomObject])) {
+                Fail "CONFIG_ERROR: ${normPath}: root must be a JSON object" 1
+            }
+            $topProps = @($parsed.PSObject.Properties | ForEach-Object { $_.Name })
+            foreach ($tp in $topProps) {
+                if ($tp -notin @('version', 'models', '_comment')) {
+                    Fail "CONFIG_ERROR: ${normPath}: unsupported top-level key '$tp'" 1
+                }
+            }
+            if ($topProps -contains '_comment' -and -not ($parsed._comment -is [string])) {
+                Fail "CONFIG_ERROR: ${normPath}: '_comment' must be a string" 1
+            }
+            $verValid = ($topProps -contains 'version') -and
+                        (($parsed.version -is [int]) -or ($parsed.version -is [long])) -and
+                        ($parsed.version -eq 1)
+            if (-not $verValid) {
+                Fail "CONFIG_ERROR: ${normPath}: missing or invalid 'version' (expected integer 1)" 1
+            }
+            if (-not ($topProps -contains 'models') -or $null -eq $parsed.models -or -not ($parsed.models -is [System.Management.Automation.PSCustomObject])) {
+                Fail "CONFIG_ERROR: ${normPath}: missing or non-object 'models'" 1
+            }
+            $modelsMap = @{}
+            foreach ($prop in @($parsed.models.PSObject.Properties)) {
+                $k = [string]$prop.Name
+                $kTrim = $k.Trim()
+                if (-not $kTrim -or ($k -match '[\r\n\t]')) {
+                    Fail "CONFIG_ERROR: ${normPath}: invalid role name '$k'" 1
+                }
+                $v = $prop.Value
+                if (-not ($v -is [string])) {
+                    Fail "CONFIG_ERROR: ${normPath}: model value for '$kTrim' must be a non-empty string" 1
+                }
+                $vTrim = $v.Trim()
+                if (-not $vTrim -or ($v -match '[\r\n\t]')) {
+                    Fail "CONFIG_ERROR: ${normPath}: model value for '$kTrim' must be a non-empty string" 1
+                }
+                if ($KnownRoles -notcontains $kTrim) {
+                    $WarningsOut.Add("UNKNOWN_ROLE_WARNING: role=$kTrim file=$normPath")
+                }
+                $modelsMap[$kTrim] = $vTrim
+            }
+            return [PSCustomObject]@{ Present = $true; Path = $normPath; Models = $modelsMap }
+        }
+
+        function Resolve-OneRole([string]$RoleName, [string]$ExplicitVal, $ProjLayer, $PersLayer, $DefLayer) {
+            if ($ExplicitVal) {
+                $isAuto = $ExplicitVal.Equals('auto', [System.StringComparison]::OrdinalIgnoreCase)
+                $m = if ($isAuto) { 'auto' } else { $ExplicitVal }
+                $eff = if ($isAuto) { 'platform_default' } else { $ExplicitVal }
+                return [ordered]@{ model = $m; effective = $eff; source = 'explicit' }
+            }
+            $layers = @(
+                @{ Name = 'project'; Obj = $ProjLayer },
+                @{ Name = 'personal'; Obj = $PersLayer },
+                @{ Name = 'default'; Obj = $DefLayer }
+            )
+            foreach ($ly in $layers) {
+                if ($ly.Obj.Models.ContainsKey($RoleName)) {
+                    $rawM = [string]$ly.Obj.Models[$RoleName]
+                    $isAuto = $rawM.Equals('auto', [System.StringComparison]::OrdinalIgnoreCase)
+                    $m = if ($isAuto) { 'auto' } else { $rawM }
+                    $eff = if ($isAuto) { 'platform_default' } else { $rawM }
+                    return [ordered]@{ model = $m; effective = $eff; source = $ly.Name }
+                }
+            }
+            return [ordered]@{ model = 'auto'; effective = 'platform_default'; source = 'platform_default' }
+        }
+
+        $canonicalRoles = @(
+            'main',
+            'planning',
+            'implementation',
+            'debugging',
+            'b3-reviewer',
+            'b3-fixer',
+            'b3-security-reviewer',
+            'b3-architecture-reviewer',
+            'b3-performance-reviewer'
+        )
+
+        # Resolve B3Home cleanly (explicit -> script parent -> env B3_HOME -> product .b3/home)
+        if (-not $B3Home) {
+            $scriptParent = Split-Path -Parent $PSScriptRoot
+            $homePtr = Join-Path $RepoRoot '.b3\home'
+            if ((Test-Path -LiteralPath (Join-Path $scriptParent 'config\models.default.json')) -or (Test-Path -LiteralPath (Join-Path $scriptParent 'workflows\ship.md'))) {
+                $B3Home = $scriptParent
+            } elseif ($env:B3_HOME -and (Test-Path -LiteralPath $env:B3_HOME -PathType Container)) {
+                $B3Home = $env:B3_HOME
+            } elseif (Test-Path -LiteralPath $homePtr -PathType Leaf) {
+                $ptrVal = ([IO.File]::ReadAllText($homePtr, [System.Text.Encoding]::UTF8)).Trim()
+                if ($ptrVal) { $B3Home = $ptrVal } else { $B3Home = $scriptParent }
+            } else {
+                $B3Home = $scriptParent
+            }
+        }
+        $defaultPath = Join-Path $B3Home 'config\models.default.json'
+
+        if (-not $PersonalConfig) {
+            if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
+                $PersonalConfig = $env:B3_MODELS_PERSONAL.Trim()
+            } else {
+                $uHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+                $PersonalConfig = Join-Path $uHome '.b3\models.local.json'
+            }
+        }
+        if (-not $ProjectConfig) {
+            $ProjectConfig = Join-Path $RepoRoot '.b3\models.local.json'
+        }
+
+        $warnings = New-Object System.Collections.Generic.List[string]
+        $defLayer = Read-ModelConfigFile $defaultPath $canonicalRoles $warnings
+        $persLayer = Read-ModelConfigFile $PersonalConfig $canonicalRoles $warnings
+        $projLayer = Read-ModelConfigFile $ProjectConfig $canonicalRoles $warnings
+
+        $explicitTrim = if ($ExplicitModel) { $ExplicitModel.Trim() } else { '' }
+        $roleTrim = if ($Role) { $Role.Trim() } else { '' }
+        if ($roleTrim -and ($roleTrim -match '[\r\n\t]')) {
+            Fail "CONFIG_ERROR: invalid --role value" 1
+        }
+
+        $targetRoles = if ($roleTrim) { @($roleTrim) } else { $canonicalRoles }
+        $rolesOrdered = [ordered]@{}
+        foreach ($r in $targetRoles) {
+            $rolesOrdered[$r] = Resolve-OneRole $r $explicitTrim $projLayer $persLayer $defLayer
+        }
+
+        if ($Json) {
+            $outObj = [ordered]@{
+                version  = 1
+                sources  = [ordered]@{
+                    explicit         = if ($explicitTrim) { $explicitTrim } else { $null }
+                    project          = $projLayer.Path
+                    personal         = $persLayer.Path
+                    default          = $defLayer.Path
+                    project_present  = [bool]$projLayer.Present
+                    personal_present = [bool]$persLayer.Present
+                    default_present  = [bool]$defLayer.Present
+                }
+                warnings = @($warnings.ToArray())
+                roles    = $rolesOrdered
+            }
+            Write-Output ($outObj | ConvertTo-Json -Depth 6)
+            exit 0
+        }
+
+        foreach ($w in $warnings) { Write-Output $w }
+        foreach ($rk in $rolesOrdered.Keys) {
+            $rv = $rolesOrdered[$rk]
+            Write-Output ("role={0} model={1} effective={2} source={3}" -f $rk, $rv.model, $rv.effective, $rv.source)
+        }
+        if (-not $roleTrim) {
+            Write-Output 'RESOLVE_MODELS_OK'
+        }
         exit 0
     }
 }

@@ -5,6 +5,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $sandbox = Join-Path $env:TEMP ("b3-ship-smoke-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
+$prevModelsPersonal = $env:B3_MODELS_PERSONAL
+$env:B3_MODELS_PERSONAL = Join-Path $sandbox 'personal-models.local.json'
 
 function Fail([string]$Message) {
     Write-Output "SMOKE FAIL: $Message"
@@ -182,6 +184,7 @@ module.exports = { greet, greetAlias };
     Write-Output 'classification: Git/checkpoint/resume/install contracts VERIFIED in an isolated repo. Host /b3-ship slash UX NOT VERIFIED. Independent reviewer subagent NOT used (hat-change residue removal only).'
 }
 finally {
+    if ($null -eq $prevModelsPersonal) { Remove-Item Env:B3_MODELS_PERSONAL -ErrorAction SilentlyContinue } else { $env:B3_MODELS_PERSONAL = $prevModelsPersonal }
     Pop-Location
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }

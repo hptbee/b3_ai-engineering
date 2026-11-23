@@ -397,3 +397,17 @@ case "$TARGET" in
     echo "note: this proves filesystem links, not Claude Code runtime skill discovery"
     ;;
 esac
+
+if ! $DRY_RUN && ! $VERIFY_ONLY && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
+  TEMPLATE_CFG="${ROOT}/config/models.default.json"
+  if [[ -f "$TEMPLATE_CFG" ]]; then
+    DEST_CFG="${B3_MODELS_PERSONAL:-${HOME}/.b3/models.local.json}"
+    if [[ -e "$DEST_CFG" || -L "$DEST_CFG" ]]; then
+      echo "model_config=${DEST_CFG} (kept existing)"
+    else
+      mkdir -p "$(dirname "$DEST_CFG")"
+      cp "$TEMPLATE_CFG" "$DEST_CFG"
+      echo "model_config=${DEST_CFG} (created from defaults)"
+    fi
+  fi
+fi

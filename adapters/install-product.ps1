@@ -147,22 +147,55 @@ function Update-B3Gitignore([string]$Root) {
     $gi = Join-Path $Root '.gitignore'
     $block = @"
 
-# B3: commit .b3/home; keep ship checkpoints local
+# B3: commit .b3/home; keep ship checkpoints and local model overrides private
 .b3/ship/
+.b3/models.local.json
 "@
     if (-not (Test-Path -LiteralPath $gi)) {
         Set-Content -LiteralPath $gi -Value ($block.TrimStart() + "`n")
         return 'created'
     }
     $text = Get-Content -LiteralPath $gi -Raw
-    if ($text -match '(?m)^\s*\.b3/ship/\s*$') { return 'present' }
+    $hasShip = ($text -match '(?m)^\s*\.b3/ship/\s*$')
+    $hasModels = ($text -match '(?m)^\s*\.b3/models\.local\.json\s*$')
+    if ($hasShip -and $hasModels) { return 'present' }
     if ($text -match '(?m)^\s*\.b3/\s*$') {
-        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', '.b3/ship/')
+        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', ".b3/ship/`n.b3/models.local.json")
         Set-Content -LiteralPath $gi -Value $text -NoNewline
+        return 'upgraded'
+    }
+    if ($hasShip) {
+        Add-Content -LiteralPath $gi -Value "`n.b3/models.local.json"
         return 'upgraded'
     }
     Add-Content -LiteralPath $gi -Value $block
     return 'appended'
+}
+
+function Initialize-PersonalModelConfig([string]$HomeDir, [switch]$IsDryRun) {
+    if ($env:B3_SKIP_MODEL_INIT -eq '1') { return 'skipped' }
+    $templateCfg = Join-Path $HomeDir 'config\models.default.json'
+    if (-not (Test-Path -LiteralPath $templateCfg -PathType Leaf)) { return 'no-template' }
+    $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
+        $env:B3_MODELS_PERSONAL.Trim()
+    } else {
+        $uHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+        Join-Path $uHome '.b3\models.local.json'
+    }
+    if (Test-Path -LiteralPath $dest) {
+        if ($IsDryRun) { Write-Output "dry-run: keep existing personal model config $dest" }
+        return "kept:$dest"
+    }
+    if ($IsDryRun) {
+        Write-Output "dry-run: seed personal model config at $dest from $templateCfg"
+        return "dry-run:$dest"
+    }
+    $parent = Split-Path -Parent $dest
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $templateCfg -Destination $dest
+    return "created:$dest"
 }
 
 function Update-HostSkillGitignore([string]$Root, [string]$HostName) {
@@ -210,7 +243,7 @@ if ($DryRun) {
         if (Test-Path -LiteralPath $claudeMdDest) { Write-Output "dry-run: keep existing $claudeMdDest" }
         elseif (Test-Path -LiteralPath $claudeMdTemplate) { Write-Output "dry-run: write $claudeMdDest from $claudeMdTemplate" }
     }
-    Write-Output "dry-run: gitignore .b3/ship/ (see Update-B3Gitignore)"
+    Write-Output "dry-run: gitignore .b3/ship/ and .b3/models.local.json (see Update-B3Gitignore)"
     if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: gitignore .agents/skills" }
     if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills and .claude/agents" }
     if (Test-Path -LiteralPath $b3Commands) {
@@ -229,6 +262,7 @@ if ($DryRun) {
         Write-Output "dry-run: flatten $claudeSkillsDest (one junction per skill + command skills)"
         Write-Output "dry-run: junction $claudeAgentsDest -> $b3Agents"
     }
+    [void](Initialize-PersonalModelConfig $B3Home -IsDryRun)
     exit 0
 }
 
@@ -271,6 +305,8 @@ if ($HostName -in @('codex', 'antigravity')) {
     }
 }
 
+$modelCfgStatus = Initialize-PersonalModelConfig $B3Home
+
 Write-Output "installed B3 pointer in $ProductRoot"
 Write-Output "B3_HOME=$B3Home"
 Write-Output "command=$commandDest"
@@ -278,6 +314,7 @@ Write-Output "agents.md=$agentsMdDest"
 if ($HostName -eq 'claude') { Write-Output "claude.md=$claudeMdDest" }
 Write-Output "gitignore.b3=$ignorePlan"
 Write-Output "gitignore.skills=$skillIgnorePlan"
+Write-Output "model_config=$modelCfgStatus"
 Write-Output "host=$HostName"
 if ($HostName -eq 'codex') {
     Write-Output "skills=$agentsDest (flattened junctions + `$b3-ship; gitignored, not copied)"
