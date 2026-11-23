@@ -69,8 +69,11 @@ upper_drive() {
 canon_existing_dir() {
   local d="$1"
   local res
-  res="$(cd "$d" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))"
-  upper_drive "${res%/}"
+  res="$(cd "$d" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+  if [[ "$res" != "/" && ! "$res" =~ ^[A-Za-z]:$ && ! "$res" =~ ^[A-Za-z]:/$ ]]; then
+    res="${res%/}"
+  fi
+  upper_drive "$res"
 }
 
 canon_path_allow_missing() {
@@ -276,22 +279,36 @@ render_agent() {
 is_b3_plugin_json() {
   local pj="$1"
   [[ -f "$pj" ]] || return 1
-  grep -qE '"name"[[:space:]]*:[[:space:]]*"b3-ai-engineering"' "$pj" || return 1
-  if command -v awk >/dev/null 2>&1; then
-    local bad_keys
-    bad_keys="$(awk '
-      /"[A-Za-z0-9_-]+"[[:space:]]*:/ {
-        line = $0
-        sub(/^[^"]*"/, "", line)
-        sub(/".*$/, "", line)
-        if (line != "name" && line != "displayName" && line != "version" && line != "description" && line != "suggestedPrompts") {
-          print line
+  awk '
+    BEGIN { bad = 0; seen_name = 0; txt = "" }
+    {
+      gsub(/\r/, "")
+      txt = txt $0 "\n"
+      rest = $0
+      while (match(rest, /"[^"]*"[[:space:]]*:/)) {
+        tok = substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+        sub(/^"/, "", tok)
+        sub(/"[[:space:]]*:$/, "", tok)
+        if (tok == "name") seen_name = 1
+        if (tok != "name" && tok != "displayName" && tok != "version" && tok != "description" && tok != "suggestedPrompts") {
+          bad = 1
         }
       }
-    ' "$pj")"
-    [[ -z "$bad_keys" ]] || return 1
-  fi
-  return 0
+    }
+    END {
+      if (bad || !seen_name) exit 1
+      if (txt !~ /^[[:space:]]*\{/) exit 1
+      if (txt !~ /\}[[:space:]]*$/) exit 1
+      if (txt !~ /"name"[[:space:]]*:[[:space:]]*"b3-ai-engineering"/) exit 1
+    }
+  ' "$pj"
+}
+
+has_b3_plugin_name_json() {
+  local pj="$1"
+  [[ -f "$pj" ]] || return 1
+  grep -qE '"name"[[:space:]]*:[[:space:]]*"b3-ai-engineering"' "$pj"
 }
 
 check_coexistence() {
@@ -317,13 +334,13 @@ check_coexistence() {
 
   local plugins_dir="${user_home}/.gemini/config/plugins"
   if [[ -d "$plugins_dir" ]]; then
-    local cand
+    local cand cand_existing cand_norm
     for cand in "${plugins_dir}"/*; do
       [[ -d "$cand" ]] || continue
-      local cand_norm
-      cand_norm="$(norm_cmp_path "$(canon_existing_dir "$cand")")"
+      if ! cand_existing="$(canon_existing_dir "$cand")"; then continue; fi
+      cand_norm="$(norm_cmp_path "$cand_existing")"
       [[ "$cand_norm" == "$plugin_norm" ]] && continue
-      if is_b3_plugin_json "${cand}/plugin.json"; then
+      if has_b3_plugin_name_json "${cand}/plugin.json"; then
         echo "COEXISTENCE_WARNING: duplicate b3-ai-engineering plugin found at ${cand}; only one plugin directory with name 'b3-ai-engineering' should exist."
       fi
     done
@@ -361,6 +378,12 @@ M_FILE_KEYS=()
 M_LINK_KEYS=()
 
 load_manifest() {
+  M_EXISTS=false
+  M_SCHEMA=""
+  M_B3_HOME=""
+  M_PLUGIN_ROOT=""
+  M_FILE_KEYS=()
+  M_LINK_KEYS=()
   [[ -f "$MANIFEST_FILE" ]] || return 0
   M_EXISTS=true
   local raw k v1 v2
@@ -624,8 +647,12 @@ if [[ "$ACTION" == "verify" ]]; then
       ERRORS+=("stale or modified plugin.json at $PJ_PATH")
     fi
 
-    RULES_OUT="${PLUGIN_ROOT}/rules/AGENTS.md"
-    if [[ ! -f "$RULES_OUT" ]]; then
+    RULES_DIR_OUT="${PLUGIN_ROOT}/rules"
+    RULES_OUT="${RULES_DIR_OUT}/AGENTS.md"
+    if is_link_entry "$RULES_DIR_OUT"; then
+      RULES_OK=false
+      ERRORS+=("rules directory is a link (expected regular directory): $RULES_DIR_OUT")
+    elif [[ ! -f "$RULES_OUT" ]]; then
       RULES_OK=false
       ERRORS+=("missing rules/AGENTS.md at $RULES_OUT")
     else
@@ -641,41 +668,47 @@ if [[ "$ACTION" == "verify" ]]; then
     fi
 
     SKILLS_OUT="${PLUGIN_ROOT}/skills"
-    for i in "${!CORE_SKILL_NAMES[@]}"; do
-      sn="${CORE_SKILL_NAMES[$i]}"
-      sd="${CORE_SKILL_DIRS[$i]}"
-      dest="${SKILLS_OUT}/${sn}"
-      if ! link_target_ok "$dest" "$sd" || [[ ! -f "${dest}/SKILL.md" ]]; then
-        SKILLS_OK=false
-        ERRORS+=("missing or broken skill link: $dest -> $sd")
-      fi
-    done
-    if [[ -d "$SKILLS_OUT" ]]; then
-      for entry in "${SKILLS_OUT}"/*; do
-        [[ -e "$entry" || -L "$entry" ]] || continue
-        if is_link_entry "$entry"; then
-          ename="$(basename "$entry")"
-          known=false
-          for sn in "${ALL_SKILL_NAMES[@]}"; do
-            if [[ "$sn" == "$ename" ]]; then known=true; break; fi
-          done
-          if ! $known; then
-            SKILLS_OK=false
-            ERRORS+=("stale managed skill link present: $entry")
+    if is_link_entry "$SKILLS_OUT"; then
+      SKILLS_OK=false
+      COMMANDS_OK=false
+      ERRORS+=("skills directory is a link (expected container of 1-level skill links): $SKILLS_OUT")
+    else
+      for i in "${!CORE_SKILL_NAMES[@]}"; do
+        sn="${CORE_SKILL_NAMES[$i]}"
+        sd="${CORE_SKILL_DIRS[$i]}"
+        dest="${SKILLS_OUT}/${sn}"
+        if ! link_target_ok "$dest" "$sd" || [[ ! -f "${dest}/SKILL.md" ]]; then
+          SKILLS_OK=false
+          ERRORS+=("missing or broken skill link: $dest -> $sd")
+        fi
+      done
+      if [[ -d "$SKILLS_OUT" ]]; then
+        for entry in "${SKILLS_OUT}"/*; do
+          [[ -e "$entry" || -L "$entry" ]] || continue
+          if is_link_entry "$entry"; then
+            ename="$(basename "$entry")"
+            known=false
+            for sn in "${ALL_SKILL_NAMES[@]}"; do
+              if [[ "$sn" == "$ename" ]]; then known=true; break; fi
+            done
+            if ! $known; then
+              SKILLS_OK=false
+              ERRORS+=("stale managed skill link present: $entry")
+            fi
           fi
+        done
+      fi
+
+      for i in "${!CMD_SKILL_NAMES[@]}"; do
+        cn="${CMD_SKILL_NAMES[$i]}"
+        cd_dir="${CMD_SKILL_DIRS[$i]}"
+        dest="${SKILLS_OUT}/${cn}"
+        if ! link_target_ok "$dest" "$cd_dir" || [[ ! -f "${dest}/SKILL.md" ]]; then
+          COMMANDS_OK=false
+          ERRORS+=("missing or broken command-skill link: $dest -> $cd_dir")
         fi
       done
     fi
-
-    for i in "${!CMD_SKILL_NAMES[@]}"; do
-      cn="${CMD_SKILL_NAMES[$i]}"
-      cd_dir="${CMD_SKILL_DIRS[$i]}"
-      dest="${SKILLS_OUT}/${cn}"
-      if ! link_target_ok "$dest" "$cd_dir" || [[ ! -f "${dest}/SKILL.md" ]]; then
-        COMMANDS_OK=false
-        ERRORS+=("missing or broken command-skill link: $dest -> $cd_dir")
-      fi
-    done
     for core_cmd in b3-plan b3-implement b3-debug b3-review b3-verify b3-review-loop b3-ship; do
       found_cmd=false
       for cn in "${CMD_SKILL_NAMES[@]}"; do
@@ -688,21 +721,48 @@ if [[ "$ACTION" == "verify" ]]; then
     done
 
     AGENTS_OUT="${PLUGIN_ROOT}/agents"
-    for i in "${!AGENT_BASES[@]}"; do
-      ab="${AGENT_BASES[$i]}"
-      ac="${AGENT_CONTENTS[$i]}"
-      dest="${AGENTS_OUT}/${ab}"
-      if [[ ! -f "$dest" ]]; then
-        AGENTS_OK=false
-        ERRORS+=("missing agent file: $dest")
-      elif [[ "$(sha256_file "$dest")" != "$(sha256_text "$ac")" ]]; then
-        AGENTS_OK=false
-        ERRORS+=("stale or modified agent file: $dest")
-      elif ! grep -Eq '^subagent:[[:space:]]*true[[:space:]]*$' "$dest" || ! grep -Eq '^mainAgent:[[:space:]]*false[[:space:]]*$' "$dest" || ! grep -Eq '^tools:[[:space:]]*\[' "$dest"; then
-        AGENTS_OK=false
-        ERRORS+=("invalid subagent frontmatter in: $dest")
+    if is_link_entry "$AGENTS_OUT"; then
+      AGENTS_OK=false
+      ERRORS+=("agents directory is a link (expected regular directory): $AGENTS_OUT")
+    else
+      for i in "${!AGENT_BASES[@]}"; do
+        ab="${AGENT_BASES[$i]}"
+        ac="${AGENT_CONTENTS[$i]}"
+        dest="${AGENTS_OUT}/${ab}"
+        if [[ ! -f "$dest" ]]; then
+          AGENTS_OK=false
+          ERRORS+=("missing agent file: $dest")
+        elif [[ "$(sha256_file "$dest")" != "$(sha256_text "$ac")" ]]; then
+          AGENTS_OK=false
+          ERRORS+=("stale or modified agent file: $dest")
+        elif ! grep -Eq '^subagent:[[:space:]]*true[[:space:]]*$' "$dest" || ! grep -Eq '^mainAgent:[[:space:]]*false[[:space:]]*$' "$dest" || ! grep -Eq '^tools:[[:space:]]*\[' "$dest"; then
+          AGENTS_OK=false
+          ERRORS+=("invalid subagent frontmatter in: $dest")
+        fi
+      done
+      if [[ -d "$AGENTS_OUT" ]]; then
+        for existing in "${AGENTS_OUT}"/*.md; do
+          [[ -f "$existing" ]] || continue
+          ebase="$(basename "$existing")"
+          keep=false
+          for expected in "${AGENT_BASES[@]}"; do
+            if [[ "$ebase" == "$expected" ]]; then keep=true; break; fi
+          done
+          if ! $keep; then
+            tracked=false
+            if [[ ${#M_FILE_KEYS[@]} -gt 0 ]]; then
+              for fk in "${M_FILE_KEYS[@]}"; do
+                if [[ "$fk" == "agents/${ebase}" ]]; then tracked=true; break; fi
+              done
+            fi
+            if $tracked || grep -Eq '<!-- Generated from .*/(\.cursor/)?agents/' "$existing"; then
+              AGENTS_OK=false
+              ERRORS+=("stale generated agent file present: $existing")
+            fi
+          fi
+        done
       fi
-    done
+    fi
   fi
 
   $PLUGIN_OK && echo "check.plugin=OK" || echo "check.plugin=FAIL"

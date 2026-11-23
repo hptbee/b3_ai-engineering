@@ -9,6 +9,9 @@ $uniPs = Join-Path $root 'adapters\install-global.ps1'
 $uniShPosix = ($root -replace '\\', '/') + '/adapters/install-global.sh'
 $gitBash = 'C:\Program Files\Git\bin\bash.exe'
 $hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
+if (-not $hasBash) {
+    Write-Output "WARNING: Git Bash not found at $gitBash; Bash cross-shell checks skipped"
+}
 $failed = 0
 
 function Pass([string]$Name) { Write-Output "PASS $Name" }
@@ -116,22 +119,36 @@ try {
     }
     $skillDirs2 = @(Get-ChildItem -LiteralPath (Join-Path $pr2 'skills') -Force -ErrorAction SilentlyContinue)
     $agFiles2 = @(Get-ChildItem -LiteralPath (Join-Path $pr2 'agents') -Filter 'b3-*.md' -File -ErrorAction SilentlyContinue)
-    $revText2 = Get-Content -LiteralPath (Join-Path $pr2 'agents\b3-reviewer.md') -Raw
-    $rulesText2 = Get-Content -LiteralPath (Join-Path $pr2 'rules\AGENTS.md') -Raw
+    $pjObj2 = Get-Content -LiteralPath (Join-Path $pr2 'plugin.json') -Raw | ConvertFrom-Json
+    $pjExtra2 = @($pjObj2.PSObject.Properties | ForEach-Object { $_.Name } | Where-Object { @('name', 'displayName', 'version', 'description', 'suggestedPrompts') -notcontains $_ })
+    $pjOk2 = ($pjObj2.name -eq 'b3-ai-engineering') -and ($pjExtra2.Count -eq 0) -and (@($pjObj2.suggestedPrompts).Count -eq 3)
+    $rulesPath2 = Join-Path $pr2 'rules\AGENTS.md'
+    $rulesText2 = Get-Content -LiteralPath $rulesPath2 -Raw
+    $rulesBytes2 = ([IO.File]::ReadAllBytes($rulesPath2)).Length
+    $rulesOk2 = ($rulesBytes2 -lt 24000) -and (-not ($rulesText2.TrimStart() -match '^---')) -and ($rulesText2 -notmatch 'review-loop/spec\.md') -and
+                ($rulesText2 -match 'Project-level AGENTS\.md') -and ($rulesText2 -match 'install-product is optional')
+    $allAgentsOk2 = ($agFiles2.Count -eq 5)
+    $noHardcodedModel = $true
+    foreach ($af2 in $agFiles2) {
+        $at2 = Get-Content -LiteralPath $af2.FullName -Raw
+        if (($at2 -match '(?m)^model:') -or ($at2 -match 'claude-|gpt-|gemini-[0-9]') -or
+            ($at2 -notmatch '(?m)^subagent:\s*true\s*$') -or ($at2 -notmatch '(?m)^mainAgent:\s*false\s*$') -or ($at2 -notmatch '(?m)^tools:\s*\[')) {
+            $allAgentsOk2 = $false
+            $noHardcodedModel = $false
+        }
+    }
     $hasAllCmds = $true
     foreach ($cmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship')) {
         if (-not (Test-Path -LiteralPath (Join-Path $pr2 "skills\$cmd\SKILL.md") -PathType Leaf)) { $hasAllCmds = $false }
     }
-    $noHardcodedModel = ($revText2 -notmatch '(?m)^model:') -and ($revText2 -notmatch 'claude-|gpt-|gemini-[0-9]')
-    $rulesPrecOk = ($rulesText2 -match 'Project-level AGENTS\.md') -and ($rulesText2 -match 'install-product is optional')
     if ($in2.Code -eq 0 -and $ver2Ps.Code -eq 0 -and $ver2ShOk -and
         ($ver2Ps.Text -match 'check\.plugin=OK') -and ($ver2Ps.Text -match 'check\.commands=OK') -and
         ($ver2Ps.Text -match 'UNKNOWN / INCOMPLETE') -and
-        $skillDirs2.Count -eq $expectedTotalSkills -and $hasAllCmds -and $agFiles2.Count -eq 5 -and
-        $noHardcodedModel -and $rulesPrecOk) {
+        $pjOk2 -and $rulesOk2 -and $allAgentsOk2 -and
+        $skillDirs2.Count -eq $expectedTotalSkills -and $hasAllCmds -and $noHardcodedModel) {
         Pass 'ag-global-fresh-install'
     } else {
-        FailCheck 'ag-global-fresh-install' "in=$($in2.Code) ver=$($ver2Ps.Code) sh=$ver2ShOk skills=$($skillDirs2.Count)/$expectedTotalSkills cmds=$hasAllCmds ags=$($agFiles2.Count) model=$noHardcodedModel"
+        FailCheck 'ag-global-fresh-install' "in=$($in2.Code) ver=$($ver2Ps.Code) sh=$ver2ShOk pj=$pjOk2 rules=$rulesOk2 ags=$allAgentsOk2 skills=$($skillDirs2.Count)/$expectedTotalSkills cmds=$hasAllCmds model=$noHardcodedModel"
     }
 
     # --- 3. ag-global-idempotent (repeated PS & Bash install preserves unrelated user notes) ---
@@ -205,13 +222,28 @@ try {
     $pr5NonB3 = Join-Path $uh5 '.gemini\config\plugins\b3-ai-engineering'
     New-Item -ItemType Directory -Path $pr5NonB3 -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $pr5NonB3 'keep.txt') 'keep'
+    $refUnrecUninst = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5)
+
+    $pr5DanglingTarget = Join-Path $uh5 'dangling-target'
+    $pr5DanglingLink = Join-Path $uh5 'dangling-link'
+    New-Item -ItemType Directory -Path $pr5DanglingTarget -Force | Out-Null
+    & cmd.exe /c mklink /J "`"$pr5DanglingLink`"" "`"$pr5DanglingTarget`"" | Out-Null
+    Remove-Item -LiteralPath $pr5DanglingTarget -Force
+    $refDanglingUninst = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr5DanglingLink, '-UserHome', $uh5)
+
     $refNonB3 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5)
     $refShOk = $true
     if ($hasBash) {
         $pr5p = $pr5NonB3 -replace '\\', '/'
         $uh5p = $uh5 -replace '\\', '/'
         $refSh = Invoke-ShScript $agShPosix "install --plugin-root '$pr5p' --user-home '$uh5p'"
-        $refShOk = ($refSh.Code -eq 1)
+        # Also verify single-line extra-key JSON does not masquerade as a valid B3 plugin in Bash
+        $pr5Single = Join-Path $uh5 'single-line-extra'
+        New-Item -ItemType Directory -Path $pr5Single -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $pr5Single 'plugin.json') '{"name":"b3-ai-engineering","skills":"./x"}'
+        $pr5sp = $pr5Single -replace '\\', '/'
+        $refSingleSh = Invoke-ShScript $agShPosix "install --plugin-root '$pr5sp' --user-home '$uh5p'"
+        $refShOk = ($refSh.Code -eq 1) -and ($refSingleSh.Code -eq 1)
     }
     $forceNonB3 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5, '-Force')
     # Inject non-link dir under skills/ and check refusal without -Force
@@ -221,11 +253,12 @@ try {
     $refNonLink = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5)
     $forceNonLink = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5, '-Force')
     $ver5 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr5NonB3, '-UserHome', $uh5)
-    if ($refFile.Code -eq 1 -and $refNonB3.Code -eq 1 -and $refShOk -and (Test-Path -LiteralPath (Join-Path $pr5NonB3 'keep.txt')) -and
+    if ($refFile.Code -eq 1 -and $refUnrecUninst.Code -eq 1 -and $refDanglingUninst.Code -eq 1 -and
+        $refNonB3.Code -eq 1 -and $refShOk -and (Test-Path -LiteralPath (Join-Path $pr5NonB3 'keep.txt')) -and
         $forceNonB3.Code -eq 0 -and $refNonLink.Code -eq 1 -and $forceNonLink.Code -eq 0 -and $ver5.Code -eq 0) {
         Pass 'ag-global-conflict-protection'
     } else {
-        FailCheck 'ag-global-conflict-protection' "file=$($refFile.Code) nonB3=$($refNonB3.Code) sh=$refShOk f1=$($forceNonB3.Code) nl=$($refNonLink.Code) f2=$($forceNonLink.Code) v=$($ver5.Code)"
+        FailCheck 'ag-global-conflict-protection' "file=$($refFile.Code) unrecUn=$($refUnrecUninst.Code) dangUn=$($refDanglingUninst.Code) nonB3=$($refNonB3.Code) sh=$refShOk f1=$($forceNonB3.Code) nl=$($refNonLink.Code) f2=$($forceNonLink.Code) v=$($ver5.Code)"
     }
 
     # --- 6. ag-global-stale-broken-and-drift (per-surface failure diagnostics + heal) ---
@@ -237,12 +270,20 @@ try {
     $drShPosix = ($b3Drift -replace '\\', '/') + '/adapters/antigravity/install-plugin.sh'
     $in6 = Invoke-PsScript $drPsPath @('install', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
 
+    Add-Content -LiteralPath (Join-Path $pr6 'plugin.json') ' '
+    $vPluginBad = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
+    $pluginFailReported = ($vPluginBad.Code -eq 1) -and ($vPluginBad.Text -match 'check\.plugin=FAIL') -and ($vPluginBad.Text -match 'check\.rules=OK')
+    $healPlugin = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
+
     Add-Content -LiteralPath (Join-Path $pr6 'rules\AGENTS.md') "`n<!-- drifted -->"
     $vRulesBad = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
     $rulesFailReported = ($vRulesBad.Code -eq 1) -and ($vRulesBad.Text -match 'check\.rules=FAIL') -and ($vRulesBad.Text -match 'check\.skills=OK')
 
     $healRules = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
     Add-Content -LiteralPath (Join-Path $pr6 'agents\b3-reviewer.md') "`n<!-- drifted -->"
+    Set-Content -LiteralPath (Join-Path $pr6 'agents\b3-stale-generated.md') "---`nname: b3-stale`n---`n<!-- Generated from stale/agents/b3-stale-generated.md -->`n"
+    $vStaleAg = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
+    $staleAgCaught = ($vStaleAg.Code -eq 1) -and ($vStaleAg.Text -match 'stale generated agent file')
     Remove-Item -LiteralPath (Join-Path $b3Drift 'skills\engineering\debugging') -Recurse -Force
     Remove-Item -LiteralPath (Join-Path $b3Drift 'adapters\command-skills\b3-plan') -Recurse -Force
     $vMultiBad = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
@@ -260,10 +301,10 @@ try {
     Copy-Item -LiteralPath (Join-Path $root 'adapters\command-skills\b3-plan') -Destination (Join-Path $b3Drift 'adapters\command-skills\b3-plan') -Recurse -Force
     $healAll = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
     $verHealed = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
-    if ($in6.Code -eq 0 -and $rulesFailReported -and $healRules.Code -eq 0 -and $multiFailReported -and $shBadOk -and $healAll.Code -eq 0 -and $verHealed.Code -eq 0) {
+    if ($in6.Code -eq 0 -and $pluginFailReported -and $healPlugin.Code -eq 0 -and $rulesFailReported -and $healRules.Code -eq 0 -and $staleAgCaught -and $multiFailReported -and $shBadOk -and $healAll.Code -eq 0 -and $verHealed.Code -eq 0) {
         Pass 'ag-global-stale-broken-and-drift'
     } else {
-        FailCheck 'ag-global-stale-broken-and-drift' "rules=$rulesFailReported multi=$multiFailReported sh=$shBadOk healed=$($verHealed.Code)"
+        FailCheck 'ag-global-stale-broken-and-drift' "pj=$pluginFailReported rules=$rulesFailReported staleAg=$staleAgCaught multi=$multiFailReported sh=$shBadOk healed=$($verHealed.Code)"
     }
 
     # --- 7. ag-global-paths-with-spaces ---
@@ -339,11 +380,11 @@ try {
         FailCheck 'ag-global-install-product-compat' "ip=$ipExit ver=$($ver8AfterProd.Code)"
     }
 
-    # --- 10. ag-global-coexistence-and-uninstall (preserves config.json & user notes) ---
+    # --- 10. ag-global-coexistence-and-uninstall (preserves config.json & user notes + legacy pre-manifest cleanup) ---
     New-Item -ItemType Directory -Path (Join-Path $uh8 '.gemini\config\skills\verification') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $uh8 '.gemini\config\skills\verification\SKILL.md') "---`nname: verification`ndescription: loose`n---`n"
     New-Item -ItemType Directory -Path (Join-Path $uh8 '.gemini\config\plugins\b3-dup') -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $uh8 '.gemini\config\plugins\b3-dup\plugin.json') '{"name":"b3-ai-engineering"}'
+    Set-Content -LiteralPath (Join-Path $uh8 '.gemini\config\plugins\b3-dup\plugin.json') '{"name":"b3-ai-engineering","extra":true}'
     New-Item -ItemType Directory -Path (Join-Path $uh8 '.agents\skills\verification') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $uh8 '.agents\skills\verification\SKILL.md') "---`nname: verification`ndescription: ag`n---`n"
     $cfgPath = Join-Path $uh8 '.gemini\config\config.json'
@@ -363,14 +404,27 @@ try {
                      (-not (Test-Path -LiteralPath (Join-Path $pr8 'skills\verification'))) -and
                      (-not (Test-Path -LiteralPath (Join-Path $pr8 'agents\b3-reviewer.md'))) -and
                      (-not (Test-Path -LiteralPath (Join-Path $pr8 '.b3-plugin-manifest')))
+
+    # Legacy pre-manifest uninstall fallback test
+    $uhLegacy = Join-Path $sandbox 'u-legacy'
+    $prLegacy = Join-Path $uhLegacy '.gemini\config\plugins\b3-ai-engineering'
+    $legIn = Invoke-PsScript $agPs @('install', '-PluginRoot', $prLegacy, '-UserHome', $uhLegacy)
+    Remove-Item -LiteralPath (Join-Path $prLegacy '.b3-plugin-manifest') -Force
+    Set-Content -LiteralPath (Join-Path $prLegacy 'keep-legacy.txt') 'keep'
+    $legUn = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $prLegacy, '-UserHome', $uhLegacy)
+    $legCleaned = (Test-Path -LiteralPath (Join-Path $prLegacy 'keep-legacy.txt')) -and
+                  (-not (Test-Path -LiteralPath (Join-Path $prLegacy 'plugin.json'))) -and
+                  (-not (Test-Path -LiteralPath (Join-Path $prLegacy 'rules\AGENTS.md'))) -and
+                  (-not (Test-Path -LiteralPath (Join-Path $prLegacy 'skills\verification')))
     if ($coexVer.Code -eq 0 -and $warnMatches -eq 3 -and $unDr.Code -eq 0 -and $stillThereAfterDr -and
-        $un8.Code -eq 0 -and ($cfgSha0 -eq $cfgSha1) -and $userKept10 -and $managedGone10) {
+        $un8.Code -eq 0 -and ($cfgSha0 -eq $cfgSha1) -and $userKept10 -and $managedGone10 -and
+        $legIn.Code -eq 0 -and $legUn.Code -eq 0 -and $legCleaned) {
         Pass 'ag-global-coexistence-and-uninstall'
     } else {
-        FailCheck 'ag-global-coexistence-and-uninstall' "warns=$warnMatches dr=$($unDr.Code)/$stillThereAfterDr un=$($un8.Code) cfg=$($cfgSha0 -eq $cfgSha1) user=$userKept10 gone=$managedGone10"
+        FailCheck 'ag-global-coexistence-and-uninstall' "warns=$warnMatches dr=$($unDr.Code)/$stillThereAfterDr un=$($un8.Code) cfg=$($cfgSha0 -eq $cfgSha1) user=$userKept10 gone=$managedGone10 leg=$($legUn.Code)/$legCleaned"
     }
 
-    # --- 11. unified-install-global-dispatcher (cursor, antigravity, all across PS & Bash) ---
+    # --- 11. unified-install-global-dispatcher (cursor, antigravity, all, trailing slashes, failure propagation) ---
     $uhUniC = Join-Path $sandbox 'u-uni-cursor'
     $uC1 = Invoke-PsScript $uniPs @('-HostName', 'cursor', '-UserHome', $uhUniC)
     $uCOnly = (Test-Path -LiteralPath (Join-Path $uhUniC '.cursor\skills\verification\SKILL.md')) -and (-not (Test-Path -LiteralPath (Join-Path $uhUniC '.gemini\config\plugins\b3-ai-engineering')))
@@ -379,34 +433,67 @@ try {
     $uA1 = Invoke-PsScript $uniPs @('-HostName', 'antigravity', '-UserHome', $uhUniA)
     $uAOnly = (Test-Path -LiteralPath (Join-Path $uhUniA '.gemini\config\plugins\b3-ai-engineering\plugin.json')) -and (-not (Test-Path -LiteralPath (Join-Path $uhUniA '.cursor')))
 
+    # Trailing-backslash path with spaces (R001 regression test via direct PowerShell invocation, as in PS tab completion)
+    $uhSpSlash = (Join-Path $sandbox 'User Trail Space') + '\'
+    $prSpSlash = (Join-Path $uhSpSlash '.gemini\config\plugins\Ag Trail Space') + '\'
+    $chSpSlash = (Join-Path $uhSpSlash '.cursor') + '\'
+    $prevTrailPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $uniPs -HostName all -UserHome $uhSpSlash -CursorHome $chSpSlash -AntigravityPluginRoot $prSpSlash | Out-Null
+        $spTrailInCode = $LASTEXITCODE
+        & $uniPs verify -HostName all -UserHome $uhSpSlash -CursorHome $chSpSlash -AntigravityPluginRoot $prSpSlash | Out-Null
+        $spTrailVerCode = $LASTEXITCODE
+        & $uniPs uninstall -HostName all -UserHome $uhSpSlash -CursorHome $chSpSlash -AntigravityPluginRoot $prSpSlash | Out-Null
+        $spTrailUnCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevTrailPref
+    }
+    $trailOk = ($spTrailInCode -eq 0) -and ($spTrailVerCode -eq 0) -and ($spTrailUnCode -eq 0)
+
+    # Mixed-host failure propagation test: Cursor fails (conflict), Antigravity still runs & succeeds, overall exits 1 with GLOBAL_FAIL
+    $uhMix = Join-Path $sandbox 'u-uni-mix'
+    New-Item -ItemType Directory -Path (Join-Path $uhMix '.cursor\commands') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $uhMix '.cursor\commands\b3-ship.md') 'unmanaged custom'
+    $mixRes = Invoke-PsScript $uniPs @('-HostName', 'all', '-UserHome', $uhMix)
+    $mixOk = ($mixRes.Code -eq 1) -and ($mixRes.Text -match 'host=cursor status=FAIL') -and
+             ($mixRes.Text -match 'host=antigravity status=OK') -and ($mixRes.Text -match 'GLOBAL_FAIL:')
+
     $uhAll = Join-Path $sandbox 'u-uni-all'
     $allDr = Invoke-PsScript $uniPs @('-HostName', 'all', '-UserHome', $uhAll, '-DryRun')
     $allDrClean = (-not (Test-Path -LiteralPath (Join-Path $uhAll '.cursor'))) -and (-not (Test-Path -LiteralPath (Join-Path $uhAll '.gemini')))
     $allIn = Invoke-PsScript $uniPs @('-HostName', 'all', '-UserHome', $uhAll)
+    $allUp = Invoke-PsScript $uniPs @('update', '-HostName', 'all', '-UserHome', $uhAll)
     $allVer = Invoke-PsScript $uniPs @('verify', '-HostName', 'all', '-UserHome', $uhAll)
     $noCoexConflict = -not ($allVer.Text -match 'COEXISTENCE_WARNING:')
 
     $shAllOk = $true
     if ($hasBash) {
         $uhAllP = $uhAll -replace '\\', '/'
+        $uhAllSh = Join-Path $sandbox 'u-uni-sh'
+        $uhAllShP = $uhAllSh -replace '\\', '/'
+        $shAllIn = Invoke-ShScript $uniShPosix "install --host all --user-home '$uhAllShP'"
         $shAllVer = Invoke-ShScript $uniShPosix "verify --host all --user-home '$uhAllP'"
         $shAllUp = Invoke-ShScript $uniShPosix "update --host all --user-home '$uhAllP'"
         $shAllUn = Invoke-ShScript $uniShPosix "uninstall --host all --user-home '$uhAllP'"
-        $shAllOk = ($shAllVer.Code -eq 0) -and ($shAllVer.Text -match 'GLOBAL_OK:') -and
+        $shAllShUn = Invoke-ShScript $uniShPosix "uninstall --host all --user-home '$uhAllShP'"
+        $shAllOk = ($shAllIn.Code -eq 0) -and ($shAllIn.Text -match 'GLOBAL_OK:') -and
+                   ($shAllVer.Code -eq 0) -and ($shAllVer.Text -match 'GLOBAL_OK:') -and
                    ($shAllUp.Code -eq 0) -and ($shAllUp.Text -match 'GLOBAL_OK:') -and
-                   ($shAllUn.Code -eq 0) -and ($shAllUn.Text -match 'GLOBAL_OK:')
+                   ($shAllUn.Code -eq 0) -and ($shAllUn.Text -match 'GLOBAL_OK:') -and
+                   ($shAllShUn.Code -eq 0)
     } else {
         $psAllUn = Invoke-PsScript $uniPs @('uninstall', '-HostName', 'all', '-UserHome', $uhAll)
         $shAllOk = ($psAllUn.Code -eq 0)
     }
     $allGone = (-not (Test-Path -LiteralPath (Join-Path $uhAll '.cursor\skills\verification'))) -and
                (-not (Test-Path -LiteralPath (Join-Path $uhAll '.gemini\config\plugins\b3-ai-engineering')))
-    if ($uC1.Code -eq 0 -and $uCOnly -and $uA1.Code -eq 0 -and $uAOnly -and
-        $allDr.Code -eq 0 -and $allDrClean -and $allIn.Code -eq 0 -and $allVer.Code -eq 0 -and
+    if ($uC1.Code -eq 0 -and $uCOnly -and $uA1.Code -eq 0 -and $uAOnly -and $trailOk -and $mixOk -and
+        $allDr.Code -eq 0 -and $allDrClean -and $allIn.Code -eq 0 -and $allUp.Code -eq 0 -and $allVer.Code -eq 0 -and
         ($allVer.Text -match 'GLOBAL_OK:') -and $noCoexConflict -and $shAllOk -and $allGone) {
         Pass 'unified-install-global-dispatcher'
     } else {
-        FailCheck 'unified-install-global-dispatcher' "c=$($uC1.Code)/$uCOnly a=$($uA1.Code)/$uAOnly dr=$allDrClean all=$($allIn.Code)/$($allVer.Code) noWarn=$noCoexConflict sh=$shAllOk gone=$allGone"
+        FailCheck 'unified-install-global-dispatcher' "c=$($uC1.Code)/$uCOnly a=$($uA1.Code)/$uAOnly trail=$trailOk mix=$mixOk dr=$allDrClean all=$($allIn.Code)/$($allUp.Code)/$($allVer.Code) noWarn=$noCoexConflict sh=$shAllOk gone=$allGone"
     }
 }
 finally {

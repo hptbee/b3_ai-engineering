@@ -9,6 +9,7 @@ param(
     [string]$HostName = 'all',
     [string]$B3Home = '',
     [string]$CursorHome = '',
+    [Alias('PluginRoot')]
     [string]$AntigravityPluginRoot = '',
     [string]$UserHome = '',
     [switch]$DryRun,
@@ -22,6 +23,19 @@ function Fail([string]$Message) {
     exit 1
 }
 
+function Trim-ChildPathArg([string]$PathValue) {
+    if (-not $PathValue) { return $PathValue }
+    $trimmed = $PathValue.Trim()
+    if ($trimmed -match '^([A-Za-z]:)[\\/]+$') { return ($Matches[1] + '/') }
+    if ($trimmed -match '^[/\\]+$') { return $trimmed.Substring(0, 1) }
+    return $trimmed.TrimEnd('\', '/')
+}
+
+$B3Home = Trim-ChildPathArg $B3Home
+$CursorHome = Trim-ChildPathArg $CursorHome
+$AntigravityPluginRoot = Trim-ChildPathArg $AntigravityPluginRoot
+$UserHome = Trim-ChildPathArg $UserHome
+
 $scriptRoot = $PSScriptRoot
 if (-not $B3Home) {
     $B3Home = Split-Path -Parent $scriptRoot
@@ -29,7 +43,7 @@ if (-not $B3Home) {
 if (-not (Test-Path -LiteralPath $B3Home -PathType Container)) {
     Fail "B3Home directory not found: $B3Home"
 }
-$B3Home = (Resolve-Path -LiteralPath $B3Home).Path.TrimEnd('\', '/')
+$B3Home = Trim-ChildPathArg ((Resolve-Path -LiteralPath $B3Home).Path)
 
 $cursorScript = Join-Path $scriptRoot 'cursor\install-global.ps1'
 $antigravityScript = Join-Path $scriptRoot 'antigravity\install-plugin.ps1'

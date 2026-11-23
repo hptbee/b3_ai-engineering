@@ -276,6 +276,22 @@ function Read-PluginManifest([string]$ManifestPath) {
     return $m
 }
 
+function Sort-OrdinalStrings([string[]]$Items) {
+    $arr = @($Items)
+    if ($arr.Count -gt 1) {
+        [Array]::Sort($arr, [System.StringComparer]::Ordinal)
+    }
+    return $arr
+}
+
+function Sort-FilesOrdinalByFullName([System.IO.FileInfo[]]$Files) {
+    $arr = @($Files)
+    if ($arr.Count -gt 1) {
+        [Array]::Sort($arr, [System.Comparison[System.IO.FileInfo]]{ param($a, $b) [System.StringComparer]::Ordinal.Compare($a.FullName, $b.FullName) })
+    }
+    return $arr
+}
+
 function Test-B3PluginJson([string]$JsonPath) {
     if (-not (Test-Path -LiteralPath $JsonPath -PathType Leaf)) { return $false }
     try {
@@ -284,6 +300,16 @@ function Test-B3PluginJson([string]$JsonPath) {
         $propNames = @($parsed.PSObject.Properties | ForEach-Object { $_.Name })
         $extra = @($propNames | Where-Object { $allowedKeys -notcontains $_ })
         return ($parsed.name -eq 'b3-ai-engineering') -and ($extra.Count -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+function Test-B3PluginName([string]$JsonPath) {
+    if (-not (Test-Path -LiteralPath $JsonPath -PathType Leaf)) { return $false }
+    try {
+        $parsed = Get-Content -LiteralPath $JsonPath -Raw | ConvertFrom-Json
+        return ($parsed.name -eq 'b3-ai-engineering')
     } catch {
         return $false
     }
@@ -308,7 +334,7 @@ function Check-AntigravityCoexistence([string]$UserHomeDir, [string]$PluginRootP
             $candNorm = Normalize-Path $cand.FullName
             if ($candNorm.Equals($pluginNorm, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
             $candJson = Join-Path $cand.FullName 'plugin.json'
-            if (Test-B3PluginJson $candJson) {
+            if (Test-B3PluginName $candJson) {
                 Write-Output "COEXISTENCE_WARNING: duplicate b3-ai-engineering plugin found at $($cand.FullName); only one plugin directory with name 'b3-ai-engineering' should exist."
             }
         }
@@ -341,17 +367,17 @@ $manifestFile = Join-Path $PluginRoot '.b3-plugin-manifest'
 
 # --- Handle uninstall before requiring B3Home ---
 if ($Action -eq 'uninstall') {
+    if (Test-IsReparseLink $PluginRoot) {
+        Fail "refusing to uninstall link-based PluginRoot: $PluginRoot"
+    }
     $manifest = Read-PluginManifest $manifestFile
     $hasPluginJson = Test-B3PluginJson (Join-Path $PluginRoot 'plugin.json')
     if (-not $manifest.Exists -and -not $hasPluginJson) {
-        if (Test-Path -LiteralPath $PluginRoot) {
+        if ((Test-Path -LiteralPath $PluginRoot) -or (Test-IsReparseLink $PluginRoot)) {
             Fail "refusing to uninstall unrecognized directory (missing B3 manifest or plugin.json): $PluginRoot"
         }
         Write-Output "nothing installed (no B3 plugin at $PluginRoot)"
         exit 0
-    }
-    if (Test-IsReparseLink $PluginRoot) {
-        Fail "refusing to uninstall link-based PluginRoot: $PluginRoot"
     }
 
     $removed = 0
@@ -444,12 +470,12 @@ $agentsDir = Join-Path $B3Home 'agents'
 if (-not (Test-Path -LiteralPath $workflowPath -PathType Leaf)) { Fail "B3_HOME missing workflow: $workflowPath" }
 if (-not (Test-Path -LiteralPath $skillsSrc -PathType Container)) { Fail "B3_HOME missing skills: $skillsSrc" }
 
-$canonicalSkillFiles = @(Get-ChildItem -LiteralPath $skillsSrc -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
+$canonicalSkillFiles = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $skillsSrc -Recurse -Filter 'SKILL.md' -File)
 if ($canonicalSkillFiles.Count -lt 1) { Fail "B3_HOME has no SKILL.md under skills: $skillsSrc" }
 
 $cmdSkillFiles = @()
 if (Test-Path -LiteralPath $cmdSkillsSrc -PathType Container) {
-    $cmdSkillFiles = @(Get-ChildItem -LiteralPath $cmdSkillsSrc -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
+    $cmdSkillFiles = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $cmdSkillsSrc -Recurse -Filter 'SKILL.md' -File)
 }
 if ($cmdSkillFiles.Count -lt 1) { Fail "B3_HOME has no command skills under: $cmdSkillsSrc" }
 
@@ -478,9 +504,9 @@ foreach ($sf in $cmdSkillFiles) {
     $cmdSkillMap[$sname] = $srcDir
     $skillEntries.Add([PSCustomObject]@{ Name = $sname; Source = $srcDir; Kind = 'command' })
 }
-$sortedSkillNames = @($skillMap.Keys | Sort-Object)
+$sortedSkillNames = Sort-OrdinalStrings @($skillMap.Keys)
 
-$ruleFiles = @(Get-ChildItem -LiteralPath $rulesDir -Filter '*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)
+$ruleFiles = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $rulesDir -Filter '*.md' -File -ErrorAction SilentlyContinue)
 if ($ruleFiles.Count -lt 1) { Fail "B3_HOME has no rules under $rulesDir" }
 
 $rulesHeader = @"
@@ -504,7 +530,7 @@ if ($rulesBytes -ge 24000) {
     Fail "generated rules/AGENTS.md is $rulesBytes bytes (must stay under 24000 bytes)"
 }
 
-$agentFiles = @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'README.md' } | Sort-Object Name)
+$agentFiles = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'README.md' })
 if ($agentFiles.Count -lt 1) { Fail "B3_HOME has no agent definitions under $agentsDir" }
 $renderedAgents = New-Object System.Collections.Generic.List[object]
 foreach ($af in $agentFiles) {
@@ -553,8 +579,12 @@ if ($Action -eq 'verify') {
             $errors.Add("stale or modified plugin.json at $pjPath")
         }
 
-        $rulesOut = Join-Path $PluginRoot 'rules\AGENTS.md'
-        if (-not (Test-Path -LiteralPath $rulesOut -PathType Leaf)) {
+        $rulesDirOut = Join-Path $PluginRoot 'rules'
+        $rulesOut = Join-Path $rulesDirOut 'AGENTS.md'
+        if (Test-IsReparseLink $rulesDirOut) {
+            $rulesOk = $false
+            $errors.Add("rules directory is a link (expected regular directory): $rulesDirOut")
+        } elseif (-not (Test-Path -LiteralPath $rulesOut -PathType Leaf)) {
             $rulesOk = $false
             $errors.Add("missing rules/AGENTS.md at $rulesOut")
         } else {
@@ -570,27 +600,33 @@ if ($Action -eq 'verify') {
         }
 
         $skillsOut = Join-Path $PluginRoot 'skills'
-        foreach ($sn in @($coreSkillMap.Keys | Sort-Object)) {
-            $dest = Join-Path $skillsOut $sn
-            if (-not (Test-LinkTarget $dest $coreSkillMap[$sn]) -or -not (Test-Path -LiteralPath (Join-Path $dest 'SKILL.md') -PathType Leaf)) {
-                $skillsOk = $false
-                $errors.Add("missing or broken skill link: $dest -> $($coreSkillMap[$sn])")
-            }
-        }
-        if (Test-Path -LiteralPath $skillsOut -PathType Container) {
-            foreach ($child in @(Get-ChildItem -LiteralPath $skillsOut -Force)) {
-                if ((Test-IsReparseLink $child.FullName) -and -not $skillMap.ContainsKey($child.Name)) {
+        if (Test-IsReparseLink $skillsOut) {
+            $skillsOk = $false
+            $commandsOk = $false
+            $errors.Add("skills directory is a link (expected container of 1-level skill links): $skillsOut")
+        } else {
+            foreach ($sn in (Sort-OrdinalStrings @($coreSkillMap.Keys))) {
+                $dest = Join-Path $skillsOut $sn
+                if (-not (Test-LinkTarget $dest $coreSkillMap[$sn]) -or -not (Test-Path -LiteralPath (Join-Path $dest 'SKILL.md') -PathType Leaf)) {
                     $skillsOk = $false
-                    $errors.Add("stale managed skill link present: $($child.FullName)")
+                    $errors.Add("missing or broken skill link: $dest -> $($coreSkillMap[$sn])")
                 }
             }
-        }
+            if (Test-Path -LiteralPath $skillsOut -PathType Container) {
+                foreach ($child in @(Get-ChildItem -LiteralPath $skillsOut -Force)) {
+                    if ((Test-IsReparseLink $child.FullName) -and -not $skillMap.ContainsKey($child.Name)) {
+                        $skillsOk = $false
+                        $errors.Add("stale managed skill link present: $($child.FullName)")
+                    }
+                }
+            }
 
-        foreach ($cn in @($cmdSkillMap.Keys | Sort-Object)) {
-            $dest = Join-Path $skillsOut $cn
-            if (-not (Test-LinkTarget $dest $cmdSkillMap[$cn]) -or -not (Test-Path -LiteralPath (Join-Path $dest 'SKILL.md') -PathType Leaf)) {
-                $commandsOk = $false
-                $errors.Add("missing or broken command-skill link: $dest -> $($cmdSkillMap[$cn])")
+            foreach ($cn in (Sort-OrdinalStrings @($cmdSkillMap.Keys))) {
+                $dest = Join-Path $skillsOut $cn
+                if (-not (Test-LinkTarget $dest $cmdSkillMap[$cn]) -or -not (Test-Path -LiteralPath (Join-Path $dest 'SKILL.md') -PathType Leaf)) {
+                    $commandsOk = $false
+                    $errors.Add("missing or broken command-skill link: $dest -> $($cmdSkillMap[$cn])")
+                }
             }
         }
         foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship')) {
@@ -601,19 +637,37 @@ if ($Action -eq 'verify') {
         }
 
         $agentsOut = Join-Path $PluginRoot 'agents'
-        foreach ($ag in $renderedAgents) {
-            $dest = Join-Path $agentsOut $ag.FileName
-            if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
-                $agentsOk = $false
-                $errors.Add("missing agent file: $dest")
-            } elseif ((Get-FileSha256 $dest) -ne (Get-TextSha256 $ag.Content)) {
-                $agentsOk = $false
-                $errors.Add("stale or modified agent file: $dest")
-            } else {
-                $txt = [IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
-                if (($txt -notmatch '(?m)^subagent:\s*true\s*$') -or ($txt -notmatch '(?m)^mainAgent:\s*false\s*$') -or ($txt -notmatch '(?m)^tools:\s*\[')) {
+        $expectedAgentSet = @($renderedAgents | ForEach-Object { $_.FileName })
+        if (Test-IsReparseLink $agentsOut) {
+            $agentsOk = $false
+            $errors.Add("agents directory is a link (expected regular directory): $agentsOut")
+        } else {
+            foreach ($ag in $renderedAgents) {
+                $dest = Join-Path $agentsOut $ag.FileName
+                if (-not (Test-Path -LiteralPath $dest -PathType Leaf)) {
                     $agentsOk = $false
-                    $errors.Add("invalid subagent frontmatter in: $dest")
+                    $errors.Add("missing agent file: $dest")
+                } elseif ((Get-FileSha256 $dest) -ne (Get-TextSha256 $ag.Content)) {
+                    $agentsOk = $false
+                    $errors.Add("stale or modified agent file: $dest")
+                } else {
+                    $txt = [IO.File]::ReadAllText($dest, [System.Text.Encoding]::UTF8)
+                    if (($txt -notmatch '(?m)^subagent:\s*true\s*$') -or ($txt -notmatch '(?m)^mainAgent:\s*false\s*$') -or ($txt -notmatch '(?m)^tools:\s*\[')) {
+                        $agentsOk = $false
+                        $errors.Add("invalid subagent frontmatter in: $dest")
+                    }
+                }
+            }
+            if (Test-Path -LiteralPath $agentsOut -PathType Container) {
+                foreach ($existingAg in @(Get-ChildItem -LiteralPath $agentsOut -Filter '*.md' -File -ErrorAction SilentlyContinue)) {
+                    if ($expectedAgentSet -notcontains $existingAg.Name) {
+                        $agTxt = [IO.File]::ReadAllText($existingAg.FullName, [System.Text.Encoding]::UTF8)
+                        $isTrackedAg = $manifest.Exists -and $manifest.Files.ContainsKey("agents/$($existingAg.Name)")
+                        if ($isTrackedAg -or ($agTxt -match '<!-- Generated from .*/(\.cursor/)?agents/')) {
+                            $agentsOk = $false
+                            $errors.Add("stale generated agent file present: $($existingAg.FullName)")
+                        }
+                    }
                 }
             }
         }
@@ -702,13 +756,14 @@ foreach ($child in @(Get-ChildItem -LiteralPath $skillsOutDir -Force)) {
         Remove-Item -LiteralPath $child.FullName -Recurse -Force
     }
 }
-foreach ($se in @($skillEntries | Sort-Object Name)) {
-    $dest = Join-Path $skillsOutDir $se.Name
-    if (-not (Test-LinkTarget $dest $se.Source)) {
+foreach ($sn in $sortedSkillNames) {
+    $src = $skillMap[$sn]
+    $dest = Join-Path $skillsOutDir $sn
+    if (-not (Test-LinkTarget $dest $src)) {
         if (Test-IsReparseLink $dest) { Remove-LinkOnly $dest }
-        Create-DirLink $dest $se.Source
+        Create-DirLink $dest $src
     }
-    $manifestLines.Add("link|skills/$($se.Name)|$(To-Forward $se.Source)")
+    $manifestLines.Add("link|skills/$sn|$(To-Forward $src)")
 }
 
 $expectedAgentFiles = @($renderedAgents | ForEach-Object { $_.FileName })

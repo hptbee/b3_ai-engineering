@@ -67,7 +67,8 @@ Use either the unified host dispatcher or the standalone plugin manager:
 
 - Pass `-DryRun` / `--dry-run` to preview `install` or `uninstall` without modifying disk.
 - Pass `-Force` / `--force` to overwrite conflicting unmanaged non-link directories.
-- `verify` checks each capability surface independently (`check.plugin`, `check.rules`, `check.skills`, `check.commands`, `check.agents`), hashes `plugin.json`, `rules/AGENTS.md`, and `agents/*.md` against canonical `B3_HOME` to detect drift, validates junction/symlink targets, and scans for duplicate roots (`COEXISTENCE_WARNING:`).
+- Custom target/path flags (for sandboxes or non-default homes): `-PluginRoot` / `--plugin-root`, `-B3Home` / `--b3-home`, and `-UserHome` / `--user-home` (or `-AntigravityPluginRoot` / `-PluginRoot` and `-CursorHome` via `adapters/install-global.ps1`, `--plugin-root` and `--cursor-home` via `adapters/install-global.sh`).
+- `verify` checks each capability surface independently (`check.plugin`, `check.rules`, `check.skills`, `check.commands`, `check.agents`), hashes `plugin.json`, `rules/AGENTS.md`, and `agents/*.md` against canonical `B3_HOME` to detect drift, validates Windows NTFS junctions (and POSIX symlinks where supported), and scans for duplicate roots (`COEXISTENCE_WARNING:`).
 
 ### Arbitrary-project usage examples
 
@@ -110,7 +111,7 @@ No `.agents/skills` junction is needed (and **do not** add `.agents/skills` alon
 ## 4. Known limitations & honest verification boundary
 
 - **UI lifecycle grants:** Antigravity stores user enable/disable state in `~/.gemini/config/config.json`. Enable, disable, or review the plugin in Antigravity UI (`[B3 AI Engineering](customization://b3-ai-engineering)`); installer scripts never hand-edit `config.json`.
-- **Filesystem vs. runtime discovery:** Automated validation ([`../../scripts/validate-antigravity-global.ps1`](../../scripts/validate-antigravity-global.ps1)) proves file generation, junction/symlink validity, raw SHA-256 parity across PowerShell and Git Bash, drift detection, conflict protection, coexistence warnings, and clean uninstall (`PASS`). Live Antigravity discovery of `skills/`, command skills, `rules/AGENTS.md`, and `agents/*.md` remains **`UNKNOWN / INCOMPLETE`** until observed in a live Antigravity session.
+- **Filesystem vs. runtime discovery:** Automated validation ([`../../scripts/validate-antigravity-global.ps1`](../../scripts/validate-antigravity-global.ps1)) proves file generation, Windows NTFS junction validity, raw SHA-256 parity across PowerShell and Git Bash, drift detection, conflict protection, coexistence warnings, and clean uninstall (`PASS`). Non-Windows POSIX (`macOS`/`Linux`) `.sh` symlink (`ln -s`) / `shasum` / `openssl` execution and live Antigravity IDE/CLI discovery of `skills/`, command skills, `rules/AGENTS.md`, and `agents/*.md` remain **`UNKNOWN / INCOMPLETE`** until observed on those environments.
 
 ## 5. Runtime smoke-test checklist (2 unrelated Antigravity projects)
 
