@@ -30,6 +30,8 @@ Installs under `~/.cursor/` via [`install-global.ps1`](install-global.ps1) / [`i
 
 To manage Cursor together with Antigravity from one shared canonical `B3_HOME`, you can also use the unified dispatcher ([`../install-global.ps1`](../install-global.ps1) / [`../install-global.sh`](../install-global.sh)) with `-HostName cursor` or `-HostName all` (`--host cursor|all`, supporting `-CursorHome`/`--cursor-home`, `-AntigravityPluginRoot`/`-PluginRoot`/`--plugin-root`, `-UserHome`/`--user-home`); see [`../antigravity/README.md`](../antigravity/README.md) for Antigravity checks.
 
+**Optional model preferences:** The unified `../install-global.*` initializes `~/.b3/models.md` after a successful install/update, without overwriting existing preferences. If you use the direct Cursor installer above, copy [`../../config/models.example.md`](../../config/models.example.md) to `~/.b3/models.md` yourself. Preferences are advisory and loaded only on relevant dispatch; see [`../../docs/model-preferences.md`](../../docs/model-preferences.md).
+
 - Pass `-DryRun` / `--dry-run` to preview changes without touching disk.
 - Pass `-Force` / `--force` to replace conflicting same-named unmanaged files or migrate a legacy `~/.cursor/skills/b3-ai-engineering` link. Unrelated user files (`~/.cursor/skills/my-*`, custom commands/agents) are never removed or modified.
 

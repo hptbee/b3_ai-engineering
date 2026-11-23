@@ -24,10 +24,11 @@ b3-ai-engineering/
 ├── .cursor/rules/            Committed thin Cursor .mdc wrappers (@rules/*.md)
 ├── .agents/skills.json       Committed Antigravity 1-level skill manifest
 ├── scripts/                  Repository tooling & validation
+├── config/                   Optional Markdown model preference example (models.example.md)
 └── docs/                     Architecture, standards, contracts
 ```
 
-Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md). Universal map: [`AGENTS.md`](AGENTS.md).
+Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md), [`docs/model-preferences.md`](docs/model-preferences.md). Universal map: [`AGENTS.md`](AGENTS.md).
 
 ## Why it exists
 
@@ -64,6 +65,8 @@ Install once across all local repositories without copying `skills/` or modifyin
 ./adapters/install-global.sh --host all
 ./adapters/install-global.sh verify --host all
 ```
+
+**Optional personal models:** Unified global `install`/`update` initializes a missing `~/.b3/models.md` using [`config/models.example.md`](config/models.example.md). Existing preferences are never overwritten; dry-run, verify and uninstall do not modify them. Direct host installers require copying the example manually. See [`docs/model-preferences.md`](docs/model-preferences.md) (`-UserHome`, `B3_MODELS_PERSONAL`, `B3_SKIP_MODEL_INIT`).
 
 Details, project overrides, and manual host runtime smoke checklists: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/antigravity/README.md`](adapters/antigravity/README.md).
 
@@ -187,7 +190,7 @@ Rules constrain → Skills provide methods → Commands start work
  → Lessons → Knowledge
 ```
 
-**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** map the canonical core onto Cursor, Codex, Claude Code, and Antigravity; they must not fork meaning.
+**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** map the canonical core onto Cursor, Codex, Claude Code, and Antigravity; they must not fork meaning. **Optional model preferences** live in Git-ignored `~/.b3/models.md` (and optional `<project>/.b3/models.md`) copied from [`config/models.example.md`](config/models.example.md) (`docs/model-preferences.md`).
 
 ## Research → knowledge → skills
 

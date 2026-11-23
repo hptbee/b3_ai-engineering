@@ -355,11 +355,13 @@ try {
     # --- 11. unified-install-global-dispatcher (cursor, antigravity, all, trailing slashes, failure propagation) ---
     $uhUniC = Join-Path $sandbox 'u-uni-cursor'
     $uC1 = Invoke-PsScript $uniPs @('-HostName', 'cursor', '-UserHome', $uhUniC)
-    $uCOnly = (Test-Path -LiteralPath (Join-Path $uhUniC '.cursor\skills\verification\SKILL.md')) -and (-not (Test-Path -LiteralPath (Join-Path $uhUniC '.gemini\config\plugins\b3-ai-engineering')))
+    $uCOnly = (Test-Path -LiteralPath (Join-Path $uhUniC '.cursor\skills\verification\SKILL.md')) -and (-not (Test-Path -LiteralPath (Join-Path $uhUniC '.gemini\config\plugins\b3-ai-engineering'))) -and
+              (Test-Path -LiteralPath (Join-Path $uhUniC '.b3\models.md') -PathType Leaf)
 
     $uhUniA = Join-Path $sandbox 'u-uni-ag'
     $uA1 = Invoke-PsScript $uniPs @('-HostName', 'antigravity', '-UserHome', $uhUniA)
-    $uAOnly = (Test-Path -LiteralPath (Join-Path $uhUniA '.gemini\config\plugins\b3-ai-engineering\plugin.json')) -and (-not (Test-Path -LiteralPath (Join-Path $uhUniA '.cursor')))
+    $uAOnly = (Test-Path -LiteralPath (Join-Path $uhUniA '.gemini\config\plugins\b3-ai-engineering\plugin.json')) -and (-not (Test-Path -LiteralPath (Join-Path $uhUniA '.cursor'))) -and
+              (Test-Path -LiteralPath (Join-Path $uhUniA '.b3\models.md') -PathType Leaf)
 
     # Trailing-backslash path with spaces (R001 regression test via direct PowerShell invocation, as in PS tab completion)
     $uhSpSlash = (Join-Path $sandbox 'User Trail Space') + '\'
@@ -385,14 +387,19 @@ try {
     Set-Content -LiteralPath (Join-Path $uhMix '.cursor\commands\b3-ship.md') 'unmanaged custom'
     $mixRes = Invoke-PsScript $uniPs @('-HostName', 'all', '-UserHome', $uhMix)
     $mixOk = ($mixRes.Code -eq 1) -and ($mixRes.Text -match 'host=cursor status=FAIL') -and
-             ($mixRes.Text -match 'host=antigravity status=OK') -and ($mixRes.Text -match 'GLOBAL_FAIL:')
+             ($mixRes.Text -match 'host=antigravity status=OK') -and ($mixRes.Text -match 'GLOBAL_FAIL:') -and
+             (-not (Test-Path -LiteralPath (Join-Path $uhMix '.b3\models.md')))
 
     $uhAll = Join-Path $sandbox 'u-uni-all'
     $allDr = Invoke-PsScript $uniPs @('-HostName', 'all', '-UserHome', $uhAll, '-DryRun')
-    $allDrClean = (-not (Test-Path -LiteralPath (Join-Path $uhAll '.cursor'))) -and (-not (Test-Path -LiteralPath (Join-Path $uhAll '.gemini')))
+    $allPref = Join-Path $uhAll '.b3\models.md'
+    $allDrClean = (-not (Test-Path -LiteralPath (Join-Path $uhAll '.cursor'))) -and (-not (Test-Path -LiteralPath (Join-Path $uhAll '.gemini'))) -and (-not (Test-Path -LiteralPath $allPref))
     $allIn = Invoke-PsScript $uniPs @('-HostName', 'all', '-UserHome', $uhAll)
+    $allPrefSeeded = (Test-Path -LiteralPath $allPref -PathType Leaf) -and ((Get-Content -LiteralPath $allPref -Raw) -match 'B3 Model Preferences')
+    if ($allPrefSeeded) { Set-Content -LiteralPath $allPref '# personal preference - keep after update and uninstall' }
     $allUp = Invoke-PsScript $uniPs @('update', '-HostName', 'all', '-UserHome', $uhAll)
     $allVer = Invoke-PsScript $uniPs @('verify', '-HostName', 'all', '-UserHome', $uhAll)
+    $allPrefPreserved = (Test-Path -LiteralPath $allPref -PathType Leaf) -and ((Get-Content -LiteralPath $allPref -Raw) -match 'personal preference - keep')
     $noCoexConflict = -not ($allVer.Text -match 'COEXISTENCE_WARNING:')
 
     $shAllOk = $true
@@ -401,6 +408,9 @@ try {
         $uhAllSh = Join-Path $sandbox 'u-uni-sh'
         $uhAllShP = $uhAllSh -replace '\\', '/'
         $shAllIn = Invoke-ShScript $uniShPosix "install --host all --user-home '$uhAllShP'"
+        $shModelPref = Join-Path $uhAllSh '.b3\models.md'
+        $shModelSeeded = Test-Path -LiteralPath $shModelPref -PathType Leaf
+        if ($shModelSeeded) { Set-Content -LiteralPath $shModelPref '# shell custom preference - keep' }
         $shAllVer = Invoke-ShScript $uniShPosix "verify --host all --user-home '$uhAllP'"
         $shAllUp = Invoke-ShScript $uniShPosix "update --host all --user-home '$uhAllP'"
         $shAllUn = Invoke-ShScript $uniShPosix "uninstall --host all --user-home '$uhAllP'"
@@ -409,15 +419,18 @@ try {
                    ($shAllVer.Code -eq 0) -and ($shAllVer.Text -match 'GLOBAL_OK:') -and
                    ($shAllUp.Code -eq 0) -and ($shAllUp.Text -match 'GLOBAL_OK:') -and
                    ($shAllUn.Code -eq 0) -and ($shAllUn.Text -match 'GLOBAL_OK:') -and
-                   ($shAllShUn.Code -eq 0)
+                   ($shAllShUn.Code -eq 0) -and $shModelSeeded -and
+                   (Test-Path -LiteralPath $shModelPref -PathType Leaf) -and
+                   ((Get-Content -LiteralPath $shModelPref -Raw) -match 'shell custom preference - keep')
     } else {
         $psAllUn = Invoke-PsScript $uniPs @('uninstall', '-HostName', 'all', '-UserHome', $uhAll)
         $shAllOk = ($psAllUn.Code -eq 0)
     }
     $allGone = (-not (Test-Path -LiteralPath (Join-Path $uhAll '.cursor\skills\verification'))) -and
-               (-not (Test-Path -LiteralPath (Join-Path $uhAll '.gemini\config\plugins\b3-ai-engineering')))
+               (-not (Test-Path -LiteralPath (Join-Path $uhAll '.gemini\config\plugins\b3-ai-engineering'))) -and
+               (Test-Path -LiteralPath $allPref -PathType Leaf)
     if ($uC1.Code -eq 0 -and $uCOnly -and $uA1.Code -eq 0 -and $uAOnly -and $trailOk -and $mixOk -and
-        $allDr.Code -eq 0 -and $allDrClean -and $allIn.Code -eq 0 -and $allUp.Code -eq 0 -and $allVer.Code -eq 0 -and
+        $allDr.Code -eq 0 -and $allDrClean -and $allPrefSeeded -and $allPrefPreserved -and $allIn.Code -eq 0 -and $allUp.Code -eq 0 -and $allVer.Code -eq 0 -and
         ($allVer.Text -match 'GLOBAL_OK:') -and $noCoexConflict -and $shAllOk -and $allGone) {
         Pass 'unified-install-global-dispatcher'
     } else {

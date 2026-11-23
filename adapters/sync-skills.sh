@@ -397,3 +397,20 @@ case "$TARGET" in
     echo "note: this proves filesystem links, not Claude Code runtime skill discovery"
     ;;
 esac
+
+if ! $DRY_RUN && ! $VERIFY_ONLY && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
+  TEMPLATE_MD="${ROOT}/config/models.example.md"
+  if [[ -f "$TEMPLATE_MD" ]]; then
+    TRIM_PERS="${B3_MODELS_PERSONAL:-}"
+    TRIM_PERS="${TRIM_PERS#"${TRIM_PERS%%[![:space:]]*}"}"
+    TRIM_PERS="${TRIM_PERS%"${TRIM_PERS##*[![:space:]]}"}"
+    DEST_PREFS="${TRIM_PERS:-${HOME}/.b3/models.md}"
+    if [[ -e "$DEST_PREFS" || -L "$DEST_PREFS" ]]; then
+      echo "model_preferences=${DEST_PREFS} (kept existing)"
+    else
+      mkdir -p "$(dirname "$DEST_PREFS")"
+      cp "$TEMPLATE_MD" "$DEST_PREFS"
+      echo "model_preferences=${DEST_PREFS} (created from example)"
+    fi
+  fi
+fi
