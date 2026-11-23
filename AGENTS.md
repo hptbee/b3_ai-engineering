@@ -14,6 +14,7 @@ Personal AI Engineering System with a **host-neutral canonical core** (`rules/`,
 | Full lifecycle | `workflows/ship.md` | `/b3-ship`: preflight through build, verify, review, commit, resume |
 | Review loop | `review-loop/strategy.md` (`spec.md` contract) | `/b3-review-loop` |
 | Docs / Provenance / Evals | `docs/`, `research/`, `evals/` | Definitions, external intake, system fixtures |
+| Model configuration | `config/models.default.json`; `~/.b3/models.local.json` | Optional user model overrides (`docs/model-configuration.md`) |
 | Personal context / Adapters | `knowledge/personal/`, `adapters/` | Background (never overrides rules); host wiring |
 
 Loop (`docs/architecture.md`; conflicts: `docs/precedence.md`): `Knowledge → Skills (Rules) → Commands/Workflows → Agents → Verification/Review Loop → Lessons → Knowledge`. No `profiles/` directory.

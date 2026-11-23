@@ -24,10 +24,11 @@ b3-ai-engineering/
 ├── .cursor/rules/            Committed thin Cursor .mdc wrappers (@rules/*.md)
 ├── .agents/skills.json       Committed Antigravity 1-level skill manifest
 ├── scripts/                  Repository tooling & validation
+├── config/                   Shared JSON defaults & example overrides (models.default.json)
 └── docs/                     Architecture, standards, contracts
 ```
 
-Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md). Universal map: [`AGENTS.md`](AGENTS.md).
+Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md), [`docs/model-configuration.md`](docs/model-configuration.md). Universal map: [`AGENTS.md`](AGENTS.md).
 
 ## Why it exists
 
@@ -164,7 +165,7 @@ Rules constrain → Skills provide methods → Commands start work
  → Lessons → Knowledge
 ```
 
-**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** map the canonical core onto Cursor, Codex, Claude Code, and Antigravity; they must not fork meaning.
+**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** map the canonical core onto Cursor, Codex, Claude Code, and Antigravity; they must not fork meaning. **User model preferences** stay in Git-ignored `~/.b3/models.local.json` (and optional repo `.b3/models.local.json`) over shared [`config/models.default.json`](config/models.default.json) (`docs/model-configuration.md`).
 
 ## Research → knowledge → skills
 
