@@ -104,8 +104,8 @@ uninstall_managed_file() {
     echo "warning: skipping unmanaged ${label}: $path" >&2
     return 0
   fi
-  if ! $FORCE && [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$path")" != "$exp_sha" ]]; then
-    echo "warning: skipping modified ${label}: $path (re-run with --force to remove)" >&2
+  if ! $FORCE && { [[ -z "$exp_sha" ]] || [[ "$(sha256_file "$path")" != "$exp_sha" ]]; }; then
+    echo "warning: skipping modified or unverified ${label}: $path (re-run with --force to remove)" >&2
     SKIPPED=$((SKIPPED + 1))
     return 0
   fi
@@ -168,7 +168,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
       p="${SKILLS_DEST}/${sk}"
       path_within_root "$CURSOR_HOME" "$p" || { echo "error: refusing to uninstall path outside CursorHome: $p" >&2; exit 1; }
       if is_link_entry "$p"; then
-        if ! $FORCE && [[ -n "$exp_target" ]] && ! link_matches_expected_or_dangling "$p" "$exp_target"; then
+        if ! $FORCE && { [[ -z "$exp_target" ]] || ! link_matches_expected_or_dangling "$p" "$exp_target"; }; then
           echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
           SKIPPED=$((SKIPPED + 1))
           continue
@@ -484,7 +484,7 @@ for idx in "${SORTED_IDX[@]}"; do
     if is_link_entry "$dest"; then
       remove_link_only "$dest"
     elif [[ -d "$dest" ]]; then
-      rm -rf "$dest"
+      remove_dir_tree_safely "$dest"
     fi
     create_dir_link "$dest" "$st"
   fi

@@ -229,7 +229,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
       if is_link_entry "$p"; then
         if $M_EXISTS && ! $FORCE; then
           exp_target="$(manifest_get "link" "$lk" 2>/dev/null || true)"
-          if [[ -n "$exp_target" ]] && ! link_matches_expected_or_dangling "$p" "$exp_target"; then
+          if [[ -z "$exp_target" ]] || ! link_matches_expected_or_dangling "$p" "$exp_target"; then
             echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
             skipped=$((skipped + 1))
             continue
@@ -264,7 +264,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
       if [[ -f "$p" ]]; then
         if $M_EXISTS && ! $FORCE; then
           exp_sha="$(manifest_get "file" "$fk" 2>/dev/null || true)"
-          if [[ -n "$exp_sha" ]] && [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
+          if [[ -z "$exp_sha" ]] || [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
             echo "warning: skipping modified managed file: $p (re-run with --force to remove)" >&2
             skipped=$((skipped + 1))
             continue
@@ -632,7 +632,7 @@ for entry in "${PLUGIN_ROOT}/skills"/* "${PLUGIN_ROOT}/skills"/.[!.]* "${PLUGIN_
       remove_link_only "$entry"
     fi
   elif $FORCE && array_contains "$ename" "${ALL_SKILL_NAMES[@]}"; then
-    rm -rf "$entry"
+    remove_dir_tree_safely "$entry"
   fi
 done
 

@@ -116,7 +116,7 @@ function Remove-ReparseLinksUnder([string]$DirPath) {
     if (-not $rootItem) { return }
     if ((($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($rootItem.LinkType -in @('Junction', 'SymbolicLink'))) {
         if ($rootItem.PSIsContainer) {
-            [System.IO.Directory]::Delete($rootItem.FullName)
+            [System.IO.Directory]::Delete($rootItem.FullName, $false)
         } else {
             Remove-Item -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue
         }
@@ -126,7 +126,7 @@ function Remove-ReparseLinksUnder([string]$DirPath) {
     foreach ($child in @(Get-ChildItem -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue)) {
         if ((($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($child.LinkType -in @('Junction', 'SymbolicLink'))) {
             if ($child.PSIsContainer) {
-                [System.IO.Directory]::Delete($child.FullName)
+                [System.IO.Directory]::Delete($child.FullName, $false)
             } else {
                 Remove-Item -LiteralPath $child.FullName -Force -ErrorAction SilentlyContinue
             }

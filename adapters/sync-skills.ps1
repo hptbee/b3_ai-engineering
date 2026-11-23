@@ -104,11 +104,19 @@ function Test-LinkTarget([string]$Dest, [string]$Src) {
 }
 
 function Remove-LinkPath([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $item = Get-Item -LiteralPath $Path -Force
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return }
     if (-not (Test-IsLink $item)) { Fail "refusing to remove non-link path: $Path" }
-    & cmd.exe /c rmdir "$Path" | Out-Null
-    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $Path)) {
+    try {
+        if ($item.PSIsContainer -and ($env:OS -eq 'Windows_NT')) {
+            [System.IO.Directory]::Delete($Path, $false)
+        } else {
+            Remove-Item -LiteralPath $Path -Force
+        }
+    } catch {
+        Fail "could not remove link $Path : $($_.Exception.Message)"
+    }
+    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
         Fail "could not remove link $Path"
     }
 }

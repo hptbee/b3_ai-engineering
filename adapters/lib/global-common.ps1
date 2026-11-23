@@ -9,7 +9,11 @@ function Fail([string]$Message) {
 }
 
 function Normalize-Path([string]$PathValue) {
-    $p = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PathValue).TrimEnd('\', '/')
+    $raw = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PathValue)
+    $p = $raw.TrimEnd('\', '/')
+    if (-not $p -and $raw.StartsWith('/')) {
+        return '/'
+    }
     if ($p -match '^([a-z]):(.*)$') {
         $p = $Matches[1].ToUpperInvariant() + ':' + $Matches[2]
     }
@@ -75,13 +79,39 @@ function Remove-LinkOnly([string]$LinkPath) {
         Fail "refusing to remove non-link entry: $LinkPath"
     }
     if ($item.PSIsContainer -and ($env:OS -eq 'Windows_NT')) {
-        & cmd.exe /c rmdir "`"$LinkPath`"" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0 -or $null -ne (Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue)) {
+        try {
+            [System.IO.Directory]::Delete($LinkPath, $false)
+        } catch {
+            Fail "could not remove link directory: $LinkPath : $($_.Exception.Message)"
+        }
+        if ($null -ne (Get-Item -LiteralPath $LinkPath -Force -ErrorAction SilentlyContinue)) {
             Fail "could not remove link directory: $LinkPath"
         }
         return
     }
     Remove-Item -LiteralPath $LinkPath -Force
+}
+
+function Remove-DirTreeSafely([string]$DirPath) {
+    $item = Get-Item -LiteralPath $DirPath -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return }
+    if (Test-IsReparseLink $DirPath) {
+        Fail "refusing recursive delete of link path: $DirPath"
+    }
+    if (-not $item.PSIsContainer) {
+        Remove-Item -LiteralPath $DirPath -Force
+        return
+    }
+    foreach ($child in @(Get-ChildItem -LiteralPath $DirPath -Force)) {
+        if (Test-IsReparseLink $child.FullName) {
+            Remove-LinkOnly $child.FullName
+        } elseif ($child.PSIsContainer) {
+            Remove-DirTreeSafely $child.FullName
+        } else {
+            Remove-Item -LiteralPath $child.FullName -Force
+        }
+    }
+    [System.IO.Directory]::Delete($DirPath, $false)
 }
 
 function Create-DirLink([string]$DestPath, [string]$TargetPath) {
@@ -263,13 +293,38 @@ function Test-PathWithinRoot([string]$RootDir, [string]$CandidatePath) {
     return $candFull.StartsWith($rootPrefix, $cmp)
 }
 
+function Test-SafeHeaderPath([string]$Value) {
+    if ([string]::IsNullOrEmpty($Value)) { return $false }
+    if ($Value -cne $Value.Trim()) { return $false }
+    if ($Value -match '[\x00-\x1F\x7F]') { return $false }
+    if ($Value -match '(^|[\\/])\.\.([\\/]|$)') { return $false }
+    return (($Value -match '^/') -or ($Value -match '^[A-Za-z]:[\\/]'))
+}
+
+function Test-SafeManifestValue([string]$Kind, [string]$Value) {
+    if ([string]::IsNullOrEmpty($Value)) { return $false }
+    if ($Value -cne $Value.Trim()) { return $false }
+    if ($Value -match '[\x00-\x1F\x7F]') { return $false }
+    switch -CaseSensitive ($Kind) {
+        'command' { return ($Value -cmatch '^[0-9a-f]{64}$') }
+        'agent'   { return ($Value -cmatch '^[0-9a-f]{64}$') }
+        'file'    { return ($Value -cmatch '^[0-9a-f]{64}$') }
+        'skill'   {
+            if ($Value.Contains('|')) { return $false }
+            return (Test-SafeHeaderPath $Value)
+        }
+        'link'    {
+            if ($Value.Contains('|')) { return $false }
+            return (Test-SafeHeaderPath $Value)
+        }
+        default   { return $false }
+    }
+}
+
 function Read-B3Manifest([string]$ManifestPath) {
-    $sections = @{
-        skill   = @{}
-        command = @{}
-        agent   = @{}
-        file    = @{}
-        link    = @{}
+    $sections = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    foreach ($secName in @('skill', 'command', 'agent', 'file', 'link')) {
+        $sections[$secName] = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
     }
     $m = [PSCustomObject]@{
         Exists     = $false
@@ -283,19 +338,59 @@ function Read-B3Manifest([string]$ManifestPath) {
         return $m
     }
     $m.Exists = $true
-    $lines = ([IO.File]::ReadAllText($ManifestPath, [System.Text.Encoding]::UTF8)).Replace("`r`n", "`n").Split("`n")
+    $seenSchema = $false
+    $seenB3Home = $false
+    $seenPluginRoot = $false
+    $lines = ([IO.File]::ReadAllText($ManifestPath, [System.Text.Encoding]::UTF8)).Split("`n")
     foreach ($line in $lines) {
-        $t = $line.Trim()
-        if (-not $t) { continue }
-        if ($t -match '^schema=(.+)$') { $m.Schema = $Matches[1].Trim(); continue }
-        if ($t -match '^b3_home=(.+)$') { $m.B3Home = $Matches[1].Trim(); continue }
-        if ($t -match '^plugin_root=(.+)$') { $m.PluginRoot = $Matches[1].Trim(); continue }
-        $parts = $t -split '\|', 3
-        if ($parts.Count -lt 3 -or -not $sections.ContainsKey($parts[0]) -or -not (Test-SafeManifestKey $parts[0] $parts[1])) {
+        $raw = $line.TrimEnd("`r")
+        if ($raw -eq '') { continue }
+        if ($raw -cmatch '^schema=(.*)$') {
+            if ($seenSchema) { $m.Corrupt = $true; continue }
+            $seenSchema = $true
+            $hval = $Matches[1]
+            if ([string]::IsNullOrEmpty($hval) -or ($hval -cne $hval.Trim()) -or ($hval -match '[\x00-\x1F\x7F]')) {
+                $m.Corrupt = $true
+                continue
+            }
+            $m.Schema = $hval
+            continue
+        }
+        if ($raw -cmatch '^b3_home=(.*)$') {
+            if ($seenB3Home) { $m.Corrupt = $true; continue }
+            $seenB3Home = $true
+            $hval = $Matches[1]
+            if (-not (Test-SafeHeaderPath $hval)) {
+                $m.Corrupt = $true
+                continue
+            }
+            $m.B3Home = $hval
+            continue
+        }
+        if ($raw -cmatch '^plugin_root=(.*)$') {
+            if ($seenPluginRoot) { $m.Corrupt = $true; continue }
+            $seenPluginRoot = $true
+            $hval = $Matches[1]
+            if (-not (Test-SafeHeaderPath $hval)) {
+                $m.Corrupt = $true
+                continue
+            }
+            $m.PluginRoot = $hval
+            continue
+        }
+        $parts = $raw -split '\|', 3
+        if ($parts.Count -ne 3) {
             $m.Corrupt = $true
             continue
         }
-        $sections[$parts[0]][$parts[1]] = $parts[2]
+        $kind = $parts[0]
+        $key = $parts[1]
+        $val = $parts[2]
+        if (-not $sections.ContainsKey($kind) -or -not (Test-SafeManifestKey $kind $key) -or $sections[$kind].ContainsKey($key) -or -not (Test-SafeManifestValue $kind $val)) {
+            $m.Corrupt = $true
+            continue
+        }
+        $sections[$kind][$key] = $val
     }
     return $m
 }

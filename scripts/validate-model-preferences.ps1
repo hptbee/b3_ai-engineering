@@ -7,20 +7,11 @@ $gitBash = 'C:\Program Files\Git\bin\bash.exe'
 $hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
 if (-not $hasBash) { Write-Output "WARNING: Git Bash not found at $gitBash; Bash checks skipped" }
 $failed = 0
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 
 function Pass([string]$Name) { Write-Output "PASS $Name" }
 function FailCheck([string]$Name, [string]$Detail) { Write-Output "FAIL $Name :: $Detail"; $script:failed++ }
 function To-Posix([string]$P) { $P -replace '\\', '/' }
-
-function Remove-ReparseLinksUnder([string]$DirPath) {
-    if (-not (Test-Path -LiteralPath $DirPath)) { return }
-    foreach ($item in @(Get-ChildItem -LiteralPath $DirPath -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object { $_.FullName.Length } -Descending)) {
-        if (($item.LinkType -in @('Junction', 'SymbolicLink')) -or (($item.Attributes.ToString()) -match 'ReparsePoint')) {
-            if ($item.PSIsContainer) { & cmd.exe /c rmdir "`"$($item.FullName)`"" 2>&1 | Out-Null }
-            else { Remove-Item -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue }
-        }
-    }
-}
 
 $sandbox = Join-Path $env:TEMP ('b3-model-pref-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $sandbox | Out-Null

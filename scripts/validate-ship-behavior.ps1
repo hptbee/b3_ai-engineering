@@ -3,6 +3,7 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $failed = 0
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 
 function Pass([string]$Name) { Write-Output "PASS $Name" }
 function FailCheck([string]$Name, [string]$Detail) {
@@ -653,6 +654,90 @@ try {
         FailCheck 'guard-prune-safe' "exit=$pruneExit p1Kept=$p1Kept p2Removed=$p2Removed p3Kept=$p3Kept p4Kept=$p4Kept out=$pruneOut"
     }
 
+    # --- R003 regression: prune must never follow nested or top-level reparse junctions ---
+    $prLinkRoot = Join-Path $sandbox 'prune-reparse'
+    $prDecoyNested = Join-Path $prLinkRoot 'decoy-nested'
+    $prDecoyTop = Join-Path $prLinkRoot 'decoy-top'
+    $prDecoyRuns = Join-Path $prLinkRoot 'decoy-runs'
+    New-Item -ItemType Directory -Path $prDecoyNested, $prDecoyTop, $prDecoyRuns | Out-Null
+    Set-Content (Join-Path $prDecoyNested 'keep1.txt') 'keep1'
+    Set-Content (Join-Path $prDecoyTop 'keep2.txt') 'keep2'
+    Set-Content (Join-Path $prDecoyTop 'progress.md') "- run_status: PASS`n"
+    Set-Content (Join-Path $prDecoyRuns 'keep3.txt') 'keep3'
+
+    $prPsRepo = Join-Path $prLinkRoot 'repo-ps'
+    $pNest = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prPsRepo -Slug 'nested-pass' -Timestamp '20261122-0001').Trim()
+    $pCurPs = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prPsRepo -Slug 'current-active' -Timestamp '20261122-0003').Trim()
+    Set-Content (Join-Path $prPsRepo ".b3\ship\runs\$pNest\progress.md") "- run_status: PASS`n"
+    Set-Content (Join-Path $prPsRepo ".b3\ship\runs\$pCurPs\progress.md") "- run_status: running`n"
+    New-Item -ItemType Junction -Path (Join-Path $prPsRepo ".b3\ship\runs\$pNest\nested-junc") -Target $prDecoyNested | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $prPsRepo ".b3\ship\runs\20261122-0002-top-junc") -Target $prDecoyTop | Out-Null
+    $prPsOut = ((& powershell -NoProfile -File $guardScript prune -RepoRoot $prPsRepo -Keep 0) -join "`n")
+    $prPsExit = $LASTEXITCODE
+
+    $prLinkRepoPs = Join-Path $prLinkRoot 'repo-runs-link-ps'
+    New-Item -ItemType Directory -Path (Join-Path $prLinkRepoPs '.b3\ship') -Force | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $prLinkRepoPs '.b3\ship\runs') -Target $prDecoyRuns | Out-Null
+    $prevEapPr = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $prLinkFailPs = ((& powershell -NoProfile -File $guardScript prune -RepoRoot $prLinkRepoPs -Keep 0 2>&1) -join "`n")
+    $prLinkFailPsExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEapPr
+
+    $prRepShOk = $true
+    $gitBashPr = 'C:\Program Files\Git\bin\bash.exe'
+    if (Test-Path -LiteralPath $gitBashPr) {
+        $guardShPosixPr = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+        $prShRepo = Join-Path $prLinkRoot 'repo-sh'
+        $pNestSh = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prShRepo -Slug 'nested-pass-sh' -Timestamp '20261122-0001').Trim()
+        $pCurSh = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prShRepo -Slug 'current-active-sh' -Timestamp '20261122-0003').Trim()
+        Set-Content (Join-Path $prShRepo ".b3\ship\runs\$pNestSh\progress.md") "- run_status: PASS`n"
+        Set-Content (Join-Path $prShRepo ".b3\ship\runs\$pCurSh\progress.md") "- run_status: running`n"
+        New-Item -ItemType Junction -Path (Join-Path $prShRepo ".b3\ship\runs\$pNestSh\nested-junc") -Target $prDecoyNested | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $prShRepo ".b3\ship\runs\20261122-0002-top-junc") -Target $prDecoyTop | Out-Null
+        $prShRepoPosix = $prShRepo -replace '\\', '/'
+        $prShOut = (& $gitBashPr -c "'$guardShPosixPr' prune --repo-root '$prShRepoPosix' --keep 0") -join "`n"
+        $prShExit = $LASTEXITCODE
+
+        $prLinkRepoSh = Join-Path $prLinkRoot 'repo-runs-link-sh'
+        New-Item -ItemType Directory -Path (Join-Path $prLinkRepoSh '.b3\ship') -Force | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $prLinkRepoSh '.b3\ship\runs') -Target $prDecoyRuns | Out-Null
+        $prLinkShPosix = $prLinkRepoSh -replace '\\', '/'
+        $prevEapPrSh = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        $prLinkFailSh = (& $gitBashPr -c "'$guardShPosixPr' prune --repo-root '$prLinkShPosix' --keep 0 2>&1") -join "`n"
+        $prLinkFailShExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEapPrSh
+
+        $prRepShOk = ($prShExit -eq 0) -and ($prShOut -match 'PRUNE_OK: 1 removed') -and
+                     (-not (Test-Path -LiteralPath (Join-Path $prShRepo ".b3\ship\runs\$pNestSh"))) -and
+                     ($prLinkFailShExit -eq 1) -and ($prLinkFailSh -match 'PRUNE_FAIL: runs directory is a link')
+    }
+    $decoysIntact = (Test-Path -LiteralPath (Join-Path $prDecoyNested 'keep1.txt')) -and
+                    (Test-Path -LiteralPath (Join-Path $prDecoyTop 'keep2.txt')) -and
+                    (Test-Path -LiteralPath (Join-Path $prDecoyRuns 'keep3.txt'))
+    if ($prPsExit -eq 0 -and ($prPsOut -match 'PRUNE_OK: 1 removed') -and
+        (-not (Test-Path -LiteralPath (Join-Path $prPsRepo ".b3\ship\runs\$pNest"))) -and
+        $prLinkFailPsExit -eq 1 -and ($prLinkFailPs -match 'PRUNE_FAIL: runs directory is a link') -and
+        $prRepShOk -and $decoysIntact) {
+        Pass 'guard-prune-safe-reparse'
+    } else {
+        FailCheck 'guard-prune-safe-reparse' "ps=(${prPsExit}:$prPsOut) linkFailPs=(${prLinkFailPsExit}:$prLinkFailPs) sh=$prRepShOk decoys=$decoysIntact"
+    }
+
+    # --- R002 static regression: no shell-out junction operations in adapters and scripts ---
+    $cmdHits = @()
+    foreach ($dirRel in @('adapters', 'scripts')) {
+        foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $root $dirRel) -Recurse -File | Where-Object { $_.Extension -in @('.ps1', '.sh') })) {
+            foreach ($hit in @(Select-String -LiteralPath $f.FullName -Pattern 'cmd\.exe|cmd\s+/c|\bmklink\b' -ErrorAction SilentlyContinue)) {
+                if ($hit.Line -match '^\s*#' -or $hit.Line -match 'Select-String' -or $hit.Line -match 'no-cmd-exe') { continue }
+                $cmdHits += "$($f.Name):$($hit.LineNumber)"
+            }
+        }
+    }
+    if ($cmdHits.Count -eq 0) { Pass 'no-cmd-exe-junction-ops' }
+    else { FailCheck 'no-cmd-exe-junction-ops' "hits=$($cmdHits -join ', ')" }
+
     $mechRepo = Join-Path $sandbox 'mech-repo'
     New-Item -ItemType Directory -Path $mechRepo | Out-Null
     Push-Location $mechRepo
@@ -1245,6 +1330,7 @@ try {
 finally {
     if ($null -eq $prevModelsPersonal) { Remove-Item Env:B3_MODELS_PERSONAL -ErrorAction SilentlyContinue } else { $env:B3_MODELS_PERSONAL = $prevModelsPersonal }
     Pop-Location -ErrorAction SilentlyContinue
+    Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 

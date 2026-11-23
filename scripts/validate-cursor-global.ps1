@@ -132,8 +132,9 @@ try {
     Set-Content -LiteralPath (Join-Path $ch5 'commands\keep-me.md') "# keep`n"
     Set-Content -LiteralPath (Join-Path $ch5 'agents\b3-reviewer.md') "# user custom reviewer`n"
     Set-Content -LiteralPath (Join-Path $ch5 'skills\code-review\SKILL.md') "---`nname: code-review`ndescription: local copy`n---`n"
-    & cmd.exe /c mklink /J "`"$(Join-Path $ch5 'skills\b3-ai-engineering')`"" "`"$(Join-Path $root 'skills')`"" | Out-Null
-    $j5Exit = $LASTEXITCODE
+    $legacy5 = Join-Path $ch5 'skills\b3-ai-engineering'
+    New-Item -ItemType Junction -Path $legacy5 -Target (Join-Path $root 'skills') | Out-Null
+    $j5Ok = Test-Path -LiteralPath $legacy5 -PathType Container
     $refusePs = Invoke-PsGlobal @('install', '-CursorHome', $ch5, '-UserHome', $uh5)
     $refuseShOk = $true
     if ($hasBash) {
@@ -147,18 +148,18 @@ try {
     $ver5 = Invoke-PsGlobal @('verify', '-CursorHome', $ch5, '-UserHome', $uh5)
     $migratedGone = -not (Test-Path -LiteralPath (Join-Path $ch5 'skills\b3-ai-engineering'))
     $keepKept5 = Test-Path -LiteralPath (Join-Path $ch5 'commands\keep-me.md')
-    if ($j5Exit -eq 0 -and $refusePs.Code -eq 1 -and $refuseShOk -and $untouchedAfterRefuse -and
+    if ($j5Ok -and $refusePs.Code -eq 1 -and $refuseShOk -and $untouchedAfterRefuse -and
         $forceIn.Code -eq 0 -and $ver5.Code -eq 0 -and $migratedGone -and $keepKept5) {
         Pass 'cursor-global-conflict-protection'
     } else {
-        FailCheck 'cursor-global-conflict-protection' "j=$j5Exit ref=$($refusePs.Code) sh=$refuseShOk unt=$untouchedAfterRefuse f=$($forceIn.Code) ver=$($ver5.Code) mig=$migratedGone"
+        FailCheck 'cursor-global-conflict-protection' "j=$j5Ok ref=$($refusePs.Code) sh=$refuseShOk unt=$untouchedAfterRefuse f=$($forceIn.Code) ver=$($ver5.Code) mig=$migratedGone"
     }
 
     # --- 6. cursor-global-stale-and-broken-links ---
     $wrongTarget = Join-Path $sandbox 'wrong-skill-dir'
     New-Item -ItemType Directory -Path $wrongTarget | Out-Null
-    & cmd.exe /c rmdir "`"$(Join-Path $ch2 'skills\debugging')`"" | Out-Null
-    & cmd.exe /c mklink /J "`"$(Join-Path $ch2 'skills\debugging')`"" "`"$wrongTarget`"" | Out-Null
+    [System.IO.Directory]::Delete((Join-Path $ch2 'skills\debugging'), $false)
+    New-Item -ItemType Junction -Path (Join-Path $ch2 'skills\debugging') -Target $wrongTarget | Out-Null
     Add-Content -LiteralPath (Join-Path $ch2 'commands\b3-debug.md') "`n<!-- tampered -->"
     $verBadPs = Invoke-PsGlobal @('verify', '-CursorHome', $ch2, '-UserHome', $uh2)
     $verBadShOk = $true
@@ -273,7 +274,7 @@ try {
     $liveCuTarget = Join-Path $uh11 'live-cu-target'
     $liveCuLink = Join-Path $uh11 'live-cu-link'
     New-Item -ItemType Directory -Path $liveCuTarget -Force | Out-Null
-    & cmd.exe /c mklink /J "`"$liveCuLink`"" "`"$liveCuTarget`"" | Out-Null
+    New-Item -ItemType Junction -Path $liveCuLink -Target $liveCuTarget | Out-Null
     $psLiveIn = Invoke-PsGlobal @('install', '-CursorHome', $liveCuLink, '-UserHome', $uh11, '-Force')
     $psLiveVer = Invoke-PsGlobal @('verify', '-CursorHome', $liveCuLink, '-UserHome', $uh11)
     $psLiveUn = Invoke-PsGlobal @('uninstall', '-CursorHome', $liveCuLink, '-UserHome', $uh11)
@@ -291,7 +292,7 @@ try {
     $subCu = Join-Path $uh11 'sub-cu'
     $extCmd = Join-Path $uh11 'ext-cmd'
     New-Item -ItemType Directory -Path $subCu, $extCmd | Out-Null
-    & cmd.exe /c mklink /J "`"$(Join-Path $subCu 'commands')`"" "`"$extCmd`"" | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $subCu 'commands') -Target $extCmd | Out-Null
     $psSubCmd = Invoke-PsGlobal @('install', '-CursorHome', $subCu, '-UserHome', $uh11, '-Force')
     $shSubCmdOk = $true
     if ($hasBash) {
@@ -314,8 +315,8 @@ try {
     New-Item -ItemType Directory -Path $dbgTgt12 -Force | Out-Null
     $in12 = Invoke-PsGlobal @('install', '-CursorHome', $ch12, '-UserHome', $uh12)
     Add-Content -LiteralPath (Join-Path $ch12 'commands\b3-plan.md') "`n<!-- user edit -->"
-    & cmd.exe /c rmdir "`"$(Join-Path $ch12 'skills\debugging')`"" | Out-Null
-    & cmd.exe /c mklink /J "`"$(Join-Path $ch12 'skills\debugging')`"" "`"$dbgTgt12`"" | Out-Null
+    [System.IO.Directory]::Delete((Join-Path $ch12 'skills\debugging'), $false)
+    New-Item -ItemType Junction -Path (Join-Path $ch12 'skills\debugging') -Target $dbgTgt12 | Out-Null
     $unConf12 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch12, '-UserHome', $uh12)
     $keptMod12 = ((Get-Content -LiteralPath (Join-Path $ch12 'commands\b3-plan.md') -Raw) -match 'user edit') -and
                  (Test-Path -LiteralPath (Join-Path $ch12 'skills\debugging')) -and
@@ -336,8 +337,8 @@ try {
         $uh12sp = $uh12s -replace '\\', '/'
         $shIn12 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch12sp' --user-home '$uh12sp'"
         Add-Content -LiteralPath (Join-Path $ch12s 'commands\b3-plan.md') "`n<!-- user edit -->"
-        & cmd.exe /c rmdir "`"$(Join-Path $ch12s 'skills\debugging')`"" | Out-Null
-        & cmd.exe /c mklink /J "`"$(Join-Path $ch12s 'skills\debugging')`"" "`"$dbgTgt12s`"" | Out-Null
+        [System.IO.Directory]::Delete((Join-Path $ch12s 'skills\debugging'), $false)
+        New-Item -ItemType Junction -Path (Join-Path $ch12s 'skills\debugging') -Target $dbgTgt12s | Out-Null
         $shConf12 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch12sp' --user-home '$uh12sp'"
         $shKept12 = ((Get-Content -LiteralPath (Join-Path $ch12s 'commands\b3-plan.md') -Raw) -match 'user edit') -and
                     (Test-Path -LiteralPath (Join-Path $ch12s 'skills\debugging')) -and
@@ -453,6 +454,139 @@ try {
         Pass 'cursor-global-manifest-path-traversal'
     } else {
         FailCheck 'cursor-global-manifest-path-traversal' "in=$($in14.Code) un=$($unTrav14.Code) uf=$($unForceTrav14.Code) ver=$($verTrav14.Code) up=$($upTrav14.Code) kept=$kept14 sh=$sh14Ok"
+    }
+
+    # --- 15. cursor-global-special-chars-no-cmd-injection (R002) ---
+    $uh15 = Join-Path $sandbox 'u15 amp & %TEMP% dir'
+    $ch15 = Join-Path $uh15 '.cursor'
+    $in15 = Invoke-PsGlobal @('install', '-CursorHome', $ch15, '-UserHome', $uh15)
+    $ver15 = Invoke-PsGlobal @('verify', '-CursorHome', $ch15, '-UserHome', $uh15)
+    $un15 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch15, '-UserHome', $uh15)
+    $sh15Ok = $true
+    if ($hasBash) {
+        $uh15s = Join-Path $sandbox 'u15sh amp & %TEMP% dir'
+        $ch15s = Join-Path $uh15s '.cursor'
+        $ch15sp = $ch15s -replace '\\', '/'
+        $uh15sp = $uh15s -replace '\\', '/'
+        $shIn15 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch15sp' --user-home '$uh15sp'"
+        $shVer15 = Invoke-ShGlobal $instShPosix "verify --cursor-home '$ch15sp' --user-home '$uh15sp'"
+        $shUn15 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch15sp' --user-home '$uh15sp'"
+        $sh15Ok = ($shIn15.Code -eq 0) -and ($shVer15.Code -eq 0) -and ($shUn15.Code -eq 0) -and
+                  (-not (Test-Path -LiteralPath (Join-Path $ch15s 'skills\debugging'))) -and
+                  (-not (Test-Path -LiteralPath (Join-Path $ch15s '.b3-global-manifest')))
+    }
+    if ($in15.Code -eq 0 -and $ver15.Code -eq 0 -and $un15.Code -eq 0 -and
+        (-not (Test-Path -LiteralPath (Join-Path $ch15 'skills\debugging'))) -and
+        (-not (Test-Path -LiteralPath (Join-Path $ch15 '.b3-global-manifest'))) -and $sh15Ok) {
+        Pass 'cursor-global-special-chars-no-cmd-injection'
+    } else {
+        FailCheck 'cursor-global-special-chars-no-cmd-injection' "in=$($in15.Code) ver=$($ver15.Code) un=$($un15.Code) sh=$sh15Ok"
+    }
+
+    # --- 16. cursor-global-force-nested-junction-safe (R003) ---
+    $uh16 = Join-Path $sandbox 'u16'
+    $ch16 = Join-Path $uh16 '.cursor'
+    $decoy16 = Join-Path $uh16 'external-decoy'
+    New-Item -ItemType Directory -Path $decoy16, (Join-Path $ch16 'skills\debugging') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $decoy16 'keep.txt') "keep decoy`n"
+    Set-Content -LiteralPath (Join-Path $ch16 'skills\debugging\SKILL.md') "---`nname: debugging`ndescription: local`n---`n"
+    Set-Content -LiteralPath (Join-Path $ch16 'skills\debugging\.hidden-note') "dotfile`n"
+    New-Item -ItemType Junction -Path (Join-Path $ch16 'skills\debugging\nested-link') -Target $decoy16 | Out-Null
+    $f16 = Invoke-PsGlobal @('install', '-CursorHome', $ch16, '-UserHome', $uh16, '-Force')
+    $v16 = Invoke-PsGlobal @('verify', '-CursorHome', $ch16, '-UserHome', $uh16)
+    $decoyKept16 = Test-Path -LiteralPath (Join-Path $decoy16 'keep.txt') -PathType Leaf
+    $sh16Ok = $true
+    if ($hasBash) {
+        $uh16s = Join-Path $sandbox 'u16sh'
+        $ch16s = Join-Path $uh16s '.cursor'
+        $decoy16s = Join-Path $uh16s 'external-decoy-sh'
+        New-Item -ItemType Directory -Path $decoy16s, (Join-Path $ch16s 'skills\debugging') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $decoy16s 'keep.txt') "keep decoy sh`n"
+        Set-Content -LiteralPath (Join-Path $ch16s 'skills\debugging\SKILL.md') "---`nname: debugging`ndescription: local`n---`n"
+        Set-Content -LiteralPath (Join-Path $ch16s 'skills\debugging\.hidden-note') "dotfile`n"
+        New-Item -ItemType Junction -Path (Join-Path $ch16s 'skills\debugging\nested-link') -Target $decoy16s | Out-Null
+        $ch16sp = $ch16s -replace '\\', '/'
+        $uh16sp = $uh16s -replace '\\', '/'
+        $shF16 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch16sp' --user-home '$uh16sp' --force"
+        $shV16 = Invoke-ShGlobal $instShPosix "verify --cursor-home '$ch16sp' --user-home '$uh16sp'"
+        $sh16Ok = ($shF16.Code -eq 0) -and ($shV16.Code -eq 0) -and (Test-Path -LiteralPath (Join-Path $decoy16s 'keep.txt') -PathType Leaf)
+    }
+    if ($f16.Code -eq 0 -and $v16.Code -eq 0 -and $decoyKept16 -and $sh16Ok) {
+        Pass 'cursor-global-force-nested-junction-safe'
+    } else {
+        FailCheck 'cursor-global-force-nested-junction-safe' "f=$($f16.Code) v=$($v16.Code) decoy=$decoyKept16 sh=$sh16Ok"
+    }
+
+    # --- 17. cursor-global-manifest-hardening (R025) ---
+    $uh17 = Join-Path $sandbox 'u17'
+    $ch17 = Join-Path $uh17 '.cursor'
+    $in17 = Invoke-PsGlobal @('install', '-CursorHome', $ch17, '-UserHome', $uh17)
+    $m17Path = Join-Path $ch17 '.b3-global-manifest'
+    $m17Clean = [System.IO.File]::ReadAllText($m17Path, (New-Object System.Text.UTF8Encoding($false)))
+    $validSha17 = ('a' * 64)
+    $badVariants17 = @(
+        @{ Name = 'empty-hash'; Body = ($m17Clean -replace '(?m)^(command\|b3-plan\.md\|).*$', '$1') },
+        @{ Name = 'non-hex-hash'; Body = ($m17Clean -replace '(?m)^(command\|b3-plan\.md\|).*$', '${1}not-a-sha256') },
+        @{ Name = 'empty-target'; Body = ($m17Clean -replace '(?m)^(skill\|debugging\|).*$', '$1') },
+        @{ Name = 'rel-target'; Body = ($m17Clean -replace '(?m)^(skill\|debugging\|).*$', '${1}relative/path') },
+        @{ Name = 'trav-target'; Body = ($m17Clean -replace '(?m)^(skill\|debugging\|).*$', '${1}C:/ok/../escape') },
+        @{ Name = 'pipe-target'; Body = ($m17Clean -replace '(?m)^(skill\|debugging\|).*$', '${1}C:/ok|extra') },
+        @{ Name = 'dup-entry'; Body = ($m17Clean.TrimEnd("`n") + "`ncommand|b3-plan.md|$validSha17`n") },
+        @{ Name = 'empty-schema'; Body = ($m17Clean -replace '(?m)^schema=.*$', 'schema=') },
+        @{ Name = 'dup-header'; Body = ($m17Clean.TrimEnd("`n") + "`nb3_home=C:/other`n") }
+    )
+    $psHard17Ok = ($in17.Code -eq 0)
+    $hard17FailDetail = ''
+    foreach ($bv in $badVariants17) {
+        [System.IO.File]::WriteAllText($m17Path, $bv.Body, (New-Object System.Text.UTF8Encoding($false)))
+        $vBad = Invoke-PsGlobal @('verify', '-CursorHome', $ch17, '-UserHome', $uh17)
+        $uBad = Invoke-PsGlobal @('update', '-CursorHome', $ch17, '-UserHome', $uh17)
+        $xBad = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch17, '-UserHome', $uh17)
+        if ($vBad.Code -eq 0 -or $uBad.Code -eq 0 -or $xBad.Code -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $ch17 'commands\b3-plan.md'))) {
+            $psHard17Ok = $false
+            $hard17FailDetail = "ps:$($bv.Name)=v:$($vBad.Code)/u:$($uBad.Code)/x:$($xBad.Code)"
+            break
+        }
+    }
+    $shHard17Ok = $true
+    if ($hasBash) {
+        $uh17s = Join-Path $sandbox 'u17sh'
+        $ch17s = Join-Path $uh17s '.cursor'
+        $ch17sp = $ch17s -replace '\\', '/'
+        $uh17sp = $uh17s -replace '\\', '/'
+        $shIn17 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch17sp' --user-home '$uh17sp'"
+        $m17sPath = Join-Path $ch17s '.b3-global-manifest'
+        $m17sClean = [System.IO.File]::ReadAllText($m17sPath, (New-Object System.Text.UTF8Encoding($false)))
+        if ($shIn17.Code -ne 0) { $shHard17Ok = $false; $hard17FailDetail += " shIn=$($shIn17.Code)" }
+        else {
+            $shBadVariants17 = @(
+                @{ Name = 'empty-hash'; Body = ($m17sClean -replace '(?m)^(command\|b3-plan\.md\|).*$', '$1') },
+                @{ Name = 'non-hex-hash'; Body = ($m17sClean -replace '(?m)^(command\|b3-plan\.md\|).*$', '${1}not-a-sha256') },
+                @{ Name = 'empty-target'; Body = ($m17sClean -replace '(?m)^(skill\|debugging\|).*$', '$1') },
+                @{ Name = 'rel-target'; Body = ($m17sClean -replace '(?m)^(skill\|debugging\|).*$', '${1}relative/path') },
+                @{ Name = 'trav-target'; Body = ($m17sClean -replace '(?m)^(skill\|debugging\|).*$', '${1}C:/ok/../escape') },
+                @{ Name = 'pipe-target'; Body = ($m17sClean -replace '(?m)^(skill\|debugging\|).*$', '${1}C:/ok|extra') },
+                @{ Name = 'dup-entry'; Body = ($m17sClean.TrimEnd("`n") + "`ncommand|b3-plan.md|$validSha17`n") },
+                @{ Name = 'empty-schema'; Body = ($m17sClean -replace '(?m)^schema=.*$', 'schema=') },
+                @{ Name = 'dup-header'; Body = ($m17sClean.TrimEnd("`n") + "`nb3_home=C:/other`n") }
+            )
+            foreach ($bv in $shBadVariants17) {
+                [System.IO.File]::WriteAllText($m17sPath, $bv.Body, (New-Object System.Text.UTF8Encoding($false)))
+                $sv = Invoke-ShGlobal $instShPosix "verify --cursor-home '$ch17sp' --user-home '$uh17sp'"
+                $su = Invoke-ShGlobal $instShPosix "update --cursor-home '$ch17sp' --user-home '$uh17sp'"
+                $sx = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch17sp' --user-home '$uh17sp'"
+                if ($sv.Code -eq 0 -or $su.Code -eq 0 -or $sx.Code -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $ch17s 'commands\b3-plan.md'))) {
+                    $shHard17Ok = $false
+                    $hard17FailDetail += " sh:$($bv.Name)=v:$($sv.Code)/u:$($su.Code)/x:$($sx.Code)"
+                    break
+                }
+            }
+        }
+    }
+    if ($psHard17Ok -and $shHard17Ok) {
+        Pass 'cursor-global-manifest-hardening'
+    } else {
+        FailCheck 'cursor-global-manifest-hardening' $hard17FailDetail
     }
 }
 finally {
