@@ -1,5 +1,5 @@
 id: ship-agent-naming-host-fallback-001
-artifact: agents/dispatch-naming.md
+artifact: workflows/references/dispatch-naming.md
 intent: Stable B3 logical aliases must not compromise dispatch or resume when the host cannot accept custom names
 scenario: |
   T002 and T003 are ready for independent implementation. A host accepting custom names receives b3-impl-t002 and b3-impl-t003, and the orchestrator saves the distinct returned agent IDs.

@@ -1215,17 +1215,18 @@ try {
     }
 
     # Naming is a dispatch-only contract, not a globally injected rule.
-    $namingFile = Join-Path $root 'agents\dispatch-naming.md'
+    $namingFile = Join-Path $root 'workflows\references\dispatch-naming.md'
     $namingText = if (Test-Path -LiteralPath $namingFile) { Get-Content -LiteralPath $namingFile -Raw } else { '' }
     $shipNamingText = Get-Content -LiteralPath (Join-Path $root 'workflows\ship.md') -Raw
     $reviewNamingText = Get-Content -LiteralPath (Join-Path $root 'review-loop\strategy.md') -Raw
     $namingOk = (-not (Test-Path -LiteralPath (Join-Path $root 'rules\agent-naming.md'))) -and
                 (-not (Test-Path -LiteralPath (Join-Path $root '.cursor\rules\agent-naming.mdc'))) -and
+                (-not (Test-Path -LiteralPath (Join-Path $root 'agents\dispatch-naming.md'))) -and
                 ($namingText -match 'b3-impl-<task-id>') -and
                 ($namingText -match 'host-returned agent ID') -and
                 ($namingText -match 'only if the host API supports custom names') -and
-                ($shipNamingText -match 'agents/dispatch-naming.md') -and
-                ($reviewNamingText -match 'agents/dispatch-naming.md')
+                ($shipNamingText -match 'references/dispatch-naming\.md') -and
+                ($reviewNamingText -match 'workflows/references/dispatch-naming\.md')
     if ($namingOk) { Pass 'agent-naming-dispatch-contract' }
     else { FailCheck 'agent-naming-dispatch-contract' 'global rule, fallback, ID separation or dispatch link missing' }
 
