@@ -296,7 +296,7 @@ function New-WorkingTreeOid([string]$Root, [string]$FailPrefix) {
         if (Test-Path -LiteralPath $realIdx -PathType Leaf) {
             [IO.File]::Copy($realIdx, $tmpIdx, $true)
         }
-        $addRes = Invoke-GitCommand $Root @('add', '-A') -ExtraEnv $envMap
+        $addRes = Invoke-GitCommand $Root @('add', '-A', '--', '.', ':(exclude).b3/ship', ':(exclude).b3/autodev') -ExtraEnv $envMap
         if ($addRes.ExitCode -ne 0) {
             $detail = if ($addRes.StdErr.Trim()) { $addRes.StdErr.Trim() } else { $addRes.StdOut.Trim() }
             Fail "${FailPrefix}: git add -A failed: $detail" 1
