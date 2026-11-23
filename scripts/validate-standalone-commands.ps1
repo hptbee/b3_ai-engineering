@@ -317,15 +317,27 @@ try {
     $implSingleHop = ($cmdImpl -match 'do \*\*not\*\* eagerly load .*feature-implementation\.md') -and ($csImpl -match 'skip `workflows/feature-implementation\.md`')
     $planOk = ($cmdPlan -match 'plan-only') -and ($skPlan -match 'risk-adaptive depth') -and ($skPlan -match 'Readiness Check')
     $dbgOk = ($skDbg -match 'broken invariant') -and ($skDbg -match 'sibling entry points') -and ($skDbg -match 'regression test') -and ($skDbg -match '3 failed fix attempts')
-    $revOk = ($cmdRev -match 'symbol-check') -and ($skRev -match 'Scope \(delta-first\)') -and ($skRev -match 'never auto-fix or start `/b3-review-loop`')
+    $revTplPath = Join-Path $root 'skills\engineering\code-review\references\review-template.md'
+    $csRev = Get-Content -LiteralPath (Join-Path $root 'adapters\command-skills\b3-review\SKILL.md') -Raw
+    $ghPrRef = Get-Content -LiteralPath (Join-Path $root 'skills\engineering\code-review\references\github-pr-review.md') -Raw
+    $agentsRaw = Get-Content -LiteralPath (Join-Path $root 'AGENTS.md') -Raw
+    $revTplOk = (Test-Path -LiteralPath $revTplPath -PathType Leaf) -and
+                ($cmdRev -match 'review-template\.md') -and
+                ($csRev -match 'review-template\.md') -and
+                ($skRev -match 'review-template\.md') -and
+                ($ghPrRef -match 'review-template\.md') -and
+                ($agentsRaw -match 'skills/engineering/code-review/references/review-template\.md')
+    $implSingleTaskOk = ($cmdImpl -match 'dispatch-naming\.md') -and ($cmdImpl -match 'b3-impl-t00N') -and ($cmdImpl -match 'B3_MODELS_PERSONAL') -and
+                        ($csImpl -match 'dispatch-naming\.md') -and ($csImpl -match 'b3-impl-t00N') -and ($csImpl -match 'B3_MODELS_PERSONAL')
+    $revOk = ($cmdRev -match 'symbol-check') -and ($skRev -match 'Scope \(delta-first\)') -and ($skRev -match 'never auto-fix or start `/b3-review-loop`') -and $revTplOk
     $rlBytes = ([System.Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes((Join-Path $root 'review-loop\strategy.md')))).Replace("`r", '').Length
     $rlOk = ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and ($strat -match 'dispatch fresh `b3-fixer`') -and ($rlBytes -le 5400)
     $verOk = ($cmdVer -match 'verify-run') -and ($skVer -match 'verify-check') -and ($skVer -match 'untrusted provenance')
 
-    if ($implDescNoShip -and $implSingleHop -and $planOk -and $dbgOk -and $revOk -and $rlOk -and $verOk) {
+    if ($implDescNoShip -and $implSingleHop -and $implSingleTaskOk -and $planOk -and $dbgOk -and $revOk -and $rlOk -and $verOk) {
         Pass 'standalone-command-contracts'
     } else {
-        FailCheck 'standalone-command-contracts' "desc=$implDescNoShip hop=$implSingleHop plan=$planOk dbg=$dbgOk rev=$revOk rl=$rlOk($rlBytes) ver=$verOk"
+        FailCheck 'standalone-command-contracts' "desc=$implDescNoShip hop=$implSingleHop singleTask=$implSingleTaskOk plan=$planOk dbg=$dbgOk rev=$revOk rl=$rlOk($rlBytes) ver=$verOk"
     }
 }
 finally {

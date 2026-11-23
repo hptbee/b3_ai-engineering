@@ -13,6 +13,7 @@ Progressive-disclosure references for `/b3-ship` (opened only on template creati
 - [`references/ship-templates.md`](references/ship-templates.md) — `master-plan.md` (`Shared contracts`), `progress.md` (`impl_agent`), risk-adaptive `detailed` matrices (`failure_matrix`, `write_paths`, `io_budget`), Context Packets, and `approach/T00N.md` schemas
 - [`references/ship-resume.md`](references/ship-resume.md) — Scenario C Git-verified resume, freshness/`verify-check` validation, and read-only `.b3/autodev/` legacy fallback
 - [`references/dispatch-naming.md`](references/dispatch-naming.md) — on-demand subagent logical alias & host-safe fallback contract (loaded only at dispatch)
+- [`references/pr-template.md`](references/pr-template.md) — shared PR description template (`Summary`, `Changes`, `Verification`, `Risks & Compatibility`, `Checklist`) for `gh pr create` / `gh pr edit`
 - Deterministic helper CLI (not an orchestrator): [`../scripts/README.md`](../scripts/README.md) (`b3-guard.{ps1,sh}`)
 - Visual diagrams & walkthrough: [`../docs/ship-and-review-guide.md`](../docs/ship-and-review-guide.md)
 

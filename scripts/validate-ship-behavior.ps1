@@ -221,10 +221,13 @@ try {
         'b3-guard'
     )
     $missing = @($needles | Where-Object { $wfCorpus -notlike "*$_*" })
-    $linksOk = ($wfMain -match 'references/ship-resume\.md') -and ($wfMain -match 'references/ship-templates\.md')
+    $prTplExists = Test-Path -LiteralPath (Join-Path $root 'workflows\references\pr-template.md') -PathType Leaf
+    $agentsRaw = Get-Content (Join-Path $root 'AGENTS.md') -Raw
+    $linksOk = ($wfMain -match 'references/ship-resume\.md') -and ($wfMain -match 'references/ship-templates\.md') -and ($wfMain -match 'references/pr-template\.md') -and ($agentsRaw -match 'workflows/references/pr-template\.md') -and $prTplExists
+    $spawnEveryOk = ($wfMain -notmatch 'on `>=2` ready') -and ($wfMain -match 'for \*\*every\*\* ready task')
     $sizeOk = ($wfMainLines -le 300)
-    if ($missing.Count -eq 0 -and $linksOk -and $sizeOk) { Pass 'workflow-recipes' }
-    else { FailCheck 'workflow-recipes' "missing=$($missing -join ', ') links=$linksOk lines=$wfMainLines" }
+    if ($missing.Count -eq 0 -and $linksOk -and $spawnEveryOk -and $sizeOk) { Pass 'workflow-recipes' }
+    else { FailCheck 'workflow-recipes' "missing=$($missing -join ', ') links=$linksOk prTpl=$prTplExists spawnEvery=$spawnEveryOk lines=$wfMainLines" }
 
     $inlineOk = ($wfCorpus -match '(?m)^\s*- inspected:') -and ($wfCorpus -match '(?m)^\s*- files:') -and ($wfCorpus -match '(?m)^\s*- changes:') -and ($wfCorpus -match '(?m)^\s*- verification:') -and ($wfCorpus -match '(?m)^\s*- watched_paths:') -and ($wfCorpus -match '(?m)^\s*- task_spec_fingerprint:') -and ($wfCorpus -match '(?m)^\s*- readiness: draft') -and ($wfCorpus -match '(?m)^\s*- reuse:') -and ($wfCorpus -match '(?m)^\s*- obsoletes:') -and ($wfCorpus -match '(?m)^\s*- read_only_deps:')
     if ($inlineOk) { Pass 'inline-template-fields' }
