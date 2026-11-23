@@ -10,7 +10,7 @@ Reconcile [`../ship.md`](../ship.md) checkpoints against Git before acting (prog
 
 ## 2. Verify completed & in-progress tasks
 
-1. Task is `completed` **only** when its recorded SHA is a valid `commit`, descends into `HEAD` (`git merge-base --is-ancestor <sha> HEAD`), is unique here, descends from `task_base`/`run_base_sha`, and satisfies ACs (reuse `verify-check` or re-run checks).
+1. Task is `completed` **only** when its recorded SHA is a valid `commit`, descends into `HEAD` (`git merge-base --is-ancestor <sha> HEAD`), is unique here, descends from `task_base`/`run_base_sha`, and satisfies ACs (reuse `verify-check` across forward ancestry when relevant paths stay unchanged, else re-run checks).
 2. For `in_progress` uncommitted edits: keep valid work (never `git reset`/duplicate); run `verify-check` on `{RUN_DIR}/evidence/T00N.verify` or re-verify.
 
 ## 3. Approach freshness
