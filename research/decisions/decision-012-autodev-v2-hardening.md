@@ -5,11 +5,11 @@
 `workflows/autonomous-development.md` grew to 464 lines and had two internal issues alongside several workflow ergonomics gaps:
 
 1. **Internal drift and gaps:** Product repos changed to ignore `.b3/autodev/` instead of `.b3/` so `.b3/home` can commit (`38e0f45`), while the workflow still mandated ignoring `.b3/`; pre-existing dirty files were permitted on entry yet swept into task `git diff` / final dirty-tree checks; and there was no pre-`T001` baseline probe of canonical repo checks.
-2. **External pattern evaluation:** Community `/leader` (`ccc-skills`) planning and task-decomposition notes (reviewed 2026-11-21) surfaced useful shift-left controls (baseline CI/hook probes, explicit `REUSE` / `OBSOLETES`, numbered acceptance criteria, invariants, conditional data/IO risk checks, owned vs read-only files, upfront sizing warning) mixed with heavy multi-agent debate and broad stop gates.
+2. **Workflow pattern evaluation:** Evaluating external multi-agent planning and task-decomposition workflows surfaced useful shift-left controls (baseline CI/hook probes, explicit `REUSE` / `OBSOLETES`, numbered acceptance criteria, invariants, conditional data/IO risk checks, owned vs read-only files, upfront sizing warning) mixed with heavy multi-agent debate and broad stop gates.
 
 ## Options considered
 
-1. Import `/leader` multi-matrix Concept Pack, 3-lens Debate Round, parallel wave execution, and high-risk pause gates verbatim.
+1. Import heavyweight multi-matrix planning packs, multi-round explorer debate, parallel wave execution, and high-risk pause gates verbatim.
 2. **ADAPT** the high-signal shift-left invariants and deterministic Git/fingerprint checks into B3's single-orchestrator workflow, split templates and resume details via progressive disclosure, and **REJECT** debate/stop-gate bloat.
 
 ## Decision
@@ -30,9 +30,9 @@
 ### REJECT
 
 - Custom advisory lint rules overriding product repo linter config (`docs/precedence.md`).
-- Hardcoding `QB-1..QB-7` boilerplate into every plan (`rules/` + `review-loop/spec.md` already carry quality bars).
-- Mandatory 4-matrix Concept Pack on `inline` / `notes` tasks.
-- Multi-round 3-lens Debate Round and broad stop-for-approval gates on `>= 4 tasks` or ordinary `auth`/`migration`/`shared` code ([`../rejected/reject-mandatory-debate-and-broad-autodev-gates.md`](../rejected/reject-mandatory-debate-and-broad-autodev-gates.md)).
+- Hardcoding repeated per-plan quality-bar boilerplate into every plan (`rules/` + `review-loop/spec.md` already carry quality bars).
+- Mandatory multi-matrix planning packs on `inline` / `notes` tasks.
+- Multi-round explorer debate and broad stop-for-approval gates on `>= 4 tasks` or ordinary `auth`/`migration`/`shared` code ([`../rejected/reject-mandatory-debate-and-broad-autodev-gates.md`](../rejected/reject-mandatory-debate-and-broad-autodev-gates.md)).
 
 ### DEFER
 
