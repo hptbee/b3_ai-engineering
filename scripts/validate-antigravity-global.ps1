@@ -1,86 +1,15 @@
 # Behavioral validation suite for global Antigravity plugin lifecycle and unified adapters/install-global dispatcher.
-# Exercises install, verify (independent capability surfaces), update, dry-run, uninstall, drift/broken links, spaces, coexistence, and dispatcher parity across PowerShell and Git Bash.
+# Exercises install, verify (independent capability surfaces), update, dry-run, uninstall, drift/broken links, spaces, coexistence, manifest corruption, and dispatcher parity across PowerShell and Git Bash.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-antigravity-global.ps1
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
+
 $root = Split-Path -Parent $PSScriptRoot
 $agPs = Join-Path $root 'adapters\antigravity\install-plugin.ps1'
 $agShPosix = ($root -replace '\\', '/') + '/adapters/antigravity/install-plugin.sh'
 $uniPs = Join-Path $root 'adapters\install-global.ps1'
 $uniShPosix = ($root -replace '\\', '/') + '/adapters/install-global.sh'
-$gitBash = 'C:\Program Files\Git\bin\bash.exe'
-if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
-    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
-    if ($bashCmd -and ($bashCmd.Source -notmatch '[\\/]Windows[\\/]System32[\\/]bash\.exe$')) {
-        $gitBash = $bashCmd.Source
-    }
-}
-$hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
-if (-not $hasBash) {
-    Write-Output "WARNING: bash not found; cross-shell .sh checks skipped (INCOMPLETE)"
-}
-$failed = 0
-
-function Pass([string]$Name) { Write-Output "PASS $Name" }
-function FailCheck([string]$Name, [string]$Detail) {
-    Write-Output "FAIL $Name :: $Detail"
-    $script:failed++
-}
-
-function Invoke-PsScript([string]$ScriptPath, [string[]]$ScriptArgs) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ScriptArgs 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function Invoke-ShScript([string]$ScriptPosix, [string]$ArgsLine) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & $gitBash -c "'$ScriptPosix' $ArgsLine" 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function Copy-B3Snapshot([string]$DestDir) {
-    New-Item -ItemType Directory -Path $DestDir | Out-Null
-    foreach ($sub in @('skills', 'commands', 'agents', 'rules', 'workflows')) {
-        Copy-Item -LiteralPath (Join-Path $root $sub) -Destination (Join-Path $DestDir $sub) -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path (Join-Path $DestDir 'adapters\antigravity') -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $DestDir 'adapters\cursor') -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\command-skills') -Destination (Join-Path $DestDir 'adapters\command-skills') -Recurse -Force
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\install-global.ps1') -Destination (Join-Path $DestDir 'adapters\install-global.ps1') -Force
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\install-global.sh') -Destination (Join-Path $DestDir 'adapters\install-global.sh') -Force
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -Destination (Join-Path $DestDir 'adapters\antigravity\install-plugin.ps1') -Force
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\antigravity\install-plugin.sh') -Destination (Join-Path $DestDir 'adapters\antigravity\install-plugin.sh') -Force
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\cursor\install-global.ps1') -Destination (Join-Path $DestDir 'adapters\cursor\install-global.ps1') -Force
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\cursor\install-global.sh') -Destination (Join-Path $DestDir 'adapters\cursor\install-global.sh') -Force
-}
-
-function Remove-ReparseLinksUnder([string]$DirPath) {
-    if (-not (Test-Path -LiteralPath $DirPath)) { return }
-    $all = @(Get-ChildItem -LiteralPath $DirPath -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object { $_.FullName.Length } -Descending)
-    foreach ($item in $all) {
-        if (($item.LinkType -in @('Junction', 'SymbolicLink')) -or (($item.Attributes.ToString()) -match 'ReparsePoint')) {
-            if ($item.PSIsContainer) {
-                & cmd.exe /c rmdir "`"$($item.FullName)`"" 2>&1 | Out-Null
-            } else {
-                Remove-Item -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-}
+$hasBash = $script:HasBash
 
 $expectedCoreSkills = @(Get-ChildItem -LiteralPath (Join-Path $root 'skills') -Recurse -Filter 'SKILL.md' -File).Count
 $expectedCmdSkills = @(Get-ChildItem -LiteralPath (Join-Path $root 'adapters\command-skills') -Recurse -Filter 'SKILL.md' -File).Count
@@ -178,7 +107,7 @@ try {
 
     # --- 4. ag-global-update-and-prune ---
     $b3Copy = Join-Path $sandbox 'b3-copy'
-    Copy-B3Snapshot $b3Copy
+    Copy-B3Snapshot -DestDir $b3Copy -IncludeCommandSkills
     $uh4 = Join-Path $sandbox 'u4'
     $pr4 = Join-Path $uh4 '.gemini\config\plugins\b3-ai-engineering'
     $copyPs = Join-Path $b3Copy 'adapters\antigravity\install-plugin.ps1'
@@ -269,7 +198,9 @@ try {
 
     # --- 6. ag-global-stale-broken-and-drift (per-surface failure diagnostics + heal) ---
     $b3Drift = Join-Path $sandbox 'b3-drift'
-    Copy-B3Snapshot $b3Drift
+    Copy-B3Snapshot -DestDir $b3Drift -IncludeCommandSkills
+    $staleSrcAg = Join-Path $b3Drift 'agents\b3-stale-generated.md'
+    [System.IO.File]::WriteAllText($staleSrcAg, "---`nname: b3-stale`ndescription: Temporary test agent for stale-agent verification`nreadonly: true`n---`nTemporary agent.`n", (New-Object System.Text.UTF8Encoding($false)))
     $uh6 = Join-Path $sandbox 'u6'
     $pr6 = Join-Path $uh6 '.gemini\config\plugins\b3-ai-engineering'
     $drPsPath = Join-Path $b3Drift 'adapters\antigravity\install-plugin.ps1'
@@ -279,15 +210,15 @@ try {
     Add-Content -LiteralPath (Join-Path $pr6 'plugin.json') ' '
     $vPluginBad = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
     $pluginFailReported = ($vPluginBad.Code -eq 1) -and ($vPluginBad.Text -match 'check\.plugin=FAIL') -and ($vPluginBad.Text -match 'check\.rules=OK')
-    $healPlugin = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
+    $healPlugin = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6, '-Force')
 
     Add-Content -LiteralPath (Join-Path $pr6 'rules\AGENTS.md') "`n<!-- drifted -->"
     $vRulesBad = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
     $rulesFailReported = ($vRulesBad.Code -eq 1) -and ($vRulesBad.Text -match 'check\.rules=FAIL') -and ($vRulesBad.Text -match 'check\.skills=OK')
 
-    $healRules = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
+    $healRules = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6, '-Force')
     Add-Content -LiteralPath (Join-Path $pr6 'agents\b3-reviewer.md') "`n<!-- drifted -->"
-    Set-Content -LiteralPath (Join-Path $pr6 'agents\b3-stale-generated.md') "---`nname: b3-stale`n---`n<!-- Generated from stale/agents/b3-stale-generated.md -->`n"
+    Remove-Item -LiteralPath $staleSrcAg -Force
     $vStaleAg = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
     $staleAgCaught = ($vStaleAg.Code -eq 1) -and ($vStaleAg.Text -match 'stale generated agent file')
     Remove-Item -LiteralPath (Join-Path $b3Drift 'skills\engineering\debugging') -Recurse -Force
@@ -305,17 +236,18 @@ try {
 
     Copy-Item -LiteralPath (Join-Path $root 'skills\engineering\debugging') -Destination (Join-Path $b3Drift 'skills\engineering\debugging') -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $root 'adapters\command-skills\b3-plan') -Destination (Join-Path $b3Drift 'adapters\command-skills\b3-plan') -Recurse -Force
-    $healAll = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
+    $healAll = Invoke-PsScript $drPsPath @('update', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6, '-Force')
     $verHealed = Invoke-PsScript $drPsPath @('verify', '-B3Home', $b3Drift, '-PluginRoot', $pr6, '-UserHome', $uh6)
-    if ($in6.Code -eq 0 -and $pluginFailReported -and $healPlugin.Code -eq 0 -and $rulesFailReported -and $healRules.Code -eq 0 -and $staleAgCaught -and $multiFailReported -and $shBadOk -and $healAll.Code -eq 0 -and $verHealed.Code -eq 0) {
+    $staleAgPruned = -not (Test-Path -LiteralPath (Join-Path $pr6 'agents\b3-stale-generated.md'))
+    if ($in6.Code -eq 0 -and $pluginFailReported -and $healPlugin.Code -eq 0 -and $rulesFailReported -and $healRules.Code -eq 0 -and $staleAgCaught -and $multiFailReported -and $shBadOk -and $healAll.Code -eq 0 -and $verHealed.Code -eq 0 -and $staleAgPruned) {
         Pass 'ag-global-stale-broken-and-drift'
     } else {
-        FailCheck 'ag-global-stale-broken-and-drift' "pj=$pluginFailReported rules=$rulesFailReported staleAg=$staleAgCaught multi=$multiFailReported sh=$shBadOk healed=$($verHealed.Code)"
+        FailCheck 'ag-global-stale-broken-and-drift' "pj=$pluginFailReported rules=$rulesFailReported staleAg=$staleAgCaught multi=$multiFailReported sh=$shBadOk healed=$($verHealed.Code) pruned=$staleAgPruned"
     }
 
     # --- 7. ag-global-paths-with-spaces ---
     $b3Sp = Join-Path $sandbox 'B3 Space Home'
-    Copy-B3Snapshot $b3Sp
+    Copy-B3Snapshot -DestDir $b3Sp -IncludeCommandSkills
     $uhSp = Join-Path $sandbox 'User Space Home'
     $prSp = Join-Path $uhSp '.gemini\config\plugins\B3 Plugin Space'
     $spPs = Join-Path $b3Sp 'adapters\antigravity\install-plugin.ps1'
@@ -343,13 +275,8 @@ try {
     $repoA = Join-Path $sandbox 'ag-proj-alpha'
     $repoB = Join-Path $sandbox 'ag-proj-beta'
     foreach ($pr in @($repoA, $repoB)) {
-        New-Item -ItemType Directory -Path (Join-Path $pr '.agents\rules') -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $pr 'AGENTS.md') "# Local Project $(Split-Path -Leaf $pr)`n"
-        Set-Content -LiteralPath (Join-Path $pr '.agents\rules\local.md') "# Local rule`n"
-        Push-Location $pr
-        & git init -q; & git config user.email 't@e.com'; & git config user.name 'T'
-        & git add .; & git commit -qm 'init'
-        Pop-Location
+        New-TempGitRepo -RepoPath $pr -SubDir '.agents\rules' -SubFileName 'local.md' -SubFileContent '# Local rule' `
+            -RootFileName 'AGENTS.md' -RootFileContent "# Local Project $(Split-Path -Leaf $pr)"
     }
     $shaA0 = (& git -C $repoA rev-parse HEAD).Trim()
     $shaB0 = (& git -C $repoB rev-parse HEAD).Trim()
@@ -369,12 +296,7 @@ try {
 
     # --- 9. ag-global-install-product-compat ---
     $prodC = Join-Path $sandbox 'ag-proj-gamma'
-    New-Item -ItemType Directory -Path $prodC | Out-Null
-    Push-Location $prodC
-    & git init -q; & git config user.email 't@e.com'; & git config user.name 'T'
-    Set-Content 'README.md' "# Gamma`n"
-    & git add .; & git commit -qm 'init'
-    Pop-Location
+    New-TempGitRepo -RepoPath $prodC -RootFileName 'README.md' -RootFileContent '# Gamma'
     $instProd = Join-Path $root 'adapters\install-product.ps1'
     & powershell -NoProfile -ExecutionPolicy Bypass -File $instProd -ProductRoot $prodC -B3Home $root -HostName antigravity | Out-Null
     $ipExit = $LASTEXITCODE
@@ -726,6 +648,112 @@ try {
         FailCheck 'ag-global-update-preserves-user-edits' "in=$($in16.Code) agent=$($blocked16Ps.Code)/$blocked16ShOk protected=$protected16 restore=$($restored16.Code) rules=$($rulesBlockedPs16.Code)/$rulesBlockedShOk16 kept=$rulesKept16 forced=$($forced16.Code) ver=$($verified16.Code)"
     }
 
+    # --- 17. ag-global-manifest-corruption (blocks install/update/verify/uninstall) ---
+    $uh17 = Join-Path $sandbox 'u17'
+    $pr17 = Join-Path $uh17 '.gemini\config\plugins\b3-ai-engineering'
+    $in17 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr17, '-UserHome', $uh17)
+    $manifest17 = Join-Path $pr17 '.b3-plugin-manifest'
+    [System.IO.File]::WriteAllText($manifest17, "schema=corrupt`nbad_line_without_equals`n", (New-Object System.Text.UTF8Encoding($false)))
+    $inBad17 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr17, '-UserHome', $uh17)
+    $upBad17 = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr17, '-UserHome', $uh17)
+    $verBad17 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr17, '-UserHome', $uh17)
+    $unBad17 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr17, '-UserHome', $uh17)
+    $kept17 = (Test-Path -LiteralPath (Join-Path $pr17 'plugin.json')) -and
+              (Test-Path -LiteralPath (Join-Path $pr17 'agents\b3-reviewer.md')) -and
+              (Test-Path -LiteralPath $manifest17)
+
+    $sh17Ok = $true
+    if ($hasBash) {
+        $uh17s = Join-Path $sandbox 'u17sh'
+        $pr17s = Join-Path $uh17s '.gemini\config\plugins\b3-ai-engineering'
+        $pr17sp = $pr17s -replace '\\', '/'
+        $uh17sp = $uh17s -replace '\\', '/'
+        $shIn17 = Invoke-ShScript $agShPosix "install --plugin-root '$pr17sp' --user-home '$uh17sp'"
+        $manifest17s = Join-Path $pr17s '.b3-plugin-manifest'
+        [System.IO.File]::WriteAllText($manifest17s, "schema=corrupt`nbad_line_without_equals`n", (New-Object System.Text.UTF8Encoding($false)))
+        $shInBad17 = Invoke-ShScript $agShPosix "install --plugin-root '$pr17sp' --user-home '$uh17sp'"
+        $shUpBad17 = Invoke-ShScript $agShPosix "update --plugin-root '$pr17sp' --user-home '$uh17sp'"
+        $shVerBad17 = Invoke-ShScript $agShPosix "verify --plugin-root '$pr17sp' --user-home '$uh17sp'"
+        $shUnBad17 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr17sp' --user-home '$uh17sp'"
+        $shKept17 = (Test-Path -LiteralPath (Join-Path $pr17s 'plugin.json')) -and
+                    (Test-Path -LiteralPath (Join-Path $pr17s 'agents\b3-reviewer.md')) -and
+                    (Test-Path -LiteralPath $manifest17s)
+        $sh17Ok = ($shIn17.Code -eq 0) -and ($shInBad17.Code -ne 0) -and ($shUpBad17.Code -ne 0) -and
+                  ($shVerBad17.Code -ne 0) -and ($shUnBad17.Code -ne 0) -and $shKept17
+    }
+    if ($in17.Code -eq 0 -and $inBad17.Code -ne 0 -and $upBad17.Code -ne 0 -and
+        $verBad17.Code -ne 0 -and $unBad17.Code -ne 0 -and $kept17 -and $sh17Ok) {
+        Pass 'ag-global-manifest-corruption'
+    } else {
+        FailCheck 'ag-global-manifest-corruption' "in=$($in17.Code) i2=$($inBad17.Code) u2=$($upBad17.Code) v2=$($verBad17.Code) un2=$($unBad17.Code) kept=$kept17 sh=$sh17Ok"
+    }
+
+    # --- 18. ag-global-manifest-path-traversal ---
+    $uh18 = Join-Path $sandbox 'u18'
+    $pr18 = Join-Path $uh18 '.gemini\config\plugins\b3-ai-engineering'
+    $in18 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $decoy18 = Join-Path $uh18 'outside-ag-decoy.txt'
+    $decoyDir18 = Join-Path $uh18 'outside-ag-dir'
+    [System.IO.File]::WriteAllText($decoy18, "keep outside ag decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-Item -ItemType Directory -Path $decoyDir18 -Force | Out-Null
+    $decoySha18 = (Get-FileHash -LiteralPath $decoy18 -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifest18 = Join-Path $pr18 '.b3-plugin-manifest'
+    $origManifest18 = [System.IO.File]::ReadAllText($manifest18, (New-Object System.Text.UTF8Encoding($false)))
+    $evilLines18 = @(
+        "file|../../../../outside-ag-decoy.txt|$decoySha18",
+        "file|agents\..\..\..\..\..\outside-ag-decoy.txt|$decoySha18",
+        "file|/tmp/outside.txt|$decoySha18",
+        "file|C:/outside.txt|$decoySha18",
+        "link|skills/../../outside-ag-dir|$($decoyDir18 -replace '\\', '/')"
+    ) -join "`n"
+    [System.IO.File]::WriteAllText($manifest18, ($origManifest18.TrimEnd("`r", "`n") + "`n" + $evilLines18 + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $unTrav18 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $unForceTrav18 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr18, '-UserHome', $uh18, '-Force')
+    $verTrav18 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $upTrav18 = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $kept18 = (Test-Path -LiteralPath $decoy18 -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir18 -PathType Container) -and
+              (Test-Path -LiteralPath (Join-Path $pr18 'plugin.json') -PathType Leaf) -and
+              (Test-Path -LiteralPath (Join-Path $pr18 'agents\b3-reviewer.md') -PathType Leaf)
+
+    $sh18Ok = $true
+    if ($hasBash) {
+        $uh18s = Join-Path $sandbox 'u18sh'
+        $pr18s = Join-Path $uh18s '.gemini\config\plugins\b3-ai-engineering'
+        $pr18sp = $pr18s -replace '\\', '/'
+        $uh18sp = $uh18s -replace '\\', '/'
+        $shIn18 = Invoke-ShScript $agShPosix "install --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $decoy18s = Join-Path $uh18s 'outside-ag-decoy.txt'
+        $decoyDir18s = Join-Path $uh18s 'outside-ag-dir'
+        [System.IO.File]::WriteAllText($decoy18s, "keep outside ag decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+        New-Item -ItemType Directory -Path $decoyDir18s -Force | Out-Null
+        $decoySha18s = (Get-FileHash -LiteralPath $decoy18s -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest18s = Join-Path $pr18s '.b3-plugin-manifest'
+        $origManifest18s = [System.IO.File]::ReadAllText($manifest18s, (New-Object System.Text.UTF8Encoding($false)))
+        $evilLines18s = @(
+            "file|../../../../outside-ag-decoy.txt|$decoySha18s",
+            "file|agents\..\..\..\..\..\outside-ag-decoy.txt|$decoySha18s",
+            "file|/tmp/outside.txt|$decoySha18s",
+            "file|C:/outside.txt|$decoySha18s",
+            "link|skills/../../outside-ag-dir|$($decoyDir18s -replace '\\', '/')"
+        ) -join "`n"
+        [System.IO.File]::WriteAllText($manifest18s, ($origManifest18s.TrimEnd("`r", "`n") + "`n" + $evilLines18s + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+        $shUn18 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $shUnForce18 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr18sp' --user-home '$uh18sp' --force"
+        $shVer18 = Invoke-ShScript $agShPosix "verify --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $shUp18 = Invoke-ShScript $agShPosix "update --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $shKept18 = (Test-Path -LiteralPath $decoy18s -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir18s -PathType Container) -and
+                    (Test-Path -LiteralPath (Join-Path $pr18s 'plugin.json') -PathType Leaf) -and
+                    (Test-Path -LiteralPath (Join-Path $pr18s 'agents\b3-reviewer.md') -PathType Leaf)
+        $sh18Ok = ($shIn18.Code -eq 0) -and ($shUn18.Code -ne 0) -and ($shUnForce18.Code -ne 0) -and
+                  ($shVer18.Code -ne 0) -and ($shUp18.Code -ne 0) -and $shKept18
+    }
+    if ($in18.Code -eq 0 -and $unTrav18.Code -ne 0 -and $unForceTrav18.Code -ne 0 -and
+        $verTrav18.Code -ne 0 -and $upTrav18.Code -ne 0 -and $kept18 -and $sh18Ok) {
+        Pass 'ag-global-manifest-path-traversal'
+    } else {
+        FailCheck 'ag-global-manifest-path-traversal' "in=$($in18.Code) un=$($unTrav18.Code) uf=$($unForceTrav18.Code) ver=$($verTrav18.Code) up=$($upTrav18.Code) kept=$kept18 sh=$sh18Ok"
+    }
+
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue
@@ -733,13 +761,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($failed -gt 0) {
-    Write-Output "$failed check(s) failed"
-    exit 1
-}
-if (-not $hasBash) {
-    Write-Output 'ok (PS-only; bash skipped - INCOMPLETE)'
-} else {
-    Write-Output 'ok'
-}
-exit 0
+Complete-ValidationSuite

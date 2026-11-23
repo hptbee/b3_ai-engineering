@@ -1,79 +1,16 @@
 # Behavioral validation suite for global Cursor installation (install-global.ps1 & install-global.sh).
-# Exercises filesystem links, generated artifacts, conflicts, updates, paths with spaces, unrelated repos, and uninstall in isolated sandboxes.
+# Exercises filesystem links, generated artifacts, conflicts, updates, paths with spaces, unrelated repos, manifest corruption, and uninstall in isolated sandboxes.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-cursor-global.ps1
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
+
 $root = Split-Path -Parent $PSScriptRoot
 $instPs = Join-Path $root 'adapters\cursor\install-global.ps1'
 $instShPosix = ($root -replace '\\', '/') + '/adapters/cursor/install-global.sh'
-$gitBash = 'C:\Program Files\Git\bin\bash.exe'
-if (-not (Test-Path -LiteralPath $gitBash -PathType Leaf)) {
-    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
-    if ($bashCmd -and ($bashCmd.Source -notmatch '[\\/]Windows[\\/]System32[\\/]bash\.exe$')) {
-        $gitBash = $bashCmd.Source
-    }
-}
-$hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
-if (-not $hasBash) {
-    Write-Output "WARNING: bash not found; cross-shell .sh checks skipped (INCOMPLETE)"
-}
-$failed = 0
+$hasBash = $script:HasBash
 
-function Pass([string]$Name) { Write-Output "PASS $Name" }
-function FailCheck([string]$Name, [string]$Detail) {
-    Write-Output "FAIL $Name :: $Detail"
-    $script:failed++
-}
-
-function Invoke-PsGlobal([string[]]$ScriptArgs) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $instPs @ScriptArgs 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function Invoke-ShGlobal([string]$ScriptPosix, [string]$ArgsLine) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & $gitBash -c "'$ScriptPosix' $ArgsLine" 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function Copy-B3Snapshot([string]$DestDir) {
-    New-Item -ItemType Directory -Path $DestDir | Out-Null
-    foreach ($sub in @('skills', 'commands', 'agents', 'rules', 'workflows')) {
-        Copy-Item -LiteralPath (Join-Path $root $sub) -Destination (Join-Path $DestDir $sub) -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path (Join-Path $DestDir 'adapters\cursor') -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\cursor\install-global.ps1') -Destination (Join-Path $DestDir 'adapters\cursor\install-global.ps1') -Force
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\cursor\install-global.sh') -Destination (Join-Path $DestDir 'adapters\cursor\install-global.sh') -Force
-}
-
-function Remove-ReparseLinksUnder([string]$DirPath) {
-    if (-not (Test-Path -LiteralPath $DirPath)) { return }
-    # Remove junction/symlink directories before recursive delete so target trees are never traversed
-    $all = @(Get-ChildItem -LiteralPath $DirPath -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object { $_.FullName.Length } -Descending)
-    foreach ($item in $all) {
-        if (($item.LinkType -in @('Junction', 'SymbolicLink')) -or (($item.Attributes.ToString()) -match 'ReparsePoint')) {
-            if ($item.PSIsContainer) {
-                & cmd.exe /c rmdir "`"$($item.FullName)`"" 2>&1 | Out-Null
-            } else {
-                Remove-Item -LiteralPath $item.FullName -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-}
+function Invoke-PsGlobal([string[]]$ScriptArgs) { return Invoke-PsScript $instPs $ScriptArgs }
+function Invoke-ShGlobal([string]$ScriptPosix, [string]$ArgsLine) { return Invoke-ShScript $ScriptPosix $ArgsLine }
 
 function Add-CustomUserArtifacts([string]$CursorHome) {
     $mySkill = Join-Path $CursorHome 'skills\my-custom-skill'
@@ -272,13 +209,9 @@ try {
     $projA = Join-Path $sandbox 'proj-alpha'
     $projB = Join-Path $sandbox 'proj-beta'
     foreach ($pr in @($projA, $projB)) {
-        New-Item -ItemType Directory -Path (Join-Path $pr '.cursor\rules') -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $pr 'AGENTS.md') "# Project Specific Rules for $(Split-Path -Leaf $pr)`n"
-        Set-Content -LiteralPath (Join-Path $pr '.cursor\rules\project.mdc') "---`ndescription: proj rule`nalwaysApply: true`n---`nUse local project rules.`n"
-        Push-Location $pr
-        & git init -q; & git config user.email 't@e.com'; & git config user.name 'T'
-        & git add .; & git commit -qm 'init'
-        Pop-Location
+        New-TempGitRepo -RepoPath $pr -SubDir '.cursor\rules' -SubFileName 'project.mdc' `
+            -SubFileContent "---`ndescription: proj rule`nalwaysApply: true`n---`nUse local project rules." `
+            -RootFileName 'AGENTS.md' -RootFileContent "# Project Specific Rules for $(Split-Path -Leaf $pr)"
     }
     $uh8 = Join-Path $sandbox 'u8'
     $ch8 = Join-Path $uh8 '.cursor'
@@ -423,6 +356,104 @@ try {
     } else {
         FailCheck 'cursor-global-uninstall-protects-modified' "in=$($in12.Code) conf=$($unConf12.Code) kept=$keptMod12 force=$($unForce12.Code) clean=$clean12 sh=$sh12Ok"
     }
+
+    # --- 13. cursor-global-manifest-corruption ---
+    $uh13 = Join-Path $sandbox 'u13'
+    $ch13 = Join-Path $uh13 '.cursor'
+    $in13 = Invoke-PsGlobal @('install', '-CursorHome', $ch13, '-UserHome', $uh13)
+    $manifest13 = Join-Path $ch13 '.b3-global-manifest'
+    [System.IO.File]::WriteAllText($manifest13, "schema=corrupt`nbad_line_without_equals`n", (New-Object System.Text.UTF8Encoding($false)))
+    $inBad13 = Invoke-PsGlobal @('install', '-CursorHome', $ch13, '-UserHome', $uh13)
+    $upBad13 = Invoke-PsGlobal @('update', '-CursorHome', $ch13, '-UserHome', $uh13)
+    $verBad13 = Invoke-PsGlobal @('verify', '-CursorHome', $ch13, '-UserHome', $uh13)
+    $unBad13 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch13, '-UserHome', $uh13)
+    $kept13 = (Test-Path -LiteralPath (Join-Path $ch13 'commands\b3-plan.md')) -and (Test-Path -LiteralPath $manifest13)
+
+    $sh13Ok = $true
+    if ($hasBash) {
+        $uh13s = Join-Path $sandbox 'u13sh'
+        $ch13s = Join-Path $uh13s '.cursor'
+        $ch13sp = $ch13s -replace '\\', '/'
+        $uh13sp = $uh13s -replace '\\', '/'
+        $shIn13 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch13sp' --user-home '$uh13sp'"
+        $manifest13s = Join-Path $ch13s '.b3-global-manifest'
+        [System.IO.File]::WriteAllText($manifest13s, "schema=corrupt`nbad_line_without_equals`n", (New-Object System.Text.UTF8Encoding($false)))
+        $shInBad13 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch13sp' --user-home '$uh13sp'"
+        $shUpBad13 = Invoke-ShGlobal $instShPosix "update --cursor-home '$ch13sp' --user-home '$uh13sp'"
+        $shVerBad13 = Invoke-ShGlobal $instShPosix "verify --cursor-home '$ch13sp' --user-home '$uh13sp'"
+        $shUnBad13 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch13sp' --user-home '$uh13sp'"
+        $shKept13 = (Test-Path -LiteralPath (Join-Path $ch13s 'commands\b3-plan.md')) -and (Test-Path -LiteralPath $manifest13s)
+        $sh13Ok = ($shIn13.Code -eq 0) -and ($shInBad13.Code -ne 0) -and ($shUpBad13.Code -ne 0) -and
+                  ($shVerBad13.Code -ne 0) -and ($shUnBad13.Code -ne 0) -and $shKept13
+    }
+    if ($in13.Code -eq 0 -and $inBad13.Code -ne 0 -and $upBad13.Code -ne 0 -and
+        $verBad13.Code -ne 0 -and $unBad13.Code -ne 0 -and $kept13 -and $sh13Ok) {
+        Pass 'cursor-global-manifest-corruption'
+    } else {
+        FailCheck 'cursor-global-manifest-corruption' "in=$($in13.Code) i2=$($inBad13.Code) u2=$($upBad13.Code) v2=$($verBad13.Code) un2=$($unBad13.Code) kept=$kept13 sh=$sh13Ok"
+    }
+
+    # --- 14. cursor-global-manifest-path-traversal ---
+    $uh14 = Join-Path $sandbox 'u14'
+    $ch14 = Join-Path $uh14 '.cursor'
+    $in14 = Invoke-PsGlobal @('install', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $decoy14 = Join-Path $uh14 'outside-cursor-decoy.txt'
+    $decoyDir14 = Join-Path $uh14 'outside-cursor-dir'
+    [System.IO.File]::WriteAllText($decoy14, "keep outside decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-Item -ItemType Directory -Path $decoyDir14 -Force | Out-Null
+    $decoySha14 = (Get-FileHash -LiteralPath $decoy14 -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifest14 = Join-Path $ch14 '.b3-global-manifest'
+    $origManifest14 = [System.IO.File]::ReadAllText($manifest14, (New-Object System.Text.UTF8Encoding($false)))
+    $evilLines14 = @(
+        "command|../../outside-cursor-decoy.txt|$decoySha14",
+        "skill|../outside-cursor-dir|$($decoyDir14 -replace '\\', '/')",
+        "file|C:/outside.txt|$decoySha14",
+        "agent|..\outside.md|$decoySha14"
+    ) -join "`n"
+    [System.IO.File]::WriteAllText($manifest14, ($origManifest14.TrimEnd("`r", "`n") + "`n" + $evilLines14 + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $unTrav14 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $unForceTrav14 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch14, '-UserHome', $uh14, '-Force')
+    $verTrav14 = Invoke-PsGlobal @('verify', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $upTrav14 = Invoke-PsGlobal @('update', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $kept14 = (Test-Path -LiteralPath $decoy14 -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir14 -PathType Container) -and
+              (Test-Path -LiteralPath (Join-Path $ch14 'commands\b3-plan.md') -PathType Leaf)
+
+    $sh14Ok = $true
+    if ($hasBash) {
+        $uh14s = Join-Path $sandbox 'u14sh'
+        $ch14s = Join-Path $uh14s '.cursor'
+        $ch14sp = $ch14s -replace '\\', '/'
+        $uh14sp = $uh14s -replace '\\', '/'
+        $shIn14 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $decoy14s = Join-Path $uh14s 'outside-cursor-decoy.txt'
+        $decoyDir14s = Join-Path $uh14s 'outside-cursor-dir'
+        [System.IO.File]::WriteAllText($decoy14s, "keep outside decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+        New-Item -ItemType Directory -Path $decoyDir14s -Force | Out-Null
+        $decoySha14s = (Get-FileHash -LiteralPath $decoy14s -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest14s = Join-Path $ch14s '.b3-global-manifest'
+        $origManifest14s = [System.IO.File]::ReadAllText($manifest14s, (New-Object System.Text.UTF8Encoding($false)))
+        $evilLines14s = @(
+            "command|../../outside-cursor-decoy.txt|$decoySha14s",
+            "skill|../outside-cursor-dir|$($decoyDir14s -replace '\\', '/')",
+            "file|C:/outside.txt|$decoySha14s",
+            "agent|..\outside.md|$decoySha14s"
+        ) -join "`n"
+        [System.IO.File]::WriteAllText($manifest14s, ($origManifest14s.TrimEnd("`r", "`n") + "`n" + $evilLines14s + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+        $shUn14 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $shUnForce14 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch14sp' --user-home '$uh14sp' --force"
+        $shVer14 = Invoke-ShGlobal $instShPosix "verify --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $shUp14 = Invoke-ShGlobal $instShPosix "update --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $shKept14 = (Test-Path -LiteralPath $decoy14s -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir14s -PathType Container) -and
+                    (Test-Path -LiteralPath (Join-Path $ch14s 'commands\b3-plan.md') -PathType Leaf)
+        $sh14Ok = ($shIn14.Code -eq 0) -and ($shUn14.Code -ne 0) -and ($shUnForce14.Code -ne 0) -and
+                  ($shVer14.Code -ne 0) -and ($shUp14.Code -ne 0) -and $shKept14
+    }
+    if ($in14.Code -eq 0 -and $unTrav14.Code -ne 0 -and $unForceTrav14.Code -ne 0 -and
+        $verTrav14.Code -ne 0 -and $upTrav14.Code -ne 0 -and $kept14 -and $sh14Ok) {
+        Pass 'cursor-global-manifest-path-traversal'
+    } else {
+        FailCheck 'cursor-global-manifest-path-traversal' "in=$($in14.Code) un=$($unTrav14.Code) uf=$($unForceTrav14.Code) ver=$($verTrav14.Code) up=$($upTrav14.Code) kept=$kept14 sh=$sh14Ok"
+    }
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue
@@ -430,13 +461,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($failed -gt 0) {
-    Write-Output "$failed check(s) failed"
-    exit 1
-}
-if (-not $hasBash) {
-    Write-Output 'ok (PS-only; bash skipped - INCOMPLETE)'
-} else {
-    Write-Output 'ok'
-}
-exit 0
+Complete-ValidationSuite
