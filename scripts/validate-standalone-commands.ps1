@@ -492,7 +492,136 @@ try {
         FailCheck 'standalone-review-loop-optimizations' "none=$($psDeltaNone.Text) edit=$($psDeltaEdit.Text) delNew=$($psDeltaDelNew.Text) flag=$($psFlagInj.Code) dir=$($psDirRec.Code)/$noSideEffPs gl=$gitLogVariantsOk mc=$mcPsExit shOk=$optShOk"
     }
 
-    # --- 7. standalone-command-contracts ---
+    # --- Snapshot secret/submodule safety and completed-cleanup delta regression ---
+    $r6 = Join-Path $sandbox 'snapshot-safety-repo'
+    $r6Posix = $r6 -replace '\\', '/'
+    Init-TestRepo $r6
+    [IO.File]::WriteAllText((Join-Path $r6 'main.ts'), "export const baseline = 1;`n", (New-Object System.Text.UTF8Encoding($false)))
+    Push-Location $r6
+    & git add main.ts; & git commit -qm 'baseline'
+    $base6 = (& git rev-parse HEAD).Trim()
+    Pop-Location
+
+    [IO.File]::WriteAllText((Join-Path $r6 'temporary.ts'), "temporary change`n", (New-Object System.Text.UTF8Encoding($false)))
+    $psSnap6 = Invoke-PsGuard @('snapshot', '-RepoRoot', $r6)
+    Remove-Item -LiteralPath (Join-Path $r6 'temporary.ts') -Force
+    $psClean6 = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r6, '-BaseSha', $base6, '-PrevSha', $psSnap6.Text.Trim())
+    $psEmpty6 = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r6, '-BaseSha', $base6)
+
+    # A temporary index must not persist untracked credentials into .git/objects.
+    [IO.File]::WriteAllText((Join-Path $r6 'credentials.json'), '{"secret":"snapshot-test-unique"}', (New-Object System.Text.UTF8Encoding($false)))
+    $secretOid6 = (& git -C $r6 hash-object -- credentials.json).Trim()
+    $psSecret6 = Invoke-PsGuard @('snapshot', '-RepoRoot', $r6)
+    $shOk6 = $true
+    if ($hasBash) {
+        $shSecret6 = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r6Posix'"
+        $shOk6 = ($shSecret6.Code -eq 1) -and ($shSecret6.Text -match 'sensitive path cannot be snapshotted')
+    }
+    & git -C $r6 cat-file -e $secretOid6 2>$null
+    $secretNotStored6 = ($LASTEXITCODE -ne 0)
+    Remove-Item -LiteralPath (Join-Path $r6 'credentials.json') -Force
+
+    if ($hasBash) {
+        [IO.File]::WriteAllText((Join-Path $r6 'temporary.ts'), "temporary change`n", (New-Object System.Text.UTF8Encoding($false)))
+        $shSnap6 = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r6Posix'"
+        Remove-Item -LiteralPath (Join-Path $r6 'temporary.ts') -Force
+        $shClean6 = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r6Posix' --base-sha '$base6' --prev-sha '$($shSnap6.Text.Trim())'"
+        $shEmpty6 = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r6Posix' --base-sha '$base6'"
+        $shOk6 = $shOk6 -and ($shSnap6.Code -eq 0) -and
+                 ($shClean6.Code -eq 0) -and ($shClean6.Text -match 'size_class=CLEAN_AFTER_FIX') -and
+                 ($shClean6.Text -match 'delta_files=temporary\.ts') -and
+                 ($shEmpty6.Code -eq 2) -and ($shEmpty6.Text -match 'EMPTY_DIFF')
+    }
+
+    $subOrigin6 = Join-Path $sandbox 'snapshot-sub-origin'
+    Init-TestRepo $subOrigin6
+    [IO.File]::WriteAllText((Join-Path $subOrigin6 'src.txt'), "source`n", (New-Object System.Text.UTF8Encoding($false)))
+    Push-Location $subOrigin6
+    & git add src.txt; & git commit -qm 'sub init'
+    Pop-Location
+    Push-Location $r6
+    & git -c protocol.file.allow=always submodule add -q $subOrigin6 deps/lib
+    Pop-Location
+    [IO.File]::WriteAllText((Join-Path $r6 'deps\lib\dirty-untracked.txt'), "not in gitlink`n", (New-Object System.Text.UTF8Encoding($false)))
+    $psSub6 = Invoke-PsGuard @('snapshot', '-RepoRoot', $r6)
+    if ($hasBash) {
+        $shSub6 = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r6Posix'"
+        $shOk6 = $shOk6 -and ($shSub6.Code -eq 1) -and ($shSub6.Text -match 'dirty submodule cannot be snapshotted')
+    }
+    if ($psSnap6.Code -eq 0 -and ($psSnap6.Text.Trim() -match '^[0-9a-f]{40}
+    $cmdImpl = Get-Content -LiteralPath (Join-Path $root 'commands\b3-implement.md') -Raw
+    $csImpl = Get-Content -LiteralPath (Join-Path $root 'adapters\command-skills\b3-implement\SKILL.md') -Raw
+    $cmdPlan = Get-Content -LiteralPath (Join-Path $root 'commands\b3-plan.md') -Raw
+    $skPlan = Get-Content -LiteralPath (Join-Path $root 'skills\engineering\planning\SKILL.md') -Raw
+    $skDbg = Get-Content -LiteralPath (Join-Path $root 'skills\engineering\debugging\SKILL.md') -Raw
+    $cmdRev = Get-Content -LiteralPath (Join-Path $root 'commands\b3-review.md') -Raw
+    $skRev = Get-Content -LiteralPath (Join-Path $root 'skills\engineering\code-review\SKILL.md') -Raw
+    $cmdRl = Get-Content -LiteralPath (Join-Path $root 'commands\b3-review-loop.md') -Raw
+    $strat = Get-Content -LiteralPath (Join-Path $root 'review-loop\strategy.md') -Raw
+    $cmdVer = Get-Content -LiteralPath (Join-Path $root 'commands\b3-verify.md') -Raw
+    $skVer = Get-Content -LiteralPath (Join-Path $root 'skills\engineering\verification\SKILL.md') -Raw
+
+    $implDescMatch = [regex]::Match($cmdImpl, '(?ms)^---\r?\n.*?\r?\ndescription:\s*(.+?)\r?\n')
+    $implDescNoShip = $implDescMatch.Success -and ($implDescMatch.Groups[1].Value -notmatch 'ship a change')
+    $implSingleHop = ($cmdImpl -match 'do \*\*not\*\* eagerly load .*feature-implementation\.md') -and ($csImpl -match 'skip `workflows/feature-implementation\.md`')
+    $planOk = ($cmdPlan -match 'plan-only') -and ($skPlan -match 'risk-adaptive depth') -and ($skPlan -match 'Readiness Check')
+    $dbgOk = ($skDbg -match 'broken invariant') -and ($skDbg -match 'sibling entry points') -and ($skDbg -match 'regression test') -and ($skDbg -match '3 failed fix attempts')
+    $revTplPath = Join-Path $root 'skills\engineering\code-review\references\review-template.md'
+    $csRev = Get-Content -LiteralPath (Join-Path $root 'adapters\command-skills\b3-review\SKILL.md') -Raw
+    $ghPrRef = Get-Content -LiteralPath (Join-Path $root 'skills\engineering\code-review\references\github-pr-review.md') -Raw
+    $agentsRaw = Get-Content -LiteralPath (Join-Path $root 'AGENTS.md') -Raw
+    $revTplOk = (Test-Path -LiteralPath $revTplPath -PathType Leaf) -and
+                ($cmdRev -match 'review-template\.md') -and
+                ($csRev -match 'review-template\.md') -and
+                ($skRev -match 'review-template\.md') -and
+                ($ghPrRef -match 'review-template\.md') -and
+                ($agentsRaw -match 'skills/engineering/code-review/references/review-template\.md')
+    $implSingleTaskOk = ($cmdImpl -match 'dispatch-naming\.md') -and ($cmdImpl -match 'b3-impl-t00N') -and ($cmdImpl -match 'B3_MODELS_PERSONAL') -and
+                        ($csImpl -match 'dispatch-naming\.md') -and ($csImpl -match 'b3-impl-t00N') -and ($csImpl -match 'B3_MODELS_PERSONAL')
+    $revOk = ($cmdRev -match 'symbol-check') -and ($skRev -match 'Scope \(delta-first\)') -and ($skRev -match 'never auto-fix or start `/b3-review-loop`') -and ($skRev -match 'skip inside `/b3-review-loop`') -and $revTplOk
+    $rlBytes = ([System.Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes((Join-Path $root 'review-loop\strategy.md')))).Replace("`r", '').Length
+    $rlOk = ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and ($strat -match 'dispatch fresh `b3-fixer`') -and ($strat -match '`FAIL` on failed check') -and ($strat -match 'EVIDENCED RISK') -and ($rlBytes -le 5400)
+    $verOk = ($cmdVer -match 'verify-run') -and ($skVer -match 'verify-check') -and ($skVer -match 'untrusted provenance')
+    $agentsContractOk = $true
+    foreach ($ra in @('b3-reviewer.md', 'b3-security-reviewer.md', 'b3-architecture-reviewer.md', 'b3-performance-reviewer.md')) {
+        $rat = Get-Content -LiteralPath (Join-Path $root "agents\$ra") -Raw
+        if ($rat -notmatch 'NO_BLOCKING_FINDINGS \| BLOCKING_FINDINGS \| INCOMPLETE') { $agentsContractOk = $false }
+    }
+    $revAgTxt = Get-Content -LiteralPath (Join-Path $root 'agents\b3-reviewer.md') -Raw
+    $fixAgTxt = Get-Content -LiteralPath (Join-Path $root 'agents\b3-fixer.md') -Raw
+    $agentsContractOk = $agentsContractOk -and ($revAgTxt -match 'skip `code-review/SKILL\.md`, `review-template\.md`') -and ($fixAgTxt -match 'verification/SKILL\.md.*on demand only')
+
+    if ($implDescNoShip -and $implSingleHop -and $implSingleTaskOk -and $planOk -and $dbgOk -and $revOk -and $rlOk -and $verOk -and $agentsContractOk) {
+        Pass 'standalone-command-contracts'
+    } else {
+        FailCheck 'standalone-command-contracts' "desc=$implDescNoShip hop=$implSingleHop singleTask=$implSingleTaskOk plan=$planOk dbg=$dbgOk rev=$revOk rl=$rlOk($rlBytes) ver=$verOk ag=$agentsContractOk"
+    }
+}
+finally {
+    Pop-Location -ErrorAction SilentlyContinue
+    Remove-ReparseLinksUnder $sandbox
+    Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+if ($failed -gt 0) {
+    Write-Output "$failed check(s) failed"
+    exit 1
+}
+Write-Output 'ok'
+exit 0
+) -and
+        $psClean6.Code -eq 0 -and ($psClean6.Text -match 'size_class=CLEAN_AFTER_FIX') -and
+        ($psClean6.Text -match 'delta_files=temporary\.ts') -and
+        $psEmpty6.Code -eq 2 -and ($psEmpty6.Text -match 'EMPTY_DIFF') -and
+        $psSecret6.Code -eq 1 -and ($psSecret6.Text -match 'sensitive path cannot be snapshotted') -and
+        $secretNotStored6 -and $psSub6.Code -eq 1 -and
+        ($psSub6.Text -match 'dirty submodule cannot be snapshotted') -and $shOk6) {
+        Pass 'standalone-snapshot-safety-and-cleared-diff'
+    } else {
+        FailCheck 'standalone-snapshot-safety-and-cleared-diff' "clean=$($psClean6.Code) empty=$($psEmpty6.Code) secret=$($psSecret6.Code)/$secretNotStored6 sub=$($psSub6.Code) sh=$shOk6"
+    }
+
+    # --- 8. standalone-command-contracts ---
     $cmdImpl = Get-Content -LiteralPath (Join-Path $root 'commands\b3-implement.md') -Raw
     $csImpl = Get-Content -LiteralPath (Join-Path $root 'adapters\command-skills\b3-implement\SKILL.md') -Raw
     $cmdPlan = Get-Content -LiteralPath (Join-Path $root 'commands\b3-plan.md') -Raw
