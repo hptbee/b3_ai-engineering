@@ -46,7 +46,43 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 
 > **Coexistence note:** Do not activate conflicting skill discovery roots in the same checkout. Cursor cross-loads `.agents/skills` and `.claude/skills`, and Antigravity reads both `.agents/skills.json` and `.agents/skills`. `sync-skills` guards against conflicts unless `-Force` / `--force` is passed.
 
+### Global machine-wide install (Cursor & Antigravity)
+
+Install once across all local repositories without copying `skills/` or modifying individual repos (`cursor`, `antigravity`, or `all`; supports `install`, `verify`, `update`, `uninstall`, `-DryRun`/`--dry-run`, `-Force`/`--force`):
+
+```powershell
+# Windows PowerShell
+.\adapters\install-global.ps1 -HostName cursor
+.\adapters\install-global.ps1 -HostName antigravity
+.\adapters\install-global.ps1 -HostName all
+.\adapters\install-global.ps1 verify -HostName all
+```
+
+```bash
+# macOS / Linux / Git Bash
+./adapters/install-global.sh --host cursor
+./adapters/install-global.sh --host antigravity
+./adapters/install-global.sh --host all
+./adapters/install-global.sh verify --host all
+```
+
+Details, project overrides, and manual host runtime smoke checklists: [`adapters/cursor/README.md`](adapters/cursor/README.md), [`adapters/antigravity/README.md`](adapters/antigravity/README.md).
+
 ### Cursor
+
+**Global one-time install:** makes all 7 commands, flattened 1-level skills, 5 subagents, global `b3-home`, and a compact `b3-user-rules.txt` User Rules template available under `~/.cursor/` (or via `.\adapters\install-global.ps1 -HostName cursor`):
+
+```powershell
+# Windows
+.\adapters\cursor\install-global.ps1
+.\adapters\cursor\install-global.ps1 verify
+```
+
+```bash
+# macOS / Linux / Git Bash
+./adapters/cursor/install-global.sh
+./adapters/cursor/install-global.sh verify
+```
 
 **Work inside this B3 repository:** `.cursor/rules/*.mdc` and `AGENTS.md` work on fresh clone. To expose `skills/`, `commands/`, and `agents/` on Cursor's native paths (gitignored links):
 
@@ -62,7 +98,7 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 ./adapters/sync-skills.sh --verify cursor
 ```
 
-**Work in a separate product repository:**
+**Optional per-project attach (`install-product`):** for shared repo-committed `.b3/home` + `.cursor/commands/*.md` (without copying `skills/`):
 
 ```powershell
 # Windows
@@ -72,21 +108,6 @@ Host-specific notes: [`adapters/cursor/README.md`](adapters/cursor/README.md), [
 ```bash
 # macOS / Linux
 ./adapters/install-product.sh --product-root /path/to/your-product --host cursor
-```
-
-The installer writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.cursor/commands/*.md` (including `b3-ship.md`), and `.b3/ship/` in `.gitignore`. It does **not** copy `skills/` into the product. Optional user-level link (once per machine):
-
-```powershell
-# Windows — replace the target with your B3 clone
-$skills = 'D:\Project\b3_ai-engineering\skills'
-$dest = Join-Path $env:USERPROFILE '.cursor\skills\b3-ai-engineering'
-New-Item -ItemType Directory -Path (Split-Path $dest) -Force | Out-Null
-if (-not (Test-Path -LiteralPath $dest)) { cmd /c mklink /J "$dest" "$skills" }
-```
-
-```bash
-# macOS / Linux
-ln -sfn /path/to/b3_ai-engineering/skills ~/.cursor/skills/b3-ai-engineering
 ```
 
 ### Codex
@@ -143,14 +164,16 @@ ln -sfn /path/to/b3_ai-engineering/skills ~/.cursor/skills/b3-ai-engineering
 ./adapters/install-product.sh --product-root /path/to/your-product --host antigravity
 ```
 
-- **Machine-global plugin:** Generate `~/.gemini/config/plugins/b3-ai-engineering/` (rules, 1-level skill links, and isolated `agents/*.md` subagents) via:
+- **Machine-global plugin:** Manage `~/.gemini/config/plugins/b3-ai-engineering/` (rules, 1-level skill links, command skills, and isolated `agents/*.md` subagents; or use `.\adapters\install-global.ps1 -HostName antigravity`) via:
 
 ```powershell
 .\adapters\antigravity\install-plugin.ps1
+.\adapters\antigravity\install-plugin.ps1 verify
 ```
 
 ```bash
 ./adapters/antigravity/install-plugin.sh
+./adapters/antigravity/install-plugin.sh verify
 ```
 
 More detail: [`adapters/README.md`](adapters/README.md), [`research/decisions/decision-011-product-repo-attach.md`](research/decisions/decision-011-product-repo-attach.md), [`research/decisions/decision-013-host-neutral-multi-host-layout.md`](research/decisions/decision-013-host-neutral-multi-host-layout.md).
