@@ -225,6 +225,44 @@ function Add-CanonicalSkills([string]$RootDir, [hashtable]$AllMap, [hashtable]$B
     return $files.Count
 }
 
+function Test-SafeManifestKey([string]$Kind, [string]$Key) {
+    if ([string]::IsNullOrEmpty($Key)) { return $false }
+    if ($Key -ne $Key.Trim()) { return $false }
+    if ($Key.StartsWith('/') -or $Key.EndsWith('/') -or $Key.StartsWith('~')) { return $false }
+    if ($Key.Contains('\') -or $Key.Contains(':') -or $Key.Contains('//')) { return $false }
+    if ($Key -match '[\x00-\x1F\x7F]') { return $false }
+    $segs = $Key.Split('/')
+    foreach ($seg in $segs) {
+        if (-not $seg -or $seg -eq '.' -or $seg -eq '..') { return $false }
+    }
+    switch ($Kind) {
+        'skill'   { return ($segs.Count -eq 1) }
+        'command' { return ($segs.Count -eq 1) }
+        'agent'   { return ($segs.Count -eq 1) }
+        'link'    { return ($segs.Count -eq 2 -and $segs[0] -eq 'skills') }
+        'file'    { return ($segs.Count -eq 1 -or ($segs.Count -eq 2 -and ($segs[0] -eq 'rules' -or $segs[0] -eq 'agents'))) }
+        default   { return $false }
+    }
+}
+
+function Test-PathWithinRoot([string]$RootDir, [string]$CandidatePath) {
+    if ([string]::IsNullOrWhiteSpace($RootDir) -or [string]::IsNullOrWhiteSpace($CandidatePath)) { return $false }
+    try {
+        $rootFull = Normalize-Path $RootDir
+        $candFull = Normalize-Path $CandidatePath
+    } catch {
+        return $false
+    }
+    $sep = [IO.Path]::DirectorySeparatorChar
+    $rootPrefix = if ($rootFull -eq [string]$sep) { $rootFull } else { $rootFull + $sep }
+    $cmp = if ($sep -eq '\') {
+        [System.StringComparison]::OrdinalIgnoreCase
+    } else {
+        [System.StringComparison]::Ordinal
+    }
+    return $candFull.StartsWith($rootPrefix, $cmp)
+}
+
 function Read-B3Manifest([string]$ManifestPath) {
     $sections = @{
         skill   = @{}
@@ -253,7 +291,7 @@ function Read-B3Manifest([string]$ManifestPath) {
         if ($t -match '^b3_home=(.+)$') { $m.B3Home = $Matches[1].Trim(); continue }
         if ($t -match '^plugin_root=(.+)$') { $m.PluginRoot = $Matches[1].Trim(); continue }
         $parts = $t -split '\|', 3
-        if ($parts.Count -lt 3 -or -not $sections.ContainsKey($parts[0]) -or -not $parts[1]) {
+        if ($parts.Count -lt 3 -or -not $sections.ContainsKey($parts[0]) -or -not (Test-SafeManifestKey $parts[0] $parts[1])) {
             $m.Corrupt = $true
             continue
         }

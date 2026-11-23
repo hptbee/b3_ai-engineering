@@ -26,6 +26,9 @@ function Check-CrossHostCoexistence([string]$UserHomeDir, [string[]]$SkillNames)
 }
 
 function Uninstall-ManagedFile([string]$Path, [string]$ExpectedSha, [bool]$RequireMarker, [string]$Label, [ref]$Removed, [ref]$Skipped) {
+    if (-not (Test-PathWithinRoot $CursorHome $Path)) {
+        Fail "refusing to uninstall path outside CursorHome: $Path"
+    }
     if (Test-IsReparseLink $Path) {
         Write-Warning "skipping symlinked ${Label}: $Path"
         $Skipped.Value++
@@ -98,6 +101,9 @@ if ($Action -eq 'uninstall') {
     } else {
         foreach ($sk in (Sort-OrdinalStrings @($manifest.Sections.skill.Keys))) {
             $p = Join-Path $skillsDest $sk
+            if (-not (Test-PathWithinRoot $CursorHome $p)) {
+                Fail "refusing to uninstall path outside CursorHome: $p"
+            }
             if (Test-IsReparseLink $p) {
                 $expTarget = $manifest.Sections.skill[$sk]
                 if (-not $Force -and $expTarget -and -not (Test-LinkTarget $p $expTarget)) {

@@ -163,6 +163,7 @@ if ($Action -eq 'uninstall') {
     } else {
         foreach ($lk in $trackedLinks) {
             $p = Join-Path $PluginRoot ($lk -replace '/', '\')
+            if (-not (Test-PathWithinRoot $PluginRoot $p)) { Fail "refusing to uninstall path outside PluginRoot: $p" }
             if (Test-IsReparseLink $p) {
                 if ($manifest.Exists -and $manifest.Sections.link.ContainsKey($lk) -and -not $Force) {
                     $expTarget = $manifest.Sections.link[$lk]
@@ -182,6 +183,7 @@ if ($Action -eq 'uninstall') {
     $warnedContainers = @{}
     foreach ($fk in $trackedFiles) {
         $p = Join-Path $PluginRoot ($fk -replace '/', '\')
+        if (-not (Test-PathWithinRoot $PluginRoot $p)) { Fail "refusing to uninstall path outside PluginRoot: $p" }
         $parentDir = Split-Path -Parent $p
         if ((Normalize-Path $parentDir) -ne $PluginRoot -and (Test-IsReparseLink $parentDir)) {
             if (-not $warnedContainers.ContainsKey($parentDir)) {

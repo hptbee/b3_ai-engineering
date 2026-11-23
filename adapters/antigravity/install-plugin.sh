@@ -225,6 +225,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   elif [[ ${#TRACKED_LINKS[@]} -gt 0 ]]; then
     for lk in "${TRACKED_LINKS[@]}"; do
       p="${PLUGIN_ROOT}/${lk}"
+      path_within_root "$PLUGIN_ROOT" "$p" || { echo "error: refusing to uninstall path outside PluginRoot: $p" >&2; exit 1; }
       if is_link_entry "$p"; then
         if $M_EXISTS && ! $FORCE; then
           exp_target="$(manifest_get "link" "$lk" 2>/dev/null || true)"
@@ -245,6 +246,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   if [[ ${#TRACKED_FILES[@]} -gt 0 ]]; then
     for fk in "${TRACKED_FILES[@]}"; do
       p="${PLUGIN_ROOT}/${fk}"
+      path_within_root "$PLUGIN_ROOT" "$p" || { echo "error: refusing to uninstall path outside PluginRoot: $p" >&2; exit 1; }
       p_parent="${p%/*}"
       if [[ "$(norm_cmp_path "$p_parent")" != "$(norm_cmp_path "$PLUGIN_ROOT")" ]] && is_link_entry "$p_parent"; then
         if [[ ${#WARNED_CONTAINERS[@]} -eq 0 ]] || ! array_contains "$p_parent" "${WARNED_CONTAINERS[@]}"; then

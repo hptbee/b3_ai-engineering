@@ -392,6 +392,68 @@ try {
     } else {
         FailCheck 'cursor-global-manifest-corruption' "in=$($in13.Code) i2=$($inBad13.Code) u2=$($upBad13.Code) v2=$($verBad13.Code) un2=$($unBad13.Code) kept=$kept13 sh=$sh13Ok"
     }
+
+    # --- 14. cursor-global-manifest-path-traversal ---
+    $uh14 = Join-Path $sandbox 'u14'
+    $ch14 = Join-Path $uh14 '.cursor'
+    $in14 = Invoke-PsGlobal @('install', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $decoy14 = Join-Path $uh14 'outside-cursor-decoy.txt'
+    $decoyDir14 = Join-Path $uh14 'outside-cursor-dir'
+    [System.IO.File]::WriteAllText($decoy14, "keep outside decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-Item -ItemType Directory -Path $decoyDir14 -Force | Out-Null
+    $decoySha14 = (Get-FileHash -LiteralPath $decoy14 -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifest14 = Join-Path $ch14 '.b3-global-manifest'
+    $origManifest14 = [System.IO.File]::ReadAllText($manifest14, (New-Object System.Text.UTF8Encoding($false)))
+    $evilLines14 = @(
+        "command|../../outside-cursor-decoy.txt|$decoySha14",
+        "skill|../outside-cursor-dir|$($decoyDir14 -replace '\\', '/')",
+        "file|C:/outside.txt|$decoySha14",
+        "agent|..\outside.md|$decoySha14"
+    ) -join "`n"
+    [System.IO.File]::WriteAllText($manifest14, ($origManifest14.TrimEnd("`r", "`n") + "`n" + $evilLines14 + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $unTrav14 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $unForceTrav14 = Invoke-PsGlobal @('uninstall', '-CursorHome', $ch14, '-UserHome', $uh14, '-Force')
+    $verTrav14 = Invoke-PsGlobal @('verify', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $upTrav14 = Invoke-PsGlobal @('update', '-CursorHome', $ch14, '-UserHome', $uh14)
+    $kept14 = (Test-Path -LiteralPath $decoy14 -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir14 -PathType Container) -and
+              (Test-Path -LiteralPath (Join-Path $ch14 'commands\b3-plan.md') -PathType Leaf)
+
+    $sh14Ok = $true
+    if ($hasBash) {
+        $uh14s = Join-Path $sandbox 'u14sh'
+        $ch14s = Join-Path $uh14s '.cursor'
+        $ch14sp = $ch14s -replace '\\', '/'
+        $uh14sp = $uh14s -replace '\\', '/'
+        $shIn14 = Invoke-ShGlobal $instShPosix "install --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $decoy14s = Join-Path $uh14s 'outside-cursor-decoy.txt'
+        $decoyDir14s = Join-Path $uh14s 'outside-cursor-dir'
+        [System.IO.File]::WriteAllText($decoy14s, "keep outside decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+        New-Item -ItemType Directory -Path $decoyDir14s -Force | Out-Null
+        $decoySha14s = (Get-FileHash -LiteralPath $decoy14s -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest14s = Join-Path $ch14s '.b3-global-manifest'
+        $origManifest14s = [System.IO.File]::ReadAllText($manifest14s, (New-Object System.Text.UTF8Encoding($false)))
+        $evilLines14s = @(
+            "command|../../outside-cursor-decoy.txt|$decoySha14s",
+            "skill|../outside-cursor-dir|$($decoyDir14s -replace '\\', '/')",
+            "file|C:/outside.txt|$decoySha14s",
+            "agent|..\outside.md|$decoySha14s"
+        ) -join "`n"
+        [System.IO.File]::WriteAllText($manifest14s, ($origManifest14s.TrimEnd("`r", "`n") + "`n" + $evilLines14s + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+        $shUn14 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $shUnForce14 = Invoke-ShGlobal $instShPosix "uninstall --cursor-home '$ch14sp' --user-home '$uh14sp' --force"
+        $shVer14 = Invoke-ShGlobal $instShPosix "verify --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $shUp14 = Invoke-ShGlobal $instShPosix "update --cursor-home '$ch14sp' --user-home '$uh14sp'"
+        $shKept14 = (Test-Path -LiteralPath $decoy14s -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir14s -PathType Container) -and
+                    (Test-Path -LiteralPath (Join-Path $ch14s 'commands\b3-plan.md') -PathType Leaf)
+        $sh14Ok = ($shIn14.Code -eq 0) -and ($shUn14.Code -ne 0) -and ($shUnForce14.Code -ne 0) -and
+                  ($shVer14.Code -ne 0) -and ($shUp14.Code -ne 0) -and $shKept14
+    }
+    if ($in14.Code -eq 0 -and $unTrav14.Code -ne 0 -and $unForceTrav14.Code -ne 0 -and
+        $verTrav14.Code -ne 0 -and $upTrav14.Code -ne 0 -and $kept14 -and $sh14Ok) {
+        Pass 'cursor-global-manifest-path-traversal'
+    } else {
+        FailCheck 'cursor-global-manifest-path-traversal' "in=$($in14.Code) un=$($unTrav14.Code) uf=$($unForceTrav14.Code) ver=$($verTrav14.Code) up=$($upTrav14.Code) kept=$kept14 sh=$sh14Ok"
+    }
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue

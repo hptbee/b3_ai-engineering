@@ -688,6 +688,72 @@ try {
         FailCheck 'ag-global-manifest-corruption' "in=$($in17.Code) i2=$($inBad17.Code) u2=$($upBad17.Code) v2=$($verBad17.Code) un2=$($unBad17.Code) kept=$kept17 sh=$sh17Ok"
     }
 
+    # --- 18. ag-global-manifest-path-traversal ---
+    $uh18 = Join-Path $sandbox 'u18'
+    $pr18 = Join-Path $uh18 '.gemini\config\plugins\b3-ai-engineering'
+    $in18 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $decoy18 = Join-Path $uh18 'outside-ag-decoy.txt'
+    $decoyDir18 = Join-Path $uh18 'outside-ag-dir'
+    [System.IO.File]::WriteAllText($decoy18, "keep outside ag decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+    New-Item -ItemType Directory -Path $decoyDir18 -Force | Out-Null
+    $decoySha18 = (Get-FileHash -LiteralPath $decoy18 -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifest18 = Join-Path $pr18 '.b3-plugin-manifest'
+    $origManifest18 = [System.IO.File]::ReadAllText($manifest18, (New-Object System.Text.UTF8Encoding($false)))
+    $evilLines18 = @(
+        "file|../../../../outside-ag-decoy.txt|$decoySha18",
+        "file|agents\..\..\..\..\..\outside-ag-decoy.txt|$decoySha18",
+        "file|/tmp/outside.txt|$decoySha18",
+        "file|C:/outside.txt|$decoySha18",
+        "link|skills/../../outside-ag-dir|$($decoyDir18 -replace '\\', '/')"
+    ) -join "`n"
+    [System.IO.File]::WriteAllText($manifest18, ($origManifest18.TrimEnd("`r", "`n") + "`n" + $evilLines18 + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $unTrav18 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $unForceTrav18 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr18, '-UserHome', $uh18, '-Force')
+    $verTrav18 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $upTrav18 = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr18, '-UserHome', $uh18)
+    $kept18 = (Test-Path -LiteralPath $decoy18 -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir18 -PathType Container) -and
+              (Test-Path -LiteralPath (Join-Path $pr18 'plugin.json') -PathType Leaf) -and
+              (Test-Path -LiteralPath (Join-Path $pr18 'agents\b3-reviewer.md') -PathType Leaf)
+
+    $sh18Ok = $true
+    if ($hasBash) {
+        $uh18s = Join-Path $sandbox 'u18sh'
+        $pr18s = Join-Path $uh18s '.gemini\config\plugins\b3-ai-engineering'
+        $pr18sp = $pr18s -replace '\\', '/'
+        $uh18sp = $uh18s -replace '\\', '/'
+        $shIn18 = Invoke-ShScript $agShPosix "install --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $decoy18s = Join-Path $uh18s 'outside-ag-decoy.txt'
+        $decoyDir18s = Join-Path $uh18s 'outside-ag-dir'
+        [System.IO.File]::WriteAllText($decoy18s, "keep outside ag decoy`n", (New-Object System.Text.UTF8Encoding($false)))
+        New-Item -ItemType Directory -Path $decoyDir18s -Force | Out-Null
+        $decoySha18s = (Get-FileHash -LiteralPath $decoy18s -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest18s = Join-Path $pr18s '.b3-plugin-manifest'
+        $origManifest18s = [System.IO.File]::ReadAllText($manifest18s, (New-Object System.Text.UTF8Encoding($false)))
+        $evilLines18s = @(
+            "file|../../../../outside-ag-decoy.txt|$decoySha18s",
+            "file|agents\..\..\..\..\..\outside-ag-decoy.txt|$decoySha18s",
+            "file|/tmp/outside.txt|$decoySha18s",
+            "file|C:/outside.txt|$decoySha18s",
+            "link|skills/../../outside-ag-dir|$($decoyDir18s -replace '\\', '/')"
+        ) -join "`n"
+        [System.IO.File]::WriteAllText($manifest18s, ($origManifest18s.TrimEnd("`r", "`n") + "`n" + $evilLines18s + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+        $shUn18 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $shUnForce18 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr18sp' --user-home '$uh18sp' --force"
+        $shVer18 = Invoke-ShScript $agShPosix "verify --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $shUp18 = Invoke-ShScript $agShPosix "update --plugin-root '$pr18sp' --user-home '$uh18sp'"
+        $shKept18 = (Test-Path -LiteralPath $decoy18s -PathType Leaf) -and (Test-Path -LiteralPath $decoyDir18s -PathType Container) -and
+                    (Test-Path -LiteralPath (Join-Path $pr18s 'plugin.json') -PathType Leaf) -and
+                    (Test-Path -LiteralPath (Join-Path $pr18s 'agents\b3-reviewer.md') -PathType Leaf)
+        $sh18Ok = ($shIn18.Code -eq 0) -and ($shUn18.Code -ne 0) -and ($shUnForce18.Code -ne 0) -and
+                  ($shVer18.Code -ne 0) -and ($shUp18.Code -ne 0) -and $shKept18
+    }
+    if ($in18.Code -eq 0 -and $unTrav18.Code -ne 0 -and $unForceTrav18.Code -ne 0 -and
+        $verTrav18.Code -ne 0 -and $upTrav18.Code -ne 0 -and $kept18 -and $sh18Ok) {
+        Pass 'ag-global-manifest-path-traversal'
+    } else {
+        FailCheck 'ag-global-manifest-path-traversal' "in=$($in18.Code) un=$($unTrav18.Code) uf=$($unForceTrav18.Code) ver=$($verTrav18.Code) up=$($upTrav18.Code) kept=$kept18 sh=$sh18Ok"
+    }
+
 }
 finally {
     Pop-Location -ErrorAction SilentlyContinue

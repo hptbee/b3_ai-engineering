@@ -291,6 +291,48 @@ M_KINDS=()
 M_KEYS=()
 M_VALS=()
 
+is_safe_manifest_key() {
+  local kind="$1" key="$2" seg0 seg1
+  [[ -n "$key" ]] || return 1
+  case "$key" in
+    /*|*/|*//*|*'\'*|*:*|~*|' '*|*' '|*$'\t'*|*$'\r'*|*$'\n'*) return 1 ;;
+  esac
+  [[ "$key" =~ [[:cntrl:]] ]] && return 1
+  if [[ "$key" == */* ]]; then
+    seg0="${key%%/*}"
+    seg1="${key#*/}"
+    [[ "$seg1" != */* ]] || return 1
+    [[ -n "$seg0" && -n "$seg1" && "$seg0" != "." && "$seg0" != ".." && "$seg1" != "." && "$seg1" != ".." ]] || return 1
+    case "$kind" in
+      link) [[ "$seg0" == "skills" ]] ;;
+      file) [[ "$seg0" == "rules" || "$seg0" == "agents" ]] ;;
+      *) return 1 ;;
+    esac
+  else
+    [[ "$key" != "." && "$key" != ".." ]] || return 1
+    case "$kind" in
+      skill|command|agent|file) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+}
+
+path_within_root() {
+  local root_dir="$1" cand="$2" leaf root_norm cand_parent parent_norm
+  [[ -n "$root_dir" && -n "$cand" ]] || return 1
+  case "$cand" in
+    *'\'*|*/../*|*/./*|*/..|*/.|*//*) return 1 ;;
+  esac
+  [[ "$cand" == */* ]] || return 1
+  leaf="${cand##*/}"
+  [[ -n "$leaf" && "$leaf" != "." && "$leaf" != ".." ]] || return 1
+  cand_parent="${cand%/*}"
+  root_norm="$(norm_cmp_path "$(canon_path_allow_missing "$root_dir")")"
+  parent_norm="$(norm_cmp_path "$(canon_path_allow_missing "$cand_parent")")"
+  [[ -n "$root_norm" && -n "$parent_norm" ]] || return 1
+  [[ "$parent_norm" == "$root_norm" || "$parent_norm" == "${root_norm}/"* ]]
+}
+
 manifest_load() {
   local mfile="$1"
   M_EXISTS=false
@@ -326,7 +368,7 @@ manifest_load() {
     v1="${v1%%|*}"
     case "$k" in
       skill|command|agent|file|link)
-        if [[ -z "$v1" ]]; then
+        if ! is_safe_manifest_key "$k" "$v1"; then
           M_CORRUPT=true
           continue
         fi

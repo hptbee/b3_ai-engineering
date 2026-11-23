@@ -93,6 +93,7 @@ check_coexistence() {
 
 uninstall_managed_file() {
   local path="$1" exp_sha="$2" require_marker="$3" label="$4"
+  path_within_root "$CURSOR_HOME" "$path" || { echo "error: refusing to uninstall path outside CursorHome: $path" >&2; exit 1; }
   if is_link_entry "$path"; then
     echo "warning: skipping symlinked ${label}: $path" >&2
     SKIPPED=$((SKIPPED + 1))
@@ -165,6 +166,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
       sk="${M_KEYS[$i]}"
       exp_target="${M_VALS[$i]}"
       p="${SKILLS_DEST}/${sk}"
+      path_within_root "$CURSOR_HOME" "$p" || { echo "error: refusing to uninstall path outside CursorHome: $p" >&2; exit 1; }
       if is_link_entry "$p"; then
         if ! $FORCE && [[ -n "$exp_target" ]] && ! link_matches_expected_or_dangling "$p" "$exp_target"; then
           echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
