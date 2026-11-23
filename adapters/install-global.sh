@@ -130,5 +130,27 @@ if [[ $OVERALL_EXIT -ne 0 ]]; then
   echo "GLOBAL_FAIL: host=${HOST_NAME} action=${ACTION}"
   exit 1
 fi
+
+# Optional advisory preferences; do not manage this personal file in the global manifest.
+if [[ "$ACTION" == "install" || "$ACTION" == "update" ]] && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
+  MODEL_EXAMPLE="${B3_HOME}/config/models.example.md"
+  if [[ -f "$MODEL_EXAMPLE" ]]; then
+    MODEL_DEST="${B3_MODELS_PERSONAL:-}"
+    MODEL_DEST="${MODEL_DEST#"${MODEL_DEST%%[![:space:]]*}"}"
+    MODEL_DEST="${MODEL_DEST%"${MODEL_DEST##*[![:space:]]}"}"
+    MODEL_DEST="${MODEL_DEST:-${USER_HOME:-$HOME}/.b3/models.md}"
+    if [[ -e "$MODEL_DEST" || -L "$MODEL_DEST" ]]; then
+      echo "model_preferences=${MODEL_DEST} (kept existing)"
+    elif $DRY_RUN; then
+      echo "dry-run: initialize model_preferences=${MODEL_DEST} from $MODEL_EXAMPLE"
+    elif mkdir -p "$(dirname "$MODEL_DEST")" && (umask 077; set -C; cat "$MODEL_EXAMPLE" > "$MODEL_DEST"); then
+      echo "model_preferences=${MODEL_DEST} (created from example)"
+    elif [[ -e "$MODEL_DEST" || -L "$MODEL_DEST" ]]; then
+      echo "model_preferences=${MODEL_DEST} (kept existing)"
+    else
+      echo "MODEL_PREFERENCES_WARNING: optional initialization failed at $MODEL_DEST" >&2
+    fi
+  fi
+fi
 echo "GLOBAL_OK: host=${HOST_NAME} action=${ACTION}"
 exit 0

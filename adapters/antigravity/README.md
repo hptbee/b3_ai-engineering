@@ -65,6 +65,8 @@ Use either the unified host dispatcher or the standalone plugin manager:
 ./adapters/antigravity/install-plugin.sh uninstall
 ```
 
+**Optional model preferences:** The unified `../install-global.*` initializes `~/.b3/models.md` on successful install/update and preserves it on later updates/uninstall. With the direct plugin installer above, copy [`../../config/models.example.md`](../../config/models.example.md) to `~/.b3/models.md` manually. Model selection remains native/advisory; see [`../../docs/model-preferences.md`](../../docs/model-preferences.md).
+
 - Pass `-DryRun` / `--dry-run` to preview `install` or `uninstall` without modifying disk.
 - Normal `install`/`update` checks SHA-256 values recorded in `.b3-plugin-manifest` **before writing**. Modified generated files cause `UPDATE_CONFLICT` and are preserved. Back up your edits before using `-Force` / `--force` to deliberately replace same-named generated files or skill directories.
 - Untracked symlinks and custom agents are never pruned; an untracked symlink colliding with a desired B3 skill name must be moved manually, even with `-Force`.

@@ -1,6 +1,6 @@
 # Model / role slots & Cost-Preserving Quality Tiering
 
-Portable contract. This file does **not** name vendor models. Hosts differ (Cursor, Codex, Claude Code, Antigravity). Where to set `model:` is host config, not this spec.
+Portable contract. This file does **not** name vendor models. Hosts differ (Cursor, Codex, Claude Code, Antigravity). Optional personal/project Markdown preferences live in `~/.b3/models.md` and `<project>/.b3/models.md` (template: [`../config/models.example.md`](../config/models.example.md); guide: [`../docs/model-preferences.md`](../docs/model-preferences.md)). Where unsupported, hosts inherit their native model.
 
 ## Three slots (`/b3-review-loop`)
 

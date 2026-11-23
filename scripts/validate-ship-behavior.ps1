@@ -12,6 +12,8 @@ function FailCheck([string]$Name, [string]$Detail) {
 
 $sandbox = Join-Path $env:TEMP ("b3-ship-behavior-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
+$prevModelsPersonal = $env:B3_MODELS_PERSONAL
+$env:B3_MODELS_PERSONAL = Join-Path $sandbox 'personal-models.md'
 Push-Location $sandbox
 try {
     # --- F4: empty invalid dest is replaced; nonempty dest fails; cursor sync & coexistence guard ---
@@ -1238,6 +1240,7 @@ try {
     }
 }
 finally {
+    if ($null -eq $prevModelsPersonal) { Remove-Item Env:B3_MODELS_PERSONAL -ErrorAction SilentlyContinue } else { $env:B3_MODELS_PERSONAL = $prevModelsPersonal }
     Pop-Location -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
