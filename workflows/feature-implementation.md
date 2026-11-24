@@ -8,11 +8,11 @@ Scope → Plan → Build → Verify → Review → Fix → Verify
 
 | Step | Use |
 | --- | --- |
-| Scope | Read code, callers, and constraints |
+| Scope | Read known targets directly (short-circuit) or load [`references/context-routing.md`](references/context-routing.md) on demand for unfamiliar architecture/symbols (optional MCP acceleration, native fallback); inspect callers and constraints |
 | Plan | `skills/engineering/planning` when multi-step; else a short plan in-place |
 | Build | `problem-solving` + smallest domain skill |
 | Verify | `verification` (executed checks; `b3-guard verify-run` for non-trivial changes/handoffs) |
-| Review | `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) → risk-sensitive `code-review` (`b3-reviewer` + matching specialist on high risk) |
+| Review | `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) → diff-first, risk-sensitive `code-review` (`b3-reviewer` + matching specialist on high risk; optional [`references/context-routing.md`](references/context-routing.md) with native fallback) |
 | Fix / Verify | Fix root causes, add regression tests, remove `CONFIRMED` residue, re-verify (max 2 bounded rounds) |
 
 During **Review**, do not only ask "is it correct?" Also ask: *given final requirements, is all of this code still necessary?* Check whether intermediate steps left temporary scaffolding, dead branches, or redundant state.

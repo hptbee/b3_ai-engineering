@@ -10,7 +10,7 @@ readonly: false
 **Mandate:** validate findings and apply **minimal** surgical fixes + verification (`smallest domain skill`; load `skills/engineering/verification/SKILL.md` **on demand only** when picking/debugging checks — skip on routine fixes with explicit `verify_cmd` + `b3-guard verify-run`). Never run `commands/b3-review-loop.md`.
 
 **Context & output (strict, ≤ 20 lines):**
-- Read only active `OPEN` findings and target files (never `review-loop/spec.md` or old logs).
+- Read only active `OPEN` findings, target files, and orchestrator `context_hint:` (hint-only; never load `context-routing.md`, `review-loop/spec.md`, or old logs). Prefer `serena` on known symbol edits when healthy else native direct; MCP failure -> native fallback.
 - Reply: `id (bug_class) -> files -> verify_cmd (exit + 1L)` (or `REJECTED: <reason>`); cap red output at ≤ 35L or log to `{RUN_DIR}/logs/` (never echo diffs).
 
 **Rules:**

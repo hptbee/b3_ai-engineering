@@ -16,6 +16,8 @@ Dispatch a fresh read-only verification subagent (distinct from researcher; reus
 | **Engineering Gate** | `b3-guard mechanical-check`, `symbol-check`, `verify-run`/`verify-check`, `b3-reviewer.md` (+ specialists) | Classical/domain source fidelity |
 | **Editorial / Authority Gate** | Product policy (e.g., digest-bound registered AI review, Owner decision pins, `WITHHELD` stays withheld) | GitHub branch write access or PR merge |
 
+- **Codebase routing boundary:** optional codebase MCP output (`codebase-memory` / `serena` via [`context-routing.md`](context-routing.md)) is strictly `repo-evidence` for codebase exploration and Phase G implementation; it never substitutes for verified domain sources (`evidence-check`), the **Research Gate**, or the **Editorial / Authority Gate**.
+
 ## 3. PR Lifecycle (Phase I)
 
 1. Fetch & reconcile against `origin/main` (`git merge-base --is-ancestor origin/main HEAD`; rebase/merge if needed, then re-verify).

@@ -33,7 +33,7 @@ Near miss: “is this design sound?” with no code change yet → stay in Scope
 ## Procedure
 
 1. **Scope**  
-   Restate the problem, current behavior, desired behavior, and constraints. Read the relevant code and failure evidence. If understanding is incomplete, stop and gather; do not guess a root cause.
+   Restate the problem, current/desired behavior, and constraints. Read known targets directly (short-circuit) or use `workflows/references/context-routing.md` on demand for unfamiliar arch/symbols (optional MCP acceleration, native fallback). If incomplete, gather; do not guess.
 
 2. **Plan**  
    Write a short plan: approach, files likely touched, risks, and how success will be verified. Prefer the smallest change. Call out open questions. Inside `/b3-ship`, this step is `Scope` + `Gate` (Implementation Readiness Gate): inspect code first, then persist by **depth** (`inline` / `notes` / `detailed`). Do not skip it. Do not stop for the user after it.
@@ -57,6 +57,7 @@ Near miss: “is this design sound?” with no code change yet → stay in Scope
 
 ## Progressive disclosure
 
+- Context routing (on demand): `workflows/references/context-routing.md`
 - Constraints: `rules/engineering-principles.md`, `rules/verification.md`
 - Full independent loop: `review-loop/strategy.md`
 - Review method: `skills/engineering/code-review/SKILL.md`
