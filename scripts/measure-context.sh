@@ -94,6 +94,9 @@ RS_CORE=$((WF_RS_B + $(file_bytes "commands/b3-research-ship.md")))
 RS_REFS=$(($(file_bytes "workflows/references/research-ship-templates.md") + $(file_bytes "workflows/references/research-ship-resume.md") + $(file_bytes "workflows/references/research-ship-gates.md")))
 [[ "$RS_REFS" -gt 12000 ]] && WARNINGS+=("workflows/references/research-ship-{templates,resume,gates}.md (${RS_REFS} B > 12000 B)")
 
+CTX_ROUTE_B="$(file_bytes "workflows/references/context-routing.md")"
+[[ "$CTX_ROUTE_B" -gt 3200 ]] && WARNINGS+=("workflows/references/context-routing.md (${CTX_ROUTE_B} B > 3200 B)")
+
 RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
 [[ "$RL_STRAT_B" -gt 5400 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5400 B)")
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
@@ -129,6 +132,7 @@ printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/b3-ship.m
 printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.md]\n" "$SHIP_REFS" "$(est_tok "$SHIP_REFS")"
 printf "research_ship_core: %6d B (~%4d tok)  [research-ship.md=%d B + commands/b3-research-ship.md]\n" "$RS_CORE" "$(est_tok "$RS_CORE")" "$WF_RS_B"
 printf "research_ship_refs: %6d B (~%4d tok)  [research-ship-{templates,resume,gates}.md]\n" "$RS_REFS" "$(est_tok "$RS_REFS")"
+printf "context_routing   : %6d B (~%4d tok)  [workflows/references/context-routing.md (on-demand)]\n" "$CTX_ROUTE_B" "$(est_tok "$CTX_ROUTE_B")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$REV_AGENT_B"
 printf "review_hier_load  : %6d B (~%4d tok)  [review_loop_op + hierarchical.md (L/XL/XXL on demand)]\n" "$RL_HIER" "$(est_tok "$RL_HIER")"
 printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md (self-contained)]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"
