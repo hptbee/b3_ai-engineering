@@ -8,7 +8,7 @@ Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.a
 
 | Host | Rules / context | Skills | Commands | Subagents |
 | --- | --- | --- | --- | --- |
-| **Cursor** | `AGENTS.md` + committed `.cursor/rules/*.mdc` (`@rules/*.md`) | Gitignored `.cursor/skills` → `skills/` (or `~/.cursor/skills/b3-ai-engineering` in products) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
+| **Cursor** | `AGENTS.md` + committed `.cursor/rules/*.mdc` (`@rules/*.md`) | Gitignored `.cursor/skills` → `skills/` (or global `~/.cursor/skills/<name>` via `adapters/cursor/install-global.{ps1,sh}`) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
 | **Codex** | `AGENTS.md` | Gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`) | `adapters/command-skills/` (`$b3-ship`, `$b3-plan`, …) + prompt routing | Delegated role prompts from `agents/*.md` |
 | **Claude Code** | Committed `CLAUDE.md` (`@AGENTS.md`) | Gitignored flattened `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`) | Unified with skills (`adapters/command-skills/` via `.claude/skills/<name>`) | Gitignored `.claude/agents` → `agents/` |
 | **Antigravity** | `AGENTS.md` (or plugin `rules/AGENTS.md`) | Committed `.agents/skills.json` (in-repo), flattened `.agents/skills/<name>` (product), or plugin `skills/` | `adapters/command-skills/` via `.agents/skills.json` / plugin | Generated plugin `agents/*.md` (`subagent: true`, explicit `tools:`) or dynamic `define_subagent` |

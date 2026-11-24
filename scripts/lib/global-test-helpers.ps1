@@ -5,14 +5,25 @@ $script:HelpersRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:FailedCount = 0
 $script:PassedCount = 0
 
-$script:GitBash = 'C:\Program Files\Git\bin\bash.exe'
-if (-not (Test-Path -LiteralPath $script:GitBash -PathType Leaf)) {
-    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
-    if ($bashCmd -and ($bashCmd.Source -notmatch '[\\/]Windows[\\/]System32[\\/]bash\.exe$')) {
-        $script:GitBash = $bashCmd.Source
+$script:GitBash = ''
+foreach ($candidate in @('C:\Program Files\Git\bin\bash.exe', 'C:\Program Files (x86)\Git\bin\bash.exe')) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        $script:GitBash = $candidate
+        break
     }
 }
-$script:HasBash = Test-Path -LiteralPath $script:GitBash -PathType Leaf
+if (-not $script:GitBash) {
+    foreach ($bashCmd in @(Get-Command bash -All -ErrorAction SilentlyContinue)) {
+        if ($bashCmd.Source -and
+            ($bashCmd.Source -notmatch '[\\/]Windows[\\/]System32[\\/]bash\.exe$') -and
+            ($bashCmd.Source -notmatch '[\\/]Microsoft[\\/]WindowsApps[\\/]bash\.exe$') -and
+            (Test-Path -LiteralPath $bashCmd.Source -PathType Leaf)) {
+            $script:GitBash = $bashCmd.Source
+            break
+        }
+    }
+}
+$script:HasBash = [bool]($script:GitBash -and (Test-Path -LiteralPath $script:GitBash -PathType Leaf))
 if (-not $script:HasBash) {
     Write-Output 'WARNING: bash not found; cross-shell .sh checks skipped (INCOMPLETE)'
 }
@@ -61,6 +72,30 @@ function Invoke-ShScript([string]$ScriptPosix, [string]$ArgsLine) {
     $ErrorActionPreference = 'Continue'
     try {
         $raw = & $script:GitBash -c "'$ScriptPosix' $ArgsLine" 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
+    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
+}
+
+function To-PosixPath([string]$PathValue) {
+    return ($PathValue -replace '\\', '/')
+}
+
+function Invoke-PsGuard([string[]]$GuardArgs, [string]$GuardPath = (Join-Path $script:HelpersRepoRoot 'scripts\b3-guard.ps1')) {
+    return (Invoke-PsScript -ScriptPath $GuardPath -ScriptArgs $GuardArgs)
+}
+
+function Invoke-ShGuard([string]$BashCmd) {
+    if (-not $script:HasBash) {
+        return @{ Code = 127; Lines = @('bash not found'); Text = 'bash not found' }
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = & $script:GitBash -c $BashCmd 2>&1
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prev

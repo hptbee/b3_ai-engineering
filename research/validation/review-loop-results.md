@@ -4,7 +4,7 @@
 
 This file is a **historical** tabletop record (R1–R4 below). It is not current layout status.
 
-**Current** spec and orchestrator: [`../../review-loop/spec.md`](../../review-loop/spec.md), [`../../review-loop/strategy.md`](../../review-loop/strategy.md), trigger `.cursor/commands/b3-review-loop.md`. Finding log: `findings.md` (session table or gitignored `review-loop/state/current.yaml`). Default SMALL/MEDIUM inner-loop cap: **5** (`strategy.md`). Host subagent isolation and real-PR exercise remain **NOT VERIFIED**. At v1 the walkthrough cited an older `docs/review-loop.md` path.
+**Current** spec and orchestrator: [`../../review-loop/spec.md`](../../review-loop/spec.md), [`../../review-loop/strategy.md`](../../review-loop/strategy.md), trigger [`../../commands/b3-review-loop.md`](../../commands/b3-review-loop.md) (`/b3-review-loop`). State & finding log: standalone `.b3/ship/review-loop/<slug>/` (`state.md`, `ledger.md`, `logs/`, `evidence/verify.verify`) or `{RUN_DIR}/findings.md` inside `/b3-ship`. Default `XS`/`S`/`M` inner-loop cap: **5** (`strategy.md`). Host subagent isolation and real-PR exercise remain **NOT VERIFIED**. At v1 the walkthrough cited an older `docs/review-loop.md` path.
 
 Outcomes below are tabletop, not measured on a product repo.
 

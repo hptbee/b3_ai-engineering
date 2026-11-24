@@ -60,6 +60,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/global-common.sh
+source "${SCRIPT_DIR}/lib/global-common.sh"
 if [[ -z "$B3_HOME" ]]; then
   B3_HOME="$(cd "${SCRIPT_DIR}/.." && pwd)"
 else
@@ -132,25 +134,13 @@ if [[ $OVERALL_EXIT -ne 0 ]]; then
 fi
 
 # Optional advisory preferences; do not manage this personal file in the global manifest.
-if [[ "$ACTION" == "install" || "$ACTION" == "update" ]] && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
-  MODEL_EXAMPLE="${B3_HOME}/config/models.example.md"
-  if [[ -f "$MODEL_EXAMPLE" ]]; then
-    MODEL_DEST="${B3_MODELS_PERSONAL:-}"
-    MODEL_DEST="${MODEL_DEST#"${MODEL_DEST%%[![:space:]]*}"}"
-    MODEL_DEST="${MODEL_DEST%"${MODEL_DEST##*[![:space:]]}"}"
-    MODEL_DEST="${MODEL_DEST:-${USER_HOME:-$HOME}/.b3/models.md}"
-    if [[ -e "$MODEL_DEST" || -L "$MODEL_DEST" ]]; then
-      echo "model_preferences=${MODEL_DEST} (kept existing)"
-    elif $DRY_RUN; then
-      echo "dry-run: initialize model_preferences=${MODEL_DEST} from $MODEL_EXAMPLE"
-    elif mkdir -p "$(dirname "$MODEL_DEST")" && (umask 077; set -C; cat "$MODEL_EXAMPLE" > "$MODEL_DEST"); then
-      echo "model_preferences=${MODEL_DEST} (created from example)"
-    elif [[ -e "$MODEL_DEST" || -L "$MODEL_DEST" ]]; then
-      echo "model_preferences=${MODEL_DEST} (kept existing)"
-    else
-      echo "MODEL_PREFERENCES_WARNING: optional initialization failed at $MODEL_DEST" >&2
-    fi
-  fi
+if [[ "$ACTION" == "install" || "$ACTION" == "update" ]]; then
+  MODEL_PREF_STATUS="$(init_personal_models_file "$B3_HOME" "$USER_HOME" "$DRY_RUN" "true")"
+  case "$MODEL_PREF_STATUS" in
+    kept:*) echo "model_preferences=${MODEL_PREF_STATUS#kept:} (kept existing)" ;;
+    dry-run:*) echo "dry-run: initialize model_preferences=${MODEL_PREF_STATUS#dry-run:} from ${B3_HOME}/config/models.example.md" ;;
+    created:*) echo "model_preferences=${MODEL_PREF_STATUS#created:} (created from example)" ;;
+  esac
 fi
 echo "GLOBAL_OK: host=${HOST_NAME} action=${ACTION}"
 exit 0

@@ -3,44 +3,8 @@
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-standalone-commands.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$guardPs = Join-Path $root 'scripts\b3-guard.ps1'
-$guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
-$failed = 0
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
-$gitBash = $script:GitBash
-$hasBash = $script:HasBash
-
-function Pass([string]$Name) { Write-Output "PASS $Name" }
-function FailCheck([string]$Name, [string]$Detail) {
-    Write-Output "FAIL $Name :: $Detail"
-    $script:failed++
-}
-
-function Invoke-PsGuard([string[]]$GuardArgs) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & powershell -NoProfile -File $guardPs @GuardArgs 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function Invoke-ShGuard([string]$BashCmd) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & $gitBash -c $BashCmd 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
+$guardShPosix = (To-PosixPath $root) + '/scripts/b3-guard.sh'
 
 function Init-TestRepo([string]$DirPath) {
     New-Item -ItemType Directory -Path $DirPath | Out-Null
@@ -102,7 +66,7 @@ try {
     $psJuncLog = Invoke-PsGuard @('verify-check', '-RepoRoot', $r1, '-ReceiptPath', '.b3/ship/verify/junclog.verify')
 
     $provShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shSeed = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1Posix' --receipt-path '.b3/ship/verify/seed.verify'"
         $shNoCmd = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1Posix' --receipt-path '.b3/ship/verify/nocmd.verify'"
         $shBadTs = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r1Posix' --receipt-path '.b3/ship/verify/badts.verify'"
@@ -174,7 +138,7 @@ try {
 
     $contShOk = $true
     $contShDetail = ''
-    if ($hasBash) {
+    if ($script:HasBash) {
         $sideEffectSh = (Join-Path $sandbox 'ran-sh.txt') -replace '\\', '/'
         $outLogEscP = $outLogEsc -replace '\\', '/'
         $outRecEscP = $outRecEsc -replace '\\', '/'
@@ -247,7 +211,7 @@ try {
     $psAllCovers = Invoke-PsGuard @('verify-check', '-RepoRoot', $r2, '-ReceiptPath', '.b3/ship/verify/all.verify', '-ExpectedCmd', 'echo full-suite', '-RelevantPaths', 'src/a.ts,package.json')
 
     $scopeShOk1 = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shCmdOk = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r2Posix' --receipt-path '.b3/ship/verify/unit.verify' --expected-cmd 'echo check-unit' --relevant-paths 'src/a.ts'"
         $shCmdBad = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r2Posix' --receipt-path '.b3/ship/verify/unit.verify' --expected-cmd 'echo check-all'"
         $shScopeBad = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r2Posix' --receipt-path '.b3/ship/verify/unit.verify' --relevant-paths 'src/a.ts,package.json'"
@@ -262,7 +226,7 @@ try {
     Set-Content (Join-Path $r2 'package.json') "{`"name`":`"x`",`"version`":`"2`"}"
     $psAllStale = Invoke-PsGuard @('verify-check', '-RepoRoot', $r2, '-ReceiptPath', '.b3/ship/verify/all.verify', '-RelevantPaths', 'src/a.ts,package.json')
     $scopeShOk2 = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shAllStale = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r2Posix' --receipt-path '.b3/ship/verify/all.verify' --relevant-paths 'src/a.ts,package.json'"
         $scopeShOk2 = ($shAllStale.Code -eq 2) -and ($shAllStale.Text -match 'VERIFY_STALE:')
     }
@@ -284,7 +248,7 @@ try {
     $psBigLogCount = if (Test-Path -LiteralPath $psBigLog) { (Get-Content -LiteralPath $psBigLog).Count } else { 0 }
 
     $bigShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shBig = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r2Posix' --verify-cmd 'seq 1 15000; exit 2' --receipt-path '.b3/ship/verify/shbig.verify'"
         $shBigLog = Join-Path $r2 '.b3\ship\verify\shbig.verify.log'
         $shBigLogCount = if (Test-Path -LiteralPath $shBigLog) { (Get-Content -LiteralPath $shBigLog).Count } else { 0 }
@@ -322,7 +286,7 @@ try {
     $psVcIso2 = Invoke-PsGuard @('verify-check', '-RepoRoot', $r3, '-ReceiptPath', '.b3/ship/verify/claim.verify')
 
     $isoShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shDiff = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r3Posix' --base-sha HEAD"
         $shVcIso = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r3Posix' --receipt-path '.b3/ship/verify/claim.verify'"
         $shRes = Invoke-ShGuard "'$guardShPosix' resolve-run --repo-root '$r3Posix'"
@@ -335,7 +299,7 @@ try {
     Pop-Location
     $psPcBlk = Invoke-PsGuard @('precommit', '-RepoRoot', $r3, '-AllowedPaths', 'src/app.ts,.b3/ship/review-loop/r1/state.md')
     $isoPcShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shPcBlk = Invoke-ShGuard "'$guardShPosix' precommit --repo-root '$r3Posix' --allowed-paths 'src/app.ts,.b3/ship/review-loop/r1/state.md'"
         $isoPcShOk = ($shPcBlk.Code -eq 1) -and ($shPcBlk.Text -match 'checkpoint staged')
     }
@@ -374,7 +338,7 @@ try {
     $psLoopVc = Invoke-PsGuard @('verify-check', '-RepoRoot', $r4, '-ReceiptPath', '.b3/ship/review-loop/r1/evidence/verify.verify', '-ExpectedCmd', 'echo loop-pass', '-RelevantPaths', 'src/calc.ts,src/caller.ts')
 
     $loopShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shDelta = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r4Posix' --base-sha '$baseSha4' --prev-sha '$snap1'"
         $shMech = Invoke-ShGuard "'$guardShPosix' mechanical-check --repo-root '$r4Posix' --base-sha '$baseSha4'"
         $shSymOk = Invoke-ShGuard "'$guardShPosix' symbol-check --repo-root '$r4Posix' --base-sha '$baseSha4'"
@@ -442,7 +406,7 @@ try {
         [IO.File]::WriteAllText((Join-Path $r5 '.b3\ship\ev\gitlog.verify'), "schema=b3-verify-v1`ntask_id=T1`nscope=s`nhead_sha=$baseSha5`ntree_hash=$(('0' * 40))`nrelevant_paths=ALL`nexit_code=0`nstatus=PASS`ncommand=echo ok`nlog_path=$badLogPath`ntimestamp_utc=2026-01-01T00:00:00Z`n", (New-Object System.Text.UTF8Encoding($false)))
         $psGl = Invoke-PsGuard @('verify-check', '-RepoRoot', $r5, '-ReceiptPath', '.b3/ship/ev/gitlog.verify')
         if ($psGl.Code -ne 1 -or ($psGl.Text -notmatch 'VERIFY_CORRUPT: invalid log_path')) { $gitLogVariantsOk = $false }
-        if ($hasBash) {
+        if ($script:HasBash) {
             $shGl = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r5Posix' --receipt-path '.b3/ship/ev/gitlog.verify'"
             if ($shGl.Code -ne 1 -or ($shGl.Text -notmatch 'VERIFY_CORRUPT: invalid log_path')) { $gitLogVariantsOk = $false }
         }
@@ -456,7 +420,7 @@ try {
     $mcPsNorm = ($mcPsRaw | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
 
     $optShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shSnap = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r5Posix'"
         $snapShId = $shSnap.Text.Trim()
         $shDeltaNone = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r5Posix' --base-sha '$baseSha5' --prev-sha '$snapShId'"
@@ -467,7 +431,7 @@ try {
         $shNonCkVr = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$r5Posix' --verify-cmd 'echo nonck-ok' --receipt-path '.b3/nonck/sub/r.verify' --relevant-paths 'foo/bar.ts'"
         $shNonCkVc = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$r5Posix' --receipt-path '.b3/nonck/sub/r.verify'"
         $prevShMc = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-        $mcShRaw = & $gitBash -c "'$($root -replace '\\','/')/scripts/measure-context.sh' --strict" 2>&1
+        $mcShRaw = & $script:GitBash -c "'$($root -replace '\\','/')/scripts/measure-context.sh' --strict" 2>&1
         $mcShExit = $LASTEXITCODE
         $ErrorActionPreference = $prevShMc
         $mcShNorm = ($mcShRaw | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
@@ -512,14 +476,14 @@ try {
     $secretOid6 = (& git -C $r6 hash-object -- credentials.json).Trim()
     $psSecret6 = Invoke-PsGuard @('snapshot', '-RepoRoot', $r6)
     $shOk6 = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shSecret6 = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r6Posix'"
         $shOk6 = ($shSecret6.Code -eq 1) -and ($shSecret6.Text -match 'sensitive path cannot be snapshotted')
     }
     & git -C $r6 cat-file -e $secretOid6 2>$null
     $secretNotStored6 = ($LASTEXITCODE -ne 0)
     Remove-Item -LiteralPath (Join-Path $r6 'credentials.json') -Force
-    if ($hasBash) {
+    if ($script:HasBash) {
         [IO.File]::WriteAllText((Join-Path $r6 'temporary.ts'), "temporary change`n", (New-Object System.Text.UTF8Encoding($false)))
         $shSnap6 = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r6Posix'"
         Remove-Item -LiteralPath (Join-Path $r6 'temporary.ts') -Force
@@ -541,7 +505,7 @@ try {
     Pop-Location
     [IO.File]::WriteAllText((Join-Path $r6 'deps\lib\dirty-untracked.txt'), "not in gitlink`n", (New-Object System.Text.UTF8Encoding($false)))
     $psSub6 = Invoke-PsGuard @('snapshot', '-RepoRoot', $r6)
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shSub6 = Invoke-ShGuard "'$guardShPosix' snapshot --repo-root '$r6Posix'"
         $shOk6 = $shOk6 -and ($shSub6.Code -eq 1) -and ($shSub6.Text -match 'dirty submodule cannot be snapshotted')
     }
@@ -618,9 +582,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($failed -gt 0) {
-    Write-Output "$failed check(s) failed"
-    exit 1
-}
-Write-Output 'ok'
-exit 0
+Complete-ValidationSuite

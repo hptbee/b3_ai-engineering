@@ -32,7 +32,7 @@ Knowledge
 | Skill / Rule / Workflow | Executable method or constraint | `skills/`, `rules/`, `workflows/` |
 | Implementation | Change in a product (or in this system) | the target repo |
 | Verification | Evidence | verification skill / rule |
-| Review | Independent check; loop when implemented | `review-loop/spec.md` |
+| Review | Independent check and iterative review loop | `review-loop/spec.md`, `review-loop/strategy.md` |
 | Lessons learned | Candidates only | notes → then the promotion path below |
 
 Research intake in more detail: [`../research/README.md`](../research/README.md) and [`research-methodology.md`](research-methodology.md).
@@ -80,6 +80,7 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 | Research and domain synthesis | **Present** |
 | Review-loop spec and orchestrator procedure | **Present** — [`../review-loop/spec.md`](../review-loop/spec.md), [`../review-loop/strategy.md`](../review-loop/strategy.md), [`commands/b3-review-loop.md`](../commands/b3-review-loop.md). Agent procedure, not a host plugin. Default inner-loop cap is 5 (`strategy.md`). |
 | Ship lifecycle (`/b3-ship`) | **Present** — [`../workflows/ship.md`](../workflows/ship.md), [`commands/b3-ship.md`](../commands/b3-ship.md). Session orchestrator, not a runner. Slash UX and other-host runtime are **NOT VERIFIED**. |
+| Research-ship lifecycle (`/b3-research-ship`) | **Present** — [`../workflows/research-ship.md`](../workflows/research-ship.md), [`commands/b3-research-ship.md`](../commands/b3-research-ship.md). Research-first delivery with SHA-256 provenance and fail-closed merge gates. |
 | Review-loop on a real product PR / host subagent isolation | **NOT VERIFIED** — tabletop only: [`../research/validation/review-loop-results.md`](../research/validation/review-loop-results.md) |
 | Knowledge after lessons | **Minimal** — [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md); no `stable/` or `volatile/` yet |
 

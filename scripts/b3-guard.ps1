@@ -586,6 +586,27 @@ function Resolve-AutoBaseForTarget([string]$Root, [string]$TargetCommitSha) {
     return $TargetCommitSha
 }
 
+function Resolve-ScopeTargetAndBase([string]$Root, [string]$TargetRefRaw, [string]$BaseShaRaw, [string[]]$IgnoredPaths, [string]$FailPrefix, [string]$BaseRevKind = 'object') {
+    $targetTrim = $TargetRefRaw.Trim()
+    $targetCommitSha = ''
+    if ($targetTrim) {
+        if ($targetTrim -match '[\r\n]') {
+            Fail "${FailPrefix}: invalid -TargetRef '$targetTrim'" 1
+        }
+        $targetCommitSha = Assert-ValidGitRev $Root $targetTrim 'commit' $FailPrefix '-TargetRef'
+    }
+    $resolvedBase = $BaseShaRaw.Trim()
+    if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+        $resolvedBase = if ($targetTrim) { Resolve-AutoBaseForTarget $Root $targetCommitSha } else { Resolve-AutoBaseSha $Root $IgnoredPaths }
+    }
+    $validBaseSha = Assert-ValidGitRev $Root $resolvedBase $BaseRevKind $FailPrefix '-BaseSha'
+    return @{
+        TargetRef = $targetTrim
+        TargetCommitSha = $targetCommitSha
+        BaseSha = if ($BaseRevKind -eq 'commit') { $validBaseSha } else { $resolvedBase }
+    }
+}
+
 function Test-SecretPath([string]$PathVal) {
     $leaf = (($PathVal -split '/')[-1]).ToLowerInvariant()
     if (-not $leaf) { return $false }
@@ -795,6 +816,16 @@ function Parse-GitRawDiff([string]$RawOut, [string[]]$IgnPaths, [string[]]$Clean
     return $map
 }
 
+function Invoke-GitTextHash([string]$Root, [string]$Text, [string]$FailPrefix = 'GIT_ERROR', [string]$FailDesc = 'failed') {
+    $hRes = Invoke-GitCommand $Root @('hash-object', '--stdin') -StdInText $Text
+    $hOut = $hRes.StdOut.Trim()
+    if ($hRes.ExitCode -ne 0 -or $hOut -cnotmatch '^[0-9a-f]{40}$') {
+        $detail = if ($hRes.StdErr.Trim()) { $hRes.StdErr.Trim() } else { $hOut }
+        Fail "${FailPrefix}: git hash-object ${FailDesc}: $detail" 1
+    }
+    return $hOut
+}
+
 function Get-SymlinkBlobOid([string]$Root, [string]$RelPath) {
     $full = Join-Path $Root ($RelPath -replace '/', '\')
     $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
@@ -802,13 +833,7 @@ function Get-SymlinkBlobOid([string]$Root, [string]$RelPath) {
         $isSym = (-not $item.PSObject.Properties['LinkType']) -or ($item.LinkType -ceq 'SymbolicLink')
         if ($isSym -and $item.PSObject.Properties['Target'] -and $item.Target) {
             $tgt = ([string](@($item.Target)[0])) -replace '\\', '/'
-            $sRes = Invoke-GitCommand $Root @('hash-object', '--stdin') $tgt
-            $sSha = $sRes.StdOut.Trim()
-            if ($sRes.ExitCode -ne 0 -or $sSha -notmatch '^[0-9a-f]{40}$') {
-                $detail = if ($sRes.StdErr.Trim()) { $sRes.StdErr.Trim() } else { $sSha }
-                Fail "GIT_ERROR: git hash-object symlink failed for ${RelPath}: $detail" 1
-            }
-            return $sSha
+            return (Invoke-GitTextHash $Root $tgt 'GIT_ERROR' "symlink failed for ${RelPath}")
         }
     }
     if (Test-Path -LiteralPath $full -PathType Leaf) {
@@ -891,12 +916,7 @@ function Get-SubmoduleEntryIdentity([string]$Root, [string]$RelPath, [string]$Fa
                 [void]$sbDirty.Append("C $sp DELETED`n")
             }
         }
-        $dRes = Invoke-GitCommand $Root @('hash-object', '--stdin') $sbDirty.ToString()
-        $dSha = $dRes.StdOut.Trim()
-        if ($dRes.ExitCode -ne 0 -or $dSha -notmatch '^[0-9a-f]{40}$') {
-            $detail = if ($dRes.StdErr.Trim()) { $dRes.StdErr.Trim() } else { $dSha }
-            Fail "GIT_ERROR: git hash-object submodule digest failed for ${RelPath}: $detail" 1
-        }
+        $dSha = Invoke-GitTextHash $Root $sbDirty.ToString() 'GIT_ERROR' "submodule digest failed for ${RelPath}"
         return "160000 commit ${subHead}+dirty:${dSha}"
     }
     if ($hasFallback) {
@@ -1091,12 +1111,7 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
         [void]$sb.Append("I $($indexDiv[$ip]) $ip`n")
     }
 
-    $thRes = Invoke-GitCommand $Root @('hash-object', '--stdin') -StdInText ($sb.ToString())
-    $treeHash = $thRes.StdOut.Trim()
-    if ($thRes.ExitCode -ne 0 -or $treeHash -notmatch '^[0-9a-f]{40}$') {
-        $detail = if ($thRes.StdErr.Trim()) { $thRes.StdErr.Trim() } else { $treeHash }
-        Fail "GIT_ERROR: git hash-object manifest failed: $detail" 1
-    }
+    $treeHash = Invoke-GitTextHash $Root ($sb.ToString()) 'GIT_ERROR' 'manifest failed'
     return @{ HeadSha = $headSha; TreeHash = $treeHash; PathsCsv = $pathsCsv }
 }
 
@@ -1351,9 +1366,6 @@ function Test-ContractPath([string]$PathVal) {
 }
 
 function Get-RawModuleGroup([string]$PathVal) {
-    if ($PathVal -match '^(packages|services|apps|libs|modules|crates)/([^/]+)/') {
-        return "$($Matches[1])/$($Matches[2])"
-    }
     if ($PathVal -match '^([^/]+)/([^/]+)/') {
         return "$($Matches[1])/$($Matches[2])"
     }
@@ -1682,27 +1694,8 @@ function Eval-RiskForSubset([string[]]$PathsList, [System.Collections.Hashtable]
     }
 }
 
-function Invoke-GitTextHash([string]$Root, [string]$Text, [string]$FailPrefix = 'GIT_ERROR') {
-    $hRes = Invoke-GitCommand $Root @('hash-object', '--stdin') -StdInText $Text
-    $hOut = $hRes.StdOut.Trim()
-    if ($hRes.ExitCode -ne 0 -or $hOut -cnotmatch '^[0-9a-f]{40}$') {
-        $detail = if ($hRes.StdErr.Trim()) { $hRes.StdErr.Trim() } else { $hRes.StdOut.Trim() }
-        Fail "${FailPrefix}: git hash-object failed: $detail" 1
-    }
-    return $hOut
-}
-
 function Test-IsOversizedUnit([int]$FilesCnt, [int]$LinesCnt) {
     return ($LinesCnt -gt 5000 -or ($FilesCnt -gt 100 -and $LinesCnt -gt 1000))
-}
-
-function Get-RiskSeverityNum([string]$RiskLevel) {
-    switch ($RiskLevel) {
-        'CRITICAL' { return 4 }
-        'HIGH' { return 3 }
-        'MEDIUM' { return 2 }
-        default { return 1 }
-    }
 }
 
 function Get-UnitMetrics([hashtable]$GrpEntry, [hashtable]$FileLines, [hashtable]$FileSignals) {
@@ -1721,7 +1714,6 @@ function Get-UnitMetrics([hashtable]$GrpEntry, [hashtable]$FileLines, [hashtable
         FilesCnt = $filesSorted.Count
         LinesCnt = $linesSum
         Risk = $ev.RiskLevel
-        RiskNum = (Get-RiskSeverityNum $ev.RiskLevel)
         Specialists = $ev.RecommendedSpecialists
         Signals = $ev.RiskSignals
         FilesCsv = ($filesSorted -join ',')
@@ -1783,7 +1775,7 @@ function Get-SourceContentLines([string]$Root, [string]$TargetCommitSha, [string
     return @([IO.File]::ReadLines($full))
 }
 
-function Attach-TestsToSubBuckets([string]$ParentGroup, [System.Collections.Generic.List[hashtable]]$SubBuckets, [string[]]$TestFiles, [string[]]$AllRegFiles, [hashtable]$StemToSubIdx) {
+function Attach-TestsToSubBuckets([string]$ParentGroup, [System.Collections.Generic.List[hashtable]]$SubBuckets, [string[]]$TestFiles) {
     $extraTests = New-Object System.Collections.Generic.List[string]
     foreach ($tf in $TestFiles) {
         $assignedIdx = -1
@@ -1928,7 +1920,7 @@ function Expand-OversizedUnit([string]$Root, [string]$TargetCommitSha, [hashtabl
                 foreach ($rf in $dirMap[$k]) { [void]$fts.Add((Get-FileFeatureToken $rf)) }
                 [void]$subBuckets.Add(@{ Group = $k; Members = @($k); Files = $dirMap[$k]; FeatureTokens = @($fts | Select-Object -Unique) })
             }
-            Attach-TestsToSubBuckets $baseGroup $subBuckets $tests.ToArray() $nonTest.ToArray() @{}
+            Attach-TestsToSubBuckets $baseGroup $subBuckets $tests.ToArray()
             $coalesced = Coalesce-TinySubBuckets $subBuckets $FileLines $FileSignals
             $outUnits = New-Object System.Collections.Generic.List[hashtable]
             foreach ($cu in $coalesced) {
@@ -2069,7 +2061,7 @@ function Expand-OversizedUnit([string]$Root, [string]$TargetCommitSha, [hashtabl
     }
 
     if ($b2Buckets.Count -ge 2) {
-        Attach-TestsToSubBuckets $baseGroup $b2Buckets $tests.ToArray() $nonTest.ToArray() @{}
+        Attach-TestsToSubBuckets $baseGroup $b2Buckets $tests.ToArray()
         $coalesced = Coalesce-TinySubBuckets $b2Buckets $FileLines $FileSignals
         foreach ($cu in $coalesced) {
             if (Test-IsOversizedUnit $cu.FilesCnt $cu.LinesCnt) {
@@ -2851,28 +2843,10 @@ switch ($Command) {
 
     'diff-scope' {
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
-        $targetTrim = $TargetRef.Trim()
-        $targetCommitSha = ''
-        if ($targetTrim) {
-            if ($targetTrim.StartsWith('-')) {
-                Fail "DIFF_SCOPE_FAIL: invalid -TargetRef '$targetTrim'" 1
-            }
-            $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
-            $targetCommitSha = $trRes.StdOut.Trim()
-            if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) {
-                Fail "DIFF_SCOPE_FAIL: invalid -TargetRef '$targetTrim'" 1
-            }
-        }
-
-        $resolvedBase = $BaseSha.Trim()
-        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
-            if ($targetTrim) {
-                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha
-            } else {
-                $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
-            }
-        }
-        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'DIFF_SCOPE_FAIL' '-BaseSha')
+        $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'DIFF_SCOPE_FAIL' 'object'
+        $targetTrim = $scopeTarget.TargetRef
+        $targetCommitSha = $scopeTarget.TargetCommitSha
+        $resolvedBase = $scopeTarget.BaseSha
 
         $scopeData = Invoke-CollectScopeData $RepoRoot $resolvedBase $targetCommitSha $ignored 'DIFF_SCOPE_FAIL'
         $reviewFiles = $scopeData.ReviewFiles
@@ -2941,29 +2915,10 @@ switch ($Command) {
         $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
         $obsoletesList = @(Split-CsvList $Obsoletes)
-        $targetTrim = $TargetRef.Trim()
-        $targetCommitSha = ''
-        if ($targetTrim) {
-            if ($targetTrim.StartsWith('-')) {
-                Fail "MECHANICAL_FAIL: invalid -TargetRef '$targetTrim'" 1
-            }
-            $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
-            $targetCommitSha = $trRes.StdOut.Trim()
-            if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) {
-                Fail "MECHANICAL_FAIL: invalid -TargetRef '$targetTrim'" 1
-            }
-        }
-
-        $resolvedBase = $BaseSha.Trim()
-        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
-            if ($targetTrim) {
-                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha
-            } else {
-                $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
-            }
-        }
-
-        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'MECHANICAL_FAIL' '-BaseSha')
+        $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'MECHANICAL_FAIL' 'object'
+        $targetTrim = $scopeTarget.TargetRef
+        $targetCommitSha = $scopeTarget.TargetCommitSha
+        $resolvedBase = $scopeTarget.BaseSha
 
         $chArgs = if ($targetTrim) {
             @('diff', '--no-renames', '--name-only', $resolvedBase, $targetCommitSha, '--')
@@ -3580,29 +3535,10 @@ switch ($Command) {
 
     'symbol-check' {
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
-        $targetTrim = $TargetRef.Trim()
-        $targetCommitSha = ''
-        if ($targetTrim) {
-            if ($targetTrim.StartsWith('-')) {
-                Fail "SYMBOL_FAIL: invalid -TargetRef '$targetTrim'" 1
-            }
-            $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
-            $targetCommitSha = $trRes.StdOut.Trim()
-            if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) {
-                Fail "SYMBOL_FAIL: invalid -TargetRef '$targetTrim'" 1
-            }
-        }
-
-        $resolvedBase = $BaseSha.Trim()
-        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
-            if ($targetTrim) {
-                $resolvedBase = Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha
-            } else {
-                $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
-            }
-        }
-
-        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'SYMBOL_FAIL' '-BaseSha')
+        $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'SYMBOL_FAIL' 'object'
+        $targetTrim = $scopeTarget.TargetRef
+        $targetCommitSha = $scopeTarget.TargetCommitSha
+        $resolvedBase = $scopeTarget.BaseSha
 
         $dlArgs = if ($targetTrim) {
             @('diff', '--no-renames', '-U0', $resolvedBase, $targetCommitSha, '--')
@@ -3866,21 +3802,10 @@ switch ($Command) {
 
     'review-inventory' {
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
-        $targetTrim = $TargetRef.Trim()
-        $targetCommitSha = ''
-        if ($targetTrim) {
-            if ($targetTrim.StartsWith('-')) { Fail "INVENTORY_FAIL: invalid -TargetRef '$targetTrim'" 1 }
-            $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
-            $targetCommitSha = $trRes.StdOut.Trim()
-            if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) {
-                Fail "INVENTORY_FAIL: invalid -TargetRef '$targetTrim'" 1
-            }
-        }
-        $resolvedBase = $BaseSha.Trim()
-        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
-            $resolvedBase = if ($targetTrim) { Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha } else { Resolve-AutoBaseSha $RepoRoot $ignored }
-        }
-        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'INVENTORY_FAIL' '-BaseSha')
+        $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'INVENTORY_FAIL' 'object'
+        $targetTrim = $scopeTarget.TargetRef
+        $targetCommitSha = $scopeTarget.TargetCommitSha
+        $resolvedBase = $scopeTarget.BaseSha
 
         $inv = Invoke-BuildInventory $RepoRoot $resolvedBase $targetCommitSha $ignored $MaxConcurrency 'INVENTORY_FAIL'
         if ($inv.IsEmpty) { Fail 'EMPTY_DIFF' 2 }
@@ -3958,19 +3883,10 @@ switch ($Command) {
             if ($maxPassesExplicit -and $MaxPasses -le 0) {
                 Fail 'LEDGER_FAIL: -MaxPasses must be a positive integer' 1
             }
-            $targetTrim = $TargetRef.Trim()
-            $targetCommitSha = ''
-            if ($targetTrim) {
-                if ($targetTrim.StartsWith('-') -or $targetTrim -match '[\r\n]') { Fail "LEDGER_FAIL: invalid -TargetRef '$targetTrim'" 1 }
-                $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
-                $targetCommitSha = $trRes.StdOut.Trim()
-                if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) { Fail "LEDGER_FAIL: invalid -TargetRef '$targetTrim'" 1 }
-            }
-            $resolvedBase = $BaseSha.Trim()
-            if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
-                $resolvedBase = if ($targetTrim) { Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha } else { Resolve-AutoBaseSha $RepoRoot $ignored }
-            }
-            $resolvedBase = Assert-ValidGitRev $RepoRoot $resolvedBase 'commit' 'LEDGER_FAIL' '-BaseSha'
+            $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'LEDGER_FAIL' 'commit'
+            $targetTrim = $scopeTarget.TargetRef
+            $targetCommitSha = $scopeTarget.TargetCommitSha
+            $resolvedBase = $scopeTarget.BaseSha
             $headSha = if ($targetCommitSha) { $targetCommitSha } else { Assert-ValidGitRev $RepoRoot 'HEAD' 'commit' 'LEDGER_FAIL' 'HEAD' }
 
             $inv = Invoke-BuildInventory $RepoRoot $resolvedBase $targetCommitSha $ignored $MaxConcurrency 'LEDGER_FAIL'

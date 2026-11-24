@@ -18,7 +18,7 @@ End-to-end research-first delivery complementing [`ship.md`](ship.md) without du
 
 ## Lifecycle (Phases A–K)
 
-For schemas load [`references/research-ship-templates.md`](references/research-ship-templates.md) only on creation; for verification/review/PR/merge load [`references/research-ship-gates.md`](references/research-ship-gates.md) only at phases E/H/I/J/K; for codebase exploration or Phase G implementation load [`references/context-routing.md`](references/context-routing.md) on demand (strictly `repo-evidence` only — never substitute codebase MCP output for verified domain sources, `evidence-check`, Research Gate, or Editorial/Authority governance).
+For schemas load [`references/research-ship-templates.md`](references/research-ship-templates.md) only on creation; for verification/review/PR/merge load [`references/research-ship-gates.md`](references/research-ship-gates.md) only at phases E/H/I/J/K; for codebase exploration or Phase G load [`references/context-routing.md`](references/context-routing.md) on demand (`repo-evidence` only — boundaries in [gates](references/research-ship-gates.md) §2).
 
 ### A. Preflight
 - **In:** user prompt / plan path, repo state. **Out:** `B3_HOME`, `PRODUCT_ROOT`, branch/HEAD, existing PR check (`gh pr list --head <branch>`), optional `.b3/research-profile.md` & `.b3/research-policy.json`, protected/single-writer paths, `{RUN_DIR}`.
@@ -51,7 +51,7 @@ For schemas load [`references/research-ship-templates.md`](references/research-s
 
 ### G. Implementation (Skip in `research-only`)
 - **In:** formalized specs. **Out:** code/structured artifact commits.
-- **Readiness:** reuse [`ship.md`](ship.md) (`check-wave`, `Context Packet`, `verify-run`/`verify-check`, `diff-scope`, `mechanical-check`, `symbol-check`, `context-cache`, `precommit`), on-demand [`references/context-routing.md`](references/context-routing.md) (`repo-evidence` only; pass 1L `context_hint:` — never substitute for verified domain sources or editorial/release gates), + [`../review-loop/strategy.md`](../review-loop/strategy.md). Enforce single-writer serialization on shared ledgers/manifests/authority pins.
+- **Readiness:** reuse [`ship.md`](ship.md) (`check-wave`, `Context Packet` + 1L `context_hint:`, `verify-run`/`verify-check`, `diff-scope`, `mechanical-check`, `symbol-check`, `context-cache`, `precommit`), on-demand [`references/context-routing.md`](references/context-routing.md) (`repo-evidence` only per [gates](references/research-ship-gates.md) §2), + [`../review-loop/strategy.md`](../review-loop/strategy.md). Enforce single-writer serialization on shared ledgers/manifests/authority pins.
 - **Failure / Recovery:** `WAVE_CONFLICT` → degrade to sequential; Tier-1/2 review breaker → follow `strategy.md`.
 
 ### H. Technical Verification & Independent Review / Editorial Gates

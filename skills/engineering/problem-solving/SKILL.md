@@ -26,20 +26,20 @@ Scope → Plan → Build → Verify → Review → Fix → Verify
 - Failure with unknown cause, before a patch → `debugging`
 - “Research how other repos do X” → `research-engineering-patterns`
 - Pure knowledge questions with no change
-- Running the full independent review loop after work is already implemented → `review-loop/strategy.md` (specified; not a substitute for this skill’s lighter review step)
+- Running the full independent review loop after work is already implemented → `review-loop/strategy.md` (not a substitute for this skill’s lighter review step)
 
 Near miss: “is this design sound?” with no code change yet → stay in Scope/Plan; do not skip to Build.
 
 ## Procedure
 
 1. **Scope**  
-   Restate the problem, current/desired behavior, and constraints. Read known targets directly (short-circuit) or use `workflows/references/context-routing.md` on demand for unfamiliar arch/symbols (optional MCP acceleration, native fallback). If incomplete, gather; do not guess.
+   Restate the problem, current/desired behavior, and constraints. Read known targets directly; load `workflows/references/context-routing.md` on demand for unfamiliar arch/symbols. If incomplete, gather; do not guess.
 
 2. **Plan**  
-   Write a short plan: approach, files likely touched, risks, and how success will be verified. Prefer the smallest change. Call out open questions. Inside `/b3-ship`, this step is `Scope` + `Gate` (Implementation Readiness Gate): inspect code first, then persist by **depth** (`inline` / `notes` / `detailed`). Do not skip it. Do not stop for the user after it.
+   Write a short plan: approach, files likely touched, risks, and verification. Prefer the smallest change; call out open questions. Inside `/b3-ship`, this is `Scope` + `Gate` (inspect first, persist by `inline`/`notes`/`detailed`; do not skip or stop for the user).
 
 3. **Build**  
-   Execute the plan. Do not silently expand scope. If the plan is wrong, update the plan, then continue.
+   Execute the plan without silent scope expansion. If wrong, update the plan and continue.
 
 4. **Verify**
    Run executed verification (`verification`; `b3-guard verify-run` to `.b3/ship/verify/<slug>.verify` for non-trivial changes) on current `HEAD` + tree. Missing evidence → `UNKNOWN / INCOMPLETE`.
@@ -57,14 +57,12 @@ Near miss: “is this design sound?” with no code change yet → stay in Scope
 
 ## Progressive disclosure
 
-- Context routing (on demand): `workflows/references/context-routing.md`
 - Constraints: `rules/engineering-principles.md`, `rules/verification.md`
-- Full independent loop: `review-loop/strategy.md`
-- Review method: `skills/engineering/code-review/SKILL.md`
+- Full loop / review: `review-loop/strategy.md`, `skills/engineering/code-review/SKILL.md`
 
 ## Verification
 
-The loop is done only when the success condition was checked with evidence, or the leftover gap is labeled incomplete. A plan plus untested code is not done.
+Done only when the success condition is checked with evidence, or gaps are labeled incomplete. Untested code is not done.
 
 ## Failure handling
 

@@ -42,7 +42,7 @@ When posting to a GitHub PR after user confirmation, include **only `CONFIRMED` 
 ## Verification & Coverage
 
 - **Executed checks:** `<command>` -> PASS / FAIL (`<exit code / counts>`), or `None run`
-- **Dimensions checked:** correctness, architecture, security, performance, simplification/residue, tests
+- **Dimensions checked:** correctness, architecture, security, performance, simplification/residue, tests, maintainability
 - **Skipped / Unverified (`UNKNOWN / INCOMPLETE`):** <skipped dimensions with reason, or `None`>
 ````
 

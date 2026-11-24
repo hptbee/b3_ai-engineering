@@ -16,17 +16,18 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
    - **GitHub Issue:** run `gh issue view <num> --json title,body,comments`.
    - **Jira ticket:** if a Jira/Atlassian CLI or MCP tool is available in the host, fetch only the ticket `summary`, `description`/ACs, and recent relevant comments (summarize to ≤ 10 lines; never dump raw JSON into context).
    - **Unavailable / missing business context:** never invent requirements. Report `CONFIRMED` technical findings from code/callers/tests and put ambiguous product intent under **Questions for author** (noting the unread ticket ID).
-3. Filter out noise files before fetching/reading diffs:
-   `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `packages.lock.json`, `Cargo.lock`, `poetry.lock`, `*.min.*`, `*.snap`, `*.Designer.cs`, `*.g.cs`, `*.map`.
+3. Filter out diff-noise files before fetching/reading diffs:
+   `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `packages.lock.json`, `Cargo.lock`, `poetry.lock`, `*.min.*`, `*.snap`, `*.map`.
+   - **Generated code (`*.generated.*`, `*.pb.*`, `*.Designer.cs`, `*.g.cs`):** do not rely solely on file-extension exemptions — inspect generator inputs/provenance and record verification/rationale (aligned with [`review-loop/hierarchical.md`](../../../../review-loop/hierarchical.md)).
 4. Choose diff source:
    - **Inside local clone (preferred):** fetch base branch and PR head separately (so `FETCH_HEAD` unambiguously points to PR head), compute merge-base, run deterministic guards with `--target-ref FETCH_HEAD` (`-TargetRef FETCH_HEAD` in PowerShell), then diff only `review_files`:
      ```sh
      git fetch origin <baseRefName>
      git fetch origin pull/<id>/head
      mb=$(git merge-base origin/<baseRefName> FETCH_HEAD)
-     ./scripts/b3-guard.sh diff-scope --base-sha "$mb" --target-ref FETCH_HEAD
-     ./scripts/b3-guard.sh mechanical-check --base-sha "$mb" --target-ref FETCH_HEAD
-     ./scripts/b3-guard.sh symbol-check --base-sha "$mb" --target-ref FETCH_HEAD   # on rename/refactor/deletion
+     {B3_HOME}/scripts/b3-guard.{ps1,sh} diff-scope --base-sha "$mb" --target-ref FETCH_HEAD
+     {B3_HOME}/scripts/b3-guard.{ps1,sh} mechanical-check --base-sha "$mb" --target-ref FETCH_HEAD
+     {B3_HOME}/scripts/b3-guard.{ps1,sh} symbol-check --base-sha "$mb" --target-ref FETCH_HEAD   # on rename/refactor/deletion
      git diff "$mb"...FETCH_HEAD -- <review_files>
      ```
    - **Outside local clone:** fetch diffs for non-noise `review_files` only via `gh api`:

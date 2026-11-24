@@ -9,10 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Fail([string]$Message) {
-    Write-Error $Message
-    exit 1
-}
+. (Join-Path $PSScriptRoot 'lib\global-common.ps1')
 
 function Test-SameFile([string]$Left, [string]$Right) {
     if (-not (Test-Path -LiteralPath $Left) -or -not (Test-Path -LiteralPath $Right)) { return $false }
@@ -191,32 +188,6 @@ function Update-B3Gitignore([string]$Root) {
     return 'appended'
 }
 
-function Initialize-PersonalModelPreferences([string]$HomeDir, [switch]$IsDryRun) {
-    if ($env:B3_SKIP_MODEL_INIT -eq '1') { return 'skipped' }
-    $templateMd = Join-Path $HomeDir 'config\models.example.md'
-    if (-not (Test-Path -LiteralPath $templateMd -PathType Leaf)) { return 'no-template' }
-    $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
-        $env:B3_MODELS_PERSONAL.Trim()
-    } else {
-        $uHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-        Join-Path $uHome '.b3\models.md'
-    }
-    if (Test-Path -LiteralPath $dest) {
-        if ($IsDryRun) { Write-Output "dry-run: keep existing personal model preferences $dest" }
-        return "kept:$dest"
-    }
-    if ($IsDryRun) {
-        Write-Output "dry-run: initialize personal model preferences at $dest from $templateMd"
-        return "dry-run:$dest"
-    }
-    $parent = Split-Path -Parent $dest
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    }
-    Copy-Item -LiteralPath $templateMd -Destination $dest
-    return "created:$dest"
-}
-
 function Update-HostSkillGitignore([string]$Root, [string]$HostName) {
     $lines = @()
     if ($HostName -in @('codex', 'antigravity')) { $lines = @('.agents/skills') }
@@ -281,7 +252,12 @@ if ($DryRun) {
         Write-Output "dry-run: flatten $claudeSkillsDest (one junction per skill + command skills)"
         Write-Output "dry-run: junction $claudeAgentsDest -> $b3Agents"
     }
-    [void](Initialize-PersonalModelPreferences $B3Home -IsDryRun)
+    $modelDryStatus = Initialize-PersonalModelsFile -B3Home $B3Home -DryRun
+    if ($modelDryStatus -like 'kept:*') {
+        Write-Output "dry-run: keep existing personal model preferences $($modelDryStatus.Substring(5))"
+    } elseif ($modelDryStatus -like 'dry-run:*') {
+        Write-Output "dry-run: initialize personal model preferences at $($modelDryStatus.Substring(8)) from $(Join-Path $B3Home 'config\models.example.md')"
+    }
     exit 0
 }
 
@@ -324,7 +300,7 @@ if ($HostName -in @('codex', 'antigravity')) {
     }
 }
 
-$modelPrefStatus = Initialize-PersonalModelPreferences $B3Home
+$modelPrefStatus = Initialize-PersonalModelsFile -B3Home $B3Home
 
 Write-Output "installed B3 pointer in $ProductRoot"
 Write-Output "B3_HOME=$B3Home"
@@ -342,6 +318,6 @@ if ($HostName -eq 'codex') {
 } elseif ($HostName -eq 'claude') {
     Write-Output "skills=$claudeSkillsDest (flattened junctions + command skills) + $claudeAgentsDest -> $b3Agents (gitignored, not copied)"
 } else {
-    Write-Output "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $skills (not copied into product)"
+    Write-Output "skills=user-level ~/.cursor/skills/<name> via adapters/cursor/install-global.ps1 (not copied into product)"
 }
 Write-Output "note: this proves files were written, not host slash-command or skill discovery"

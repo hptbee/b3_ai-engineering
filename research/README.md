@@ -151,7 +151,7 @@ Organized by architectural concern (not by repository):
 | [decision-007-backend-skills.md](decisions/decision-007-backend-skills.md) | **ADAPT** layered backend security skills |
 | [decision-008-skill-synthesis.md](decisions/decision-008-skill-synthesis.md) | **ADAPT** mined skills into B3; reject catalogs |
 | [decision-009-cursor-native-layout.md](decisions/decision-009-cursor-native-layout.md) | **ADAPT** Cursor-native discovery paths; portable meaning (superseded by decision-013) |
-| [decisions/README.md](decisions/README.md) (`decision-010`..`decision-016`) | Post-synthesis ADRs: `/b3-ship` lifecycle, product attach, hardening, 4-host layout, waves/guards, evidence gates, and standalone commands |
+| [decisions/README.md](decisions/README.md) (`decision-010`..`decision-018`) | Post-synthesis ADRs: `/b3-ship` lifecycle, product attach, hardening, 4-host layout, waves/guards, evidence gates, standalone commands, global Cursor integration, and `/b3-research-ship` |
 
 ## Rejected
 
@@ -207,7 +207,7 @@ Status as of the catalog after decision-008/009 (do not re-run synthesis as if i
 
 | Item | Status |
 | --- | --- |
-| Default max review-loop iterations | **Specified** as 5 for SMALL/MEDIUM (`review-loop/strategy.md`); still tunable after real product PRs |
+| Default max review-loop iterations | **Specified** as 5 for `XS`/`S`/`M` (`review-loop/strategy.md`); still tunable after real product PRs |
 | Independent reconstruction always-on | Deferred — high cost; optional for critical changes only |
 | Consensus scoring (calimero-style) | Deferred — useful for PR bots; may be overkill for a personal loop |
 | Automated eval runner / CI | Deferred (decision-005 E3) |
@@ -232,7 +232,7 @@ Status as of the catalog after decision-008/009 (do not re-run synthesis as if i
 
 ## Track C initial baseline (outside `research/`)
 
-Initial Phase 1 / Track C counts (`169` fixtures across Cursor/Codex/Claude). For current 4-host adapters (including Antigravity) and the `262` eval fixtures + CLI validators, see [`../adapters/README.md`](../adapters/README.md), [`../evals/README.md`](../evals/README.md), and [`../scripts/README.md`](../scripts/README.md).
+Initial Phase 1 / Track C counts (`169` fixtures across Cursor/Codex/Claude). For current 4-host adapters (including Antigravity) and the `283` eval fixtures + CLI validators, see [`../adapters/README.md`](../adapters/README.md), [`../evals/README.md`](../evals/README.md), and [`../scripts/README.md`](../scripts/README.md).
 
 | Artifact | Location |
 | --- | --- |

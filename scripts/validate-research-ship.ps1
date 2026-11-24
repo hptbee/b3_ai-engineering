@@ -3,43 +3,8 @@
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-research-ship.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$guardPs = Join-Path $root 'scripts\b3-guard.ps1'
-$guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
-$gitBash = 'C:\Program Files\Git\bin\bash.exe'
-$hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
-$failed = 0
-
-function Pass([string]$Name) { Write-Output "PASS $Name" }
-function FailCheck([string]$Name, [string]$Detail) {
-    Write-Output "FAIL $Name :: $Detail"
-    $script:failed++
-}
-
-function Invoke-PsGuard([string[]]$GuardArgs) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $guardPs @GuardArgs 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function Invoke-ShGuard([string]$BashCmd) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & $gitBash -c $BashCmd 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
+$guardShPosix = (To-PosixPath $root) + '/scripts/b3-guard.sh'
 
 function Init-TestRepo([string]$DirPath) {
     New-Item -ItemType Directory -Path $DirPath -Force | Out-Null
@@ -54,26 +19,6 @@ function Init-TestRepo([string]$DirPath) {
     } finally {
         Pop-Location -ErrorAction SilentlyContinue
         $ErrorActionPreference = $prev
-    }
-}
-
-function Remove-ReparseLinksUnder([string]$DirPath) {
-    if (-not (Test-Path -LiteralPath $DirPath)) { return }
-    $rootItem = Get-Item -LiteralPath $DirPath -Force -ErrorAction SilentlyContinue
-    if (-not $rootItem) { return }
-    if ((($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($rootItem.LinkType -in @('Junction', 'SymbolicLink'))) {
-        if ($rootItem.PSIsContainer) { [System.IO.Directory]::Delete($rootItem.FullName, $false) }
-        else { Remove-Item -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue }
-        return
-    }
-    if (-not $rootItem.PSIsContainer) { return }
-    foreach ($child in @(Get-ChildItem -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue)) {
-        if ((($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($child.LinkType -in @('Junction', 'SymbolicLink'))) {
-            if ($child.PSIsContainer) { [System.IO.Directory]::Delete($child.FullName, $false) }
-            else { Remove-Item -LiteralPath $child.FullName -Force -ErrorAction SilentlyContinue }
-        } elseif ($child.PSIsContainer) {
-            Remove-ReparseLinksUnder $child.FullName
-        }
     }
 }
 
@@ -116,7 +61,7 @@ try {
     $missPs = Invoke-PsGuard @('evidence-check', '-RepoRoot', $rEv, '-ManifestPath', $mRel)
 
     $evShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         Set-Content (Join-Path $rEv 'sources\secondary.md') "# Secondary Source`nClause B`n" -NoNewline
         $wSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --write-manifest --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/secondary.md'"
         $fSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/secondary.md'"
@@ -236,7 +181,7 @@ try {
     $postOpen = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'OPEN', '-MergedSha', $featSha, '-MainRef', 'main')
 
     $govShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shDisabled = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths docs/notes.md"
         $shWithheld = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --governance-status WITHHELD_PROMOTION"
         $shProt = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths releases/v3.json"
@@ -321,7 +266,7 @@ try {
     $waveConflict = Invoke-PsGuard @('check-wave', '-RepoRoot', $rNs, '-ExpectedBaseSha', $nsBase, '-WaveSpecs', 'U001=research/u1.md,ledger/index.json;U002=research/u2.md,ledger/index.json')
 
     $nsShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shNew = Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rNsPosix' --namespace research-ship --slug bash-pass --timestamp 20261123-0101"
         Set-Content (Join-Path $rNs '.b3\research-ship\runs\20261123-0101-bash-pass\progress.md') "- run_status: PASS`n"
         $shNew2 = Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rNsPosix' --namespace research-ship --slug bash-pass2 --timestamp 20261123-0102"
@@ -388,7 +333,7 @@ try {
     $prLinkPs = Invoke-PsGuard @('prune', '-RepoRoot', $rLinkRuns, '-Namespace', 'research-ship', '-Keep', '0')
 
     $safeShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $shVr = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$rNsPosix' --verify-cmd 'echo verified' --receipt-path '.b3/research-ship/runs/vr-sh.receipt' --task-id U001 --scope research-check"
         Set-Content (Join-Path $rNs '.b3\research-ship\runs\extra-sh-checkpoint.md') "# checkpoint note sh`n"
         $shVc = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$rNsPosix' --receipt-path '.b3/research-ship/runs/vr-sh.receipt'"
@@ -495,7 +440,7 @@ try {
                       ($giAppPsText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giAppPsText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giAppPsText -match '(?m)^\s*\.b3/models\.md\s*$')
 
     $bashCompatOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $pShDir = Join-Path $sandbox 'prod-sh-codex'
         $pShPosix = $pShDir -replace '\\', '/'
         $giUpSh = Join-Path $sandbox 'gi-up-sh'
@@ -541,9 +486,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($failed -gt 0) {
-    Write-Output "$failed check(s) failed"
-    exit 1
-}
-Write-Output 'ok'
-exit 0
+Complete-ValidationSuite

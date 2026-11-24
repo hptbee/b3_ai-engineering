@@ -43,6 +43,13 @@ Personal taste (Clean Architecture everywhere) never beats project requirements 
 
 The chosen shape can be explained in five sentences and maps to requirements. If not, INCOMPLETE design.
 
+## Failure handling
+
+- Requirements, scale targets, or team/compliance boundaries are unstated → surface the missing inputs and mark the design `UNKNOWN / INCOMPLETE` instead of guessing extra layers.
+- The product repo already enforces an architecture → follow repo conventions (`docs/precedence.md`); do not force a rewrite.
+- Evidence is partial (e.g., unmeasured throughput/latency claims) → record the assumption explicitly and defer complexity until measured.
+- The problem is a measured runtime bottleneck or local code-style fix → hand off to performance skills or `problem-solving` rather than stretching this skill.
+
 ## Provenance
 
 User-stated B3 principle. Tiki “ponytail / karpathy” anti-over-engineering observed. Not a copy of those rule files.

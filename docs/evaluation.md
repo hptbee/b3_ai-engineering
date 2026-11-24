@@ -23,7 +23,8 @@ evals/
 ├── commands/
 │
 ├── workflows/
-│   └── ship/
+│   ├── ship/
+│   └── research-ship/
 │
 └── review-loop/
     ├── false-positive/
@@ -108,7 +109,7 @@ A loop that always reports success is a failed loop. A loop that always reports 
 
 ## Workflow & command eval folders
 
-`evals/workflows/ship/` holds lifecycle fixtures for `workflows/ship.md`, and `evals/commands/` holds boundary, evidence, and convergence fixtures for the six standalone commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-review-loop`, `/b3-verify`). Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). YAML cases remain schema-checked via `scripts/validate-evals.sh`. Deterministic guard, receipt provenance, isolation, install, and resume ancestry behavior have PowerShell sandbox suites (`scripts/validate-ship-behavior.ps1`, `scripts/validate-standalone-commands.ps1`) and an isolated product-repo smoke (`scripts/smoke-ship-product.ps1`). Those scripts are not a Cursor slash-command or Codex runtime test.
+`evals/workflows/ship/` holds lifecycle fixtures for `workflows/ship.md`, `evals/workflows/research-ship/` holds research-first delivery fixtures for `workflows/research-ship.md`, and `evals/commands/` holds boundary, evidence, and convergence fixtures for the six standalone commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-review-loop`, `/b3-verify`). Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). YAML cases remain schema-checked via `scripts/validate-evals.sh`. Deterministic guard, receipt provenance, isolation, install, hierarchical review, context routing, model preferences, and resume ancestry behavior have PowerShell sandbox suites (`scripts/validate-ship-behavior.ps1`, `scripts/validate-standalone-commands.ps1`, `scripts/validate-tshirt-hierarchical.ps1`, `scripts/validate-research-ship.ps1`, `scripts/validate-context-routing.ps1`, `scripts/validate-model-preferences.ps1`, `scripts/validate-cursor-global.ps1`, `scripts/validate-antigravity-global.ps1`) and an isolated product-repo smoke (`scripts/smoke-ship-product.ps1`). Those scripts are not a Cursor slash-command or Codex runtime test.
 
 ## Honesty metrics
 

@@ -206,23 +206,29 @@ All byte caps are measured in **canonical LF UTF-8 bytes** (identical across Win
 | Individual skill frontmatter | `<= 280 B` | Prevents always-on skill-index bloat |
 | `workflows/ship.md` | `<= 9,500 B` | Core `/b3-ship` orchestrator prompt |
 | `ship_refs_load` (`templates` + `resume`) | `<= 6,000 B` | On-demand `/b3-ship` progressive-disclosure refs |
+| `workflows/research-ship.md` | `<= 9,500 B` | Core `/b3-research-ship` orchestrator prompt |
+| `research_ship_refs` (`templates` + `resume` + `gates`) | `<= 12,000 B` | On-demand `/b3-research-ship` progressive-disclosure refs |
+| `context_routing` (`workflows/references/context-routing.md`) | `<= 3,200 B` | On-demand MCP-aware routing contract (`0 B` always-on) |
 | `review-loop/strategy.md` | `<= 5,400 B` | Self-sufficient runtime `/b3-review-loop` prompt |
-| `review_delta_load` (`reviewer` + `code-review`) | Tracked | Per-pass independent review subagent payload |
+| `review_delta_load` (`b3-reviewer.md` only) | Tracked | Self-contained per-pass independent review subagent payload |
+| `review_iter_subag` (`b3-reviewer.md` + `b3-fixer.md`) | Tracked | Self-contained per-iteration reviewer + fixer subagent payloads |
+| `review_hier_load` (`review_loop_op` + `hierarchical.md`) | Tracked | On-demand `L`/`XL`/`XXL` hierarchical review load |
 | `standalone_cmds` (`plan`, `impl`, `debug`, `review`, `verify`) | Tracked | Single-hop static load per standalone command |
+| `standalone_rev_all` (`cmd` + `code-review/SKILL.md` + `review-template.md`) | Tracked | Full standalone `/b3-review` report payload |
 | `agents_roles_total` (5 runtime roles) | `<= 8,500 B` | Compact subagent role specs with strict reply caps |
 
 ---
 
-## 6. Phân tầng Model tối ưu chi phí (4-Tier Cost-Preserving Quality Routing)
+## 6. Cost-Preserving Quality Model Tiering (4-Tier Routing)
 
-Hệ thống tách biệt **suy luận sâu (Deep)**, **thực thi chuẩn (Standard)**, **phẫu thuật nhanh (Fast)** và **kiểm tra xác định (Deterministic 0-token)** theo hướng host-neutral (chi tiết contract & **Cost-Aware Escalation** tại [`../review-loop/models.md`](../review-loop/models.md)):
+The system separates **Deep reasoning**, **Standard execution**, **Fast surgical execution**, and **Deterministic (0-token) verification** in a host-neutral way (contract details and **Cost-Aware Escalation** in [`../review-loop/models.md`](../review-loop/models.md)):
 
-| Tầng | Vai trò trong `/b3-ship` & Standalone Commands | Lý do & Bảo vệ chất lượng |
+| Tier | Roles in `/b3-ship` & Standalone Commands | Rationale & Quality Guardrail |
 | --- | --- | --- |
-| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), hard debugging, `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Giữ nguyên chất lượng thiết kế, invariant, hợp đồng API và phát hiện bug độc lập |
-| **Standard execution** | Triển khai đa file phức tạp, tích hợp shared contracts, refactor lớn | Giữ state/invariant ổn định trước khi verify, giảm số vòng retry tốn kém |
-| **Fast execution** | Coding phạm vi nhỏ (`inline`/`notes`), sửa lỗi phẫu thuật của `b3-fixer` (đã ghim `file:line` + `bug_class`), tests thường quy, docs | Giảm chi phí/latency khi phạm vi & contract đã rõ; nâng 1 tầng khi gặp circuit breaker hoặc lỗi `verify-run` lặp lại |
-| **Deterministic (0-token)** | `b3-guard` (`diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`check`, `check-wave`, `check-worktree`, `precommit`), Git, lint, builds | Xác minh cấu trúc bằng CLI không tốn token và không ảo giác |
+| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), hard debugging, `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Preserves design quality, invariants, API contracts, and independent defect detection |
+| **Standard execution** | Complex multi-file implementation, shared contract integration, large refactors | Keeps state and invariants stable before verification and reduces costly retry loops |
+| **Fast execution** | Small-scope coding (`inline`/`notes`), surgical `b3-fixer` edits (pinned `file:line` + `bug_class`), routine tests, docs | Reduces cost and latency once scope and contracts are clear; escalates 1 tier on circuit breaker or repeated `verify-run` failures |
+| **Deterministic (0-token)** | `b3-guard` (`diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`check`, `check-wave`, `check-worktree`, `precommit`), Git, lint, builds | Deterministic structural verification via CLI with zero token cost and zero hallucination |
 
 ---
 
