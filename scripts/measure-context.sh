@@ -87,6 +87,13 @@ SHIP_CORE=$((WF_SHIP_B + $(file_bytes "commands/b3-ship.md")))
 SHIP_REFS=$(($(file_bytes "workflows/references/ship-templates.md") + $(file_bytes "workflows/references/ship-resume.md")))
 [[ "$SHIP_REFS" -gt 6000 ]] && WARNINGS+=("workflows/references/ship-{templates,resume}.md (${SHIP_REFS} B > 6000 B)")
 
+WF_RS_B="$(file_bytes "workflows/research-ship.md")"
+[[ "$WF_RS_B" -gt 9500 ]] && WARNINGS+=("workflows/research-ship.md (${WF_RS_B} B > 9500 B)")
+RS_CORE=$((WF_RS_B + $(file_bytes "commands/b3-research-ship.md")))
+
+RS_REFS=$(($(file_bytes "workflows/references/research-ship-templates.md") + $(file_bytes "workflows/references/research-ship-resume.md") + $(file_bytes "workflows/references/research-ship-gates.md")))
+[[ "$RS_REFS" -gt 12000 ]] && WARNINGS+=("workflows/references/research-ship-{templates,resume,gates}.md (${RS_REFS} B > 12000 B)")
+
 RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
 [[ "$RL_STRAT_B" -gt 5400 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5400 B)")
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
@@ -120,6 +127,8 @@ echo "=== B3 Context Budget Report ==="
 printf "always_on_total   : %6d B (~%4d tok)  [AGENTS.md=%d B, rules=%d B, %d skill frontmatters=%d B]\n" "$ALWAYS_ON" "$(est_tok "$ALWAYS_ON")" "$AGENTS_B" "$RULES_B" "$SKILL_COUNT" "$FM_TOTAL"
 printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/b3-ship.md]\n" "$SHIP_CORE" "$(est_tok "$SHIP_CORE")" "$WF_SHIP_B"
 printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.md]\n" "$SHIP_REFS" "$(est_tok "$SHIP_REFS")"
+printf "research_ship_core: %6d B (~%4d tok)  [research-ship.md=%d B + commands/b3-research-ship.md]\n" "$RS_CORE" "$(est_tok "$RS_CORE")" "$WF_RS_B"
+printf "research_ship_refs: %6d B (~%4d tok)  [research-ship-{templates,resume,gates}.md]\n" "$RS_REFS" "$(est_tok "$RS_REFS")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$REV_AGENT_B"
 printf "review_hier_load  : %6d B (~%4d tok)  [review_loop_op + hierarchical.md (L/XL/XXL on demand)]\n" "$RL_HIER" "$(est_tok "$RL_HIER")"
 printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md (self-contained)]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"

@@ -50,7 +50,8 @@ try {
                     ($ver2Sh.Text -match 'check\.rules=OK') -and
                     ($ver2Sh.Text -match 'check\.skills=OK') -and
                     ($ver2Sh.Text -match 'check\.commands=OK') -and
-                    ($ver2Sh.Text -match 'check\.agents=OK')
+                    ($ver2Sh.Text -match 'check\.agents=OK') -and
+                    ($ver2Sh.Text -match 'check\.skills_json=OK')
     }
     $skillDirs2 = @(Get-ChildItem -LiteralPath (Join-Path $pr2 'skills') -Force -ErrorAction SilentlyContinue)
     $agFiles2 = @(Get-ChildItem -LiteralPath (Join-Path $pr2 'agents') -Filter 'b3-*.md' -File -ErrorAction SilentlyContinue)
@@ -73,11 +74,13 @@ try {
         }
     }
     $hasAllCmds = $true
-    foreach ($cmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship')) {
+    foreach ($cmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship')) {
         if (-not (Test-Path -LiteralPath (Join-Path $pr2 "skills\$cmd\SKILL.md") -PathType Leaf)) { $hasAllCmds = $false }
     }
     if ($in2.Code -eq 0 -and $ver2Ps.Code -eq 0 -and $ver2ShOk -and
         ($ver2Ps.Text -match 'check\.plugin=OK') -and ($ver2Ps.Text -match 'check\.commands=OK') -and
+        ($ver2Ps.Text -match 'check\.skills_json=OK') -and
+        (Test-Path -LiteralPath (Join-Path $uh2 '.gemini\config\skills.json') -PathType Leaf) -and
         ($ver2Ps.Text -match 'UNKNOWN / INCOMPLETE') -and
         $pjOk2 -and $rulesOk2 -and $allAgentsOk2 -and
         $skillDirs2.Count -eq $expectedTotalSkills -and $hasAllCmds -and $noHardcodedModel) {
@@ -881,6 +884,129 @@ try {
         Pass 'ag-global-manifest-hardening'
     } else {
         FailCheck 'ag-global-manifest-hardening' $hard21FailDetail
+    }
+
+    # --- 22. ag-global-skills-json-lifecycle (merge, verify, uninstall preserve custom vs remove empty, conflict & symlink) ---
+    $uh22 = Join-Path $sandbox 'u22'
+    $pr22 = Join-Path $uh22 '.gemini\config\plugins\b3-ai-engineering'
+    $sj22 = Join-Path $uh22 '.gemini\config\skills.json'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $sj22) -Force | Out-Null
+    $b3Fwd = ($root -replace '\\', '/')
+    $seedSj22 = @"
+{
+  "inherits": ["./shared.json"],
+  "note": "keep-top",
+  "entries": [
+    { "path": "D:/my-custom-skills", "include_only": ["foo"] },
+    { "path": "$b3Fwd/skills/removed-cat" },
+    { "path": "$b3Fwd/adapters/command-skills" }
+  ]
+}
+"@.Replace("`r`n", "`n")
+    [System.IO.File]::WriteAllText($sj22, $seedSj22, (New-Object System.Text.UTF8Encoding($false)))
+
+    $in22 = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr22, '-UserHome', $uh22)
+    $ver22 = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr22, '-UserHome', $uh22)
+    $sj22Obj = Get-Content -LiteralPath $sj22 -Raw | ConvertFrom-Json
+    $sj22Paths = @($sj22Obj.entries | ForEach-Object { [string]$_.path })
+    $merge22Ok = ($in22.Code -eq 0) -and ($ver22.Code -eq 0) -and ($ver22.Text -match 'check\.skills_json=OK') -and
+                 ($sj22Obj.note -eq 'keep-top') -and (@($sj22Obj.inherits).Count -eq 1) -and ($sj22Obj.inherits[0] -eq './shared.json') -and
+                 ($sj22Paths -contains 'D:/my-custom-skills') -and ($sj22Obj.entries[0].include_only[0] -eq 'foo') -and
+                 ($sj22Paths -notcontains "$b3Fwd/skills/removed-cat") -and
+                 (@($sj22Paths | Where-Object { $_ -eq "$b3Fwd/adapters/command-skills" }).Count -eq 1) -and
+                 ($sj22Paths -contains "$b3Fwd/skills/architecture") -and ($sj22Paths -contains "$b3Fwd/skills/engineering")
+
+    # Verify catches missing/stale entries & missing file independently
+    $sj22MissingEntry = @{ inherits = $sj22Obj.inherits; note = 'keep-top'; entries = @($sj22Obj.entries | Where-Object { $_.path -ne "$b3Fwd/adapters/command-skills" }) + @(@{ path = "$b3Fwd/skills/bogus-stale" }) }
+    [System.IO.File]::WriteAllText($sj22, ((ConvertTo-Json $sj22MissingEntry -Depth 10) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    $ver22Bad = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr22, '-UserHome', $uh22)
+    $ver22BadOk = ($ver22Bad.Code -eq 1) -and ($ver22Bad.Text -match 'check\.skills_json=FAIL') -and ($ver22Bad.Text -match 'check\.plugin=OK')
+    $up22Heal = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr22, '-UserHome', $uh22)
+    $ver22Healed = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr22, '-UserHome', $uh22)
+
+    # Corrupt skills.json refuses without -Force before modifying PluginRoot; -Force heals
+    Remove-Item -LiteralPath $sj22 -Force
+    $ver22Missing = Invoke-PsScript $agPs @('verify', '-PluginRoot', $pr22, '-UserHome', $uh22)
+    [System.IO.File]::WriteAllText($sj22, "{bad json`n", (New-Object System.Text.UTF8Encoding($false)))
+    $up22Corrupt = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr22, '-UserHome', $uh22)
+    $up22Force = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr22, '-UserHome', $uh22, '-Force')
+    [System.IO.File]::WriteAllText($sj22, $seedSj22, (New-Object System.Text.UTF8Encoding($false)))
+    $up22ReSeed = Invoke-PsScript $agPs @('update', '-PluginRoot', $pr22, '-UserHome', $uh22)
+
+    # Uninstall removes only B3 entries and preserves custom entries/properties
+    $un22 = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr22, '-UserHome', $uh22)
+    $sj22PostUn = Get-Content -LiteralPath $sj22 -Raw | ConvertFrom-Json
+    $un22PreserveOk = ($un22.Code -eq 0) -and ($sj22PostUn.note -eq 'keep-top') -and
+                      (@($sj22PostUn.entries).Count -eq 1) -and ($sj22PostUn.entries[0].path -eq 'D:/my-custom-skills')
+
+    # Clean B3-only install then uninstall deletes skills.json cleanly
+    $uh22Pure = Join-Path $sandbox 'u22pure'
+    $pr22Pure = Join-Path $uh22Pure '.gemini\config\plugins\b3-ai-engineering'
+    $sj22Pure = Join-Path $uh22Pure '.gemini\config\skills.json'
+    $in22Pure = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr22Pure, '-UserHome', $uh22Pure)
+    $un22Pure = Invoke-PsScript $agPs @('uninstall', '-PluginRoot', $pr22Pure, '-UserHome', $uh22Pure)
+    $pureDeletedOk = ($in22Pure.Code -eq 0) -and ($un22Pure.Code -eq 0) -and (-not (Test-Path -LiteralPath $sj22Pure))
+
+    # Symlinked skills.json refused even with -Force
+    $uh22Sym = Join-Path $sandbox 'u22sym'
+    $pr22Sym = Join-Path $uh22Sym '.gemini\config\plugins\b3-ai-engineering'
+    $sj22SymDir = Join-Path $uh22Sym '.gemini\config\skills.json'
+    $sj22SymTgt = Join-Path $uh22Sym 'sym-target'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $sj22SymDir) -Force | Out-Null
+    New-Item -ItemType Directory -Path $sj22SymTgt -Force | Out-Null
+    New-Item -ItemType Junction -Path $sj22SymDir -Target $sj22SymTgt | Out-Null
+    $in22Sym = Invoke-PsScript $agPs @('install', '-PluginRoot', $pr22Sym, '-UserHome', $uh22Sym, '-Force')
+
+    $sh22Ok = $true
+    if ($hasBash) {
+        $uh22s = Join-Path $sandbox 'u22sh'
+        $pr22s = Join-Path $uh22s '.gemini\config\plugins\b3-ai-engineering'
+        $sj22s = Join-Path $uh22s '.gemini\config\skills.json'
+        $pr22sp = $pr22s -replace '\\', '/'
+        $uh22sp = $uh22s -replace '\\', '/'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $sj22s) -Force | Out-Null
+        [System.IO.File]::WriteAllText($sj22s, $seedSj22, (New-Object System.Text.UTF8Encoding($false)))
+        $shIn22 = Invoke-ShScript $agShPosix "install --plugin-root '$pr22sp' --user-home '$uh22sp'"
+        $shVer22 = Invoke-ShScript $agShPosix "verify --plugin-root '$pr22sp' --user-home '$uh22sp'"
+        $sj22sObj = Get-Content -LiteralPath $sj22s -Raw | ConvertFrom-Json
+        $sj22sPaths = @($sj22sObj.entries | ForEach-Object { [string]$_.path })
+        [System.IO.File]::WriteAllText($sj22s, "{bad`n", (New-Object System.Text.UTF8Encoding($false)))
+        $shUp22Bad = Invoke-ShScript $agShPosix "update --plugin-root '$pr22sp' --user-home '$uh22sp'"
+        $shUp22Force = Invoke-ShScript $agShPosix "update --plugin-root '$pr22sp' --user-home '$uh22sp' --force"
+        [System.IO.File]::WriteAllText($sj22s, $seedSj22, (New-Object System.Text.UTF8Encoding($false)))
+        $shUp22Reseed = Invoke-ShScript $agShPosix "update --plugin-root '$pr22sp' --user-home '$uh22sp'"
+        $shUn22 = Invoke-ShScript $agShPosix "uninstall --plugin-root '$pr22sp' --user-home '$uh22sp'"
+        $sj22sPostUn = Get-Content -LiteralPath $sj22s -Raw | ConvertFrom-Json
+
+        $uh22spure = Join-Path $sandbox 'u22shpure'
+        $pr22spure = Join-Path $uh22spure '.gemini\config\plugins\b3-ai-engineering'
+        $sj22spure = Join-Path $uh22spure '.gemini\config\skills.json'
+        $shInPure = Invoke-ShScript $agShPosix "install --plugin-root '$($pr22spure -replace '\\', '/')' --user-home '$($uh22spure -replace '\\', '/')'"
+        $shUnPure = Invoke-ShScript $agShPosix "uninstall --plugin-root '$($pr22spure -replace '\\', '/')' --user-home '$($uh22spure -replace '\\', '/')'"
+
+        # Bash legacy pre-manifest uninstall removes B3 entries from skills.json
+        $uh22sleg = Join-Path $sandbox 'u22shleg'
+        $pr22sleg = Join-Path $uh22sleg '.gemini\config\plugins\b3-ai-engineering'
+        $sj22sleg = Join-Path $uh22sleg '.gemini\config\skills.json'
+        $shInLeg = Invoke-ShScript $agShPosix "install --plugin-root '$($pr22sleg -replace '\\', '/')' --user-home '$($uh22sleg -replace '\\', '/')'"
+        Remove-Item -LiteralPath (Join-Path $pr22sleg '.b3-plugin-manifest') -Force
+        $shUnLeg = Invoke-ShScript $agShPosix "uninstall --plugin-root '$($pr22sleg -replace '\\', '/')' --user-home '$($uh22sleg -replace '\\', '/')'"
+
+        $sh22Ok = ($shIn22.Code -eq 0) -and ($shVer22.Code -eq 0) -and ($shVer22.Text -match 'check\.skills_json=OK') -and
+                  ($sj22sObj.note -eq 'keep-top') -and ($sj22sPaths -contains 'D:/my-custom-skills') -and
+                  ($sj22sPaths -notcontains "$b3Fwd/skills/removed-cat") -and ($sj22sPaths -contains "$b3Fwd/skills/engineering") -and
+                  ($shUp22Bad.Code -eq 1) -and ($shUp22Force.Code -eq 0) -and ($shUp22Reseed.Code -eq 0) -and
+                  ($shUn22.Code -eq 0) -and (@($sj22sPostUn.entries).Count -eq 1) -and ($sj22sPostUn.entries[0].path -eq 'D:/my-custom-skills') -and
+                  ($shInPure.Code -eq 0) -and ($shUnPure.Code -eq 0) -and (-not (Test-Path -LiteralPath $sj22spure)) -and
+                  ($shInLeg.Code -eq 0) -and ($shUnLeg.Code -eq 0) -and (-not (Test-Path -LiteralPath $sj22sleg))
+    }
+
+    if ($merge22Ok -and $ver22BadOk -and ($up22Heal.Code -eq 0) -and ($ver22Healed.Code -eq 0) -and
+        ($ver22Missing.Code -eq 1) -and ($up22Corrupt.Code -eq 1) -and ($up22Force.Code -eq 0) -and ($up22ReSeed.Code -eq 0) -and
+        $un22PreserveOk -and $pureDeletedOk -and ($in22Sym.Code -eq 1) -and $sh22Ok) {
+        Pass 'ag-global-skills-json-lifecycle'
+    } else {
+        FailCheck 'ag-global-skills-json-lifecycle' "merge=$merge22Ok vBad=$ver22BadOk vMiss=$($ver22Missing.Code) corr=$($up22Corrupt.Code)/$($up22Force.Code) unPres=$un22PreserveOk pureDel=$pureDeletedOk sym=$($in22Sym.Code) sh=$sh22Ok"
     }
 
 }

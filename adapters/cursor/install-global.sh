@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Global Cursor installer for B3 AI Engineering (macOS / Linux / Git Bash).
-# Installs/updates/verifies/uninstalls flattened 1-level skills, 7 commands, 5 subagents, global b3-home, and plain-text User Rules template under ~/.cursor.
+# Installs/updates/verifies/uninstalls flattened 1-level skills, 8 commands, 5 subagents, global b3-home, and plain-text User Rules template under ~/.cursor.
 # Usage: ./adapters/cursor/install-global.sh [install|update|verify|uninstall] [--cursor-home DIR] [--b3-home DIR] [--user-home DIR] [--dry-run] [--force]
 
 set -euo pipefail
@@ -134,7 +134,7 @@ B3_HOME_FILE="${CURSOR_HOME}/b3-home"
 USER_RULES_FILE="${CURSOR_HOME}/b3-user-rules.txt"
 MANIFEST_FILE="${CURSOR_HOME}/.b3-global-manifest"
 
-EXPECTED_COMMANDS=("b3-plan.md" "b3-implement.md" "b3-debug.md" "b3-review.md" "b3-verify.md" "b3-review-loop.md" "b3-ship.md")
+EXPECTED_COMMANDS=("b3-plan.md" "b3-implement.md" "b3-debug.md" "b3-review.md" "b3-verify.md" "b3-review-loop.md" "b3-ship.md" "b3-research-ship.md")
 EXPECTED_AGENTS=("b3-reviewer.md" "b3-fixer.md" "b3-security-reviewer.md" "b3-architecture-reviewer.md" "b3-performance-reviewer.md")
 
 # --- Uninstall ---

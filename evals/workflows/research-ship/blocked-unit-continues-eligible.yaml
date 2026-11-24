@@ -1,0 +1,9 @@
+id: research-ship-blocked-unit-continues-eligible-001
+artifact: workflows/research-ship.md
+intent: A single domain-blocked research unit must not halt independent eligible units in the same campaign
+scenario: |
+  U001 is blocked waiting on an unresolved Owner decision while independent unit U002 has disjoint owned_files and available primary sources.
+  Orchestrator marks U001 blocked and continues U002 through verification and formalization.
+expected_outcome: PASS
+failure_mode: single-blocked-unit-stalls-entire-campaign
+notes: Verifies unit-level isolation for domain blockers

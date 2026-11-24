@@ -1,5 +1,5 @@
 # Global Antigravity plugin lifecycle manager for B3 AI Engineering (Windows PowerShell / pwsh).
-# Installs, updates, verifies, or uninstalls the canonical B3 plugin bundle under ~/.gemini/config/plugins/b3-ai-engineering.
+# Installs, updates, verifies, or uninstalls the canonical B3 plugin bundle under ~/.gemini/config/plugins/b3-ai-engineering and B3 skill entries in ~/.gemini/config/skills.json.
 # Usage: .\adapters\antigravity\install-plugin.ps1 [-Action install|update|verify|uninstall] [-PluginRoot <dir>] [-B3Home <dir>] [-UserHome <dir>] [-DryRun] [-Force]
 param(
     [Parameter(Position = 0)]
@@ -75,6 +75,135 @@ function Test-B3PluginJson([string]$JsonPath, [switch]$AllowExtraKeys) {
     }
 }
 
+function Normalize-SkillJsonPath([string]$PathValue) {
+    if ([string]::IsNullOrWhiteSpace($PathValue)) { return '' }
+    $p = To-Forward $PathValue.Trim()
+    if ($p -match '^[A-Za-z]:/$') { return $p }
+    if ($p -eq '/') { return '/' }
+    return $p.TrimEnd('/')
+}
+
+function Test-SkillPathEqual([string]$A, [string]$B) {
+    $cmp = if ($env:OS -eq 'Windows_NT') { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    return $A.Equals($B, $cmp)
+}
+
+function Test-IsB3ManagedSkillPath([string]$CandidatePath, [string[]]$B3Prefixes) {
+    $norm = Normalize-SkillJsonPath $CandidatePath
+    if (-not $norm) { return $false }
+    $cmp = if ($env:OS -eq 'Windows_NT') { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    foreach ($rawPrefix in $B3Prefixes) {
+        $prefix = Normalize-SkillJsonPath $rawPrefix
+        if (-not $prefix) { continue }
+        $cmdPath = if ($prefix -eq '/') { '/adapters/command-skills' } else { "$prefix/adapters/command-skills" }
+        $skillsExact = if ($prefix -eq '/') { '/skills' } else { "$prefix/skills" }
+        $skillsPrefix = if ($prefix -eq '/') { '/skills/' } else { "$prefix/skills/" }
+        if ($norm.Equals($cmdPath, $cmp) -or $norm.Equals($skillsExact, $cmp) -or $norm.StartsWith($skillsPrefix, $cmp)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-DesiredSkillsJsonEntries([hashtable]$CoreMap, [hashtable]$CmdMap) {
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    if ($env:OS -eq 'Windows_NT') {
+        $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    }
+    $result = New-Object System.Collections.Generic.List[string]
+    foreach ($bucket in @($CoreMap, $CmdMap)) {
+        $parents = New-Object System.Collections.Generic.List[string]
+        foreach ($skillDir in $bucket.Values) {
+            $parentDir = Normalize-SkillJsonPath (Split-Path -Parent $skillDir)
+            if ($parentDir) { $parents.Add($parentDir) }
+        }
+        foreach ($p in (Sort-OrdinalStrings @($parents))) {
+            if ($seen.Add($p)) { $result.Add($p) }
+        }
+    }
+    return @($result)
+}
+
+function Read-SkillsJsonState([string]$JsonPath) {
+    $state = [PSCustomObject]@{
+        Exists    = $false
+        Valid     = $true
+        Error     = ''
+        Obj       = $null
+        Entries   = @()
+        OtherKeys = @()
+    }
+    if (-not (Test-Path -LiteralPath $JsonPath -PathType Leaf)) {
+        return $state
+    }
+    $state.Exists = $true
+    try {
+        $raw = [IO.File]::ReadAllText($JsonPath, $script:B3Utf8NoBom)
+        $parsed = $raw | ConvertFrom-Json
+    } catch {
+        $state.Valid = $false
+        $state.Error = "invalid JSON in global skills.json: $($_.Exception.Message)"
+        return $state
+    }
+    if ($null -eq $parsed -or ($parsed -is [System.Array]) -or ($parsed -is [string]) -or ($parsed -is [ValueType])) {
+        $state.Valid = $false
+        $state.Error = 'global skills.json root must be a JSON object'
+        return $state
+    }
+    $propNames = @($parsed.PSObject.Properties | ForEach-Object { $_.Name })
+    $state.OtherKeys = @($propNames | Where-Object { $_ -cne 'entries' })
+    $entriesProp = $parsed.PSObject.Properties['entries']
+    if ($null -ne $entriesProp) {
+        if ($null -eq $entriesProp.Value -or (-not ($entriesProp.Value -is [System.Collections.IList]))) {
+            $state.Valid = $false
+            $state.Error = 'global skills.json "entries" must be a JSON array'
+            return $state
+        }
+        $state.Entries = @($entriesProp.Value)
+    }
+    $state.Obj = $parsed
+    return $state
+}
+
+function ConvertTo-SkillsJsonContent($ExistingObj, [object[]]$EntriesArray) {
+    $out = [ordered]@{}
+    if ($null -ne $ExistingObj) {
+        foreach ($prop in $ExistingObj.PSObject.Properties) {
+            if ($prop.Name -ceq 'entries') { continue }
+            $out[$prop.Name] = $prop.Value
+        }
+    }
+    $out['entries'] = [object[]]$EntriesArray
+    return (((ConvertTo-Json -InputObject $out -Depth 16).Replace("`r`n", "`n")) + "`n")
+}
+
+function Get-UninstallB3Prefixes([string]$PluginRootPath, $ManifestObj) {
+    $prefixes = New-Object System.Collections.Generic.List[string]
+    if ($ManifestObj -and $ManifestObj.B3Home) {
+        $prefixes.Add((Normalize-SkillJsonPath $ManifestObj.B3Home))
+    }
+    $rPath = Join-Path $PluginRootPath 'rules\AGENTS.md'
+    if ((Test-Path -LiteralPath $rPath -PathType Leaf) -and -not (Test-IsReparseLink $rPath)) {
+        $rText = [IO.File]::ReadAllText($rPath, [System.Text.Encoding]::UTF8)
+        if ($rText -match 'Generated from B3_HOME:\s*`([^`]+)`') {
+            $prefixes.Add((Normalize-SkillJsonPath $Matches[1]))
+        }
+    }
+    $skDir = Join-Path $PluginRootPath 'skills'
+    if ((Test-Path -LiteralPath $skDir -PathType Container) -and -not (Test-IsReparseLink $skDir)) {
+        foreach ($sk in @(Get-ChildItem -LiteralPath $skDir -Force -ErrorAction SilentlyContinue)) {
+            if (-not (Test-IsReparseLink $sk.FullName) -or -not $sk.Target) { continue }
+            foreach ($t in @($sk.Target)) {
+                $tNorm = Normalize-SkillJsonPath ([string]$t)
+                if ($tNorm -match '^(.+?)/(?:skills/[^/]+|adapters/command-skills)/[^/]+$') {
+                    $prefixes.Add((Normalize-SkillJsonPath $Matches[1]))
+                }
+            }
+        }
+    }
+    return @(Sort-OrdinalStrings @($prefixes | Where-Object { $_ } | Select-Object -Unique))
+}
+
 function Check-AntigravityCoexistence([string]$UserHomeDir, [string]$PluginRootPath, [string[]]$AllSkillNames) {
     $pluginNorm = Normalize-Path $PluginRootPath
     $looseOverlaps = Get-SkillOverlaps (Join-Path $UserHomeDir '.gemini\config\skills') $AllSkillNames
@@ -108,6 +237,9 @@ if (-not $PluginRoot) {
 $PluginRoot = Normalize-Path $PluginRoot
 $pluginRootForward = To-Forward $PluginRoot
 $manifestFile = Join-Path $PluginRoot '.b3-plugin-manifest'
+$geminiDir = Join-Path $UserHome '.gemini'
+$geminiConfigDir = Join-Path $geminiDir 'config'
+$skillsJsonPath = Join-Path $geminiConfigDir 'skills.json'
 
 # --- Handle uninstall before requiring B3Home ---
 if ($Action -eq 'uninstall') {
@@ -126,6 +258,7 @@ if ($Action -eq 'uninstall') {
         exit 0
     }
 
+    $uninstallB3Prefixes = Get-UninstallB3Prefixes $PluginRoot $manifest
     $removed = 0
     $skipped = 0
     $trackedFiles = New-Object System.Collections.Generic.List[string]
@@ -214,6 +347,41 @@ if ($Action -eq 'uninstall') {
     if (-not $DryRun) {
         foreach ($subDir in @('skills', 'rules', 'agents')) { Remove-EmptyRegularDir (Join-Path $PluginRoot $subDir) }
     }
+    if ((Test-Path -LiteralPath $skillsJsonPath) -or (Test-IsReparseLink $skillsJsonPath)) {
+        if ((Test-IsReparseLink $geminiDir) -or (Test-IsReparseLink $geminiConfigDir) -or (Test-IsReparseLink $skillsJsonPath)) {
+            Write-Warning "skipping symlinked global skills.json path: $skillsJsonPath"
+            $skipped++
+        } elseif (-not (Test-Path -LiteralPath $skillsJsonPath -PathType Leaf)) {
+            Write-Warning "skipping non-file global skills.json path: $skillsJsonPath"
+            $skipped++
+        } else {
+            $sjState = Read-SkillsJsonState $skillsJsonPath
+            if (-not $sjState.Valid) {
+                Write-Warning "skipping invalid global skills.json: $skillsJsonPath ($($sjState.Error))"
+                $skipped++
+            } elseif ($uninstallB3Prefixes.Count -gt 0) {
+                $keptEntries = New-Object System.Collections.Generic.List[object]
+                $removedEntries = 0
+                foreach ($item in $sjState.Entries) {
+                    $itemPath = if ($null -ne $item -and $item.PSObject -and $item.PSObject.Properties['path']) { [string]$item.path } else { '' }
+                    if ($itemPath -and (Test-IsB3ManagedSkillPath $itemPath $uninstallB3Prefixes)) {
+                        $removedEntries++
+                    } else {
+                        $keptEntries.Add($item)
+                    }
+                }
+                if ($removedEntries -gt 0) {
+                    if ($keptEntries.Count -eq 0 -and $sjState.OtherKeys.Count -eq 0) {
+                        if ($DryRun) { Write-Output "dry-run: remove $skillsJsonPath" } else { Remove-Item -LiteralPath $skillsJsonPath -Force }
+                    } else {
+                        $updatedSj = ConvertTo-SkillsJsonContent $sjState.Obj ([object[]]$keptEntries.ToArray())
+                        if ($DryRun) { Write-Output "dry-run: update $skillsJsonPath (remove $removedEntries B3 entries)" } else { Write-Utf8NoBom $skillsJsonPath $updatedSj }
+                    }
+                    $removed++
+                }
+            }
+        }
+    }
     if ($skipped -gt 0) {
         Write-Output "UNINSTALL_CONFLICT: removed=$removed skipped=$skipped plugin_root=$PluginRoot (re-run with -Force to remove modified managed entries)"
         exit 1
@@ -253,6 +421,7 @@ if (-not (Test-Path -LiteralPath $cmdSkillsSrc -PathType Container) -or (Add-Can
     Fail "B3_HOME has no command skills under: $cmdSkillsSrc"
 }
 $sortedSkillNames = Sort-OrdinalStrings @($skillMap.Keys)
+$desiredSkillsJsonEntries = Get-DesiredSkillsJsonEntries $coreSkillMap $cmdSkillMap
 
 $ruleFiles = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $rulesDir -Filter '*.md' -File -ErrorAction SilentlyContinue)
 if ($ruleFiles.Count -lt 1) { Fail "B3_HOME has no rules under $rulesDir" }
@@ -264,7 +433,7 @@ Generated from B3_HOME: ``$b3HomeForward`` (do not edit here).
 Resolve B3_HOME from ``B3_HOME`` env, product ``.b3/home``, or ``$b3HomeForward``.
 Precedence: ``$b3HomeForward/docs/precedence.md``. Ship: ``$b3HomeForward/workflows/ship.md``. Review loop: ``$b3HomeForward/review-loop/strategy.md``.
 Project-level AGENTS.md, GEMINI.md, .agents/rules/, and .agents/skills/ override this global baseline within their project scope; per-project install-product is optional.
-B3 commands (``/b3-plan``, ``/b3-implement``, ``/b3-debug``, ``/b3-review``, ``/b3-verify``, ``/b3-review-loop``, ``/b3-ship``) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above.
+B3 commands (``/b3-plan``, ``/b3-implement``, ``/b3-debug``, ``/b3-review``, ``/b3-verify``, ``/b3-review-loop``, ``/b3-ship``, ``/b3-research-ship``) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above.
 "@
 $rulesParts = New-Object System.Collections.Generic.List[string]
 $rulesParts.Add($rulesHeader.Trim())
@@ -298,7 +467,7 @@ $pluginJson = (@'
 # --- Verify action (checks each capability surface independently) ---
 if ($Action -eq 'verify') {
     $errors = New-Object System.Collections.Generic.List[string]
-    $pluginOk = $true; $rulesOk = $true; $skillsOk = $true; $commandsOk = $true; $agentsOk = $true
+    $pluginOk = $true; $rulesOk = $true; $skillsOk = $true; $commandsOk = $true; $agentsOk = $true; $skillsJsonOk = $true
 
     if (-not (Test-Path -LiteralPath $PluginRoot -PathType Container) -or (Test-IsReparseLink $PluginRoot)) {
         $pluginOk = $false; $rulesOk = $false; $skillsOk = $false; $commandsOk = $false; $agentsOk = $false
@@ -366,7 +535,7 @@ if ($Action -eq 'verify') {
                 }
             }
         }
-        foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship')) {
+        foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship')) {
             if (-not $cmdSkillMap.ContainsKey($coreCmd)) {
                 $commandsOk = $false; $errors.Add("missing expected command skill in B3_HOME: $coreCmd")
             }
@@ -402,11 +571,53 @@ if ($Action -eq 'verify') {
         }
     }
 
+    if ((Test-IsReparseLink $geminiDir) -or (Test-IsReparseLink $geminiConfigDir) -or (Test-IsReparseLink $skillsJsonPath)) {
+        $skillsJsonOk = $false; $errors.Add("global skills.json path uses symlink or junction: $skillsJsonPath")
+    } elseif (-not (Test-Path -LiteralPath $skillsJsonPath -PathType Leaf)) {
+        $skillsJsonOk = $false; $errors.Add("missing global skills.json at $skillsJsonPath")
+    } else {
+        $sjState = Read-SkillsJsonState $skillsJsonPath
+        if (-not $sjState.Valid) {
+            $skillsJsonOk = $false; $errors.Add("invalid global skills.json at $skillsJsonPath : $($sjState.Error)")
+        } elseif ($null -eq $sjState.Obj.PSObject.Properties['entries']) {
+            $skillsJsonOk = $false; $errors.Add("global skills.json missing entries array at $skillsJsonPath")
+        } else {
+            $normPaths = New-Object System.Collections.Generic.List[string]
+            foreach ($item in $sjState.Entries) {
+                $itemPath = if ($null -ne $item -and $item.PSObject -and $item.PSObject.Properties['path']) { Normalize-SkillJsonPath ([string]$item.path) } else { '' }
+                if ($itemPath) { $normPaths.Add($itemPath) }
+            }
+            foreach ($req in $desiredSkillsJsonEntries) {
+                $found = $false
+                foreach ($np in $normPaths) {
+                    if (Test-SkillPathEqual $np $req) { $found = $true; break }
+                }
+                if (-not $found) {
+                    $skillsJsonOk = $false; $errors.Add("global skills.json missing B3 entry: $req")
+                }
+            }
+            foreach ($item in $sjState.Entries) {
+                $rawItemPath = if ($null -ne $item -and $item.PSObject -and $item.PSObject.Properties['path']) { [string]$item.path } else { '' }
+                $np = Normalize-SkillJsonPath $rawItemPath
+                if ($np -and (Test-IsB3ManagedSkillPath $np @($b3HomeForward))) {
+                    $inDesired = $false
+                    foreach ($req in $desiredSkillsJsonEntries) {
+                        if (Test-SkillPathEqual $np $req) { $inDesired = $true; break }
+                    }
+                    if (-not $inDesired) {
+                        $skillsJsonOk = $false; $errors.Add("stale B3 entry in global skills.json: $rawItemPath")
+                    }
+                }
+            }
+        }
+    }
+
     Write-Output ("check.plugin={0}" -f $(if ($pluginOk) { 'OK' } else { 'FAIL' }))
     Write-Output ("check.rules={0}" -f $(if ($rulesOk) { 'OK' } else { 'FAIL' }))
     Write-Output ("check.skills={0}" -f $(if ($skillsOk) { 'OK' } else { 'FAIL' }))
     Write-Output ("check.commands={0}" -f $(if ($commandsOk) { 'OK' } else { 'FAIL' }))
     Write-Output ("check.agents={0}" -f $(if ($agentsOk) { 'OK' } else { 'FAIL' }))
+    Write-Output ("check.skills_json={0}" -f $(if ($skillsJsonOk) { 'OK' } else { 'FAIL' }))
 
     Check-AntigravityCoexistence $UserHome $PluginRoot $sortedSkillNames
 
@@ -426,6 +637,14 @@ if (Test-IsReparseLink $manifestFile) { Fail "existing link blocks managed file:
 $oldManifest = Read-B3Manifest $manifestFile
 if ($oldManifest.Exists -and ($oldManifest.Corrupt -or $oldManifest.Schema -ne 'b3-antigravity-plugin-v1')) {
     Fail "refusing to update invalid B3 manifest at $manifestFile"
+}
+
+Assert-RegularDirOrMissing $geminiDir '.gemini'
+Assert-RegularDirOrMissing $geminiConfigDir '.gemini/config'
+Assert-RegularFileOrMissing $skillsJsonPath 'global skills.json'
+$existingSkillsJson = Read-SkillsJsonState $skillsJsonPath
+if ($existingSkillsJson.Exists -and -not $existingSkillsJson.Valid -and -not $Force) {
+    Fail "UPDATE_CONFLICT: invalid global skills.json at $skillsJsonPath ($($existingSkillsJson.Error)) (preserved; use -Force only after backing it up)"
 }
 
 if ((Test-Path -LiteralPath $PluginRoot) -or (Test-IsReparseLink $PluginRoot)) {
@@ -499,6 +718,7 @@ if ($DryRun) {
     Write-Output "dry-run: write $PluginRoot\rules\AGENTS.md ($rulesBytes bytes)"
     Write-Output "dry-run: link $($skillMap.Count) skills ($($coreSkillMap.Count) skills + $($cmdSkillMap.Count) command-skills) into $PluginRoot\skills"
     Write-Output "dry-run: write $($renderedAgents.Count) agents into $PluginRoot\agents"
+    Write-Output "dry-run: update $skillsJsonPath ($($desiredSkillsJsonEntries.Count) skill category entries)"
     Check-AntigravityCoexistence $UserHome $PluginRoot $sortedSkillNames
     Write-Output "DRY_RUN_OK: action=$Action plugin_root=$PluginRoot"
     exit 0
@@ -554,12 +774,40 @@ foreach ($ag in $renderedAgents) {
 
 Write-Utf8NoBom $manifestFile (($manifestLines -join "`n") + "`n")
 
+$replacePrefixes = New-Object System.Collections.Generic.List[string]
+$replacePrefixes.Add($b3HomeForward)
+if ($oldManifest.Exists -and $oldManifest.B3Home) {
+    $replacePrefixes.Add((Normalize-SkillJsonPath $oldManifest.B3Home))
+}
+$mergedEntries = New-Object System.Collections.Generic.List[object]
+$baseSjObj = if ($existingSkillsJson.Exists -and $existingSkillsJson.Valid) { $existingSkillsJson.Obj } else { $null }
+if ($null -ne $baseSjObj) {
+    foreach ($item in $existingSkillsJson.Entries) {
+        $itemPath = if ($null -ne $item -and $item.PSObject -and $item.PSObject.Properties['path']) { Normalize-SkillJsonPath ([string]$item.path) } else { '' }
+        if ($itemPath) {
+            if (Test-IsB3ManagedSkillPath $itemPath @($replacePrefixes)) { continue }
+            $matchesDesired = $false
+            foreach ($req in $desiredSkillsJsonEntries) {
+                if (Test-SkillPathEqual $itemPath $req) { $matchesDesired = $true; break }
+            }
+            if ($matchesDesired) { continue }
+        }
+        $mergedEntries.Add($item)
+    }
+}
+foreach ($req in $desiredSkillsJsonEntries) {
+    $mergedEntries.Add([ordered]@{ path = $req })
+}
+$skillsJsonContent = ConvertTo-SkillsJsonContent $baseSjObj ([object[]]$mergedEntries.ToArray())
+Write-Utf8NoBom $skillsJsonPath $skillsJsonContent
+
 Check-AntigravityCoexistence $UserHome $PluginRoot $sortedSkillNames
 $pluginDirName = Split-Path -Leaf $PluginRoot
 Write-Output ("{0}_OK: skills={1} commands={2} agents={3} rules_bytes={4} plugin_root={5} b3_home={6}" -f $Action.ToUpperInvariant(), $coreSkillMap.Count, $cmdSkillMap.Count, $renderedAgents.Count, $rulesBytes, $PluginRoot, $b3HomeForward)
 Write-Output "installed Antigravity plugin at $PluginRoot"
 Write-Output "B3_HOME=$B3Home"
 Write-Output "skills=$($skillMap.Count)"
+Write-Output "skills_json=$skillsJsonPath ($($desiredSkillsJsonEntries.Count) entries)"
 Write-Output "agents=$($renderedAgents.Count)"
 Write-Output "rules_bytes=$rulesBytes"
 Write-Output "manage=customization://$pluginDirName"

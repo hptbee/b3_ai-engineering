@@ -25,6 +25,7 @@ function Add-CustomUserArtifacts([string]$CursorHome) {
 }
 
 $expectedSkillsCount = @(Get-ChildItem -LiteralPath (Join-Path $root 'skills') -Recurse -Filter 'SKILL.md' -File).Count
+$expectedCommandsCount = @(Get-ChildItem -LiteralPath (Join-Path $root 'commands') -Filter 'b3-*.md' -File).Count
 $sandbox = Join-Path $env:TEMP ('b3-cursor-global-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
 
@@ -61,17 +62,21 @@ try {
     $skillDirs2 = @(Get-ChildItem -LiteralPath (Join-Path $ch2 'skills') -Force -ErrorAction SilentlyContinue)
     $cmdFiles2 = @(Get-ChildItem -LiteralPath (Join-Path $ch2 'commands') -Filter 'b3-*.md' -File -ErrorAction SilentlyContinue)
     $agFiles2 = @(Get-ChildItem -LiteralPath (Join-Path $ch2 'agents') -Filter 'b3-*.md' -File -ErrorAction SilentlyContinue)
-    $noCmdSkillInSkills = -not (Test-Path -LiteralPath (Join-Path $ch2 'skills\b3-ship')) -and -not (Test-Path -LiteralPath (Join-Path $ch2 'skills\b3-plan'))
+    $noCmdSkillInSkills = (-not (Test-Path -LiteralPath (Join-Path $ch2 'skills\b3-ship'))) -and
+                          (-not (Test-Path -LiteralPath (Join-Path $ch2 'skills\b3-plan'))) -and
+                          (-not (Test-Path -LiteralPath (Join-Path $ch2 'skills\b3-research-ship')))
     $revText2 = Get-Content -LiteralPath (Join-Path $ch2 'agents\b3-reviewer.md') -Raw
     $rulesLen2 = ([IO.File]::ReadAllBytes((Join-Path $ch2 'b3-user-rules.txt'))).Length
     if ($in2.Code -eq 0 -and $ver2Ps.Code -eq 0 -and $ver2ShOk -and
         $skillDirs2.Count -eq $expectedSkillsCount -and $noCmdSkillInSkills -and
-        $cmdFiles2.Count -eq 7 -and $agFiles2.Count -eq 5 -and
+        $cmdFiles2.Count -eq $expectedCommandsCount -and
+        (Test-Path -LiteralPath (Join-Path $ch2 'commands\b3-research-ship.md') -PathType Leaf) -and
+        $agFiles2.Count -eq 5 -and
         ($revText2 -match '(?m)^model:\s*inherit\s*$') -and ($revText2 -notmatch 'claude-|gpt-|gemini-') -and
         $rulesLen2 -le 1200 -and ($ver2Ps.Text -match 'UNKNOWN / INCOMPLETE')) {
         Pass 'cursor-global-fresh-install'
     } else {
-        FailCheck 'cursor-global-fresh-install' "in=$($in2.Code) ver=$($ver2Ps.Code) sh=$ver2ShOk skills=$($skillDirs2.Count)/$expectedSkillsCount cmds=$($cmdFiles2.Count) ags=$($agFiles2.Count) rulesB=$rulesLen2"
+        FailCheck 'cursor-global-fresh-install' "in=$($in2.Code) ver=$($ver2Ps.Code) sh=$ver2ShOk skills=$($skillDirs2.Count)/$expectedSkillsCount cmds=$($cmdFiles2.Count)/$expectedCommandsCount ags=$($agFiles2.Count) rulesB=$rulesLen2"
     }
 
     # --- 3. cursor-global-idempotent (repeated install + unrelated user config untouched) ---
