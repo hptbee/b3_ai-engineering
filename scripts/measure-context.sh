@@ -9,7 +9,9 @@ STRICT=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
+    --repo-root)
+      [[ $# -ge 2 ]] || { echo "missing value for $1" >&2; exit 1; }
+      REPO_ROOT="$2"; shift 2 ;;
     --strict) STRICT=true; shift ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
   esac
@@ -65,9 +67,9 @@ while IFS= read -r sf; do
   fm_b="$(LC_ALL=C awk '
     { sub(/\r$/, "") }
     NR == 1 && $0 == "---" { in_fm = 1; next }
-    in_fm && $0 == "---" { exit }
+    in_fm && $0 == "---" { closed = 1; exit }
     in_fm { sum += length($0) + 1 }
-    END { print (sum > 0 ? sum - 1 : 0) }
+    END { print (closed && sum > 0 ? sum - 1 : 0) }
   ' "$sf")"
   FM_TOTAL=$((FM_TOTAL + fm_b))
   if [[ "$fm_b" -gt "$MAX_FM" ]]; then
@@ -95,22 +97,29 @@ RS_REFS=$(($(file_bytes "workflows/references/research-ship-templates.md") + $(f
 RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
 [[ "$RL_STRAT_B" -gt 5400 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5400 B)")
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
+REV_TPL_B="$(file_bytes "skills/engineering/code-review/references/review-template.md")"
 REV_AGENT_B="$(file_bytes "agents/b3-reviewer.md")"
-REV_DELTA_B=$((REV_AGENT_B + CR_SKILL_B))
+FIXER_AGENT_B="$(file_bytes "agents/b3-fixer.md")"
+REV_DELTA_B="$REV_AGENT_B"
+REV_ITER_SUBAG=$((REV_AGENT_B + FIXER_AGENT_B))
 PLAN_CMD_B=$(($(file_bytes "commands/b3-plan.md") + $(file_bytes "skills/engineering/planning/SKILL.md")))
 IMPL_CMD_B=$(($(file_bytes "commands/b3-implement.md") + $(file_bytes "skills/engineering/problem-solving/SKILL.md")))
 DEBUG_CMD_B=$(($(file_bytes "commands/b3-debug.md") + $(file_bytes "skills/engineering/debugging/SKILL.md")))
 REVIEW_CMD_B=$(($(file_bytes "commands/b3-review.md") + CR_SKILL_B))
+STANDALONE_REV_ALL=$((REVIEW_CMD_B + REV_TPL_B))
 VERIFY_CMD_B=$(($(file_bytes "commands/b3-verify.md") + $(file_bytes "skills/engineering/verification/SKILL.md")))
-RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + REV_AGENT_B + CR_SKILL_B))
-RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md")))
+RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + REV_AGENT_B))
+RL_HIER=$((RL_OP + $(file_bytes "review-loop/hierarchical.md")))
+RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md") + $(file_bytes "review-loop/hierarchical.md")))
 
 AGENT_ROLES_B=0
+AGENT_COUNT=0
 for af in "${REPO_ROOT}/agents"/*.md; do
   [[ -f "$af" ]] || continue
   [[ "$(basename "$af")" == "README.md" ]] && continue
   ab="$(raw_lf_bytes "$af")"
   AGENT_ROLES_B=$((AGENT_ROLES_B + ab))
+  AGENT_COUNT=$((AGENT_COUNT + 1))
 done
 [[ "$AGENT_ROLES_B" -gt 8500 ]] && WARNINGS+=("agents/*.md roles (${AGENT_ROLES_B} B > 8500 B)")
 
@@ -120,11 +129,14 @@ printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/b3-ship.m
 printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.md]\n" "$SHIP_REFS" "$(est_tok "$SHIP_REFS")"
 printf "research_ship_core: %6d B (~%4d tok)  [research-ship.md=%d B + commands/b3-research-ship.md]\n" "$RS_CORE" "$(est_tok "$RS_CORE")" "$WF_RS_B"
 printf "research_ship_refs: %6d B (~%4d tok)  [research-ship-{templates,resume,gates}.md]\n" "$RS_REFS" "$(est_tok "$RS_REFS")"
-printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer + code-review/SKILL.md=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$CR_SKILL_B"
-printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md + code-review/SKILL.md]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"
+printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$REV_AGENT_B"
+printf "review_hier_load  : %6d B (~%4d tok)  [review_loop_op + hierarchical.md (L/XL/XXL on demand)]\n" "$RL_HIER" "$(est_tok "$RL_HIER")"
+printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md (self-contained)]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"
+printf "review_iter_subag : %6d B (~%4d tok)  [b3-reviewer.md + b3-fixer.md (self-contained loop iter)]\n" "$REV_ITER_SUBAG" "$(est_tok "$REV_ITER_SUBAG")"
 printf "standalone_cmds   : plan=%d B, impl=%d B, debug=%d B, review=%d B, verify=%d B\n" "$PLAN_CMD_B" "$IMPL_CMD_B" "$DEBUG_CMD_B" "$REVIEW_CMD_B" "$VERIFY_CMD_B"
-printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
-printf "agents_roles_total: %6d B (~%4d tok)  [5 runtime subagent roles excl. README.md]\n" "$AGENT_ROLES_B" "$(est_tok "$AGENT_ROLES_B")"
+printf "standalone_rev_all: %6d B (~%4d tok)  [cmd + code-review/SKILL.md + review-template.md]\n" "$STANDALONE_REV_ALL" "$(est_tok "$STANDALONE_REV_ALL")"
+printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models+hierarchical (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
+printf "agents_roles_total: %6d B (~%4d tok)  [%d runtime subagent roles excl. README.md]\n" "$AGENT_ROLES_B" "$(est_tok "$AGENT_ROLES_B")" "$AGENT_COUNT"
 printf "max_skill_file    : %6d B  (%s)\n" "$MAX_SKILL" "$MAX_SKILL_FILE"
 printf "max_frontmatter   : %6d B  (%s)\n" "$MAX_FM" "$MAX_FM_FILE"
 

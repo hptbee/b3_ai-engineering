@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree', 'evidence-check', 'merge-policy-check')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree', 'review-inventory', 'review-ledger', 'evidence-check', 'merge-policy-check')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -33,6 +33,18 @@ param(
     [string]$ExpectedBaseSha = '',
     [string]$ExpectedRoot = '',
     [string]$ExpectedCmd = '',
+    [string]$Action = '',
+    [string]$LedgerPath = '',
+    [int]$MaxConcurrency = 4,
+    [int]$MaxPasses = -1,
+    [string]$UnitId = '',
+    [string]$Status = '',
+    [string]$Findings = '',
+    [string]$Specialists = '',
+    [string]$Rationale = '',
+    [string]$CrossUnitStatus = '',
+    [string]$BudgetStatus = '',
+    [int]$PassesUsed = -1,
     [string]$SourcePaths = '',
     [string]$ManifestPath = '',
     [switch]$WriteManifest,
@@ -185,12 +197,17 @@ function Format-WinArg([string]$Arg) {
     return $sb.ToString()
 }
 
-function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '') {
+function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '', [hashtable]$ExtraEnv = $null) {
     $useStdIn = $PSBoundParameters.ContainsKey('StdInText')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'git'
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    if ($ExtraEnv) {
+        foreach ($kv in $ExtraEnv.GetEnumerator()) {
+            $psi.EnvironmentVariables[[string]$kv.Key] = [string]$kv.Value
+        }
+    }
     if ($useStdIn) {
         $psi.RedirectStandardInput = $true
     }
@@ -295,6 +312,182 @@ function Get-RunStatus([string]$RunDir) {
     return 'unknown'
 }
 
+function Test-BinaryFile([string]$FullPath) {
+    if (-not (Test-Path -LiteralPath $FullPath -PathType Leaf)) { return $false }
+    try {
+        $fs = [IO.File]::OpenRead($FullPath)
+        try {
+            $buf = New-Object byte[] 8192
+            $n = $fs.Read($buf, 0, $buf.Length)
+            for ($i = 0; $i -lt $n; $i++) {
+                if ($buf[$i] -eq 0) { return $true }
+            }
+            return $false
+        } finally {
+            $fs.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
+function Assert-ValidGitRev([string]$Root, [string]$Rev, [string]$Kind, [string]$FailPrefix, [string]$OptionName) {
+    if (-not $Rev -or $Rev.StartsWith('-')) {
+        Fail "${FailPrefix}: invalid $OptionName '$Rev'" 1
+    }
+    $res = Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', "${Rev}^{${Kind}}")
+    $sha = $res.StdOut.Trim()
+    if ($res.ExitCode -ne 0 -or -not $sha) {
+        Fail "${FailPrefix}: invalid $OptionName '$Rev'" 1
+    }
+    return $sha
+}
+
+function Assert-SnapshotSafe([string]$Root, [string]$FailPrefix) {
+    # A temporary index still creates permanent Git blobs: reject non-deleted sensitive changes first.
+    $changed = Invoke-GitCommand $Root @('diff', '--no-renames', '--diff-filter=d', '--name-only', 'HEAD', '--')
+    $untracked = Invoke-GitCommand $Root @('ls-files', '--others', '--exclude-standard')
+    if ($changed.ExitCode -ne 0 -or $untracked.ExitCode -ne 0) {
+        Fail "${FailPrefix}: unable to inspect snapshot paths" 1
+    }
+    foreach ($line in (($changed.StdOut + "`n" + $untracked.StdOut) -split "\r?\n")) {
+        $p = Normalize-PathValue ([string]$line)
+        if ($p -and (Test-SecretPath $p)) {
+            Fail "${FailPrefix}: sensitive path cannot be snapshotted ($p)" 1
+        }
+    }
+    $links = Invoke-GitCommand $Root @('ls-files', '--stage')
+    if ($links.ExitCode -ne 0) { Fail "${FailPrefix}: unable to inspect submodules" 1 }
+    foreach ($entry in ($links.StdOut -split "\r?\n")) {
+        if ($entry -cnotmatch '^160000 [0-9a-f]{40} [0-3]\t(.+)$') { continue }
+        $rel = $Matches[1]
+        $sub = Join-Path $Root ($rel -replace '/', '\')
+        if (-not (Test-Path -LiteralPath (Join-Path $sub '.git'))) { continue }
+        $state = Invoke-GitCommand $sub @('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none')
+        if ($state.ExitCode -ne 0) { Fail "${FailPrefix}: unable to inspect submodule ($rel)" 1 }
+        if ($state.StdOut.Trim()) { Fail "${FailPrefix}: dirty submodule cannot be snapshotted ($rel)" 1 }
+    }
+}
+
+function Invoke-ChunkedGitWithIndex(
+    [string]$Root,
+    [hashtable]$EnvMap,
+    [string]$FailPrefix,
+    [string]$FailLabel,
+    [string[]]$BaseArgs,
+    [System.Collections.Generic.List[string]]$Paths
+) {
+    if ($null -eq $Paths -or $Paths.Count -eq 0) { return }
+    for ($i = 0; $i -lt $Paths.Count; $i += 50) {
+        $end = [Math]::Min($i + 49, $Paths.Count - 1)
+        $cmdArgs = New-Object System.Collections.Generic.List[string]
+        foreach ($ba in $BaseArgs) { [void]$cmdArgs.Add($ba) }
+        for ($j = $i; $j -le $end; $j++) { [void]$cmdArgs.Add($Paths[$j]) }
+        $cmdRes = Invoke-GitCommand $Root $cmdArgs.ToArray() -ExtraEnv $EnvMap
+        if ($cmdRes.ExitCode -ne 0) {
+            $detail = if ($cmdRes.StdErr.Trim()) { $cmdRes.StdErr.Trim() } else { $cmdRes.StdOut.Trim() }
+            Fail "${FailPrefix}: ${FailLabel}: $detail" 1
+        }
+    }
+}
+
+function New-WorkingTreeOid([string]$Root, [string]$FailPrefix, [switch]$ExcludeSensitive) {
+    $hasHead = (Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', 'HEAD')).ExitCode -eq 0
+    $trackedSecrets = New-Object System.Collections.Generic.List[string]
+    $unbornStagedSecrets = New-Object System.Collections.Generic.List[string]
+    $untrackedToAdd = New-Object System.Collections.Generic.List[string]
+    if ($ExcludeSensitive) {
+        if ($hasHead) {
+            $ch = Invoke-GitCommand $Root @('diff', '--no-renames', '--diff-filter=d', '--name-only', 'HEAD', '--')
+            if ($ch.ExitCode -eq 0) {
+                foreach ($line in ($ch.StdOut -split "\r?\n")) {
+                    $sp = Normalize-PathValue ([string]$line)
+                    if ($sp -and (Test-SecretPath $sp)) {
+                        [void]$trackedSecrets.Add($sp)
+                    }
+                }
+            }
+        } else {
+            $st = Invoke-GitCommand $Root @('ls-files', '--cached')
+            if ($st.ExitCode -eq 0) {
+                foreach ($line in ($st.StdOut -split "\r?\n")) {
+                    $sp = Normalize-PathValue ([string]$line)
+                    if ($sp -and (Test-SecretPath $sp)) {
+                        [void]$unbornStagedSecrets.Add($sp)
+                    }
+                }
+            }
+        }
+    } else {
+        Assert-SnapshotSafe $Root $FailPrefix
+    }
+    $un = Invoke-GitCommand $Root @('ls-files', '--others', '--exclude-standard')
+    if ($un.ExitCode -eq 0) {
+        foreach ($line in ($un.StdOut -split "\r?\n")) {
+            $sp = Normalize-PathValue ([string]$line)
+            if (-not $sp) { continue }
+            if (Test-CheckpointPath $sp) { continue }
+            if ($ExcludeSensitive -and (Test-SecretPath $sp)) { continue }
+            [void]$untrackedToAdd.Add($sp)
+        }
+    }
+    $idxRes = Invoke-GitCommand $Root @('rev-parse', '--git-path', 'index')
+    if ($idxRes.ExitCode -ne 0) {
+        Fail "${FailPrefix}: failed to locate git index" 1
+    }
+    $realIdxRaw = $idxRes.StdOut.Trim()
+    $realIdx = Resolve-TargetPath $Root $realIdxRaw
+    $tmpIdx = Join-Path ([IO.Path]::GetTempPath()) ("b3-snap-idx-" + [guid]::NewGuid().ToString('N') + ".tmp")
+    $envMap = @{ GIT_INDEX_FILE = $tmpIdx }
+    try {
+        if (Test-Path -LiteralPath $realIdx -PathType Leaf) {
+            [IO.File]::Copy($realIdx, $tmpIdx, $true)
+        }
+        if ($ExcludeSensitive -and $unbornStagedSecrets.Count -gt 0) {
+            Invoke-ChunkedGitWithIndex $Root $envMap $FailPrefix 'git rm cached secrets failed' @('rm', '-r', '--cached', '--ignore-unmatch', '-q', '--') $unbornStagedSecrets
+        }
+        if ($ExcludeSensitive -and $trackedSecrets.Count -gt 0) {
+            $wtDiffRes = Invoke-GitCommand $Root @('diff', '--no-renames', '--name-only', '--') -ExtraEnv $envMap
+            if ($wtDiffRes.ExitCode -ne 0) {
+                $detail = if ($wtDiffRes.StdErr.Trim()) { $wtDiffRes.StdErr.Trim() } else { $wtDiffRes.StdOut.Trim() }
+                Fail "${FailPrefix}: git diff tracked failed: $detail" 1
+            }
+            $trackedSecretSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+            foreach ($ts in $trackedSecrets) { [void]$trackedSecretSet.Add($ts) }
+            $nonSecretTracked = New-Object System.Collections.Generic.List[string]
+            foreach ($line in ($wtDiffRes.StdOut -split "\r?\n")) {
+                $sp = Normalize-PathValue ([string]$line)
+                if ($sp -and -not $trackedSecretSet.Contains($sp)) {
+                    [void]$nonSecretTracked.Add($sp)
+                }
+            }
+            Invoke-ChunkedGitWithIndex $Root $envMap $FailPrefix 'git add -u filtered failed' @('add', '-u', '--') $nonSecretTracked
+            Invoke-ChunkedGitWithIndex $Root $envMap $FailPrefix 'git reset HEAD failed' @('reset', '-q', 'HEAD', '--') $trackedSecrets
+        } else {
+            $addRes = Invoke-GitCommand $Root @('add', '-u') -ExtraEnv $envMap
+            if ($addRes.ExitCode -ne 0) {
+                $detail = if ($addRes.StdErr.Trim()) { $addRes.StdErr.Trim() } else { $addRes.StdOut.Trim() }
+                Fail "${FailPrefix}: git add -u failed: $detail" 1
+            }
+        }
+        Invoke-ChunkedGitWithIndex $Root $envMap $FailPrefix 'git add untracked failed' @('add', '--') $untrackedToAdd
+        $rmRes = Invoke-GitCommand $Root @('rm', '-r', '--cached', '--ignore-unmatch', '--quiet', '--', '.b3/ship', '.b3/research-ship', '.b3/autodev') -ExtraEnv $envMap
+        if ($rmRes.ExitCode -ne 0) {
+            $detail = if ($rmRes.StdErr.Trim()) { $rmRes.StdErr.Trim() } else { $rmRes.StdOut.Trim() }
+            Fail "${FailPrefix}: git rm checkpoint failed: $detail" 1
+        }
+        $wtRes = Invoke-GitCommand $Root @('write-tree') -ExtraEnv $envMap
+        $treeSha = $wtRes.StdOut.Trim()
+        if ($wtRes.ExitCode -ne 0 -or -not $treeSha) {
+            $detail = if ($wtRes.StdErr.Trim()) { $wtRes.StdErr.Trim() } else { $wtRes.StdOut.Trim() }
+            Fail "${FailPrefix}: git write-tree failed: $detail" 1
+        }
+        return $treeSha
+    } finally {
+        Remove-Item -LiteralPath $tmpIdx -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-NoiseFile([string]$PathVal) {
     $leaf = ($PathVal -split '/')[-1]
     if ($leaf -in @('package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'packages.lock.json', 'Cargo.lock', 'poetry.lock')) {
@@ -364,6 +557,11 @@ function Resolve-AutoBaseForTarget([string]$Root, [string]$TargetCommitSha) {
                 return $mb
             }
         }
+    }
+    $parRes = Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', "${TargetCommitSha}^")
+    $par = $parRes.StdOut.Trim()
+    if ($parRes.ExitCode -eq 0 -and $par) {
+        return $par
     }
     return $TargetCommitSha
 }
@@ -935,37 +1133,11 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
         if (-not $lpSlash -or $lpSlash -eq '.' -or $lpSlash.StartsWith('/') -or $lpSlash.StartsWith('~') -or ($lpSlash -match '^[A-Za-z]:') -or ($lpSlash -match '(^|/)\.\.(/|$)')) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
         }
-        $rootSlash = ($Root -replace '\\', '/').TrimEnd('/')
-        $logFull = Resolve-TargetPath $Root $lpSlash
-        $logSlash = ($logFull -replace '\\', '/')
-        if (-not $logSlash.StartsWith("$rootSlash/", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $logInfo = Resolve-SafeRepoWritePath $Root $lpSlash
+        if (-not $logInfo) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
         }
-        $segCur = $Root
-        foreach ($seg in (($lpSlash -replace '^\./', '') -split '/')) {
-            if (-not $seg -or $seg -eq '.') { continue }
-            $segCur = Join-Path $segCur $seg
-            if (Test-Path -LiteralPath $segCur) {
-                try {
-                    $attrs = [IO.File]::GetAttributes($segCur)
-                    if (($attrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
-                    }
-                } catch {
-                    return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
-                }
-            } else {
-                try {
-                    $item = Get-Item -LiteralPath $segCur -Force -ErrorAction SilentlyContinue
-                    if (Test-IsReparseItem $item) {
-                        return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
-                    }
-                } catch {
-                    return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid log_path' }
-                }
-            }
-        }
-        if (-not (Test-Path -LiteralPath $logFull -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath $logInfo.FullPath -PathType Leaf)) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: missing log_path' }
         }
     }
@@ -1108,6 +1280,1176 @@ function Get-CanonicalGitCommonDir([string]$Dir) {
     return (Normalize-PathValue ([IO.Path]::GetFullPath($gd)))
 }
 
+function Get-TShirtSize([int]$FilesCount, [int]$LinesCount) {
+    if ($FilesCount -eq 0) { return 'NOISE_ONLY' }
+    if ($FilesCount -le 3 -and $LinesCount -le 100) { return 'XS' }
+    if ($FilesCount -le 8 -and $LinesCount -le 300) { return 'S' }
+    if ($FilesCount -le 20 -and $LinesCount -le 800) { return 'M' }
+    if ($FilesCount -lt 50 -and $LinesCount -lt 2000) { return 'L' }
+    if ($FilesCount -le 100 -and $LinesCount -le 5000) { return 'XL' }
+    return 'XXL'
+}
+
+function Normalize-SizeClass([string]$RawSize) {
+    if (-not $RawSize) { return $null }
+    $u = $RawSize.Trim().ToUpperInvariant()
+    switch ($u) {
+        'SMALL' { return 'S' }
+        'MEDIUM' { return 'M' }
+        'LARGE' { return 'L' }
+        'VERY_LARGE' { return 'XL' }
+        'XS' { return 'XS' }
+        'S' { return 'S' }
+        'M' { return 'M' }
+        'L' { return 'L' }
+        'XL' { return 'XL' }
+        'XXL' { return 'XXL' }
+        'NOISE_ONLY' { return 'NOISE_ONLY' }
+        'CLEAN_AFTER_FIX' { return 'CLEAN_AFTER_FIX' }
+        'EMPTY_DIFF' { return 'EMPTY_DIFF' }
+        default { return $null }
+    }
+}
+
+function Test-DocOrAssetPath([string]$PathVal) {
+    $low = $PathVal.ToLowerInvariant()
+    if ($low -match '(^|/)evals/.*\.ya?ml$') { return $true }
+    return ($low -match '\.(md|mdx|txt|rst|adoc|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|pdf)$')
+}
+
+function Test-GeneratedCodePath([string]$PathVal) {
+    return ($PathVal.ToLowerInvariant() -match '\.generated\.|\.pb\.|(^|/)(generated|gen)(/|$)|\.(g|designer)\.cs$')
+}
+
+function Test-ContractPath([string]$PathVal) {
+    $low = $PathVal.ToLowerInvariant()
+    if ((Test-DocOrAssetPath $low) -or (Test-TestPath $low) -or (Test-NoiseFile $low)) { return $false }
+    return ($low -match '(^|/)(openapi|swagger|proto|graphql|contracts?|schemas?|interfaces?|shared-types|api-types)(/|$|\.)|\.(proto|graphql|gql|sql)$|(^|/)(package\.json|pnpm-workspace\.yaml|go\.mod|cargo\.toml|pyproject\.toml)$|\.(csproj|sln)$')
+}
+
+function Get-RawModuleGroup([string]$PathVal) {
+    if ($PathVal -match '^(packages|services|apps|libs|modules|crates)/([^/]+)/') {
+        return "$($Matches[1])/$($Matches[2])"
+    }
+    if ($PathVal -match '^([^/]+)/([^/]+)/') {
+        return "$($Matches[1])/$($Matches[2])"
+    }
+    if ($PathVal -match '^([^/]+)/') {
+        return $Matches[1]
+    }
+    return 'root'
+}
+
+function Add-SignalTag([System.Collections.Hashtable]$Map, [string]$PathKey, [string]$Tag) {
+    if (-not $Map.ContainsKey($PathKey)) {
+        $Map[$PathKey] = New-Object System.Collections.Generic.List[string]
+    }
+    if (-not $Map[$PathKey].Contains($Tag)) {
+        [void]$Map[$PathKey].Add($Tag)
+    }
+}
+
+function Scan-PathRiskSignals([System.Collections.Hashtable]$Map, [string]$PathVal) {
+    $low = $PathVal.ToLowerInvariant()
+    if (Test-GeneratedCodePath $low) { Add-SignalTag $Map $PathVal 'generated_code' }
+    if ((Test-DocOrAssetPath $low) -or (Test-TestPath $low)) { return }
+    if ((Test-SecretPath $low) -or ($low -match '(^|/)(auth|authn|authz|oauth|oidc|jwt|rbac|acl|sessions?|security|crypto|cipher|secrets?|tokens?|credentials?|permissions?|polic(y|ies))(/|$|[^/]*\.)')) {
+        Add-SignalTag $Map $PathVal 'auth_security'
+    }
+    if ($low -match '(^|/)(b3-guard|install[^/]*|sync[^/]*)\.(ps1|sh)$') {
+        Add-SignalTag $Map $PathVal 'fs_git_security'
+    }
+    if ($low -match '(^|/)(migrations?|schema|prisma|alembic|flyway|liquibase|db|database|persistence|repositories|efcore)(/|$)|\.sql$') {
+        Add-SignalTag $Map $PathVal 'db_migration_tx'
+    }
+    if ($low -match '(^|/)(openapi|swagger|proto|graphql|contracts?|api|routes?|controllers?|endpoints?|schemas?|interfaces?|public)(/|$)|\.(proto|graphql|gql)$|(^|/)(contracts?|shared-types|api-types)\.[^/]+$') {
+        Add-SignalTag $Map $PathVal 'public_api_contract'
+    }
+    if ($low -match '(^|/)(cache|redis|queue|worker|lock|mutex|concurrency|scheduler|state|store)(/|$)') {
+        Add-SignalTag $Map $PathVal 'concurrency_state_cache'
+    }
+    if ($low -match '(^|/)(render|renderer|shader|three|canvas|scene|webgl|engine|query|queries|indexer|serializer|stream)(/|$)') {
+        Add-SignalTag $Map $PathVal 'perf_hot_path'
+    }
+}
+
+function Scan-LineRiskSignals([System.Collections.Hashtable]$Map, [string]$PathVal, [string]$LineLower) {
+    if ($LineLower -match 'verifytoken|jwt\.|bcrypt|argon2|pbkdf2|crypto\.|\[authorize|allowanonymous|eval\(|execsync|child_process|dangerouslysetinnerhtml|rejectunauthorized[ \t]*:[ \t]*false|chmod[ \t]+777') {
+        Add-SignalTag $Map $PathVal 'auth_security'
+    }
+    if ($LineLower -match 'git_index_file|reparsepoint|symboliclink|junction|rm[ \t]+-rf|remove-item.*-recurse|git[ \t]+push|git[ \t]+reset[ \t]+--hard') {
+        Add-SignalTag $Map $PathVal 'fs_git_security'
+    }
+    if ($LineLower -match '(^|[^a-z0-9_])(drop[ \t]+table|drop[ \t]+database|alter[ \t]+table|truncate[ \t]+table|begin[ \t]+transaction|isolationlevel|savechanges|migrate\()') {
+        Add-SignalTag $Map $PathVal 'db_migration_tx'
+        if ($LineLower -match '(^|[^a-z0-9_])(drop[ \t]+table|drop[ \t]+database|truncate[ \t]+table)([^a-z0-9_]|$)') {
+            Add-SignalTag $Map $PathVal '_db_destructive'
+        }
+    }
+    if ($LineLower -match '(^|[^a-z0-9_])(mutex|semaphore|concurrentdictionary|channel<|promise\.all|abortcontroller|imemorycache|distributedcache)') {
+        Add-SignalTag $Map $PathVal 'concurrency_state_cache'
+    }
+    if ($LineLower -match '(^|[^a-z0-9_])(useframe|requestanimationframe|instancedmesh|webglrenderer|asnotracking|json\.stringify|json\.parse)') {
+        Add-SignalTag $Map $PathVal 'perf_hot_path'
+    }
+}
+
+function Invoke-CollectScopeData([string]$Root, [string]$ResolvedBase, [string]$TargetCommitSha, [string[]]$IgnPaths, [string]$FailPrefix) {
+    $nsArgs = if ($TargetCommitSha) {
+        @('diff', '--no-renames', '--numstat', $ResolvedBase, $TargetCommitSha, '--')
+    } else {
+        @('diff', '--no-renames', '--numstat', $ResolvedBase, '--')
+    }
+    $nsRes = Invoke-GitCommand $Root $nsArgs
+    if ($nsRes.ExitCode -ne 0) {
+        $detail = if ($nsRes.StdErr.Trim()) { $nsRes.StdErr.Trim() } else { $nsRes.StdOut.Trim() }
+        Fail ("${FailPrefix}: git diff --numstat failed: $detail") 1
+    }
+
+    $stArgs = if ($TargetCommitSha) {
+        @('diff', '--no-renames', '--name-status', $ResolvedBase, $TargetCommitSha, '--')
+    } else {
+        @('diff', '--no-renames', '--name-status', $ResolvedBase, '--')
+    }
+    $stRes = Invoke-GitCommand $Root $stArgs
+    if ($stRes.ExitCode -ne 0) {
+        $detail = if ($stRes.StdErr.Trim()) { $stRes.StdErr.Trim() } else { $stRes.StdOut.Trim() }
+        Fail ("${FailPrefix}: git diff --name-status failed: $detail") 1
+    }
+
+    $untracked = if ($TargetCommitSha) { @() } else { @(Invoke-GitLines $Root @('ls-files', '--others', '--exclude-standard')) }
+
+    $reviewFiles = New-Object System.Collections.Generic.List[string]
+    $noiseFiles = New-Object System.Collections.Generic.List[string]
+    $fileLines = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    $fileSignals = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    $changeMap = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    $untrackedSet = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    $scanContentSet = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    $totalLines = 0
+
+    foreach ($sRow in ($stRes.StdOut -split "\r?\n")) {
+        $stLine = ([string]$sRow).Trim()
+        if (-not $stLine) { continue }
+        $sp = $stLine -split "`t", 2
+        if ($sp.Count -lt 2) { continue }
+        $ch = $sp[0].Substring(0, 1).ToUpperInvariant()
+        if ($ch -notin @('A', 'M', 'D')) { $ch = 'M' }
+        $fp = Normalize-PathValue $sp[1]
+        if ($fp -and -not (Test-CheckpointPath $fp) -and -not (Test-PathMatch $fp $IgnPaths)) {
+            $changeMap[$fp] = $ch
+        }
+    }
+
+    foreach ($row in ($nsRes.StdOut -split "\r?\n")) {
+        $lineStr = ([string]$row).Trim()
+        if (-not $lineStr) { continue }
+        $parts = $lineStr -split "`t", 3
+        if ($parts.Count -lt 3) { continue }
+        $p = Normalize-PathValue $parts[2]
+        if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $IgnPaths)) { continue }
+        Scan-PathRiskSignals $fileSignals $p
+        if (Test-NoiseFile $p) {
+            if (-not $noiseFiles.Contains($p)) { $noiseFiles.Add($p) }
+            continue
+        }
+        if (-not $reviewFiles.Contains($p)) { $reviewFiles.Add($p) }
+        $fLc = 0
+        if ($parts[0] -match '^\d+$') { $fLc += [int]$parts[0] }
+        if ($parts[1] -match '^\d+$') { $fLc += [int]$parts[1] }
+        $fileLines[$p] = $fLc
+        $totalLines += $fLc
+        if (-not ((Test-DocOrAssetPath $p) -or (Test-TestPath $p))) {
+            $scanContentSet[$p] = $true
+        }
+    }
+
+    foreach ($u in $untracked) {
+        if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $IgnPaths)) { continue }
+        Scan-PathRiskSignals $fileSignals $u
+        if (Test-NoiseFile $u) {
+            if (-not $noiseFiles.Contains($u)) { $noiseFiles.Add($u) }
+            continue
+        }
+        if (-not $reviewFiles.Contains($u)) {
+            $reviewFiles.Add($u)
+            $untrackedSet[$u] = $true
+            $changeMap[$u] = 'U'
+            $full = Join-Path $Root ($u -replace '/', '\')
+            $fLc = 0
+            if ((Test-Path -LiteralPath $full -PathType Leaf) -and -not (Test-BinaryFile $full)) {
+                $isTextCode = -not ((Test-DocOrAssetPath $u) -or (Test-TestPath $u))
+                $linesArr = [IO.File]::ReadAllLines($full)
+                $fLc = $linesArr.Length
+                if ($isTextCode) {
+                    foreach ($uln in $linesArr) {
+                        Scan-LineRiskSignals $fileSignals $u ($uln.ToLowerInvariant())
+                    }
+                }
+            }
+            $fileLines[$u] = $fLc
+            $totalLines += $fLc
+        }
+    }
+
+    if ($scanContentSet.Count -gt 0) {
+        $dArgs = if ($TargetCommitSha) {
+            @('diff', '--no-renames', '-U0', $ResolvedBase, $TargetCommitSha, '--')
+        } else {
+            @('diff', '--no-renames', '-U0', $ResolvedBase, '--')
+        }
+        $dRes = Invoke-GitCommand $Root $dArgs
+        if ($dRes.ExitCode -eq 0 -and $dRes.StdOut) {
+            $hdrOldPath = ''
+            $curPath = ''
+            $curScan = $false
+            foreach ($dl in ($dRes.StdOut -split "\r?\n")) {
+                if ($dl.StartsWith('diff --git ')) {
+                    $hdrOldPath = ''; $curPath = ''; $curScan = $false
+                    continue
+                }
+                if ($dl.StartsWith('--- ')) {
+                    $hdrOldPath = if ($dl -cne '--- /dev/null' -and $dl.Length -gt 6) { Normalize-PathValue ($dl.Substring(6)) } else { '' }
+                    continue
+                }
+                if ($dl.StartsWith('+++ ')) {
+                    if ($dl -cne '+++ /dev/null' -and $dl.Length -gt 6) {
+                        $curPath = Normalize-PathValue ($dl.Substring(6))
+                    } else {
+                        $curPath = $hdrOldPath
+                    }
+                    $curScan = ($curPath -and $scanContentSet.ContainsKey($curPath))
+                    continue
+                }
+                if ($curScan -and $curPath -and (($dl.StartsWith('+') -and -not $dl.StartsWith('+++')) -or ($dl.StartsWith('-') -and -not $dl.StartsWith('---')))) {
+                    Scan-LineRiskSignals $fileSignals $curPath ($dl.Substring(1).ToLowerInvariant())
+                }
+            }
+        }
+    }
+
+    $cntA = 0; $cntM = 0; $cntD = 0; $cntU = 0
+    foreach ($rf in $reviewFiles) {
+        $ct = if ($changeMap.ContainsKey($rf)) { $changeMap[$rf] } else { 'M' }
+        switch ($ct) {
+            'A' { $cntA++ }
+            'D' { $cntD++ }
+            'U' { $cntU++ }
+            default { $cntM++ }
+        }
+    }
+
+    $sortedRev = if ($reviewFiles.Count -gt 0) { @(Sort-Ordinal $reviewFiles.ToArray()) } else { @() }
+    $sortedNoise = if ($noiseFiles.Count -gt 0) { @(Sort-Ordinal $noiseFiles.ToArray()) } else { @() }
+    return @{
+        ReviewFiles = $sortedRev
+        NoiseFiles = $sortedNoise
+        FileLines = $fileLines
+        FileSignals = $fileSignals
+        TotalLines = $totalLines
+        ChangeTypes = "A:$cntA,M:$cntM,D:$cntD,U:$cntU"
+        UntrackedSet = $untrackedSet
+    }
+}
+
+function Eval-RiskForSubset([string[]]$PathsList, [System.Collections.Hashtable]$FileSignalsMap, [System.Collections.Hashtable]$FileLinesMap) {
+    $sigs = New-Object System.Collections.Generic.List[string]
+    $hasDestructive = $false
+    $codeGroups = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    $hasContractSig = $false
+    $codeFileCnt = 0
+    $codeLineCnt = 0
+
+    foreach ($p in @($PathsList)) {
+        if (-not $p) { continue }
+        if ($FileSignalsMap -and $FileSignalsMap.ContainsKey($p)) {
+            foreach ($s in @($FileSignalsMap[$p])) {
+                if ($s -ceq '_db_destructive') { $hasDestructive = $true; continue }
+                if (-not $sigs.Contains($s)) { [void]$sigs.Add($s) }
+                if ($s -ceq 'public_api_contract' -or $s -ceq 'db_migration_tx') { $hasContractSig = $true }
+            }
+        } else {
+            $tmpMap = @{}
+            Scan-PathRiskSignals $tmpMap $p
+            if ($tmpMap.ContainsKey($p)) {
+                foreach ($s in @($tmpMap[$p])) {
+                    if ($s -ceq '_db_destructive') { $hasDestructive = $true; continue }
+                    if (-not $sigs.Contains($s)) { [void]$sigs.Add($s) }
+                    if ($s -ceq 'public_api_contract' -or $s -ceq 'db_migration_tx') { $hasContractSig = $true }
+                }
+            }
+        }
+        if (-not ((Test-DocOrAssetPath $p) -or (Test-TestPath $p) -or (Test-GeneratedCodePath $p) -or (Test-NoiseFile $p))) {
+            $grp = Get-RawModuleGroup $p
+            $codeGroups[$grp] = $true
+            if ((Test-CodePath $p) -or (Test-ContractPath $p)) {
+                $codeFileCnt++
+                if ($FileLinesMap -and $FileLinesMap.ContainsKey($p)) { $codeLineCnt += [int]$FileLinesMap[$p] }
+            }
+        }
+    }
+
+    $crossHigh = $false
+    if ($codeGroups.Count -ge 4 -and $hasContractSig) {
+        if (-not $sigs.Contains('cross_module_blast')) { [void]$sigs.Add('cross_module_blast') }
+        $crossHigh = $true
+    } elseif ($codeGroups.Count -ge 3) {
+        if (-not $sigs.Contains('cross_module_blast')) { [void]$sigs.Add('cross_module_blast') }
+    }
+
+    $maxSev = 1
+    $specs = New-Object System.Collections.Generic.List[string]
+    foreach ($s in $sigs) {
+        switch ($s) {
+            'auth_security' {
+                if ($maxSev -lt 4) { $maxSev = 4 }
+                if (-not $specs.Contains('b3-security-reviewer')) { [void]$specs.Add('b3-security-reviewer') }
+            }
+            'fs_git_security' {
+                if ($maxSev -lt 4) { $maxSev = 4 }
+                if (-not $specs.Contains('b3-security-reviewer')) { [void]$specs.Add('b3-security-reviewer') }
+            }
+            'db_migration_tx' {
+                $dbSev = if ($hasDestructive) { 4 } else { 3 }
+                if ($maxSev -lt $dbSev) { $maxSev = $dbSev }
+                if (-not $specs.Contains('b3-architecture-reviewer')) { [void]$specs.Add('b3-architecture-reviewer') }
+                if ($hasDestructive -and -not $specs.Contains('b3-security-reviewer')) { [void]$specs.Add('b3-security-reviewer') }
+            }
+            'public_api_contract' {
+                if ($maxSev -lt 3) { $maxSev = 3 }
+                if (-not $specs.Contains('b3-architecture-reviewer')) { [void]$specs.Add('b3-architecture-reviewer') }
+            }
+            'concurrency_state_cache' {
+                if ($maxSev -lt 3) { $maxSev = 3 }
+                if (-not $specs.Contains('b3-architecture-reviewer')) { [void]$specs.Add('b3-architecture-reviewer') }
+                if (-not $specs.Contains('b3-performance-reviewer')) { [void]$specs.Add('b3-performance-reviewer') }
+            }
+            'perf_hot_path' {
+                if ($maxSev -lt 3) { $maxSev = 3 }
+                if (-not $specs.Contains('b3-performance-reviewer')) { [void]$specs.Add('b3-performance-reviewer') }
+            }
+            'generated_code' {
+                if ($maxSev -lt 2) { $maxSev = 2 }
+            }
+            'cross_module_blast' {
+                $cSev = if ($crossHigh) { 3 } else { 2 }
+                if ($maxSev -lt $cSev) { $maxSev = $cSev }
+                if ($crossHigh -and -not $specs.Contains('b3-architecture-reviewer')) { [void]$specs.Add('b3-architecture-reviewer') }
+            }
+        }
+    }
+
+    if ($maxSev -lt 2 -and ($codeFileCnt -gt 1 -or $codeLineCnt -gt 100)) {
+        if (-not $sigs.Contains('general_code_change')) { [void]$sigs.Add('general_code_change') }
+        $maxSev = 2
+    }
+
+    $riskLabel = switch ($maxSev) {
+        4 { 'CRITICAL' }
+        3 { 'HIGH' }
+        2 { 'MEDIUM' }
+        default { 'LOW' }
+    }
+    $sigOut = if ($sigs.Count -gt 0) { (Sort-Ordinal $sigs.ToArray()) -join ',' } else { 'none' }
+    $specOut = if ($specs.Count -gt 0) { (Sort-Ordinal $specs.ToArray()) -join ',' } else { 'none' }
+    return @{
+        RiskLevel = $riskLabel
+        RiskSignals = $sigOut
+        RecommendedSpecialists = $specOut
+    }
+}
+
+function Invoke-GitTextHash([string]$Root, [string]$Text, [string]$FailPrefix = 'GIT_ERROR') {
+    $hRes = Invoke-GitCommand $Root @('hash-object', '--stdin') -StdInText $Text
+    $hOut = $hRes.StdOut.Trim()
+    if ($hRes.ExitCode -ne 0 -or $hOut -cnotmatch '^[0-9a-f]{40}$') {
+        $detail = if ($hRes.StdErr.Trim()) { $hRes.StdErr.Trim() } else { $hRes.StdOut.Trim() }
+        Fail "${FailPrefix}: git hash-object failed: $detail" 1
+    }
+    return $hOut
+}
+
+function Test-IsOversizedUnit([int]$FilesCnt, [int]$LinesCnt) {
+    return ($LinesCnt -gt 5000 -or ($FilesCnt -gt 100 -and $LinesCnt -gt 1000))
+}
+
+function Get-RiskSeverityNum([string]$RiskLevel) {
+    switch ($RiskLevel) {
+        'CRITICAL' { return 4 }
+        'HIGH' { return 3 }
+        'MEDIUM' { return 2 }
+        default { return 1 }
+    }
+}
+
+function Get-UnitMetrics([hashtable]$GrpEntry, [hashtable]$FileLines, [hashtable]$FileSignals) {
+    $filesSorted = @(Sort-Ordinal @($GrpEntry.Files))
+    $linesSum = 0
+    foreach ($f in $filesSorted) {
+        if ($FileLines -and $FileLines.ContainsKey($f)) { $linesSum += [int]$FileLines[$f] }
+    }
+    $ev = Eval-RiskForSubset $filesSorted $FileSignals $FileLines
+    $topSeg = if ($GrpEntry.Group -eq 'root' -or $GrpEntry.Group.StartsWith('(')) { $GrpEntry.Group } else { ($GrpEntry.Group -split '/')[0] }
+    return @{
+        Group = $GrpEntry.Group
+        Members = @($GrpEntry.Members)
+        TopSeg = $topSeg
+        Files = $filesSorted
+        FilesCnt = $filesSorted.Count
+        LinesCnt = $linesSum
+        Risk = $ev.RiskLevel
+        RiskNum = (Get-RiskSeverityNum $ev.RiskLevel)
+        Specialists = $ev.RecommendedSpecialists
+        Signals = $ev.RiskSignals
+        FilesCsv = ($filesSorted -join ',')
+        FeatureTokens = @($GrpEntry.FeatureTokens)
+    }
+}
+
+function Get-FileFeatureToken([string]$PathVal) {
+    $leaf = ($PathVal -split '/')[-1]
+    $stem = $leaf -replace '\.[^.]+$', ''
+    $stem = $stem -replace '\.(test|spec|generated|pb|g|designer)$', ''
+    $spaced = ($stem -replace '[-_.]+', ' ')
+    $spaced = [regex]::Replace($spaced, '([a-z0-9])([A-Z])', '$1 $2')
+    $rawWords = @($spaced.ToLowerInvariant().Trim() -split '\s+' | Where-Object { $_ -ne '' })
+    if ($rawWords.Count -eq 0) { return 'misc' }
+    $layerSet = @('controller','controllers','service','services','repository','repositories','repo','handler','handlers','model','models','types','type','schema','schemas','utils','util','helper','helpers','view','views','component','components','slice','store','routes','route','router','api','client','impl','dto','dtos','spec','test')
+    $end = $rawWords.Count
+    while ($end -gt 1 -and ($layerSet -contains $rawWords[$end - 1])) {
+        $end--
+    }
+    return ($rawWords[0..($end - 1)] -join '-')
+}
+
+function Get-StemKeyNoExt([string]$PathVal) {
+    $low = $PathVal.ToLowerInvariant()
+    return ($low -replace '\.(?:tsx|ts|jsx|js|mjs|cjs|py|go|rs|cpp|hpp|c|h|cs|java|proto|graphql|gql)$', '')
+}
+
+function Resolve-RelImportTarget([string]$FromFile, [string]$RelSpec) {
+    $cleanSpec = ($RelSpec -replace '\\', '/' -replace '[?#].*$', '').Trim()
+    if (-not $cleanSpec -or -not ($cleanSpec.StartsWith('./') -or $cleanSpec.StartsWith('../'))) { return '' }
+    $dirParts = @()
+    $slashIdx = $FromFile.LastIndexOf('/')
+    if ($slashIdx -gt 0) {
+        $dirParts = @($FromFile.Substring(0, $slashIdx) -split '/' | Where-Object { $_ -ne '' })
+    }
+    $stk = New-Object System.Collections.Generic.List[string]
+    foreach ($dp in $dirParts) { [void]$stk.Add($dp) }
+    foreach ($seg in ($cleanSpec -split '/')) {
+        if (-not $seg -or $seg -eq '.') { continue }
+        if ($seg -eq '..') {
+            if ($stk.Count -gt 0) { $stk.RemoveAt($stk.Count - 1) } else { return '' }
+        } else {
+            [void]$stk.Add($seg)
+        }
+    }
+    if ($stk.Count -eq 0) { return '' }
+    return (Get-StemKeyNoExt ($stk -join '/'))
+}
+
+function Get-SourceContentLines([string]$Root, [string]$TargetCommitSha, [string]$RelPath) {
+    if ($TargetCommitSha) {
+        $shRes = Invoke-GitCommand $Root @('show', "${TargetCommitSha}:${RelPath}")
+        if ($shRes.ExitCode -ne 0) { return @() }
+        return ($shRes.StdOut -split "\r?\n")
+    }
+    $full = Join-Path $Root ($RelPath -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf) -or (Test-BinaryFile $full)) { return @() }
+    return @([IO.File]::ReadLines($full))
+}
+
+function Attach-TestsToSubBuckets([string]$ParentGroup, [System.Collections.Generic.List[hashtable]]$SubBuckets, [string[]]$TestFiles, [string[]]$AllRegFiles, [hashtable]$StemToSubIdx) {
+    $extraTests = New-Object System.Collections.Generic.List[string]
+    foreach ($tf in $TestFiles) {
+        $assignedIdx = -1
+        # 1. Deeper prefix match inside ParentGroup
+        if ($ParentGroup -ne 'root') {
+            $pfx = "$ParentGroup/"
+            if ($tf.StartsWith($pfx)) {
+                $tRem = $tf.Substring($pfx.Length)
+                $tSeg = if ($tRem.Contains('/')) { "$ParentGroup/$($tRem.Split('/')[0])" } else { '' }
+                if ($tSeg) {
+                    for ($i = 0; $i -lt $SubBuckets.Count; $i++) {
+                        if ($SubBuckets[$i].Group -ceq $tSeg) { $assignedIdx = $i; break }
+                    }
+                }
+            }
+        }
+        # 2. Stem or feature-token unique match
+        if ($assignedIdx -lt 0) {
+            $tfLeaf = ($tf -split '/')[-1]
+            $tfStem = ($tfLeaf -replace '\.[^.]+$', '' -replace '\.(test|spec)$', '').ToLowerInvariant()
+            $matchedIdxs = New-Object System.Collections.Generic.List[int]
+            for ($i = 0; $i -lt $SubBuckets.Count; $i++) {
+                $hit = $false
+                foreach ($rf in $SubBuckets[$i].Files) {
+                    $rfLeaf = ($rf -split '/')[-1]
+                    $rfStem = ($rfLeaf -replace '\.[^.]+$', '').ToLowerInvariant()
+                    if ($rfStem -ceq $tfStem) { $hit = $true; break }
+                }
+                if ($hit) { [void]$matchedIdxs.Add($i) }
+            }
+            if ($matchedIdxs.Count -eq 0) {
+                $tFeat = Get-FileFeatureToken $tf
+                for ($i = 0; $i -lt $SubBuckets.Count; $i++) {
+                    if ($SubBuckets[$i].FeatureTokens -contains $tFeat) { [void]$matchedIdxs.Add($i) }
+                }
+            }
+            if ($matchedIdxs.Count -eq 1) {
+                $assignedIdx = $matchedIdxs[0]
+            }
+        }
+        if ($assignedIdx -ge 0) {
+            [void]$SubBuckets[$assignedIdx].Files.Add($tf)
+        } else {
+            [void]$extraTests.Add($tf)
+        }
+    }
+    if ($extraTests.Count -gt 0) {
+        $tGrp = if ($ParentGroup -eq 'root') { '(tests)' } else { "$ParentGroup/(tests)" }
+        [void]$SubBuckets.Add(@{
+            Group = $tGrp
+            Members = @($tGrp)
+            Files = $extraTests
+            FeatureTokens = @()
+        })
+    }
+}
+
+function Coalesce-TinySubBuckets([System.Collections.Generic.List[hashtable]]$SubBuckets, [hashtable]$FileLines, [hashtable]$FileSignals) {
+    $cur = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($sb in $SubBuckets) { [void]$cur.Add((Get-UnitMetrics $sb $FileLines $FileSignals)) }
+    while ($cur.Count -gt 4) {
+        $tinyIdx = -1
+        $tinyLines = [int]::MaxValue
+        for ($i = 0; $i -lt $cur.Count; $i++) {
+            $u = $cur[$i]
+            $hasContract = (@($u.Files | Where-Object { Test-ContractPath $_ })).Count -gt 0
+            if ($u.FilesCnt -lt 2 -and $u.LinesCnt -lt 200 -and $u.Risk -cne 'CRITICAL' -and -not $hasContract) {
+                if ($u.LinesCnt -lt $tinyLines) { $tinyLines = $u.LinesCnt; $tinyIdx = $i }
+            }
+        }
+        if ($tinyIdx -lt 0) { break }
+        $tu = $cur[$tinyIdx]
+        $bestTarget = -1
+        $bestScore = [long]::MaxValue
+        for ($j = 0; $j -lt $cur.Count; $j++) {
+            if ($j -eq $tinyIdx) { continue }
+            $cand = $cur[$j]
+            $combFiles = $tu.FilesCnt + $cand.FilesCnt
+            $combLines = $tu.LinesCnt + $cand.LinesCnt
+            if (Test-IsOversizedUnit $combFiles $combLines) { continue }
+            $score = [long]$combLines
+            if ($cand.Risk -cne $tu.Risk) { $score += 100000 }
+            if ($cand.Risk -ceq 'CRITICAL') { $score += 500000 }
+            if ($score -lt $bestScore) { $bestScore = $score; $bestTarget = $j }
+        }
+        if ($bestTarget -lt 0) { break }
+        $tgt = $cur[$bestTarget]
+        $mergedFiles = New-Object System.Collections.Generic.List[string]
+        foreach ($f in ($tu.Files + $tgt.Files)) { [void]$mergedFiles.Add($f) }
+        $mems = @($tu.Members + $tgt.Members | Select-Object -Unique)
+        $mGroup = if ($tgt.Group.Length -ge $tu.Group.Length) { $tgt.Group } else { $tu.Group }
+        $feats = @($tu.FeatureTokens + $tgt.FeatureTokens | Select-Object -Unique)
+        $merged = Get-UnitMetrics @{ Group = $mGroup; Members = $mems; Files = $mergedFiles; FeatureTokens = $feats } $FileLines $FileSignals
+        $hi = [Math]::Max($tinyIdx, $bestTarget); $lo = [Math]::Min($tinyIdx, $bestTarget)
+        $cur.RemoveAt($hi); $cur.RemoveAt($lo)
+        [void]$cur.Add($merged)
+    }
+    return $cur
+}
+
+function Expand-OversizedUnit([string]$Root, [string]$TargetCommitSha, [hashtable]$Unit, [hashtable]$FileLines, [hashtable]$FileSignals, [int]$Depth) {
+    foreach ($f in $Unit.Files) {
+        $fl = if ($FileLines.ContainsKey($f)) { [int]$FileLines[$f] } else { 0 }
+        if ($fl -gt 5000) {
+            return @{ PartitionError = "PARTITION_INCOMPLETE: single file '$f' (${fl}L) exceeds max unit bound (5000L); refactor or split PR" }
+        }
+    }
+
+    $nonTest = New-Object System.Collections.Generic.List[string]
+    $tests = New-Object System.Collections.Generic.List[string]
+    foreach ($f in $Unit.Files) {
+        if (Test-TestPath $f) { [void]$tests.Add($f) } else { [void]$nonTest.Add($f) }
+    }
+
+    $rawGroup = $Unit.Group
+    $baseGroup = $rawGroup -replace '/\((root|contracts)\)$', ''
+    $prefix = if ($baseGroup -eq 'root' -or $baseGroup.StartsWith('(')) { '' } else { "$baseGroup/" }
+
+    # Boundary 1: deeper directory hierarchy
+    if ($Depth -lt 4) {
+        $dirMap = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+        $hasDeeperDir = $false
+        foreach ($f in $nonTest) {
+            $rem = if ($prefix -and $f.StartsWith($prefix)) { $f.Substring($prefix.Length) } elseif (-not $prefix) { $f } else { '' }
+            if ($rem -and $rem.Contains('/')) {
+                $hasDeeperDir = $true
+                $childKey = if ($prefix) { "$prefix$($rem.Split('/')[0])" } else { $rem.Split('/')[0] }
+            } elseif (Test-ContractPath $f) {
+                $childKey = if ($baseGroup -eq 'root') { '(contracts)' } else { "$baseGroup/(contracts)" }
+            } else {
+                $childKey = if ($baseGroup -eq 'root') { '(root)' } else { "$baseGroup/(root)" }
+            }
+            if (-not $dirMap.ContainsKey($childKey)) {
+                $dirMap[$childKey] = New-Object System.Collections.Generic.List[string]
+            }
+            [void]$dirMap[$childKey].Add($f)
+        }
+        if ($hasDeeperDir -and $dirMap.Count -ge 2) {
+            $subBuckets = New-Object System.Collections.Generic.List[hashtable]
+            foreach ($k in (Sort-Ordinal @($dirMap.Keys))) {
+                $fts = New-Object System.Collections.Generic.List[string]
+                foreach ($rf in $dirMap[$k]) { [void]$fts.Add((Get-FileFeatureToken $rf)) }
+                [void]$subBuckets.Add(@{ Group = $k; Members = @($k); Files = $dirMap[$k]; FeatureTokens = @($fts | Select-Object -Unique) })
+            }
+            Attach-TestsToSubBuckets $baseGroup $subBuckets $tests.ToArray() $nonTest.ToArray() @{}
+            $coalesced = Coalesce-TinySubBuckets $subBuckets $FileLines $FileSignals
+            $outUnits = New-Object System.Collections.Generic.List[hashtable]
+            foreach ($cu in $coalesced) {
+                if (Test-IsOversizedUnit $cu.FilesCnt $cu.LinesCnt) {
+                    $subRes = Expand-OversizedUnit $Root $TargetCommitSha $cu $FileLines $FileSignals ($Depth + 1)
+                    if ($subRes.PartitionError) { return $subRes }
+                    foreach ($su in $subRes.Units) { [void]$outUnits.Add($su) }
+                } else {
+                    [void]$outUnits.Add($cu)
+                }
+            }
+            return @{ Units = $outUnits }
+        }
+    }
+
+    # Boundary 2: contract separation + feature token + local relative imports connected components
+    $contracts = New-Object System.Collections.Generic.List[string]
+    $regular = New-Object System.Collections.Generic.List[string]
+    foreach ($f in $nonTest) {
+        if (Test-ContractPath $f) { [void]$contracts.Add($f) } else { [void]$regular.Add($f) }
+    }
+
+    $b2Buckets = New-Object System.Collections.Generic.List[hashtable]
+    if ($contracts.Count -gt 0 -and $regular.Count -gt 0) {
+        $cGrp = if ($baseGroup -eq 'root' -or $baseGroup.StartsWith('(')) { '(contracts)' } else { "$baseGroup/(contracts)" }
+        [void]$b2Buckets.Add(@{ Group = $cGrp; Members = @($cGrp); Files = $contracts; FeatureTokens = @('contracts') })
+    } elseif ($contracts.Count -gt 0) {
+        foreach ($cf in $contracts) { [void]$regular.Add($cf) }
+    }
+
+    $n = $regular.Count
+    if ($n -gt 0) {
+        $parent = New-Object int[] $n
+        $feats = New-Object string[] $n
+        $fileExts = New-Object string[] $n
+        $stemMap = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+        $featFirstIdx = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+        for ($i = 0; $i -lt $n; $i++) {
+            $parent[$i] = $i
+            $rf = $regular[$i]
+            $ft = Get-FileFeatureToken $rf
+            $feats[$i] = $ft
+            $rfLeaf = ($rf -split '/')[-1]
+            $dotPos = $rfLeaf.LastIndexOf('.')
+            $fileExts[$i] = if ($dotPos -ge 0 -and $dotPos -lt ($rfLeaf.Length - 1)) { $rfLeaf.Substring($dotPos + 1).ToLowerInvariant() } else { 'noext' }
+            $sk = Get-StemKeyNoExt $rf
+            if (-not $stemMap.ContainsKey($sk)) { $stemMap[$sk] = $i }
+            if ($sk.EndsWith('/index')) {
+                $dirStem = $sk.Substring(0, $sk.Length - 6)
+                if ($dirStem -and -not $stemMap.ContainsKey($dirStem)) { $stemMap[$dirStem] = $i }
+            }
+        }
+        $ufFind = {
+            param([int]$x)
+            while ($parent[$x] -ne $x) {
+                $parent[$x] = $parent[$parent[$x]]
+                $x = $parent[$x]
+            }
+            return $x
+        }
+        $ufUnion = {
+            param([int]$a, [int]$b)
+            $ra = & $ufFind $a
+            $rb = & $ufFind $b
+            if ($ra -ne $rb) {
+                if ($ra -lt $rb) { $parent[$rb] = $ra } else { $parent[$ra] = $rb }
+            }
+        }
+        $impEdges = New-Object System.Collections.Generic.List[hashtable]
+        for ($i = 0; $i -lt $n; $i++) {
+            $ft = $feats[$i]
+            if ($featFirstIdx.ContainsKey($ft)) {
+                & $ufUnion ([int]$featFirstIdx[$ft]) $i
+            } else {
+                $featFirstIdx[$ft] = $i
+            }
+            $lines = Get-SourceContentLines $Root $TargetCommitSha $regular[$i]
+            foreach ($ln in $lines) {
+                foreach ($m in ([regex]::Matches([string]$ln, '["''](\.\.?/[^"''\r\n]+)["'']'))) {
+                    $tgtStem = Resolve-RelImportTarget $regular[$i] $m.Groups[1].Value
+                    if ($tgtStem -and $stemMap.ContainsKey($tgtStem)) {
+                        $tIdx = [int]$stemMap[$tgtStem]
+                        & $ufUnion $i $tIdx
+                        [void]$impEdges.Add(@{ a = $i; b = $tIdx })
+                    }
+                }
+            }
+        }
+        $compHasCrossExt = New-Object 'System.Collections.Hashtable'
+        foreach ($ed in $impEdges) {
+            if ($fileExts[$ed.a] -cne $fileExts[$ed.b]) {
+                $rEd = & $ufFind $ed.a
+                $compHasCrossExt[$rEd] = $true
+            }
+        }
+        $compFiles = New-Object 'System.Collections.Hashtable'
+        $compIdxs = New-Object 'System.Collections.Hashtable'
+        $compFeats = New-Object 'System.Collections.Hashtable'
+        for ($i = 0; $i -lt $n; $i++) {
+            $rIdx = & $ufFind $i
+            if (-not $compFiles.ContainsKey($rIdx)) {
+                $compFiles[$rIdx] = New-Object System.Collections.Generic.List[string]
+                $compIdxs[$rIdx] = New-Object System.Collections.Generic.List[int]
+                $compFeats[$rIdx] = New-Object System.Collections.Generic.List[string]
+            }
+            [void]$compFiles[$rIdx].Add($regular[$i])
+            [void]$compIdxs[$rIdx].Add($i)
+            if (-not $compFeats[$rIdx].Contains($feats[$i])) { [void]$compFeats[$rIdx].Add($feats[$i]) }
+        }
+        foreach ($rKey in @($compFiles.Keys | Sort-Object)) {
+            $sortedFt = @(Sort-Ordinal $compFeats[$rKey].ToArray())
+            $ftLabel = $sortedFt[0]
+            $subGrp = if ($baseGroup -eq 'root' -or $baseGroup.StartsWith('(')) { $ftLabel } else { "$baseGroup/$ftLabel" }
+            $cList = $compFiles[$rKey]
+            $cLines = 0
+            foreach ($cfItem in $cList) {
+                if ($FileLines.ContainsKey($cfItem)) { $cLines += [int]$FileLines[$cfItem] }
+            }
+            if ((Test-IsOversizedUnit $cList.Count $cLines) -and $cList.Count -ge 2 -and (-not $compHasCrossExt.ContainsKey($rKey))) {
+                $extMap = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+                foreach ($idxItem in $compIdxs[$rKey]) {
+                    $extV = $fileExts[$idxItem]
+                    if (-not $extMap.ContainsKey($extV)) {
+                        $extMap[$extV] = New-Object System.Collections.Generic.List[string]
+                    }
+                    [void]$extMap[$extV].Add($regular[$idxItem])
+                }
+                if ($extMap.Count -ge 2) {
+                    foreach ($extK in (Sort-Ordinal @($extMap.Keys))) {
+                        $extSubGrp = "${subGrp}(${extK})"
+                        [void]$b2Buckets.Add(@{ Group = $extSubGrp; Members = @($extSubGrp); Files = $extMap[$extK]; FeatureTokens = $sortedFt })
+                    }
+                    continue
+                }
+            }
+            [void]$b2Buckets.Add(@{ Group = $subGrp; Members = @($subGrp); Files = $cList; FeatureTokens = $sortedFt })
+        }
+    }
+
+    if ($b2Buckets.Count -ge 2) {
+        Attach-TestsToSubBuckets $baseGroup $b2Buckets $tests.ToArray() $nonTest.ToArray() @{}
+        $coalesced = Coalesce-TinySubBuckets $b2Buckets $FileLines $FileSignals
+        foreach ($cu in $coalesced) {
+            if (Test-IsOversizedUnit $cu.FilesCnt $cu.LinesCnt) {
+                return @{ PartitionError = "PARTITION_INCOMPLETE: oversized unit '$($cu.Group)' ($($cu.FilesCnt)f, $($cu.LinesCnt)L) cannot be cohesively partitioned without arbitrary LOC splitting" }
+            }
+        }
+        return @{ Units = $coalesced }
+    }
+
+    return @{ PartitionError = "PARTITION_INCOMPLETE: oversized unit '$rawGroup' ($($Unit.FilesCnt)f, $($Unit.LinesCnt)L) cannot be cohesively partitioned without arbitrary LOC splitting" }
+}
+
+function Merge-CohesiveUnitsToCap([System.Collections.Generic.List[hashtable]]$Units, [hashtable]$FileLines, [hashtable]$FileSignals, [string]$SizeClass) {
+    while ($Units.Count -gt 4) {
+        $bestI = -1; $bestJ = -1
+        $bestTop = [int]::MaxValue; $bestCrit = [int]::MaxValue; $bestRisk = [int]::MaxValue
+        $bestLines = [int]::MaxValue; $bestFiles = [int]::MaxValue
+        $bestGA = ''; $bestGB = ''
+        for ($i = 0; $i -lt $Units.Count; $i++) {
+            for ($j = $i + 1; $j -lt $Units.Count; $j++) {
+                $ui = $Units[$i]; $uj = $Units[$j]
+                $cFiles = $ui.FilesCnt + $uj.FilesCnt
+                $cLines = $ui.LinesCnt + $uj.LinesCnt
+                if (Test-IsOversizedUnit $cFiles $cLines) { continue }
+                $dTop = if ($ui.TopSeg -ceq $uj.TopSeg) { 0 } else { 1 }
+                $dCrit = if (($ui.Risk -ceq 'CRITICAL') -ne ($uj.Risk -ceq 'CRITICAL')) { 1 } else { 0 }
+                $dRisk = if ($ui.Risk -ceq $uj.Risk) { 0 } else { 1 }
+                $gA = if ([string]::CompareOrdinal($ui.Group, $uj.Group) -le 0) { $ui.Group } else { $uj.Group }
+                $gB = if ($gA -ceq $ui.Group) { $uj.Group } else { $ui.Group }
+                $better = $false
+                if ($dTop -lt $bestTop) { $better = $true }
+                elseif ($dTop -eq $bestTop) {
+                    if ($dCrit -lt $bestCrit) { $better = $true }
+                    elseif ($dCrit -eq $bestCrit) {
+                        if ($dRisk -lt $bestRisk) { $better = $true }
+                        elseif ($dRisk -eq $bestRisk) {
+                            if ($cLines -lt $bestLines) { $better = $true }
+                            elseif ($cLines -eq $bestLines) {
+                                if ($cFiles -lt $bestFiles) { $better = $true }
+                                elseif ($cFiles -eq $bestFiles) {
+                                    $cmpA = [string]::CompareOrdinal($gA, $bestGA)
+                                    if ($cmpA -lt 0 -or ($cmpA -eq 0 -and [string]::CompareOrdinal($gB, $bestGB) -lt 0)) { $better = $true }
+                                }
+                            }
+                        }
+                    }
+                }
+                if ($better) {
+                    $bestI = $i; $bestJ = $j
+                    $bestTop = $dTop; $bestCrit = $dCrit; $bestRisk = $dRisk
+                    $bestLines = $cLines; $bestFiles = $cFiles; $bestGA = $gA; $bestGB = $gB
+                }
+            }
+        }
+        if ($bestI -lt 0) {
+            return @{ PartitionError = "PARTITION_INCOMPLETE: cannot bound $SizeClass PR to <= 4 cohesive units without exceeding unit bounds" }
+        }
+        $ua = $Units[$bestI]; $ub = $Units[$bestJ]
+        $mFiles = New-Object System.Collections.Generic.List[string]
+        foreach ($f in ($ua.Files + $ub.Files)) { [void]$mFiles.Add($f) }
+        $mems = @(Sort-Ordinal @($ua.Members + $ub.Members | Select-Object -Unique))
+        $mGroup = if ($mems.Count -eq 2) { "$($mems[0])+$($mems[1])" } else { "$($mems[0])+$($mems.Count - 1)more" }
+        $mFeats = @($ua.FeatureTokens + $ub.FeatureTokens | Select-Object -Unique)
+        $merged = Get-UnitMetrics @{ Group = $mGroup; Members = $mems; Files = $mFiles; FeatureTokens = $mFeats } $FileLines $FileSignals
+        $Units.RemoveAt($bestJ); $Units.RemoveAt($bestI)
+        [void]$Units.Add($merged)
+    }
+    return @{ Units = $Units }
+}
+
+function Build-UnitAssignments([string]$Root, [string]$TargetCommitSha, [string[]]$ReviewFiles, [hashtable]$FileLines, [hashtable]$FileSignals, [string]$SizeClass) {
+    $groupsMap = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    $nonTestGroups = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    foreach ($f in $ReviewFiles) {
+        if (Test-TestPath $f) { continue }
+        $g = Get-RawModuleGroup $f
+        $nonTestGroups[$g] = $true
+        if (-not $groupsMap.ContainsKey($g)) {
+            $groupsMap[$g] = New-Object System.Collections.Generic.List[string]
+        }
+        [void]$groupsMap[$g].Add($f)
+    }
+
+    $activeNtKeys = @(Sort-Ordinal @($nonTestGroups.Keys))
+    foreach ($f in $ReviewFiles) {
+        if (-not (Test-TestPath $f)) { continue }
+        $g = Get-RawModuleGroup $f
+        $assigned = $g
+        if (-not $nonTestGroups.ContainsKey($g)) {
+            $token = ''
+            if ($f -match '^(?:tests?|__tests__)/([^/]+)/') {
+                $token = $Matches[1]
+            } elseif ($f -match '(?:^|/)([^/]+)\.(?:test|spec)\.[^./]+$') {
+                $token = $Matches[1]
+            }
+            if ($token) {
+                $matchesNt = @($activeNtKeys | Where-Object { $_ -ceq $token -or $_.EndsWith("/$token") })
+                if ($matchesNt.Count -eq 1) {
+                    $assigned = $matchesNt[0]
+                }
+            }
+        }
+        if (-not $groupsMap.ContainsKey($assigned)) {
+            $groupsMap[$assigned] = New-Object System.Collections.Generic.List[string]
+        }
+        [void]$groupsMap[$assigned].Add($f)
+    }
+
+    $workUnits = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($grp in (Sort-Ordinal @($groupsMap.Keys))) {
+        $uRaw = Get-UnitMetrics @{ Group = $grp; Members = @($grp); Files = $groupsMap[$grp]; FeatureTokens = @() } $FileLines $FileSignals
+        if (Test-IsOversizedUnit $uRaw.FilesCnt $uRaw.LinesCnt) {
+            $expRes = Expand-OversizedUnit $Root $TargetCommitSha $uRaw $FileLines $FileSignals 0
+            if ($expRes.PartitionError) { return $expRes }
+            foreach ($eu in $expRes.Units) { [void]$workUnits.Add($eu) }
+        } else {
+            [void]$workUnits.Add($uRaw)
+        }
+    }
+
+    if ($SizeClass -in @('L', 'XL') -and $workUnits.Count -gt 4) {
+        $capRes = Merge-CohesiveUnitsToCap $workUnits $FileLines $FileSignals $SizeClass
+        if ($capRes.PartitionError) { return $capRes }
+        $workUnits = $capRes.Units
+    }
+
+    $sortedUnits = @($workUnits | Sort-Object -Property @{ Expression = { $_.Group } }, @{ Expression = { if ($_.Files.Count -gt 0) { $_.Files[0] } else { '' } } })
+    $finalUnits = New-Object System.Collections.Generic.List[hashtable]
+    $idx = 1
+    foreach ($su in $sortedUnits) {
+        $uId = 'U{0:D2}' -f $idx
+        $idx++
+        $su['UnitId'] = $uId
+        [void]$finalUnits.Add($su)
+    }
+    return @{ Units = @($finalUnits) }
+}
+
+function Eval-Level1Dispatch([string[]]$ContractFiles, [string]$RecommendedSpecialists, [string]$RiskLevel, [string[]]$ReviewFiles) {
+    $recArr = if ($RecommendedSpecialists -and $RecommendedSpecialists -cne 'none') { @(Split-CsvList $RecommendedSpecialists) } else { @() }
+    $l1 = New-Object System.Collections.Generic.List[string]
+    if ($ContractFiles.Count -gt 0 -or ($recArr -contains 'b3-architecture-reviewer')) {
+        [void]$l1.Add('b3-architecture-reviewer')
+    }
+    if ($recArr -contains 'b3-security-reviewer' -and -not $l1.Contains('b3-security-reviewer')) {
+        [void]$l1.Add('b3-security-reviewer')
+    }
+    if ($recArr -contains 'b3-performance-reviewer' -and -not $l1.Contains('b3-performance-reviewer')) {
+        [void]$l1.Add('b3-performance-reviewer')
+    }
+    $l1Out = if ($l1.Count -gt 0) { (Sort-Ordinal $l1.ToArray()) -join ',' } else { 'none' }
+    $skipRat = 'none'
+    if ($l1Out -ceq 'none') {
+        $allDocs = ($ReviewFiles.Count -gt 0 -and (@($ReviewFiles | Where-Object { -not (Test-DocOrAssetPath $_) })).Count -eq 0)
+        if ($allDocs) {
+            $skipRat = 'low-risk-docs-only'
+        } elseif ($RiskLevel -ceq 'LOW') {
+            $skipRat = 'low-risk-isolated-no-contracts'
+        } else {
+            $skipRat = 'no-contract-or-arch-signals'
+        }
+    }
+    return @{
+        L1Specialists = $l1Out
+        L1SkipRationale = $skipRat
+    }
+}
+
+function Invoke-BuildInventory([string]$Root, [string]$ResolvedBase, [string]$TargetCommitSha, [string[]]$IgnPaths, [int]$Conc, [string]$FailPrefix) {
+    $scope = Invoke-CollectScopeData $Root $ResolvedBase $TargetCommitSha $IgnPaths $FailPrefix
+    if ($scope.ReviewFiles.Count -eq 0 -and $scope.NoiseFiles.Count -eq 0) {
+        return @{ IsEmpty = $true }
+    }
+    $sizeClass = Get-TShirtSize $scope.ReviewFiles.Count $scope.TotalLines
+    $riskAllSet = if ($scope.ReviewFiles.Count -gt 0) { $scope.ReviewFiles } else { $scope.NoiseFiles }
+    $overallRisk = Eval-RiskForSubset $riskAllSet $scope.FileSignals $scope.FileLines
+
+    $contractFiles = @($scope.ReviewFiles | Where-Object { Test-ContractPath $_ })
+    $genAll = @()
+    foreach ($gf in @($scope.ReviewFiles + $scope.NoiseFiles)) {
+        if (Test-GeneratedCodePath $gf) { $genAll += $gf }
+    }
+    $generatedFiles = if ($genAll.Count -gt 0) { @(Sort-Ordinal $genAll) } else { @() }
+    $testFiles = @($scope.ReviewFiles | Where-Object { Test-TestPath $_ })
+
+    $l1Eval = Eval-Level1Dispatch $contractFiles $overallRisk.RecommendedSpecialists $overallRisk.RiskLevel $scope.ReviewFiles
+
+    $units = @()
+    if ($scope.ReviewFiles.Count -gt 0) {
+        $partRes = Build-UnitAssignments $Root $TargetCommitSha $scope.ReviewFiles $scope.FileLines $scope.FileSignals $sizeClass
+        if ($partRes.PartitionError) {
+            return @{ IsEmpty = $false; PartitionError = $partRes.PartitionError }
+        }
+        $units = @($partRes.Units)
+    }
+
+    $clampedConc = [Math]::Max(1, [Math]::Min(4, $Conc))
+    $splitRec = ($sizeClass -in @('L', 'XL', 'XXL') -and ($units.Count -ge 2 -or $scope.TotalLines -gt 800))
+    return @{
+        IsEmpty = $false
+        SizeClass = $sizeClass
+        FilesCount = $scope.ReviewFiles.Count
+        LinesCount = $scope.TotalLines
+        RiskLevel = $overallRisk.RiskLevel
+        RiskSignals = $overallRisk.RiskSignals
+        RecommendedSpecialists = $overallRisk.RecommendedSpecialists
+        L1Specialists = $l1Eval.L1Specialists
+        L1SkipRationale = $l1Eval.L1SkipRationale
+        ChangeTypes = $scope.ChangeTypes
+        ContractFiles = $contractFiles
+        GeneratedFiles = $generatedFiles
+        TestFiles = $testFiles
+        NoiseFiles = $scope.NoiseFiles
+        ReviewFiles = $scope.ReviewFiles
+        SplitRecommended = $splitRec
+        MaxConcurrency = $clampedConc
+        Units = $units
+    }
+}
+
+function Get-ScopePathsTreeHash([string]$Root, [string]$TargetCommitSha, [string[]]$PathsArr, [string[]]$IgnPaths) {
+    $clean = New-Object System.Collections.Generic.List[string]
+    foreach ($p in @($PathsArr)) {
+        $np = Normalize-PathValue ([string]$p)
+        if (-not $np -or (Test-CheckpointPath $np)) { continue }
+        if ($IgnPaths -and (Test-PathMatch $np $IgnPaths)) { continue }
+        if (-not $clean.Contains($np)) { [void]$clean.Add($np) }
+    }
+    if ($clean.Count -eq 0) { return 'none' }
+    $sorted = @(Sort-Ordinal $clean.ToArray())
+    if (-not $TargetCommitSha) {
+        return (Get-TreeFingerprint $Root $sorted $IgnPaths).TreeHash
+    }
+    $lsArgs = @('ls-tree', '-r', $TargetCommitSha, '--') + $sorted
+    $lsRes = Invoke-GitCommand $Root $lsArgs
+    if ($lsRes.ExitCode -ne 0) {
+        $detail = if ($lsRes.StdErr.Trim()) { $lsRes.StdErr.Trim() } else { $lsRes.StdOut.Trim() }
+        Fail "GIT_ERROR: git ls-tree target paths failed: $detail" 1
+    }
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($ln in ($lsRes.StdOut -split "\r?\n")) {
+        if ($ln.Trim()) { [void]$lines.Add($ln.Trim()) }
+    }
+    $manifest = "PATHS=" + ($sorted -join ',') + "`n" + ((Sort-Ordinal $lines.ToArray()) -join "`n") + "`n"
+    return (Invoke-GitTextHash $Root $manifest 'GIT_ERROR')
+}
+
+function Get-DefaultMaxPasses([string]$SizeClass) {
+    switch (Normalize-SizeClass $SizeClass) {
+        'L' { return 12 }
+        'XL' { return 12 }
+        'XXL' { return 24 }
+        default { return 5 }
+    }
+}
+
+function Test-WaiverAttempt([string]$RationaleVal) {
+    $t = if ($RationaleVal) { $RationaleVal.Trim() } else { '' }
+    return ($t -match '^WAIVER:')
+}
+
+function Get-InitialPassChain([string]$Root, [string]$BaseSha) {
+    return (Invoke-GitTextHash $Root "b3-pass-v1|init|$BaseSha|0`n" 'LEDGER_FAIL')
+}
+
+function Step-PassChain([string]$Root, [string]$PrevChain, [int]$Seq, [string]$ScopeId, [string]$Kind, [int]$Delta, [string]$RefSha) {
+    return (Invoke-GitTextHash $Root "b3-pass-v1|step|$PrevChain|$Seq|$ScopeId|$Kind|$Delta|$RefSha`n" 'LEDGER_FAIL')
+}
+
+function Verify-LedgerPassChain([string]$Root, [hashtable]$Ledger) {
+    if (-not $Ledger.HasPassChain) { return }
+    $cur = Get-InitialPassChain $Root $Ledger['base_sha']
+    $sum = 0
+    $logList = @($Ledger.PassLog)
+    for ($i = 0; $i -lt $logList.Count; $i++) {
+        $entry = $logList[$i]
+        if ([int]$entry.seq -ne ($i + 1) -or [int]$entry.delta -lt 1) {
+            Fail "LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index $($i + 1))" 1
+        }
+        $sum += [int]$entry.delta
+        $cur = Step-PassChain $Root $cur ([int]$entry.seq) $entry.scope $entry.kind ([int]$entry.delta) $entry.ref_sha
+        if ($cur -cne $entry.chain_hash) {
+            Fail "LEDGER_CORRUPT: passes_used tamper detected (chain hash mismatch at seq $($entry.seq))" 1
+        }
+    }
+    if ($sum -ne [int]$Ledger['passes_used'] -or $cur -cne $Ledger['pass_chain']) {
+        Fail "LEDGER_CORRUPT: passes_used tamper detected (passes=$($Ledger['passes_used']) log_sum=$sum)" 1
+    }
+}
+
+function Serialize-ReviewLedger([hashtable]$L) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("# B3 Review Coverage Ledger`n")
+    foreach ($k in @('schema', 'base_sha', 'head_sha', 'target_ref', 'target_sha', 'snapshot_sha', 'size_class', 'normalized_legacy_size', 'risk_level', 'risk_signals', 'recommended_specialists', 'l1_specialists', 'l1_skip_rationale', 'contract_files', 'generated_files', 'max_concurrency', 'max_passes', 'passes_used', 'pass_chain', 'budget_status', 'cross_unit_status', 'cross_unit_tree_hash', 'unit_count')) {
+        if ($L.ContainsKey($k)) {
+            [void]$sb.Append("${k}=$($L[$k])`n")
+        }
+    }
+    [void]$sb.Append("`n## Units`n")
+    [void]$sb.Append("| unit_id | group | files_cnt | lines_cnt | risk | specialists | rationale | status | findings | verify_receipt | unit_tree_hash | files_csv |`n")
+    [void]$sb.Append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`n")
+    foreach ($u in @($L.Units)) {
+        [void]$sb.Append("| $($u.unit_id) | $($u.group) | $($u.files_cnt) | $($u.lines_cnt) | $($u.risk) | $($u.specialists) | $($u.rationale) | $($u.status) | $($u.findings) | $($u.verify_receipt) | $($u.unit_tree_hash) | $($u.files_csv) |`n")
+    }
+    if ($L.ContainsKey('PassLog')) {
+        [void]$sb.Append("`n## Pass Log`n")
+        foreach ($pe in @($L.PassLog)) {
+            [void]$sb.Append("pass|$($pe.seq)|$($pe.scope)|$($pe.kind)|$($pe.delta)|$($pe.ref_sha)|$($pe.chain_hash)`n")
+        }
+    }
+    return $sb.ToString()
+}
+
+function Parse-ReviewLedger([string]$FullPath) {
+    $raw = [IO.File]::ReadAllText($FullPath)
+    $meta = @{}
+    $units = New-Object System.Collections.Generic.List[hashtable]
+    $passLog = New-Object System.Collections.Generic.List[hashtable]
+    foreach ($rawLn in ($raw -split "\r?\n")) {
+        $ln = $rawLn.Trim()
+        if (-not $ln -or $ln.StartsWith('#')) { continue }
+        if ($ln.StartsWith('|')) {
+            $cols = @($ln.Trim('|') -split '\|' | ForEach-Object { $_.Trim() })
+            if ($cols.Count -ne 12) { Fail 'LEDGER_CORRUPT: malformed unit row column count' 1 }
+            if ($cols[0] -eq 'unit_id' -or $cols[0] -eq '---') { continue }
+            if ($cols[0] -notmatch '^U[0-9]{2,}$') { Fail "LEDGER_CORRUPT: invalid unit_id '$($cols[0])'" 1 }
+            if ($cols[2] -notmatch '^[0-9]+$' -or $cols[3] -notmatch '^[0-9]+$') { Fail 'LEDGER_CORRUPT: invalid unit row numeric field' 1 }
+            [void]$units.Add(@{
+                unit_id = $cols[0]
+                group = $cols[1]
+                files_cnt = [int]$cols[2]
+                lines_cnt = [int]$cols[3]
+                risk = $cols[4]
+                specialists = $cols[5]
+                rationale = $cols[6]
+                status = $cols[7]
+                findings = $cols[8]
+                verify_receipt = $cols[9]
+                unit_tree_hash = $cols[10]
+                files_csv = $cols[11]
+            })
+            continue
+        }
+        if ($ln.StartsWith('pass|')) {
+            if ($ln -cnotmatch '^pass\|([0-9]+)\|([^|\r\n]+)\|([^|\r\n]+)\|([0-9]+)\|([0-9a-f]{40}|none)\|([0-9a-f]{40})$') {
+                Fail "LEDGER_CORRUPT: malformed pass log entry '$ln'" 1
+            }
+            [void]$passLog.Add(@{
+                seq = [int]$Matches[1]
+                scope = $Matches[2]
+                kind = $Matches[3]
+                delta = [int]$Matches[4]
+                ref_sha = $Matches[5]
+                chain_hash = $Matches[6]
+            })
+            continue
+        }
+        $eq = $ln.IndexOf('=')
+        if ($eq -lt 1) { Fail "LEDGER_CORRUPT: unexpected line '$ln'" 1 }
+        $k = $ln.Substring(0, $eq).Trim()
+        $v = $ln.Substring($eq + 1).Trim()
+        if ($meta.ContainsKey($k)) { Fail "LEDGER_CORRUPT: duplicate key '$k'" 1 }
+        $meta[$k] = $v
+    }
+    foreach ($req in @('schema', 'base_sha', 'head_sha', 'target_ref', 'snapshot_sha', 'size_class', 'normalized_legacy_size', 'risk_level', 'risk_signals', 'recommended_specialists', 'contract_files', 'generated_files', 'max_concurrency', 'max_passes', 'passes_used', 'budget_status', 'cross_unit_status', 'cross_unit_tree_hash', 'unit_count')) {
+        if (-not $meta.ContainsKey($req) -or $meta[$req] -eq '') { Fail "LEDGER_CORRUPT: missing key '$req'" 1 }
+    }
+    if ($meta['schema'] -cne 'b3-review-ledger-v1') { Fail "LEDGER_CORRUPT: unsupported schema '$($meta['schema'])'" 1 }
+    if ($meta['base_sha'] -cnotmatch '^[0-9a-f]{40}$') { Fail 'LEDGER_CORRUPT: invalid base_sha' 1 }
+    if (-not $meta.ContainsKey('target_sha') -or $meta['target_sha'] -eq '') {
+        if ($meta['target_ref'] -ceq 'working_tree') {
+            $meta['target_sha'] = 'none'
+        } elseif ($meta['target_ref'] -cmatch '^[0-9a-f]{40}$') {
+            $meta['target_sha'] = $meta['target_ref']
+        } else {
+            Fail 'LEDGER_CORRUPT: missing target_sha for symbolic target_ref' 1
+        }
+    }
+    if ($meta['target_ref'] -ceq 'working_tree') {
+        if ($meta['target_sha'] -cne 'none') { Fail 'LEDGER_CORRUPT: invalid target_sha' 1 }
+    } elseif ($meta['target_sha'] -cnotmatch '^[0-9a-f]{40}$') {
+        Fail 'LEDGER_CORRUPT: invalid target_sha' 1
+    }
+    if ($meta['max_passes'] -cnotmatch '^[0-9]+$' -or $meta['passes_used'] -cnotmatch '^[0-9]+$') {
+        Fail 'LEDGER_CORRUPT: invalid pass counter' 1
+    }
+    $hasChain = $meta.ContainsKey('pass_chain')
+    if ($hasChain) {
+        if ($meta['pass_chain'] -cnotmatch '^[0-9a-f]{40}$') { Fail 'LEDGER_CORRUPT: invalid pass_chain' 1 }
+    } elseif ($passLog.Count -gt 0) {
+        Fail 'LEDGER_CORRUPT: pass_chain missing with non-empty pass log' 1
+    }
+    if (-not $meta.ContainsKey('l1_specialists') -or $meta['l1_specialists'] -eq '') { $meta['l1_specialists'] = 'none' }
+    if (-not $meta.ContainsKey('l1_skip_rationale') -or $meta['l1_skip_rationale'] -eq '') { $meta['l1_skip_rationale'] = 'none' }
+    $normSize = Normalize-SizeClass $meta['size_class']
+    if (-not $normSize) { Fail "LEDGER_CORRUPT: invalid size_class '$($meta['size_class'])'" 1 }
+    if ([int]$meta['unit_count'] -ne $units.Count) { Fail 'LEDGER_CORRUPT: unit_count mismatch' 1 }
+    $meta['HasPassChain'] = $hasChain
+    $meta['Units'] = @($units)
+    $meta['PassLog'] = $passLog
+    return $meta
+}
+
 switch ($Command) {
     'fingerprint' {
         $trimmedScope = $Scope.Trim()
@@ -1164,7 +2506,9 @@ switch ($Command) {
                 if (-not $uncommitted.Contains($p)) { $uncommitted.Add($p) }
             }
 
-            $roHits = @($uncommitted | Where-Object { Test-PathMatch $_ $readOnlyWatched } | Sort-Object -Unique)
+            $roHits = @($uncommitted | Where-Object {
+                (-not (Test-PathMatch $_ $owned)) -and (Test-PathMatch $_ $readOnlyWatched)
+            } | Sort-Object -Unique)
             if ($roHits.Count -gt 0) {
                 Fail ("STALE: uncommitted change in read_only_deps (" + ($roHits -join ', ') + ")") 2
             }
@@ -1286,17 +2630,21 @@ switch ($Command) {
     }
 
     'snapshot' {
-        $stashRes = Invoke-GitCommand $RepoRoot @('stash', 'create')
-        if ($stashRes.ExitCode -ne 0) {
-            Fail 'SNAPSHOT_FAIL: git stash create failed' 1
+        $headSha = Assert-ValidGitRev $RepoRoot 'HEAD' 'commit' 'SNAPSHOT_FAIL' 'HEAD'
+        $headTreeRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{tree}')
+        $headTree = $headTreeRes.StdOut.Trim()
+        if ($headTreeRes.ExitCode -ne 0 -or -not $headTree) {
+            Fail 'SNAPSHOT_FAIL: failed to resolve HEAD^{tree}' 1
         }
-        $sha = $stashRes.StdOut.Trim()
-        if (-not $sha) {
-            $headRes = Invoke-GitCommand $RepoRoot @('rev-parse', 'HEAD')
-            $sha = $headRes.StdOut.Trim()
-            if ($headRes.ExitCode -ne 0) {
-                $detail = if ($headRes.StdErr.Trim()) { $headRes.StdErr.Trim() } else { $sha }
-                Fail ("SNAPSHOT_FAIL: git rev-parse HEAD failed: $detail") 1
+        $curTree = New-WorkingTreeOid $RepoRoot 'SNAPSHOT_FAIL'
+        if ($curTree -ceq $headTree) {
+            $sha = $headSha
+        } else {
+            $ctRes = Invoke-GitCommand $RepoRoot @('commit-tree', $curTree, '-p', $headSha, '-m', 'b3-snapshot')
+            $sha = $ctRes.StdOut.Trim()
+            if ($ctRes.ExitCode -ne 0 -or -not $sha) {
+                $detail = if ($ctRes.StdErr.Trim()) { $ctRes.StdErr.Trim() } else { $ctRes.StdOut.Trim() }
+                Fail ("SNAPSHOT_FAIL: git commit-tree failed: $detail") 1
             }
         }
         $typeRes = Invoke-GitCommand $RepoRoot @('cat-file', '-t', $sha)
@@ -1331,63 +2679,20 @@ switch ($Command) {
                 $resolvedBase = Resolve-AutoBaseSha $RepoRoot $ignored
             }
         }
+        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'DIFF_SCOPE_FAIL' '-BaseSha')
 
-        $nsArgs = if ($targetTrim) {
-            @('diff', '--no-renames', '--numstat', $resolvedBase, $targetCommitSha, '--')
-        } else {
-            @('diff', '--no-renames', '--numstat', $resolvedBase)
-        }
-        $nsRes = Invoke-GitCommand $RepoRoot $nsArgs
-        if ($nsRes.ExitCode -ne 0) {
-            $detail = if ($nsRes.StdErr.Trim()) { $nsRes.StdErr.Trim() } else { $nsRes.StdOut.Trim() }
-            Fail ("DIFF_SCOPE_FAIL: git diff --numstat failed: $detail") 1
-        }
-
-        $untracked = if ($targetTrim) { @() } else { @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')) }
-        $reviewFiles = New-Object System.Collections.Generic.List[string]
-        $noiseFiles = New-Object System.Collections.Generic.List[string]
-        $totalLines = 0
-
-        foreach ($row in ($nsRes.StdOut -split "\r?\n")) {
-            $lineStr = ([string]$row).Trim()
-            if (-not $lineStr) { continue }
-            $parts = $lineStr -split "`t", 3
-            if ($parts.Count -lt 3) { continue }
-            $p = Normalize-PathValue $parts[2]
-            if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $ignored)) { continue }
-            if (Test-NoiseFile $p) {
-                if (-not $noiseFiles.Contains($p)) { $noiseFiles.Add($p) }
-                continue
-            }
-            if (-not $reviewFiles.Contains($p)) { $reviewFiles.Add($p) }
-            if ($parts[0] -match '^\d+$') { $totalLines += [int]$parts[0] }
-            if ($parts[1] -match '^\d+$') { $totalLines += [int]$parts[1] }
-        }
-
-        foreach ($u in $untracked) {
-            if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
-            if (Test-NoiseFile $u) {
-                if (-not $noiseFiles.Contains($u)) { $noiseFiles.Add($u) }
-                continue
-            }
-            if (-not $reviewFiles.Contains($u)) {
-                $reviewFiles.Add($u)
-                $full = Join-Path $RepoRoot ($u -replace '/', '\')
-                if (Test-Path -LiteralPath $full -PathType Leaf) {
-                    $totalLines += @(Get-Content -LiteralPath $full -ErrorAction SilentlyContinue).Count
-                }
-            }
-        }
+        $scopeData = Invoke-CollectScopeData $RepoRoot $resolvedBase $targetCommitSha $ignored 'DIFF_SCOPE_FAIL'
+        $reviewFiles = $scopeData.ReviewFiles
+        $noiseFiles = $scopeData.NoiseFiles
+        $totalLines = [int]$scopeData.TotalLines
 
         $dfOut = $null
+        $deltaArr = @()
         if ($PrevSha -and $PrevSha.Trim()) {
             $prevTrim = $PrevSha.Trim()
-            $deltaArgs = if ($targetTrim) {
-                @('diff', '--no-renames', '--name-only', $prevTrim, $targetCommitSha, '--')
-            } else {
-                @('diff', '--no-renames', '--name-only', $prevTrim)
-            }
-            $deltaRes = Invoke-GitCommand $RepoRoot $deltaArgs
+            [void](Assert-ValidGitRev $RepoRoot $prevTrim 'commit' 'DIFF_SCOPE_FAIL' '-PrevSha')
+            $deltaEnd = if ($targetTrim) { $targetCommitSha } else { New-WorkingTreeOid $RepoRoot 'DIFF_SCOPE_FAIL' }
+            $deltaRes = Invoke-GitCommand $RepoRoot @('diff', '--no-renames', '--name-only', $prevTrim, $deltaEnd, '--')
             if ($deltaRes.ExitCode -ne 0) {
                 $detail = if ($deltaRes.StdErr.Trim()) { $deltaRes.StdErr.Trim() } else { $deltaRes.StdOut.Trim() }
                 Fail ("DIFF_SCOPE_FAIL: git diff -PrevSha failed: $detail") 1
@@ -1399,27 +2704,32 @@ switch ($Command) {
                 if (Test-NoiseFile $dp) { continue }
                 if (-not $deltaFiles.Contains($dp)) { $deltaFiles.Add($dp) }
             }
-            foreach ($u in $untracked) {
-                if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
-                if (Test-NoiseFile $u) { continue }
-                if (-not $deltaFiles.Contains($u)) { $deltaFiles.Add($u) }
-            }
-            $dfOut = if ($deltaFiles.Count -gt 0) { (Sort-Ordinal $deltaFiles.ToArray()) -join ',' } else { 'none' }
+            $deltaArr = if ($deltaFiles.Count -gt 0) { @(Sort-Ordinal $deltaFiles.ToArray()) } else { @() }
+            $dfOut = if ($deltaArr.Count -gt 0) { $deltaArr -join ',' } else { 'none' }
         }
 
         if ($reviewFiles.Count -eq 0 -and $noiseFiles.Count -eq 0) {
-            Fail 'EMPTY_DIFF' 2
+            if ($null -eq $dfOut -or $dfOut -eq 'none') { Fail 'EMPTY_DIFF' 2 }
+            $cleanRisk = Eval-RiskForSubset $deltaArr $null $null
+            Write-Output 'size_class=CLEAN_AFTER_FIX'
+            Write-Output 'files=0'
+            Write-Output 'lines=0'
+            Write-Output 'review_files=none'
+            Write-Output 'noise_files=none'
+            Write-Output "delta_files=$dfOut"
+            Write-Output "risk_level=$($cleanRisk.RiskLevel)"
+            Write-Output "risk_signals=$($cleanRisk.RiskSignals)"
+            Write-Output "recommended_specialists=$($cleanRisk.RecommendedSpecialists)"
+            exit 0
         }
 
         $fileCount = $reviewFiles.Count
-        $sizeClass = if ($fileCount -eq 0) { 'NOISE_ONLY' }
-            elseif ($fileCount -le 8 -and $totalLines -le 300) { 'SMALL' }
-            elseif ($fileCount -le 20 -and $totalLines -le 800) { 'MEDIUM' }
-            elseif ($fileCount -lt 50 -and $totalLines -lt 2000) { 'LARGE' }
-            else { 'VERY_LARGE' }
+        $sizeClass = Get-TShirtSize $fileCount $totalLines
+        $riskTarget = if ($reviewFiles.Count -gt 0) { $reviewFiles } else { $noiseFiles }
+        $riskRes = Eval-RiskForSubset $riskTarget $scopeData.FileSignals $scopeData.FileLines
 
-        $rfOut = if ($reviewFiles.Count -gt 0) { (Sort-Ordinal $reviewFiles.ToArray()) -join ',' } else { 'none' }
-        $nfOut = if ($noiseFiles.Count -gt 0) { (Sort-Ordinal $noiseFiles.ToArray()) -join ',' } else { 'none' }
+        $rfOut = if ($reviewFiles.Count -gt 0) { $reviewFiles -join ',' } else { 'none' }
+        $nfOut = if ($noiseFiles.Count -gt 0) { $noiseFiles -join ',' } else { 'none' }
         Write-Output "size_class=$sizeClass"
         Write-Output "files=$fileCount"
         Write-Output "lines=$totalLines"
@@ -1428,6 +2738,9 @@ switch ($Command) {
         if ($null -ne $dfOut) {
             Write-Output "delta_files=$dfOut"
         }
+        Write-Output "risk_level=$($riskRes.RiskLevel)"
+        Write-Output "risk_signals=$($riskRes.RiskSignals)"
+        Write-Output "recommended_specialists=$($riskRes.RecommendedSpecialists)"
         exit 0
     }
 
@@ -1457,15 +2770,27 @@ switch ($Command) {
             }
         }
 
+        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'MECHANICAL_FAIL' '-BaseSha')
+
         $chArgs = if ($targetTrim) {
             @('diff', '--no-renames', '--name-only', $resolvedBase, $targetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '--name-only', $resolvedBase)
+            @('diff', '--no-renames', '--name-only', $resolvedBase, '--')
         }
         $chRes = Invoke-GitCommand $RepoRoot $chArgs
         if ($chRes.ExitCode -ne 0) {
             $detail = if ($chRes.StdErr.Trim()) { $chRes.StdErr.Trim() } else { $chRes.StdOut.Trim() }
             Fail ("MECHANICAL_FAIL: git diff --name-only failed: $detail") 1
+        }
+        $nonDelArgs = if ($targetTrim) {
+            @('diff', '--no-renames', '--diff-filter=d', '--name-only', $resolvedBase, $targetCommitSha, '--')
+        } else {
+            @('diff', '--no-renames', '--diff-filter=d', '--name-only', $resolvedBase, '--')
+        }
+        $nonDelRes = Invoke-GitCommand $RepoRoot $nonDelArgs
+        if ($nonDelRes.ExitCode -ne 0) {
+            $detail = if ($nonDelRes.StdErr.Trim()) { $nonDelRes.StdErr.Trim() } else { $nonDelRes.StdOut.Trim() }
+            Fail ("MECHANICAL_FAIL: git diff --diff-filter=d failed: $detail") 1
         }
         $untracked = if ($targetTrim) { @() } else { @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')) }
 
@@ -1480,6 +2805,17 @@ switch ($Command) {
             if (-not $allChanged.Contains($u)) { $allChanged.Add($u) }
         }
 
+        $nonDelChanged = New-Object System.Collections.Generic.List[string]
+        foreach ($row in ($nonDelRes.StdOut -split "\r?\n")) {
+            $p = Normalize-PathValue ([string]$row)
+            if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $ignored)) { continue }
+            if (-not $nonDelChanged.Contains($p)) { $nonDelChanged.Add($p) }
+        }
+        foreach ($u in $untracked) {
+            if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
+            if (-not $nonDelChanged.Contains($u)) { $nonDelChanged.Add($u) }
+        }
+
         $scopeCreep = New-Object System.Collections.Generic.List[string]
         if ($allowed.Count -gt 0) {
             foreach ($p in $allChanged) {
@@ -1489,7 +2825,7 @@ switch ($Command) {
 
         $leftoverHits = New-Object System.Collections.Generic.List[string]
         $safetyHits = New-Object System.Collections.Generic.List[string]
-        foreach ($p in $allChanged) {
+        foreach ($p in $nonDelChanged) {
             if (Test-SecretPath $p) {
                 $safetyHits.Add("secret_path:$p")
             }
@@ -1499,7 +2835,7 @@ switch ($Command) {
         $dlArgs = if ($targetTrim) {
             @('diff', '--no-renames', '-U0', $resolvedBase, $targetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '-U0', $resolvedBase)
+            @('diff', '--no-renames', '-U0', $resolvedBase, '--')
         }
         $dlRes = Invoke-GitCommand $RepoRoot $dlArgs
         if ($dlRes.ExitCode -ne 0) {
@@ -1555,7 +2891,7 @@ switch ($Command) {
             if ($leftoverHits.Count -ge 10 -and $sqlHitCount -ge 10) { break }
             if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or ($u -match '\.md$')) { continue }
             $full = Join-Path $RepoRoot ($u -replace '/', '\')
-            if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+            if (-not (Test-Path -LiteralPath $full -PathType Leaf) -or (Test-BinaryFile $full)) { continue }
             $isUTest = Test-TestPath $u
             $lno = 0
             foreach ($fl in @(Get-Content -LiteralPath $full -ErrorAction SilentlyContinue)) {
@@ -1572,11 +2908,8 @@ switch ($Command) {
             }
         }
 
-        $delArgs = if ($targetTrim) {
-            @('diff', '--no-renames', '--diff-filter=D', '--name-only', $resolvedBase, $targetCommitSha, '--')
-        } else {
-            @('diff', '--no-renames', '--diff-filter=D', '--name-only', $resolvedBase)
-        }
+        $delTarget = if ($targetTrim) { $targetCommitSha } else { New-WorkingTreeOid $RepoRoot 'MECHANICAL_FAIL' -ExcludeSensitive }
+        $delArgs = @('diff', '-M', '--diff-filter=D', '--name-only', $resolvedBase, $delTarget, '--')
         $delRes = Invoke-GitCommand $RepoRoot $delArgs
         if ($delRes.ExitCode -ne 0) {
             $detail = if ($delRes.StdErr.Trim()) { $delRes.StdErr.Trim() } else { $delRes.StdOut.Trim() }
@@ -1605,9 +2938,9 @@ switch ($Command) {
                 }
             }
             $grepArgs = if ($targetTrim) {
-                @('grep', '-l', '-F', '-e', $tok, $targetCommitSha, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship')
+                @('grep', '-l', '-F', '-e', $tok, $targetCommitSha, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship', ':(exclude).b3/autodev')
             } else {
-                @('grep', '-l', '-F', '-e', $tok, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship')
+                @('grep', '--untracked', '-l', '-F', '-e', $tok, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship', ':(exclude).b3/autodev')
             }
             $grepRes = Invoke-GitCommand $RepoRoot $grepArgs
             if ($grepRes.ExitCode -gt 1) {
@@ -1615,7 +2948,15 @@ switch ($Command) {
             }
             $grepCount = 0
             if ($grepRes.ExitCode -eq 0) {
-                $grepCount = @(($grepRes.StdOut -split "\r?\n") | Where-Object { ([string]$_).Trim() }).Count
+                $obsPrefix = "${targetCommitSha}:"
+                foreach ($row in ($grepRes.StdOut -split "\r?\n")) {
+                    $gp = ([string]$row).Trim()
+                    if (-not $gp) { continue }
+                    if ($targetTrim -and $gp.StartsWith($obsPrefix)) { $gp = $gp.Substring($obsPrefix.Length) }
+                    $gp = Normalize-PathValue $gp
+                    if (-not $gp -or (Test-CheckpointPath $gp) -or ($ignored -and (Test-PathMatch $gp $ignored))) { continue }
+                    $grepCount++
+                }
             }
             if ($existsPath -and $grepCount -gt 0) {
                 $obsoleteHits.Add("${tok}(exists+${grepCount}f)")
@@ -1952,11 +3293,11 @@ switch ($Command) {
         if (-not $ReceiptPath -or -not $ReceiptPath.Trim()) { Fail 'VERIFY_RUN_FAIL: missing -ReceiptPath' 1 }
 
         $receiptInfo = Resolve-SafeRepoWritePath $RepoRoot $ReceiptPath
-        if (-not $receiptInfo) { Fail 'VERIFY_RUN_FAIL: invalid receipt_path' 1 }
+        if (-not $receiptInfo -or (Test-Path -LiteralPath $receiptInfo.FullPath -PathType Container)) { Fail 'VERIFY_RUN_FAIL: invalid receipt_path' 1 }
 
         $effLogArg = if ($LogPath -and $LogPath.Trim()) { $LogPath } else { "$($receiptInfo.RelPath).log" }
         $logInfo = Resolve-SafeRepoWritePath $RepoRoot $effLogArg
-        if (-not $logInfo) { Fail 'VERIFY_RUN_FAIL: invalid log_path' 1 }
+        if (-not $logInfo -or (Test-Path -LiteralPath $logInfo.FullPath -PathType Container)) { Fail 'VERIFY_RUN_FAIL: invalid log_path' 1 }
 
         $effTaskId = if ($TaskId -and $TaskId.Trim()) { ($TaskId.Trim() -replace '[\r\n]+', ' ') } else { 'unknown' }
         $effScope = if ($Scope -and $Scope.Trim()) { ($Scope.Trim() -replace '[\r\n]+', ' ') } else { 'scoped' }
@@ -2068,10 +3409,12 @@ switch ($Command) {
             }
         }
 
+        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'SYMBOL_FAIL' '-BaseSha')
+
         $dlArgs = if ($targetTrim) {
             @('diff', '--no-renames', '-U0', $resolvedBase, $targetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '-U0', $resolvedBase)
+            @('diff', '--no-renames', '-U0', $resolvedBase, '--')
         }
         $dlRes = Invoke-GitCommand $RepoRoot $dlArgs
         if ($dlRes.ExitCode -ne 0) {
@@ -2159,11 +3502,36 @@ switch ($Command) {
         $danglingRefs = New-Object System.Collections.Generic.List[string]
         $orphanInternal = New-Object System.Collections.Generic.List[string]
 
+        $addedAnywhere = @{}
+        $removedAnywhere = @{}
+        foreach ($af in @($addedByFile.Keys)) {
+            foreach ($as in @($addedByFile[$af].Keys)) {
+                $isAddExp = [bool]$addedByFile[$af][$as]
+                $prevAny = if ($addedAnywhere.ContainsKey($as)) { [bool]$addedAnywhere[$as] } else { $false }
+                $addedAnywhere[$as] = ($prevAny -or $isAddExp)
+            }
+        }
+        foreach ($rf in @($removedByFile.Keys)) {
+            foreach ($rs in @($removedByFile[$rf].Keys)) {
+                $removedAnywhere[$rs] = $true
+            }
+        }
+
         $remChecked = @{}
         foreach ($f in @($removedByFile.Keys)) {
             foreach ($sName in @($removedByFile[$f].Keys)) {
-                if ($addedByFile.ContainsKey($f) -and $addedByFile[$f].ContainsKey($sName)) { continue }
                 $isExp = [bool]$removedByFile[$f][$sName]
+                $inSameFile = ($addedByFile.ContainsKey($f) -and $addedByFile[$f].ContainsKey($sName))
+                $sameFileExp = if ($inSameFile) { [bool]$addedByFile[$f][$sName] } else { $false }
+                $inAnyFile = $addedAnywhere.ContainsKey($sName)
+                $anyFileExp = if ($inAnyFile) { [bool]$addedAnywhere[$sName] } else { $false }
+
+                if ($inSameFile) {
+                    if (-not $isExp -or $sameFileExp) { continue }
+                } elseif ($inAnyFile) {
+                    if (-not $isExp -or $anyFileExp) { continue }
+                }
+
                 if (-not $removedSyms.Contains($sName)) { $removedSyms.Add($sName) }
                 if ($isExp -and -not $exportedRemoved.Contains($sName)) { $exportedRemoved.Add($sName) }
                 if ($remChecked.ContainsKey($sName)) { continue }
@@ -2185,6 +3553,7 @@ switch ($Command) {
                         if ($targetTrim -and $rStr.StartsWith($commitPrefix)) { $rStr = $rStr.Substring($commitPrefix.Length) }
                         $np = Normalize-PathValue $rStr
                         if (-not $np -or (Test-CheckpointPath $np) -or (Test-PathMatch $np $ignored) -or (Test-NoiseFile $np) -or (-not (Test-CodePath $np))) { continue }
+                        if ($inSameFile -and $np -ceq $f) { continue }
                         if (-not $hitFiles.Contains($np)) { $hitFiles.Add($np) }
                     }
                     if ($hitFiles.Count -gt 0) {
@@ -2199,7 +3568,7 @@ switch ($Command) {
             foreach ($sName in @($addedByFile[$f].Keys)) {
                 $isExp = [bool]$addedByFile[$f][$sName]
                 if ($isExp) { continue }
-                if ($removedByFile.ContainsKey($f) -and $removedByFile[$f].ContainsKey($sName)) { continue }
+                if ($removedAnywhere.ContainsKey($sName)) { continue }
 
                 $gnArgs = if ($targetTrim) {
                     @('grep', '-w', '-F', '-n', '-e', $sName, $targetCommitSha, '--', '.', ':(exclude).b3', ':(exclude)*.md')
@@ -2299,6 +3668,510 @@ switch ($Command) {
         }
 
         Write-Output "WORKTREE_OK: root=$actualRootNorm head=$headRaw"
+        exit 0
+    }
+
+    'review-inventory' {
+        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $targetTrim = $TargetRef.Trim()
+        $targetCommitSha = ''
+        if ($targetTrim) {
+            if ($targetTrim.StartsWith('-')) { Fail "INVENTORY_FAIL: invalid -TargetRef '$targetTrim'" 1 }
+            $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
+            $targetCommitSha = $trRes.StdOut.Trim()
+            if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) {
+                Fail "INVENTORY_FAIL: invalid -TargetRef '$targetTrim'" 1
+            }
+        }
+        $resolvedBase = $BaseSha.Trim()
+        if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+            $resolvedBase = if ($targetTrim) { Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha } else { Resolve-AutoBaseSha $RepoRoot $ignored }
+        }
+        [void](Assert-ValidGitRev $RepoRoot $resolvedBase 'object' 'INVENTORY_FAIL' '-BaseSha')
+
+        $inv = Invoke-BuildInventory $RepoRoot $resolvedBase $targetCommitSha $ignored $MaxConcurrency 'INVENTORY_FAIL'
+        if ($inv.IsEmpty) { Fail 'EMPTY_DIFF' 2 }
+        if ($inv.PartitionError) { Fail $inv.PartitionError 2 }
+
+        $cfOut = if ($inv.ContractFiles.Count -gt 0) { $inv.ContractFiles -join ',' } else { 'none' }
+        $gfOut = if ($inv.GeneratedFiles.Count -gt 0) { $inv.GeneratedFiles -join ',' } else { 'none' }
+        $tfOut = if ($inv.TestFiles.Count -gt 0) { $inv.TestFiles -join ',' } else { 'none' }
+        $nfOut = if ($inv.NoiseFiles.Count -gt 0) { $inv.NoiseFiles -join ',' } else { 'none' }
+        $splitStr = if ($inv.SplitRecommended) { 'true' } else { 'false' }
+
+        Write-Output "size_class=$($inv.SizeClass)"
+        Write-Output "files=$($inv.FilesCount)"
+        Write-Output "lines=$($inv.LinesCount)"
+        Write-Output "risk_level=$($inv.RiskLevel)"
+        Write-Output "risk_signals=$($inv.RiskSignals)"
+        Write-Output "recommended_specialists=$($inv.RecommendedSpecialists)"
+        Write-Output "l1_specialists=$($inv.L1Specialists)"
+        Write-Output "l1_skip_rationale=$($inv.L1SkipRationale)"
+        Write-Output "change_types=$($inv.ChangeTypes)"
+        Write-Output "contract_files=$cfOut"
+        Write-Output "generated_files=$gfOut"
+        Write-Output "test_files=$tfOut"
+        Write-Output "noise_files=$nfOut"
+        Write-Output "split_recommended=$splitStr"
+        Write-Output "max_concurrency=$($inv.MaxConcurrency)"
+        Write-Output "unit_count=$($inv.Units.Count)"
+        foreach ($u in $inv.Units) {
+            Write-Output "unit|$($u.UnitId)|$($u.Group)|$($u.FilesCnt)|$($u.LinesCnt)|$($u.Risk)|$($u.Specialists)|$($u.Signals)|$($u.FilesCsv)"
+        }
+        exit 0
+    }
+
+    'review-ledger' {
+        $act = $Action.Trim().ToLowerInvariant()
+        if ($act -notin @('init', 'update', 'normalize', 'check')) {
+            Fail "LEDGER_FAIL: -Action must be init, update, normalize, or check" 1
+        }
+        if ($act -eq 'normalize' -and -not $LedgerPath.Trim()) {
+            if (-not $Scope.Trim()) { Fail 'LEDGER_FAIL: -LedgerPath or -Scope required for normalize' 1 }
+            $norm = Normalize-SizeClass $Scope
+            if (-not $norm) { Fail "LEDGER_FAIL: unknown size class '$Scope'" 1 }
+            Write-Output $norm
+            exit 0
+        }
+
+        $safeInfo = Resolve-SafeRepoWritePath $RepoRoot $LedgerPath
+        if (-not $safeInfo) { Fail 'LEDGER_FAIL: invalid -LedgerPath' 1 }
+        $ledgerFull = $safeInfo.FullPath
+        $ledgerRel = $safeInfo.RelPath
+        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+
+        if ($act -eq 'normalize') {
+            if (-not (Test-Path -LiteralPath $ledgerFull -PathType Leaf)) {
+                Fail "LEDGER_MISSING: $ledgerRel" 1
+            }
+            $orig = [IO.File]::ReadAllText($ledgerFull)
+            $script:normChanges = 0
+            $updated = [regex]::Replace($orig, '(?im)^(-?\s*size_class\s*[:=]\s*)(SMALL|MEDIUM|LARGE|VERY_LARGE)\b', {
+                param($m)
+                $n = Normalize-SizeClass $m.Groups[2].Value
+                $script:normChanges++
+                return "$($m.Groups[1].Value)$n"
+            })
+            if ($script:normChanges -gt 0) {
+                Write-AtomicLfFile $ledgerFull $updated
+            }
+            Write-Output "LEDGER_NORMALIZED: path=$ledgerRel changes=$($script:normChanges)"
+            exit 0
+        }
+
+        if ($act -eq 'init') {
+            if (Test-Path -LiteralPath $ledgerFull -PathType Container) { Fail 'LEDGER_FAIL: -LedgerPath is a directory' 1 }
+            $maxPassesExplicit = $PSBoundParameters.ContainsKey('MaxPasses')
+            if ($maxPassesExplicit -and $MaxPasses -le 0) {
+                Fail 'LEDGER_FAIL: -MaxPasses must be a positive integer' 1
+            }
+            $targetTrim = $TargetRef.Trim()
+            $targetCommitSha = ''
+            if ($targetTrim) {
+                if ($targetTrim.StartsWith('-') -or $targetTrim -match '[\r\n]') { Fail "LEDGER_FAIL: invalid -TargetRef '$targetTrim'" 1 }
+                $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
+                $targetCommitSha = $trRes.StdOut.Trim()
+                if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) { Fail "LEDGER_FAIL: invalid -TargetRef '$targetTrim'" 1 }
+            }
+            $resolvedBase = $BaseSha.Trim()
+            if (-not $resolvedBase -or $resolvedBase -eq 'auto') {
+                $resolvedBase = if ($targetTrim) { Resolve-AutoBaseForTarget $RepoRoot $targetCommitSha } else { Resolve-AutoBaseSha $RepoRoot $ignored }
+            }
+            $resolvedBase = Assert-ValidGitRev $RepoRoot $resolvedBase 'commit' 'LEDGER_FAIL' '-BaseSha'
+            $headSha = if ($targetCommitSha) { $targetCommitSha } else { Assert-ValidGitRev $RepoRoot 'HEAD' 'commit' 'LEDGER_FAIL' 'HEAD' }
+
+            $inv = Invoke-BuildInventory $RepoRoot $resolvedBase $targetCommitSha $ignored $MaxConcurrency 'LEDGER_FAIL'
+            if ($inv.IsEmpty) { Fail 'LEDGER_FAIL: EMPTY_DIFF' 2 }
+            if ($inv.PartitionError) { Fail $inv.PartitionError 2 }
+            $effectiveMaxPasses = if ($maxPassesExplicit) { $MaxPasses } else { Get-DefaultMaxPasses $inv.SizeClass }
+
+            if ($targetCommitSha) {
+                $snapSha = $targetCommitSha
+            } else {
+                $headTree = Assert-ValidGitRev $RepoRoot 'HEAD' 'tree' 'LEDGER_FAIL' 'HEAD^{tree}'
+                $wtTree = New-WorkingTreeOid $RepoRoot 'LEDGER_FAIL'
+                if ($wtTree -ceq $headTree) {
+                    $snapSha = $headSha
+                } else {
+                    $ctRes = Invoke-GitCommand $RepoRoot @('commit-tree', $wtTree, '-p', $headSha, '-m', 'b3-ledger-snapshot')
+                    $snapSha = $ctRes.StdOut.Trim()
+                    if ($ctRes.ExitCode -ne 0 -or $snapSha -notmatch '^[0-9a-f]{40}$') { Fail 'LEDGER_FAIL: git commit-tree failed' 1 }
+                }
+            }
+
+            $initChain = Get-InitialPassChain $RepoRoot $resolvedBase
+
+            $unitRows = New-Object System.Collections.Generic.List[hashtable]
+            foreach ($u in $inv.Units) {
+                $fpPaths = @($u.Files) + @($inv.ContractFiles)
+                $uHash = Get-ScopePathsTreeHash $RepoRoot $targetCommitSha $fpPaths $ignored
+                [void]$unitRows.Add(@{
+                    unit_id = $u.UnitId
+                    group = $u.Group
+                    files_cnt = $u.FilesCnt
+                    lines_cnt = $u.LinesCnt
+                    risk = $u.Risk
+                    specialists = 'none'
+                    rationale = 'none'
+                    status = 'PENDING'
+                    findings = 'none'
+                    verify_receipt = 'none'
+                    unit_tree_hash = $uHash
+                    files_csv = $u.FilesCsv
+                })
+            }
+
+            $needCross = ($inv.SizeClass -in @('L', 'XL', 'XXL') -and $unitRows.Count -gt 1)
+            $crossStatus = if ($needCross) { 'PENDING' } else { 'N_A' }
+            $crossPaths = if ($inv.ContractFiles.Count -gt 0) { $inv.ContractFiles } else { $inv.ReviewFiles }
+            $crossHash = if ($needCross) { Get-ScopePathsTreeHash $RepoRoot $targetCommitSha $crossPaths $ignored } else { 'none' }
+
+            $ledger = @{
+                schema = 'b3-review-ledger-v1'
+                base_sha = $resolvedBase
+                head_sha = $headSha
+                target_ref = if ($targetTrim) { $targetTrim } else { 'working_tree' }
+                target_sha = if ($targetCommitSha) { $targetCommitSha } else { 'none' }
+                snapshot_sha = $snapSha
+                size_class = $inv.SizeClass
+                normalized_legacy_size = 'none'
+                risk_level = $inv.RiskLevel
+                risk_signals = $inv.RiskSignals
+                recommended_specialists = $inv.RecommendedSpecialists
+                l1_specialists = $inv.L1Specialists
+                l1_skip_rationale = $inv.L1SkipRationale
+                contract_files = if ($inv.ContractFiles.Count -gt 0) { $inv.ContractFiles -join ',' } else { 'none' }
+                generated_files = if ($inv.GeneratedFiles.Count -gt 0) { $inv.GeneratedFiles -join ',' } else { 'none' }
+                max_concurrency = [string]$inv.MaxConcurrency
+                max_passes = [string]$effectiveMaxPasses
+                passes_used = '0'
+                pass_chain = $initChain
+                budget_status = 'OK'
+                cross_unit_status = $crossStatus
+                cross_unit_tree_hash = $crossHash
+                unit_count = [string]$unitRows.Count
+                Units = @($unitRows)
+                PassLog = (New-Object System.Collections.Generic.List[hashtable])
+            }
+            Write-AtomicLfFile $ledgerFull (Serialize-ReviewLedger $ledger)
+            Write-Output "LEDGER_INIT: path=$ledgerRel size=$($inv.SizeClass) risk=$($inv.RiskLevel) units=$($unitRows.Count) max_passes=$effectiveMaxPasses snapshot=$snapSha"
+            exit 0
+        }
+
+        if (-not (Test-Path -LiteralPath $ledgerFull -PathType Leaf)) {
+            Fail "LEDGER_MISSING: $ledgerRel" 1
+        }
+        $ledger = Parse-ReviewLedger $ledgerFull
+        $origRawSize = $ledger['size_class']
+        $normSize = Normalize-SizeClass $origRawSize
+        $legacyNormNote = if ($origRawSize -cne $normSize) { "${origRawSize}:${normSize}" } else { $ledger['normalized_legacy_size'] }
+        $ledger['size_class'] = $normSize
+        $ledger['normalized_legacy_size'] = $legacyNormNote
+        $targetRefVal = $ledger['target_ref']
+        $targetCommitSha = if ($targetRefVal -cne 'working_tree') { $ledger['target_sha'] } else { '' }
+
+        if ($act -eq 'update') {
+            Verify-LedgerPassChain $RepoRoot $ledger
+            $maxPassesExplicit = $PSBoundParameters.ContainsKey('MaxPasses')
+            if ($maxPassesExplicit -and $MaxPasses -le 0) {
+                Fail 'LEDGER_FAIL: -MaxPasses must be a positive integer' 1
+            }
+            $passesUsedExplicit = $PSBoundParameters.ContainsKey('PassesUsed')
+            if ($passesUsedExplicit -and $PassesUsed -lt 0) {
+                Fail 'LEDGER_FAIL: -PassesUsed must be non-negative' 1
+            }
+            $liveScopeUpd = $null
+            $liveContractsUpd = @()
+            $found = $null
+            $stVal = ''
+            $addedNewSpec = $false
+            $cuVal = if ($CrossUnitStatus.Trim()) { $CrossUnitStatus.Trim().ToUpperInvariant() } else { '' }
+            if ($UnitId.Trim()) {
+                $targetU = $UnitId.Trim()
+                foreach ($u in $ledger.Units) {
+                    if ($u.unit_id -ceq $targetU) { $found = $u; break }
+                }
+                if (-not $found) { Fail "LEDGER_FAIL: unknown -UnitId '$targetU'" 1 }
+                if ($Status.Trim()) {
+                    $stVal = $Status.Trim().ToUpperInvariant()
+                    if ($stVal -notin @('PENDING', 'IN_PROGRESS', 'REVIEWED', 'INCOMPLETE', 'STALE', 'BLOCKED')) {
+                        Fail "LEDGER_FAIL: invalid unit -Status '$stVal'" 1
+                    }
+                    $found.status = $stVal
+                }
+                if ($Findings.Trim()) { $found.findings = ($Findings.Trim() -replace '[\r\n|]+', ';') }
+                if ($Specialists.Trim()) {
+                    $oldSpList = @($found.specialists -split ',' | Where-Object { $_ -and $_ -cne 'none' })
+                    $spArr = @(Split-CsvList $Specialists)
+                    foreach ($nsItem in $spArr) {
+                        if ($nsItem -notin $oldSpList) { $addedNewSpec = $true; break }
+                    }
+                    $found.specialists = if ($spArr.Count -gt 0) { (Sort-Ordinal $spArr) -join ',' } else { 'none' }
+                }
+                if ($Rationale.Trim()) { $found.rationale = ($Rationale.Trim() -replace '[\r\n|]+', ' ') }
+                if ($ReceiptPath.Trim()) {
+                    if ($ReceiptPath.Trim() -ceq 'none') {
+                        $found.verify_receipt = 'none'
+                    } else {
+                        $rSafe = Resolve-SafeRepoWritePath $RepoRoot $ReceiptPath
+                        if (-not $rSafe) { Fail 'LEDGER_FAIL: invalid -ReceiptPath' 1 }
+                        $found.verify_receipt = $rSafe.RelPath
+                    }
+                }
+            }
+            if (($found -and $stVal -ceq 'REVIEWED') -or ($cuVal -ceq 'REVIEWED')) {
+                if ($targetRefVal -cne 'working_tree') {
+                    $trLiveRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetRefVal}^{commit}")
+                    $trLiveSha = $trLiveRes.StdOut.Trim()
+                    if ($trLiveRes.ExitCode -ne 0 -or $trLiveSha -cnotmatch '^[0-9a-f]{40}$') {
+                        Fail "LEDGER_STALE: target_ref '$targetRefVal' cannot be resolved" 2
+                    }
+                    $targetCommitSha = $trLiveSha
+                    $ledger['target_sha'] = $trLiveSha
+                    $ledger['head_sha'] = $trLiveSha
+                    $ledger['snapshot_sha'] = $trLiveSha
+                }
+                $liveScopeUpd = Invoke-CollectScopeData $RepoRoot $ledger['base_sha'] $targetCommitSha $ignored 'LEDGER_FAIL'
+                $liveContractsUpd = @($liveScopeUpd.ReviewFiles | Where-Object { Test-ContractPath $_ })
+                $ledger['contract_files'] = if ($liveContractsUpd.Count -gt 0) { $liveContractsUpd -join ',' } else { 'none' }
+                if ($liveScopeUpd.ReviewFiles.Count -gt 0) {
+                    $overallUpdRisk = Eval-RiskForSubset $liveScopeUpd.ReviewFiles $liveScopeUpd.FileSignals $liveScopeUpd.FileLines
+                    $ledger['risk_level'] = $overallUpdRisk.RiskLevel
+                    $ledger['risk_signals'] = $overallUpdRisk.RiskSignals
+                    $ledger['recommended_specialists'] = $overallUpdRisk.RecommendedSpecialists
+                    $l1Upd = Eval-Level1Dispatch $liveContractsUpd $overallUpdRisk.RecommendedSpecialists $overallUpdRisk.RiskLevel $liveScopeUpd.ReviewFiles
+                    $ledger['l1_specialists'] = $l1Upd.L1Specialists
+                    $ledger['l1_skip_rationale'] = $l1Upd.L1SkipRationale
+                }
+            }
+            if ($found -and $stVal -ceq 'REVIEWED') {
+                $uFiles = @(Split-CsvList $found.files_csv -AsPaths)
+                $liveULinesUpd = 0
+                foreach ($ufItem in $uFiles) {
+                    if ($liveScopeUpd.FileLines.ContainsKey($ufItem)) { $liveULinesUpd += [int]$liveScopeUpd.FileLines[$ufItem] }
+                }
+                $liveURiskUpd = Eval-RiskForSubset $uFiles $liveScopeUpd.FileSignals $liveScopeUpd.FileLines
+                $found.files_cnt = $uFiles.Count
+                $found.lines_cnt = $liveULinesUpd
+                $found.risk = $liveURiskUpd.RiskLevel
+                $found.unit_tree_hash = Get-ScopePathsTreeHash $RepoRoot $targetCommitSha ($uFiles + $liveContractsUpd) $ignored
+                $ledger['head_sha'] = if ($targetCommitSha) { $targetCommitSha } else { Assert-ValidGitRev $RepoRoot 'HEAD' 'commit' 'LEDGER_FAIL' 'HEAD' }
+            }
+            if ($cuVal) {
+                if ($cuVal -notin @('N_A', 'PENDING', 'REVIEWED', 'INCOMPLETE', 'STALE', 'BLOCKED')) {
+                    Fail "LEDGER_FAIL: invalid -CrossUnitStatus '$cuVal'" 1
+                }
+                $ledger['cross_unit_status'] = $cuVal
+                if ($cuVal -ceq 'REVIEWED') {
+                    $allUnitFiles = New-Object System.Collections.Generic.List[string]
+                    foreach ($u in $ledger.Units) {
+                        foreach ($uf in @(Split-CsvList $u.files_csv -AsPaths)) {
+                            if (-not $allUnitFiles.Contains($uf)) { [void]$allUnitFiles.Add($uf) }
+                        }
+                    }
+                    $cuPaths = if ($liveContractsUpd.Count -gt 0) { $liveContractsUpd } else { $allUnitFiles.ToArray() }
+                    $ledger['cross_unit_tree_hash'] = Get-ScopePathsTreeHash $RepoRoot $targetCommitSha $cuPaths $ignored
+                }
+            }
+
+            $passEvents = New-Object System.Collections.Generic.List[hashtable]
+            if ($found -and $stVal -in @('REVIEWED', 'INCOMPLETE', 'BLOCKED')) {
+                [void]$passEvents.Add(@{ scope = $found.unit_id; kind = "unit:$stVal"; delta = 1 })
+            } elseif ($found -and $addedNewSpec) {
+                [void]$passEvents.Add(@{ scope = $found.unit_id; kind = 'specialist'; delta = 1 })
+            }
+            if ($cuVal -in @('REVIEWED', 'INCOMPLETE', 'BLOCKED')) {
+                [void]$passEvents.Add(@{ scope = 'cross_unit'; kind = "cross_unit:$cuVal"; delta = 1 })
+            }
+            $autoDelta = 0
+            foreach ($pe in $passEvents) { $autoDelta += [int]$pe.delta }
+            $curPasses = [int]$ledger['passes_used']
+            $minNextPasses = $curPasses + $autoDelta
+            if ($passesUsedExplicit) {
+                if ($PassesUsed -lt $curPasses) {
+                    Fail "LEDGER_FAIL: passes_used cannot be reduced or reset (${curPasses}->${PassesUsed})" 1
+                }
+                if ($PassesUsed -lt $minNextPasses) {
+                    Fail "LEDGER_FAIL: passes_used ($PassesUsed) cannot bypass consumed passes (minimum $minNextPasses)" 1
+                }
+                $newPasses = $PassesUsed
+                $extraManual = $newPasses - $minNextPasses
+                if ($extraManual -gt 0) {
+                    [void]$passEvents.Add(@{ scope = 'manual'; kind = 'manual'; delta = $extraManual })
+                }
+            } else {
+                $newPasses = $minNextPasses
+            }
+
+            if (-not $ledger.HasPassChain) {
+                $bootChain = Get-InitialPassChain $RepoRoot $ledger['base_sha']
+                $bootList = New-Object System.Collections.Generic.List[hashtable]
+                if ($curPasses -gt 0) {
+                    $bootChain = Step-PassChain $RepoRoot $bootChain 1 'legacy' 'bootstrap' $curPasses 'none'
+                    [void]$bootList.Add(@{ seq = 1; scope = 'legacy'; kind = 'bootstrap'; delta = $curPasses; ref_sha = 'none'; chain_hash = $bootChain })
+                }
+                $ledger['pass_chain'] = $bootChain
+                $ledger['HasPassChain'] = $true
+                $ledger['PassLog'] = $bootList
+            }
+
+            $curChain = $ledger['pass_chain']
+            $evtRefSha = if ($targetCommitSha) { $targetCommitSha } elseif ($ledger['head_sha'] -cmatch '^[0-9a-f]{40}$') { $ledger['head_sha'] } else { 'none' }
+            foreach ($pe in $passEvents) {
+                $nextSeq = $ledger.PassLog.Count + 1
+                $curChain = Step-PassChain $RepoRoot $curChain $nextSeq $pe.scope $pe.kind ([int]$pe.delta) $evtRefSha
+                [void]$ledger.PassLog.Add(@{
+                    seq = $nextSeq
+                    scope = $pe.scope
+                    kind = $pe.kind
+                    delta = [int]$pe.delta
+                    ref_sha = $evtRefSha
+                    chain_hash = $curChain
+                })
+            }
+            $ledger['passes_used'] = [string]$newPasses
+            $ledger['pass_chain'] = $curChain
+
+            if ($maxPassesExplicit) { $ledger['max_passes'] = [string]$MaxPasses }
+            $effMaxP = [int]$ledger['max_passes']
+            if ($BudgetStatus.Trim()) {
+                $bs = $BudgetStatus.Trim().ToUpperInvariant()
+                if ($bs -notin @('OK', 'EXHAUSTED')) { Fail "LEDGER_FAIL: invalid -BudgetStatus '$bs'" 1 }
+                if ($bs -ceq 'OK' -and $effMaxP -gt 0 -and $newPasses -gt $effMaxP) {
+                    Fail "LEDGER_FAIL: cannot set budget_status=OK while passes_used ($newPasses) exceeds max_passes ($effMaxP)" 1
+                }
+                $ledger['budget_status'] = $bs
+            } elseif ($effMaxP -gt 0 -and $newPasses -gt $effMaxP) {
+                $ledger['budget_status'] = 'EXHAUSTED'
+            } elseif ($maxPassesExplicit -and $ledger['budget_status'] -ceq 'EXHAUSTED' -and $newPasses -le $effMaxP) {
+                $ledger['budget_status'] = 'OK'
+            }
+            Write-AtomicLfFile $ledgerFull (Serialize-ReviewLedger $ledger)
+            Write-Output "LEDGER_UPDATED: path=$ledgerRel"
+            exit 0
+        }
+
+        # check
+        Verify-LedgerPassChain $RepoRoot $ledger
+        $maxP = [int]$ledger['max_passes']
+        $usedP = [int]$ledger['passes_used']
+        if ($maxP -le 0) {
+            Fail "LEDGER_INCOMPLETE: unbounded or invalid max_passes ($maxP)" 2
+        }
+        if ($ledger['budget_status'] -ceq 'EXHAUSTED' -or $usedP -gt $maxP) {
+            Fail "LEDGER_INCOMPLETE: budget exhausted (passes=$usedP/$maxP)" 2
+        }
+        $reviewedCntChk = @($ledger.Units | Where-Object { $_.status -ceq 'REVIEWED' }).Count
+        $minReqPasses = $reviewedCntChk + $(if ($ledger['cross_unit_status'] -ceq 'REVIEWED') { 1 } else { 0 })
+        if ($usedP -lt $minReqPasses) {
+            Fail "LEDGER_INCOMPLETE: passes_used ($usedP) below minimum reviewed passes ($minReqPasses)" 2
+        }
+        if ($normSize -in @('L', 'XL') -and $ledger.Units.Count -gt 4) {
+            Fail "LEDGER_INCOMPLETE: $normSize PR exceeds max 4 units ($($ledger.Units.Count))" 2
+        }
+        foreach ($uChkBound in $ledger.Units) {
+            if (Test-IsOversizedUnit $uChkBound.files_cnt $uChkBound.lines_cnt) {
+                Fail "LEDGER_INCOMPLETE: oversized unit $($uChkBound.unit_id) ($($uChkBound.files_cnt)f, $($uChkBound.lines_cnt)L)" 2
+            }
+        }
+        if ($targetRefVal -cne 'working_tree') {
+            $trChkRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetRefVal}^{commit}")
+            $trChkSha = $trChkRes.StdOut.Trim()
+            if ($trChkRes.ExitCode -ne 0 -or $trChkSha -cnotmatch '^[0-9a-f]{40}$') {
+                Fail "LEDGER_STALE: target_ref '$targetRefVal' cannot be resolved" 2
+            }
+            if ($trChkSha -cne $targetCommitSha) {
+                Fail "LEDGER_STALE: target_ref '$targetRefVal' moved (${targetCommitSha}->${trChkSha})" 2
+            }
+        }
+
+        $liveScope = Invoke-CollectScopeData $RepoRoot $ledger['base_sha'] $targetCommitSha $ignored 'LEDGER_FAIL'
+        if ($liveScope.ReviewFiles.Count -eq 0 -and $liveScope.NoiseFiles.Count -eq 0) {
+            Fail 'LEDGER_INCOMPLETE: empty diff target' 2
+        }
+
+        $assignedSet = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+        foreach ($u in $ledger.Units) {
+            foreach ($uf in @(Split-CsvList $u.files_csv -AsPaths)) { $assignedSet[$uf] = $true }
+        }
+        $uncovered = @($liveScope.ReviewFiles | Where-Object { -not $assignedSet.ContainsKey($_) })
+        if ($uncovered.Count -gt 0) {
+            Fail ("LEDGER_INCOMPLETE: uncovered files ($((Sort-Ordinal $uncovered) -join ','))") 2
+        }
+
+        $liveContracts = @($liveScope.ReviewFiles | Where-Object { Test-ContractPath $_ })
+        $unitCount = $ledger.Units.Count
+        foreach ($u in $ledger.Units) {
+            $uid = $u.unit_id
+            if ($u.status -ceq 'BLOCKED') { Fail "LEDGER_BLOCKED: unit $uid" 2 }
+            if ($u.status -ceq 'STALE') { Fail "LEDGER_STALE: unit $uid" 2 }
+            if ($u.status -cne 'REVIEWED') { Fail "LEDGER_INCOMPLETE: unit $uid status=$($u.status)" 2 }
+            if ($u.findings -cmatch '(^|[,:; ])(OPEN|FIXED)($|[,:; ])') {
+                Fail "LEDGER_INCOMPLETE: unresolved findings in $uid ($($u.findings))" 2
+            }
+
+            $uFiles = @(Split-CsvList $u.files_csv -AsPaths)
+            $liveURisk = Eval-RiskForSubset $uFiles $liveScope.FileSignals $liveScope.FileLines
+            if ($liveURisk.RiskLevel -cne $u.risk) {
+                Fail "LEDGER_STALE: unit $uid risk changed ($($u.risk)->$($liveURisk.RiskLevel))" 2
+            }
+            if ($liveURisk.RecommendedSpecialists -cne 'none') {
+                $recSp = @(Split-CsvList $u.specialists)
+                $missingSp = @((Split-CsvList $liveURisk.RecommendedSpecialists) | Where-Object { $_ -notin $recSp })
+                if ($missingSp.Count -gt 0) {
+                    if ($liveURisk.RiskLevel -ceq 'CRITICAL') {
+                        if (Test-WaiverAttempt $u.rationale) {
+                            Fail "LEDGER_BLOCKED: unverified CRITICAL specialist waiver rejected on $uid (missing $($missingSp -join ','); self-declared waivers are disabled without trusted owner approval)" 2
+                        }
+                        Fail "LEDGER_INCOMPLETE: mandatory CRITICAL specialist ($($missingSp -join ',')) required on $uid (waivers disabled without trusted owner approval)" 2
+                    } else {
+                        $ratTrim = if ($u.rationale) { $u.rationale.Trim() } else { '' }
+                        if ($ratTrim -ceq 'none' -or $ratTrim.Length -lt 5) {
+                            Fail "LEDGER_INCOMPLETE: missing specialist ($($missingSp -join ',')) or rationale on $uid" 2
+                        }
+                    }
+                }
+            }
+
+            $curUHash = Get-ScopePathsTreeHash $RepoRoot $targetCommitSha ($uFiles + $liveContracts) $ignored
+            if ($curUHash -cne $u.unit_tree_hash) {
+                Fail "LEDGER_STALE: unit $uid invalidated (files or shared contracts changed)" 2
+            }
+
+            $liveUFiles = $uFiles.Count
+            $liveULines = 0
+            foreach ($ufItem in $uFiles) {
+                if ($liveScope.FileLines.ContainsKey($ufItem)) { $liveULines += [int]$liveScope.FileLines[$ufItem] }
+            }
+            if (Test-IsOversizedUnit $liveUFiles $liveULines) {
+                Fail "LEDGER_INCOMPLETE: oversized unit $uid (${liveUFiles}f, ${liveULines}L)" 2
+            }
+
+            $hasCodeFile = (@($uFiles | Where-Object { -not ((Test-DocOrAssetPath $_) -or (Test-TestPath $_)) })).Count -gt 0
+            if ($u.verify_receipt -ceq 'none') {
+                if ($hasCodeFile -and $u.risk -in @('HIGH', 'CRITICAL')) {
+                    Fail "LEDGER_INCOMPLETE: missing verify_receipt for $($u.risk) unit $uid" 2
+                }
+            } else {
+                $vr = Test-VerifyReceipt $RepoRoot $u.verify_receipt $ignored '' $u.files_csv
+                if ($vr.Code -eq 2) { Fail "LEDGER_STALE: unit $uid receipt invalid ($($vr.Message))" 2 }
+                if ($vr.Code -ne 0) { Fail "LEDGER_INCOMPLETE: unit $uid receipt invalid ($($vr.Message))" 2 }
+            }
+        }
+
+        if ($normSize -in @('L', 'XL', 'XXL') -and $unitCount -gt 1) {
+            if ($ledger['cross_unit_status'] -ceq 'BLOCKED') { Fail 'LEDGER_BLOCKED: cross_unit blocked' 2 }
+            if ($ledger['cross_unit_status'] -ceq 'STALE') { Fail 'LEDGER_STALE: cross_unit stale' 2 }
+            if ($ledger['cross_unit_status'] -cne 'REVIEWED') { Fail "LEDGER_INCOMPLETE: cross_unit_status=$($ledger['cross_unit_status'])" 2 }
+            $cuPaths = if ($liveContracts.Count -gt 0) { $liveContracts } else { $liveScope.ReviewFiles }
+            $curCuHash = Get-ScopePathsTreeHash $RepoRoot $targetCommitSha $cuPaths $ignored
+            if ($curCuHash -cne $ledger['cross_unit_tree_hash']) {
+                Fail 'LEDGER_STALE: cross_unit invalidated' 2
+            }
+        }
+
+        $normTag = if ($origRawSize -cne $normSize) { " normalized_from=$origRawSize" } else { '' }
+        Write-Output "LEDGER_GATE_PASS: size=$normSize risk=$($ledger['risk_level']) units=$unitCount/$unitCount cross_unit=$($ledger['cross_unit_status'])${normTag}"
         exit 0
     }
 

@@ -43,7 +43,7 @@ flowchart TD
     TaskVerify --> Mech["Review step - 0-Token Guard: diff-scope + mechanical-check safety_hits + symbol-check"]
     Mech -->|"Exit 2: Findings"| FixMech["Fix mechanical / symbol findings first"]
     FixMech --> Mech
-    Mech -->|"OK"| ReviewTier["Review pass (inline+SMALL: 1 reviewer; else review-loop/strategy.md)"]
+    Mech -->|"OK"| ReviewTier["Review pass (inline+XS/S+LOW: 1 reviewer; else review-loop/strategy.md)"]
     ReviewTier -->|"Blocking CONFIRMED"| LazySnap["Lazy b3-guard snapshot (pre_fix_object) -> Fix -> delta Review"]
     LazySnap --> ReviewTier
     ReviewTier -->|"Pass"| PreCommit["Commit (precommit -RequireVerifyReceipt + git commit + collapse approach)"]
@@ -124,7 +124,9 @@ flowchart TD
     NoiseTest -->|"Green"| Pass["PASS (0 LLM review tokens)"]
     NoiseTest -->|"Red"| Fail["FAIL"]
 
-    Scope -->|"SMALL / MEDIUM / LARGE"| Rev["Review: Fresh Independent Reviewer (Iter 2+: delta_files + callers + residue; <= 25 lines; else log SINGLE_AGENT_LIMIT)"]
+    Scope -->|"L / XL / XXL"| Hier["Hierarchical L0-L4 (review-inventory + L1 contracts + L2 <=4 conc units + L3 cross-unit + review-ledger check)"]
+    Hier --> Gate
+    Scope -->|"XS / S / M"| Rev["Review: Fresh Independent Reviewer + Risk-Triggered Specialists (Iter 2+: delta_files + callers + residue; <= 25L; else SINGLE_AGENT_LIMIT)"]
     Rev --> Merge["Orchestrator merges & classifies findings (OPEN / FIXED / REJECTED / ACCEPTED / SPECULATIVE)"]
     Merge --> Gate{"Blocking OPEN == 0 AND verify-check / checks PASS?"}
     Gate -->|"Yes"| Pass2["PASS"]

@@ -1,0 +1,9 @@
+id: review-adaptive-sizing-005
+artifact: review-loop/sizing.md
+intent: Tiny XS auth PR must trigger CRITICAL risk and b3-security-reviewer without size-based downgrade
+scenario: |
+  Changed files: 1 (src/auth/jwt.ts), Changed LOC: 30 (XS)
+  Agent skips b3-security-reviewer and verify-run receipt citing "only XS diff"
+expected_outcome: FAIL
+failure_mode: risk-downgrade-from-small-size
+notes: Size determines partitioning only; CRITICAL risk stays fail-closed regardless of XS/S size

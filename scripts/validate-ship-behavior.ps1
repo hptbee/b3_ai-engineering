@@ -601,12 +601,12 @@ try {
     Pop-Location
 
     if ($dsEmptyExit -eq 2 -and $dsEmpty -match 'EMPTY_DIFF' -and
-        $dsNoiseExit -eq 0 -and $dsNoise -match 'size_class=NOISE_ONLY' -and
-        $dsExit -eq 0 -and $dsOut -match 'size_class=SMALL' -and
+        $dsNoiseExit -eq 0 -and $dsNoise -match 'size_class=NOISE_ONLY' -and ($dsNoise -match 'risk_level=LOW') -and
+        $dsExit -eq 0 -and $dsOut -match 'size_class=XS' -and
         ($dsOut -notmatch '=>') -and $dsOut -match 'src/renamed\.js' -and
         $dsOut -match 'noise_files=package-lock\.json' -and
         $dsOut -match 'delta_files=src/extra\.js' -and ($dsOut -notmatch 'docs/note\.md') -and
-        $dsAutoExit -eq 0 -and $dsAuto -match 'size_class=SMALL' -and $dsAuto -match 'review_files=feat\.js') {
+        $dsAutoExit -eq 0 -and $dsAuto -match 'size_class=XS' -and ($dsAuto -match 'risk_level=LOW') -and $dsAuto -match 'review_files=feat\.js') {
         Pass 'guard-diff-scope'
     } else {
         FailCheck 'guard-diff-scope' "empty=(${dsEmptyExit}:$dsEmpty) noise=(${dsNoiseExit}:$dsNoise) out=(${dsExit}:$dsOut) auto=(${dsAutoExit}:$dsAuto)"
@@ -856,7 +856,7 @@ try {
         FailCheck 'guard-check-wave' "ok=(${wOkExit}:$wOk) bad=(${wBadExit}:$wBad)"
     }
 
-    # --- guard-size-boundary: <50 files and <2000 lines = LARGE; >=50 or >=2000 = VERY_LARGE ---
+    # --- guard-size-boundary: <50 files and <2000 lines = L; >=50 or >=2000 = XL (up to 100f / 5000L) ---
     $sbRepo = Join-Path $sandbox 'size-boundary-repo'
     New-Item -ItemType Directory -Path $sbRepo | Out-Null
     Push-Location $sbRepo
@@ -903,16 +903,16 @@ try {
         [IO.File]::WriteAllText($bigPath, ("export const x = 1;`n" * 1999), $utf8NoBom)
         $sh1999 = (& $gitBash -c "'$guardShPosix' diff-scope --repo-root '$sbRepoPosix' --base-sha HEAD") -join "`n"
         $sh1999Exit = $LASTEXITCODE
-        $sbShOk = ($sh50Exit -eq 0) -and ($sh50 -match 'size_class=VERY_LARGE') -and ($sh50 -match 'files=50') -and
-                  ($sh49Exit -eq 0) -and ($sh49 -match 'size_class=LARGE') -and ($sh49 -match 'files=49') -and
-                  ($sh2000Exit -eq 0) -and ($sh2000 -match 'size_class=VERY_LARGE') -and ($sh2000 -match 'lines=2000') -and
-                  ($sh1999Exit -eq 0) -and ($sh1999 -match 'size_class=LARGE') -and ($sh1999 -match 'lines=1999')
+        $sbShOk = ($sh50Exit -eq 0) -and ($sh50 -match 'size_class=XL') -and ($sh50 -match 'files=50') -and
+                  ($sh49Exit -eq 0) -and ($sh49 -match 'size_class=L\b') -and ($sh49 -match 'files=49') -and
+                  ($sh2000Exit -eq 0) -and ($sh2000 -match 'size_class=XL') -and ($sh2000 -match 'lines=2000') -and
+                  ($sh1999Exit -eq 0) -and ($sh1999 -match 'size_class=L\b') -and ($sh1999 -match 'lines=1999')
     }
     Pop-Location
-    if ($sb1999Exit -eq 0 -and ($sb1999 -match 'size_class=LARGE') -and ($sb1999 -match 'lines=1999') -and
-        $sb2000Exit -eq 0 -and ($sb2000 -match 'size_class=VERY_LARGE') -and ($sb2000 -match 'lines=2000') -and
-        $sb49Exit -eq 0 -and ($sb49 -match 'size_class=LARGE') -and ($sb49 -match 'files=49') -and
-        $sb50Exit -eq 0 -and ($sb50 -match 'size_class=VERY_LARGE') -and ($sb50 -match 'files=50') -and $sbShOk) {
+    if ($sb1999Exit -eq 0 -and ($sb1999 -match 'size_class=L\b') -and ($sb1999 -match 'lines=1999') -and
+        $sb2000Exit -eq 0 -and ($sb2000 -match 'size_class=XL') -and ($sb2000 -match 'lines=2000') -and
+        $sb49Exit -eq 0 -and ($sb49 -match 'size_class=L\b') -and ($sb49 -match 'files=49') -and
+        $sb50Exit -eq 0 -and ($sb50 -match 'size_class=XL') -and ($sb50 -match 'files=50') -and $sbShOk) {
         Pass 'guard-size-boundary'
     } else {
         FailCheck 'guard-size-boundary' "1999=(${sb1999Exit}:$sb1999) 2000=(${sb2000Exit}:$sb2000) 49=(${sb49Exit}:$sb49) 50=(${sb50Exit}:$sb50) shOk=$sbShOk"
@@ -2066,6 +2066,128 @@ try {
                 ($reviewNamingText -match 'workflows/references/dispatch-naming\.md')
     if ($namingOk) { Pass 'agent-naming-dispatch-contract' }
     else { FailCheck 'agent-naming-dispatch-contract' 'global rule, fallback, ID separation or dispatch link missing' }
+
+    # --- guard-review-loop-edge-fixes (parent WatchedPaths vs OwnedFiles, secret del, rename mass_delete, untracked obsoletes, symbol move vs dropped export) ---
+    $rlEdgeRepo = Join-Path $sandbox 'rl-edge-repo'
+    New-Item -ItemType Directory -Path (Join-Path $rlEdgeRepo 'src'), (Join-Path $rlEdgeRepo 'moved'), (Join-Path $rlEdgeRepo 'secret') | Out-Null
+    Push-Location $rlEdgeRepo
+    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\a.ts'), "export function movedFn() { return 1; }`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\b.ts'), "export const b = 1;`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\lib.ts'), "export function droppedFn() { return 2; }`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\caller.ts'), "import { movedFn } from './a';`nimport { droppedFn } from './lib';`nexport const z = movedFn() + droppedFn();`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'secret\.env'), "SECRET=1`n", (New-Object System.Text.UTF8Encoding($false)))
+    1..10 | ForEach-Object { [IO.File]::WriteAllText((Join-Path $rlEdgeRepo "m$_.ts"), "export function mv$_() { return $_; }`n", (New-Object System.Text.UTF8Encoding($false))) }
+    git add .; git commit -qm 'init'
+    $edgeBase = (git rev-parse HEAD).Trim()
+
+    # 1. check-freshness with parent WatchedPaths='src' and OwnedFiles='src/a.ts'
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\a.ts'), "// owned edit`nexport function movedFn() { return 1; }`n", (New-Object System.Text.UTF8Encoding($false)))
+    $cfOwnedOk = ((& powershell -NoProfile -File $guardScript check-freshness -RepoRoot $rlEdgeRepo -ApproachAtSha $edgeBase -TaskBaseSha $edgeBase -WatchedPaths 'src' -OwnedFiles 'src/a.ts') -join "`n")
+    $cfOwnedOkExit = $LASTEXITCODE
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\b.ts'), "export const b = 2;`n", (New-Object System.Text.UTF8Encoding($false)))
+    $cfUnownedStale = ((& powershell -NoProfile -File $guardScript check-freshness -RepoRoot $rlEdgeRepo -ApproachAtSha $edgeBase -TaskBaseSha $edgeBase -WatchedPaths 'src' -OwnedFiles 'src/a.ts') -join "`n")
+    $cfUnownedStaleExit = $LASTEXITCODE
+    git checkout -- src/a.ts src/b.ts
+
+    # 2. mechanical-check: delete tracked .env (no secret_path false positive) + unstaged move of 10 files (no mass_delete false positive)
+    git rm -q secret/.env
+    1..10 | ForEach-Object { Move-Item -LiteralPath (Join-Path $rlEdgeRepo "m$_.ts") -Destination (Join-Path $rlEdgeRepo "moved\m$_.ts") }
+    $mechCleanMove = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
+    $mechCleanMoveExit = $LASTEXITCODE
+
+    # 3. mechanical-check: Obsoletes detects token in untracked file
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\new_obs.ts'), "const legacy = 'OLD_TOK_XYZ';`n", (New-Object System.Text.UTF8Encoding($false)))
+    $mechObsUntr = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase -Obsoletes 'OLD_TOK_XYZ') -join "`n")
+    $mechObsUntrExit = $LASTEXITCODE
+    Remove-Item -LiteralPath (Join-Path $rlEdgeRepo 'src\new_obs.ts') -Force
+
+    # 4. symbol-check: moving movedFn() from src/a.ts to src/b.ts cleanly passes; dropping 'export' on droppedFn() is caught
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\a.ts'), "export const aOnly = 0;`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\b.ts'), "export const b = 1;`nexport function movedFn() { return 1; }`n", (New-Object System.Text.UTF8Encoding($false)))
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\caller.ts'), "import { movedFn } from './b';`nimport { droppedFn } from './lib';`nexport const z = movedFn() + droppedFn();`n", (New-Object System.Text.UTF8Encoding($false)))
+    $symMoveOk = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
+    $symMoveOkExit = $LASTEXITCODE
+
+    [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\lib.ts'), "function droppedFn() { return 2; }`n", (New-Object System.Text.UTF8Encoding($false)))
+    $symDropExp = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
+    $symDropExpExit = $LASTEXITCODE
+
+    $rlEdgeShOk = $true
+    if (Test-Path -LiteralPath $gitBash) {
+        $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
+        $rlEdgeP = $rlEdgeRepo -replace '\\', '/'
+        $shMechMv = (& $gitBash -c "'$guardShPosix' mechanical-check --repo-root '$rlEdgeP' --base-sha '$edgeBase'") -join "`n"
+        $shMechMvExit = $LASTEXITCODE
+        $shSymDrop = (& $gitBash -c "'$guardShPosix' symbol-check --repo-root '$rlEdgeP' --base-sha '$edgeBase'") -join "`n"
+        $shSymDropExit = $LASTEXITCODE
+        # Temporarily restore lib.ts export + remove dropped export check to verify move ok in Bash too, and check check-freshness parity
+        [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\lib.ts'), "export function droppedFn() { return 2; }`n", (New-Object System.Text.UTF8Encoding($false)))
+        $shSymMvOk = (& $gitBash -c "'$guardShPosix' symbol-check --repo-root '$rlEdgeP' --base-sha '$edgeBase'") -join "`n"
+        $shSymMvOkExit = $LASTEXITCODE
+        [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\new_obs.ts'), "const legacy = 'OLD_TOK_XYZ';`n", (New-Object System.Text.UTF8Encoding($false)))
+        $shObs = (& $gitBash -c "'$guardShPosix' mechanical-check --repo-root '$rlEdgeP' --base-sha '$edgeBase' --obsoletes 'OLD_TOK_XYZ'") -join "`n"
+        $shObsExit = $LASTEXITCODE
+        Remove-Item -LiteralPath (Join-Path $rlEdgeRepo 'src\new_obs.ts') -Force
+        [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\a.ts'), "// owned`n", (New-Object System.Text.UTF8Encoding($false)))
+        $shCf = (& $gitBash -c "'$guardShPosix' check-freshness --repo-root '$rlEdgeP' --approach-at-sha '$edgeBase' --task-base-sha '$edgeBase' --watched-paths 'src' --owned-files 'src/a.ts,src/b.ts,src/caller.ts'") -join "`n"
+        $shCfExit = $LASTEXITCODE
+        $rlEdgeShOk = ($shMechMvExit -eq 0) -and ($shMechMv -match 'MECHANICAL_OK') -and
+                      ($shSymDropExit -eq 2) -and ($shSymDrop -match 'exported_removed=droppedFn') -and ($shSymDrop -match 'dangling_refs=droppedFn\(1f\)') -and
+                      ($shSymMvOkExit -eq 0) -and ($shSymMvOk -match 'SYMBOL_OK') -and
+                      ($shObsExit -eq 2) -and ($shObs -match 'obsolete_hits=OLD_TOK_XYZ\(1f\)') -and
+                      ($shCfExit -eq 0) -and ($shCf -eq 'FRESH')
+    }
+    Pop-Location
+
+    if ($cfOwnedOkExit -eq 0 -and $cfOwnedOk -eq 'FRESH' -and
+        $cfUnownedStaleExit -eq 2 -and ($cfUnownedStale -match 'src/b\.ts') -and
+        $mechCleanMoveExit -eq 0 -and ($mechCleanMove -match 'MECHANICAL_OK') -and
+        $mechObsUntrExit -eq 2 -and ($mechObsUntr -match 'obsolete_hits=OLD_TOK_XYZ\(1f\)') -and
+        $symMoveOkExit -eq 0 -and ($symMoveOk -match 'SYMBOL_OK') -and
+        $symDropExpExit -eq 2 -and ($symDropExp -match 'exported_removed=droppedFn') -and ($symDropExp -match 'dangling_refs=droppedFn\(1f\)') -and
+        $rlEdgeShOk) {
+        Pass 'guard-review-loop-edge-fixes'
+    } else {
+        FailCheck 'guard-review-loop-edge-fixes' "cf=(${cfOwnedOkExit}/${cfUnownedStaleExit}) mv=(${mechCleanMoveExit}:${mechCleanMove}) obs=(${mechObsUntrExit}:${mechObsUntr}) symMv=(${symMoveOkExit}:${symMoveOk}) symDrop=(${symDropExpExit}:${symDropExp}) sh=${rlEdgeShOk}"
+    }
+
+    $igRepo = Join-Path $sandbox 'ignored-b3-wt'
+    New-Item -ItemType Directory -Path (Join-Path $igRepo 'src') | Out-Null
+    & git -C $igRepo init -q | Out-Null
+    & git -C $igRepo config user.email 'b3@example.com' | Out-Null
+    & git -C $igRepo config user.name 'B3' | Out-Null
+    [IO.File]::WriteAllText((Join-Path $igRepo '.gitignore'), ".b3/`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $igRepo 'src\app.js'), "const v = 1;`n", [Text.UTF8Encoding]::new($false))
+    & git -C $igRepo add .gitignore src/app.js | Out-Null
+    & git -C $igRepo commit -q -m 'init' | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $igRepo '.b3\worktrees\w1') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $igRepo '.b3\worktrees\w1\scratch.txt'), "wt`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $igRepo 'src\app.js'), "const v = 2;`n", [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $igRepo 'src\extra.js'), "const e = 3;`n", [Text.UTF8Encoding]::new($false))
+
+    $igGuardSh = ((Join-Path $root 'scripts\b3-guard.sh') -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+    $igRepoPosix = ($igRepo -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+    $igSnapPs = (& powershell -NoProfile -File (Join-Path $root 'scripts\b3-guard.ps1') snapshot -RepoRoot $igRepo 2>&1 | Out-String).Trim()
+    $igSnapPsExit = $LASTEXITCODE
+    $igMcPs = (& powershell -NoProfile -File (Join-Path $root 'scripts\b3-guard.ps1') mechanical-check -RepoRoot $igRepo -BaseSha HEAD -AllowedPaths 'src/app.js,src/extra.js' 2>&1 | Out-String).Trim()
+    $igMcPsExit = $LASTEXITCODE
+    $igShOk = $true
+    if ($script:HasBash) {
+        $igSnapShOut = (& $script:GitBash -c "'$igGuardSh' snapshot --repo-root '$igRepoPosix' 2>&1") -join "`n"
+        $igSnapShExit = $LASTEXITCODE
+        $igMcShOut = (& $script:GitBash -c "'$igGuardSh' mechanical-check --repo-root '$igRepoPosix' --base-sha HEAD --allowed-paths 'src/app.js,src/extra.js' 2>&1") -join "`n"
+        $igMcShExit = $LASTEXITCODE
+        $igSnapShTrim = $igSnapShOut.Trim()
+        $igTreePs = (& git -C $igRepo rev-parse "${igSnapPs}^{tree}" 2>$null | Out-String).Trim()
+        $igTreeSh = if ($igSnapShTrim -match '^[0-9a-f]{40}$') { (& git -C $igRepo rev-parse "${igSnapShTrim}^{tree}" 2>$null | Out-String).Trim() } else { '' }
+        $igShOk = ($igSnapShExit -eq 0 -and $igSnapShTrim -match '^[0-9a-f]{40}$' -and $igTreePs -and ($igTreePs -eq $igTreeSh) -and $igMcShExit -eq 0 -and ($igMcShOut -match 'MECHANICAL_OK'))
+    }
+    if ($igSnapPsExit -eq 0 -and $igSnapPs -match '^[0-9a-f]{40}$' -and $igMcPsExit -eq 0 -and ($igMcPs -match 'MECHANICAL_OK') -and $igShOk) {
+        Pass 'guard-ignored-b3-snapshot'
+    } else {
+        FailCheck 'guard-ignored-b3-snapshot' "snapPs=(${igSnapPsExit}:$igSnapPs) mcPs=(${igMcPsExit}:$igMcPs) shOk=$igShOk"
+    }
 
     $ctxOut = (& powershell -NoProfile -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot $root -Strict) -join "`n"
     if ($LASTEXITCODE -eq 0 -and $ctxOut -match 'warnings\s*:\s*0') {
