@@ -1,6 +1,7 @@
 # Behavioral validation suite for global Antigravity plugin lifecycle and unified adapters/install-global dispatcher.
 # Exercises install, verify (independent capability surfaces), update, dry-run, uninstall, drift/broken links, spaces, coexistence, manifest corruption, and dispatcher parity across PowerShell and Git Bash.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-antigravity-global.ps1
+param([switch]$AllowIncompleteBash)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 
@@ -1016,4 +1017,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-ValidationSuite
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash
