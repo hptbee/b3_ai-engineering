@@ -41,6 +41,7 @@ Repository tooling, deterministic `/b3-ship` & `/b3-review-loop` guard helpers, 
 | `prune` | `0` `PRUNE_OK`, `1` error | Keeps newest `Keep` (default `10`) `PASS` runs in `-Namespace`; never deletes `CURRENT`, non-`PASS` runs, or symlinks/junctions |
 | `evidence-check` | `0` `EVIDENCE_FRESH`/`WRITTEN`, `1` missing/invalid, `2` `EVIDENCE_STALE` | Writes (`-WriteManifest`) or validates SHA-256 `b3-evidence-v1` source manifests with strict repo-containment checks |
 | `merge-policy-check` | `0` `MERGE_AUTHORIZED`/`POST_MERGE_VERIFIED`, `1` blocked/fail, `2` `PR_READY` | Fail-closed pre-merge eligibility (default `auto_merge: disabled` → `PR_READY`) and post-merge Git ancestry verification (`-PostMerge`) |
+| `context-cache` | `0` `CONTEXT_RECORDED`/`CONTEXT_FRESH`, `2` `CONTEXT_STALE`, `1` error/missing/corrupt/mismatch | Records (`record`) or validates (`check`) LF-only `b3-context-v1` anchor/summary/graph-index caches strictly under `.b3/{ship,research-ship}/`; reuses single-pass tree fingerprinting for immutable `anchor_paths`, checks SHA-256 `summary_ref`, and reports `graph_index` freshness alongside `live_lsp_eligible=true` |
 
 ### Receipt migration (`b3-verify-v1`)
 

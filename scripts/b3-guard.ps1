@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree', 'review-inventory', 'review-ledger', 'evidence-check', 'merge-policy-check')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree', 'review-inventory', 'review-ledger', 'evidence-check', 'merge-policy-check', 'context-cache')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -57,7 +57,13 @@ param(
     [string]$ChangedPaths = '',
     [switch]$PostMerge,
     [string]$MergedSha = '',
-    [string]$MainRef = 'HEAD'
+    [string]$MainRef = 'HEAD',
+    [string]$CachePath = '',
+    [string]$ScopeId = '',
+    [string]$AnchorPaths = '',
+    [string]$ScopePaths = '',
+    [string]$GraphIndexSha = '',
+    [string]$SummaryRef = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,7 +84,10 @@ function Fail([string]$Message, [int]$Code = 1) {
 }
 
 function Normalize-PathValue([string]$PathValue) {
-    $norm = ($PathValue.Trim() -replace '\\', '/') -replace '^\./', ''
+    $norm = $PathValue.Trim() -replace '\\', '/'
+    while ($norm.StartsWith('./')) {
+        $norm = $norm.Substring(2)
+    }
     return $norm.TrimEnd('/')
 }
 
@@ -116,13 +125,24 @@ function Resolve-NamespaceDir([string]$Root, [string]$Ns) {
 }
 
 function Test-ContainedRepoPath([string]$Root, [string]$PathArg) {
+    if ([string]::IsNullOrEmpty($PathArg)) { return $null }
+    if ($PathArg -match '[\x00-\x1F\x7F]') { return $null }
     if ([string]::IsNullOrWhiteSpace($PathArg)) { return $null }
+    if ($PathArg.EndsWith(' ')) { return $null }
     $trimmed = $PathArg.Trim()
-    if ($trimmed -match '[\x00-\x1F\x7F]') { return $null }
+    if ($trimmed.Contains(':')) { return $null }
     $rawSlash = $trimmed -replace '\\', '/'
     if (-not $rawSlash -or $rawSlash.EndsWith('/')) { return $null }
     $p = Normalize-PathValue $trimmed
-    if (-not $p -or $p -eq '.' -or $p.StartsWith('/') -or $p.StartsWith('~') -or ($p -match '^[A-Za-z]:') -or ($p -match '(^|/)\.\.(/|$)') -or ($p -match '^\.git(/|$)')) {
+    if (-not $p -or $p -eq '.' -or $p.StartsWith('/') -or $p.StartsWith('~') -or $p.Contains(':') -or ($p -match '(^|/)\.\.(/|$)')) {
+        return $null
+    }
+    foreach ($seg in ($p -split '/')) {
+        if (-not $seg -or $seg.EndsWith('.') -or $seg.EndsWith(' ')) {
+            return $null
+        }
+    }
+    if ($p -imatch '(^|/)\.git(/|$)') {
         return $null
     }
     $rootSlash = ($Root -replace '\\', '/').TrimEnd('/')
@@ -167,9 +187,9 @@ function Test-ContainedRepoPath([string]$Root, [string]$PathArg) {
 function Test-PathMatch([string]$Candidate, [string[]]$Patterns) {
     if (-not $Candidate) { return $false }
     foreach ($p in $Patterns) {
-        if ($p -eq '.') { return $true }
-        if ($Candidate -eq $p) { return $true }
-        if ($p -and $Candidate.StartsWith("$p/")) { return $true }
+        if ($p -ceq '.') { return $true }
+        if ($Candidate -ceq $p) { return $true }
+        if ($p -and $Candidate.StartsWith("$p/", [System.StringComparison]::Ordinal)) { return $true }
     }
     return $false
 }
@@ -720,6 +740,9 @@ function Resolve-SafeRepoWritePath([string]$Root, [string]$PathArg) {
 }
 
 function Write-AtomicLfFile([string]$DestPath, [string]$Text) {
+    if ((Test-Path -LiteralPath $DestPath -PathType Container) -or (Test-IsReparsePath $DestPath)) {
+        Fail "WRITE_ERROR: refusing to write over directory or link: $DestPath" 1
+    }
     $parent = Split-Path -Parent $DestPath
     if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
@@ -2448,6 +2471,202 @@ function Parse-ReviewLedger([string]$FullPath) {
     $meta['Units'] = @($units)
     $meta['PassLog'] = $passLog
     return $meta
+}
+
+function Test-HasControlChars([string]$Val) {
+    if ([string]::IsNullOrEmpty($Val)) { return $false }
+    return ($Val -match '[\x00-\x1F\x7F]')
+}
+
+function Test-ValidContextScopeId([string]$Val) {
+    if ([string]::IsNullOrEmpty($Val)) { return $false }
+    if ($Val -cnotmatch '^[A-Za-z0-9._/-]{1,80}$') { return $false }
+    if ($Val -ceq '.' -or $Val.StartsWith('/') -or $Val.EndsWith('/')) { return $false }
+    if ($Val.Contains('//')) { return $false }
+    if (($Val -match '(^|/)\.\.(/|$)') -or ($Val -match '(^|/)\.(/|$)')) { return $false }
+    return $true
+}
+
+function Test-CheckpointFilePath([string]$Root, [string]$PathArg) {
+    if ([string]::IsNullOrEmpty($PathArg)) { return @{ Status = 'INVALID'; Rel = ''; Full = '' } }
+    if ($PathArg -match '[\x00-\x1F\x7F]') { return @{ Status = 'INVALID'; Rel = ''; Full = '' } }
+    if ([string]::IsNullOrWhiteSpace($PathArg)) { return @{ Status = 'INVALID'; Rel = ''; Full = '' } }
+    if ($PathArg.EndsWith(' ')) { return @{ Status = 'INVALID'; Rel = ''; Full = '' } }
+    $trimmed = $PathArg.Trim()
+    if ($trimmed.Contains(':')) { return @{ Status = 'INVALID'; Rel = ''; Full = '' } }
+    $rawSlash = $trimmed -replace '\\', '/'
+    if (-not $rawSlash -or $rawSlash.EndsWith('/')) { return @{ Status = 'INVALID'; Rel = ''; Full = '' } }
+    $p = Normalize-PathValue $trimmed
+    if (-not $p -or $p -eq '.' -or $p.StartsWith('/') -or $p.StartsWith('~') -or $p.Contains(':') -or $p.Contains('//') -or ($p -match '(^|/)\.\.(/|$)') -or ($p -match '(^|/)\.(/|$)')) {
+        return @{ Status = 'INVALID'; Rel = ''; Full = '' }
+    }
+    foreach ($seg in ($p -split '/')) {
+        if (-not $seg -or $seg.EndsWith('.') -or $seg.EndsWith(' ')) {
+            return @{ Status = 'INVALID'; Rel = ''; Full = '' }
+        }
+    }
+    if ($p -cnotmatch '^\.b3/(ship|research-ship)/.+$') {
+        return @{ Status = 'INVALID'; Rel = ''; Full = '' }
+    }
+    if (Test-SecretPath $p) {
+        return @{ Status = 'INVALID'; Rel = ''; Full = '' }
+    }
+    $c = Test-ContainedRepoPath $Root $p
+    if (-not $c) {
+        return @{ Status = 'SYMLINK_OR_DIR'; Rel = $p; Full = '' }
+    }
+    if ((Test-Path -LiteralPath $c.Full -PathType Container) -or (Test-IsReparsePath $c.Full)) {
+        return @{ Status = 'SYMLINK_OR_DIR'; Rel = $c.Rel; Full = $c.Full }
+    }
+    return @{ Status = 'OK'; Rel = $c.Rel; Full = $c.Full }
+}
+
+function Split-StrictContextPaths([string]$Root, [string]$Csv, [bool]$AllowEmptySentinel = $true) {
+    if ([string]::IsNullOrEmpty($Csv)) {
+        if ($AllowEmptySentinel) { return @{ Ok = $true; Items = @(); BadToken = '' } }
+        return @{ Ok = $false; Items = @(); BadToken = '<empty>' }
+    }
+    if ($Csv -match '[\x00-\x1F\x7F]') {
+        return @{ Ok = $false; Items = @(); BadToken = $Csv }
+    }
+    $cleaned = $Csv.Trim()
+    if ($AllowEmptySentinel -and (-not $cleaned -or $Csv -ceq 'none' -or $Csv -ceq '[]')) {
+        return @{ Ok = $true; Items = @(); BadToken = '' }
+    }
+    if (-not $cleaned) {
+        return @{ Ok = $false; Items = @(); BadToken = '<empty>' }
+    }
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($rawPart in ($Csv -split ',')) {
+        $tok = $rawPart.TrimStart(' ')
+        if (-not $tok) {
+            return @{ Ok = $false; Items = @(); BadToken = '<empty>' }
+        }
+        if ($tok -ceq 'none' -or $tok.StartsWith('-') -or $tok.Contains(':') -or ($tok -match '[\*\?\[\]]')) {
+            return @{ Ok = $false; Items = @(); BadToken = $tok }
+        }
+        $c = Test-ContainedRepoPath $Root $tok
+        if (-not $c) {
+            return @{ Ok = $false; Items = @(); BadToken = $tok }
+        }
+        $rel = $c.Rel
+        if (-not $rel -or $rel.StartsWith('-') -or $rel.Contains('//') -or ($rel -match '(^|/)\.(/|$)') -or ($rel -imatch '(^|/)\.git(/|$)')) {
+            return @{ Ok = $false; Items = @(); BadToken = $tok }
+        }
+        if (($rel -imatch '^\.b3(/|$)') -or (Test-SecretPath $rel)) {
+            return @{ Ok = $false; Items = @(); BadToken = $tok }
+        }
+        $list.Add($rel)
+    }
+    if ($list.Count -eq 0 -and -not $AllowEmptySentinel) {
+        return @{ Ok = $false; Items = @(); BadToken = '<empty>' }
+    }
+    $sorted = @(Sort-Ordinal $list.ToArray())
+    return @{ Ok = $true; Items = $sorted; BadToken = '' }
+}
+
+function Split-StrictIgnorePaths([string]$Root, [string]$Csv) {
+    if ([string]::IsNullOrEmpty($Csv)) {
+        return @{ Ok = $true; Items = @() }
+    }
+    if ($Csv -match '[\x00-\x1F\x7F]') {
+        return @{ Ok = $false; Items = @() }
+    }
+    $cleaned = $Csv.Trim()
+    if (-not $cleaned -or $Csv -ceq 'none' -or $Csv -ceq '[]') {
+        return @{ Ok = $true; Items = @() }
+    }
+    $list = New-Object System.Collections.Generic.List[string]
+    foreach ($rawPart in ($Csv -split ',')) {
+        $tok = $rawPart.TrimStart(' ')
+        if (-not $tok -or $tok -ceq 'none' -or $tok.StartsWith('-') -or $tok.Contains(':') -or ($tok -match '[\*\?\[\]]')) {
+            return @{ Ok = $false; Items = @() }
+        }
+        $c = Test-ContainedRepoPath $Root $tok
+        if (-not $c) {
+            return @{ Ok = $false; Items = @() }
+        }
+        $rel = $c.Rel
+        if (-not $rel -or $rel -ceq '.' -or $rel.StartsWith('-') -or $rel.Contains('//') -or ($rel -match '(^|/)\.(/|$)') -or ($rel -imatch '(^|/)\.git(/|$)')) {
+            return @{ Ok = $false; Items = @() }
+        }
+        $list.Add($rel)
+    }
+    return @{ Ok = $true; Items = @(Sort-Ordinal $list.ToArray()) }
+}
+
+function Test-IgnoreOverlapsPaths([string[]]$IgnPaths, [string[]]$TargetPaths) {
+    if (-not $IgnPaths -or $IgnPaths.Count -eq 0 -or -not $TargetPaths -or $TargetPaths.Count -eq 0) {
+        return $false
+    }
+    foreach ($p in $TargetPaths) {
+        if (-not $p) { continue }
+        foreach ($ign in $IgnPaths) {
+            if (-not $ign) { continue }
+            if ($p -ceq $ign -or $p.StartsWith("$ign/", [System.StringComparison]::Ordinal) -or $ign.StartsWith("$p/", [System.StringComparison]::Ordinal)) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Resolve-StrictCommitSha([string]$Root, [string]$Rev) {
+    if ([string]::IsNullOrWhiteSpace($Rev)) { return $null }
+    $r = $Rev.Trim()
+    if ($r.StartsWith('-') -or ($r -match '\s')) { return $null }
+    $res = Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', "${r}^{commit}")
+    if ($res.ExitCode -ne 0) { return $null }
+    $sha = $res.StdOut.Trim()
+    if ($sha -cnotmatch '^[0-9a-f]{40}$') { return $null }
+    return $sha
+}
+
+function Test-GraphIndexFresh([string]$Root, [string]$GraphSha, [string]$LiveHeadSha, [string[]]$ProbePaths, [string[]]$IgnPaths) {
+    if ($GraphSha -cne $LiveHeadSha) {
+        return $false
+    }
+    if ($ProbePaths -and $ProbePaths.Count -gt 0) {
+        $wRes = Invoke-GitCommand $Root (@('diff', '--no-renames', '--name-only', '--ignore-submodules=none', $GraphSha, '--') + $ProbePaths)
+        if ($wRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git diff failed' 1 }
+        $cRes = Invoke-GitCommand $Root (@('diff', '--no-renames', '--cached', '--name-only', '--ignore-submodules=none', $GraphSha, '--') + $ProbePaths)
+        if ($cRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git diff --cached failed' 1 }
+        $uRes = Invoke-GitCommand $Root (@('ls-files', '--others', '--exclude-standard', '--') + $ProbePaths)
+        if ($uRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git ls-files failed' 1 }
+        foreach ($rawOut in @($wRes.StdOut, $cRes.StdOut, $uRes.StdOut)) {
+            foreach ($line in ($rawOut -split "\r?\n")) {
+                $p = Normalize-PathValue ([string]$line)
+                if (-not $p) { continue }
+                if (Test-CheckpointPath $p) { continue }
+                if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
+                return $false
+            }
+        }
+        return $true
+    }
+
+    $stRes = Invoke-GitCommand $Root @('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none', '-z')
+    if ($stRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git status failed' 1 }
+    $nul = [char]0
+    $records = $stRes.StdOut.Split($nul)
+    for ($i = 0; $i -lt $records.Length; $i++) {
+        $rec = $records[$i]
+        if ([string]::IsNullOrEmpty($rec)) { continue }
+        if ($rec.Length -lt 4) { return $false }
+        $xy = $rec.Substring(0, 2)
+        $p1 = ($rec.Substring(3)).TrimEnd('/')
+        $p1Ign = (-not $p1) -or (Test-CheckpointPath $p1) -or ($IgnPaths -and (Test-PathMatch $p1 $IgnPaths))
+        if ($xy[0] -ceq 'R' -or $xy[0] -ceq 'C' -or $xy[1] -ceq 'R' -or $xy[1] -ceq 'C') {
+            $i++
+            if ($i -ge $records.Length) { return $false }
+            $p2 = ($records[$i]).TrimEnd('/')
+            $p2Ign = (-not $p2) -or (Test-CheckpointPath $p2) -or ($IgnPaths -and (Test-PathMatch $p2 $IgnPaths))
+            if (-not ($p1Ign -and $p2Ign)) { return $false }
+        } else {
+            if (-not $p1Ign) { return $false }
+        }
+    }
+    return $true
 }
 
 switch ($Command) {
@@ -4428,6 +4647,353 @@ switch ($Command) {
         if ($autoMerge -cne 'authorized') { Fail 'PR_READY: auto_merge=disabled' 2 }
 
         Write-Output 'MERGE_AUTHORIZED: auto_merge=authorized ci=PASS review=PASS governance=CLEAR'
+        exit 0
+    }
+
+    'context-cache' {
+        foreach ($rawArg in @($Action, $CachePath, $ScopeId, $AnchorPaths, $ScopePaths, $GraphIndexSha, $SummaryRef, $IgnoreDirtyPaths)) {
+            if (Test-HasControlChars $rawArg) {
+                Fail 'CONTEXT_ERROR: control characters not allowed' 1
+            }
+        }
+        $act = if ($Action) { $Action.Trim() } else { '' }
+        if ($act -cnotin @('record', 'check')) {
+            Fail 'CONTEXT_ERROR: invalid action' 1
+        }
+        $midOp = Test-GitMidOperation $RepoRoot
+        if ($midOp) {
+            Fail 'CONTEXT_ERROR: mid-operation git state' 1
+        }
+        $liveHeadSha = Resolve-StrictCommitSha $RepoRoot 'HEAD'
+        if (-not $liveHeadSha) {
+            Fail 'CONTEXT_ERROR: invalid HEAD' 1
+        }
+
+        $cacheSpec = Test-CheckpointFilePath $RepoRoot $CachePath
+        if ($act -ceq 'record') {
+            if ($cacheSpec.Status -cne 'OK') {
+                Fail 'CONTEXT_ERROR: invalid cache_path' 1
+            }
+            $scopeVal = if ($ScopeId) { $ScopeId.Trim() } else { '' }
+            if (-not (Test-ValidContextScopeId $scopeVal)) {
+                Fail 'CONTEXT_ERROR: invalid scope_id' 1
+            }
+
+            $ancParsed = Split-StrictContextPaths $RepoRoot $AnchorPaths $true
+            if (-not $ancParsed.Ok) {
+                Fail "CONTEXT_ERROR: invalid path $($ancParsed.BadToken)" 1
+            }
+            $ancArr = @($ancParsed.Items)
+
+            $recScopeParsed = Split-StrictContextPaths $RepoRoot $ScopePaths $true
+            if (-not $recScopeParsed.Ok) {
+                Fail "CONTEXT_ERROR: invalid path $($recScopeParsed.BadToken)" 1
+            }
+            $recScopeArr = @($recScopeParsed.Items)
+
+            $ignParsed = Split-StrictIgnorePaths $RepoRoot $IgnoreDirtyPaths
+            if (-not $ignParsed.Ok) {
+                Fail 'CONTEXT_ERROR: invalid ignore path' 1
+            }
+            $ignArr = @($ignParsed.Items)
+            if ((Test-IgnoreOverlapsPaths $ignArr $ancArr) -or (Test-IgnoreOverlapsPaths $ignArr $recScopeArr)) {
+                Fail 'CONTEXT_ERROR: invalid ignore path' 1
+            }
+
+            $graphTrim = if ($GraphIndexSha) { $GraphIndexSha.Trim() } else { '' }
+            $graphVal = 'none'
+            if ($graphTrim -and $graphTrim -cne 'none') {
+                $resGraph = Resolve-StrictCommitSha $RepoRoot $graphTrim
+                if (-not $resGraph) {
+                    Fail 'CONTEXT_ERROR: invalid graph_index_sha' 1
+                }
+                $graphVal = $resGraph
+            }
+
+            $sumTrim = if ($SummaryRef) { $SummaryRef.Trim() } else { '' }
+            $sumRefVal = 'none'
+            $sumShaVal = 'none'
+            if ($sumTrim -and $sumTrim -cne 'none') {
+                $sumSpec = Test-CheckpointFilePath $RepoRoot $sumTrim
+                if ($sumSpec.Status -cne 'OK') {
+                    Fail 'CONTEXT_ERROR: invalid summary_ref' 1
+                }
+                if (-not (Test-Path -LiteralPath $sumSpec.Full -PathType Leaf) -or (Test-IsReparsePath $sumSpec.Full)) {
+                    Fail 'CONTEXT_ERROR: missing summary_ref' 1
+                }
+                $sumShaVal = (Get-FileHash -LiteralPath $sumSpec.Full -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($sumShaVal -cnotmatch '^[0-9a-f]{64}$') {
+                    Fail 'CONTEXT_ERROR: sha256 computation failed' 1
+                }
+                $sumRefVal = $sumSpec.Rel
+            }
+
+            $anchorPathsVal = 'none'
+            $anchorHashVal = 'none'
+            if ($ancArr.Count -gt 0) {
+                $anchorPathsVal = $ancArr -join ','
+                $fp = Get-TreeFingerprint $RepoRoot $ancArr $ignArr
+                $anchorHashVal = $fp.TreeHash
+            }
+
+            $tsUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $bodyLines = @(
+                'schema=b3-context-v1',
+                "scope_id=$scopeVal",
+                "head_sha=$liveHeadSha",
+                "anchor_paths=$anchorPathsVal",
+                "anchor_hash=$anchorHashVal",
+                "graph_index_sha=$graphVal",
+                "summary_ref=$sumRefVal",
+                "summary_sha256=$sumShaVal",
+                "timestamp_utc=$tsUtc"
+            )
+            Write-AtomicLfFile $cacheSpec.Full (($bodyLines -join "`n") + "`n")
+            Write-Output "CONTEXT_RECORDED: $($cacheSpec.Rel) scope=$scopeVal head=$liveHeadSha anchor_hash=$anchorHashVal graph_index_sha=$graphVal"
+            exit 0
+        }
+
+        if ($cacheSpec.Status -ceq 'INVALID') {
+            Fail 'CONTEXT_ERROR: invalid cache_path' 1
+        }
+        if ($cacheSpec.Status -ceq 'SYMLINK_OR_DIR') {
+            Fail 'CONTEXT_CORRUPT: invalid cache_path' 1
+        }
+
+        $callerScope = if ($ScopeId) { $ScopeId.Trim() } else { '' }
+        if ($callerScope -and -not (Test-ValidContextScopeId $callerScope)) {
+            Fail 'CONTEXT_ERROR: invalid scope_id' 1
+        }
+
+        $hasCallerAnchor = $false
+        $callerAnchorArr = @()
+        $callerAnchorCsv = 'none'
+        $ancRawTrim = if ($AnchorPaths) { $AnchorPaths.Trim() } else { '' }
+        if ($ancRawTrim.Length -gt 0) {
+            $hasCallerAnchor = $true
+            $cAncParsed = Split-StrictContextPaths $RepoRoot $AnchorPaths $true
+            if (-not $cAncParsed.Ok) {
+                Fail "CONTEXT_ERROR: invalid path $($cAncParsed.BadToken)" 1
+            }
+            $callerAnchorArr = @($cAncParsed.Items)
+            if ($callerAnchorArr.Count -gt 0) {
+                $callerAnchorCsv = $callerAnchorArr -join ','
+            }
+        }
+
+        $scopeParsed = Split-StrictContextPaths $RepoRoot $ScopePaths $true
+        if (-not $scopeParsed.Ok) {
+            Fail "CONTEXT_ERROR: invalid path $($scopeParsed.BadToken)" 1
+        }
+        $scopeArr = @($scopeParsed.Items)
+
+        $ignParsed = Split-StrictIgnorePaths $RepoRoot $IgnoreDirtyPaths
+        if (-not $ignParsed.Ok) {
+            Fail 'CONTEXT_ERROR: invalid ignore path' 1
+        }
+        $ignArr = @($ignParsed.Items)
+
+        $callerGraphTrim = if ($GraphIndexSha) { $GraphIndexSha.Trim() } else { '' }
+        $callerGraphSha = ''
+        if ($callerGraphTrim -and $callerGraphTrim -cne 'none') {
+            $resCallerGraph = Resolve-StrictCommitSha $RepoRoot $callerGraphTrim
+            if (-not $resCallerGraph) {
+                Fail 'CONTEXT_ERROR: invalid graph_index_sha' 1
+            }
+            $callerGraphSha = $resCallerGraph
+        }
+
+        $hasCallerSummary = $false
+        $callerSummaryVal = 'none'
+        $sumRawTrim = if ($SummaryRef) { $SummaryRef.Trim() } else { '' }
+        if ($sumRawTrim.Length -gt 0) {
+            $hasCallerSummary = $true
+            if ($sumRawTrim -ceq 'none') {
+                $callerSummaryVal = 'none'
+            } else {
+                $cSumSpec = Test-CheckpointFilePath $RepoRoot $sumRawTrim
+                if ($cSumSpec.Status -cne 'OK') {
+                    Fail 'CONTEXT_ERROR: invalid summary_ref' 1
+                }
+                $callerSummaryVal = $cSumSpec.Rel
+            }
+        }
+
+        if (($hasCallerAnchor -and (Test-IgnoreOverlapsPaths $ignArr $callerAnchorArr)) -or (Test-IgnoreOverlapsPaths $ignArr $scopeArr)) {
+            Fail 'CONTEXT_ERROR: invalid ignore path' 1
+        }
+
+        if (-not (Test-Path -LiteralPath $cacheSpec.Full -PathType Leaf)) {
+            Fail "CONTEXT_MISSING: $($cacheSpec.Rel)" 1
+        }
+        if (Test-IsReparsePath $cacheSpec.Full) {
+            Fail 'CONTEXT_CORRUPT: invalid cache_path' 1
+        }
+
+        $rawBytes = [IO.File]::ReadAllBytes($cacheSpec.Full)
+        $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+        $rawText = ''
+        try {
+            $rawText = $utf8Strict.GetString($rawBytes)
+        } catch {
+            Fail 'CONTEXT_CORRUPT: invalid utf8 encoding' 1
+        }
+        if ($rawText -match '[\x00-\x09\x0B-\x1F\x7F]') {
+            Fail 'CONTEXT_CORRUPT: control character or CRLF in cache' 1
+        }
+
+        $allowedKeys = @('schema', 'scope_id', 'head_sha', 'anchor_paths', 'anchor_hash', 'graph_index_sha', 'summary_ref', 'summary_sha256', 'timestamp_utc')
+        $kv = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+        if ($rawText.Length -gt 0) {
+            $bodyText = if ($rawText.EndsWith("`n")) { $rawText.Substring(0, $rawText.Length - 1) } else { $rawText }
+            foreach ($rawLine in ($bodyText -split "`n")) {
+                $eqIdx = $rawLine.IndexOf('=')
+                if ($eqIdx -lt 1) {
+                    Fail 'CONTEXT_CORRUPT: malformed line' 1
+                }
+                $k = $rawLine.Substring(0, $eqIdx)
+                $v = $rawLine.Substring($eqIdx + 1)
+                if ($k -cnotin $allowedKeys) {
+                    Fail "CONTEXT_CORRUPT: unknown field '$k'" 1
+                }
+                if ($kv.ContainsKey($k)) {
+                    Fail "CONTEXT_CORRUPT: duplicate field '$k'" 1
+                }
+                if (-not $v) {
+                    Fail "CONTEXT_CORRUPT: empty field '$k'" 1
+                }
+                $kv[$k] = $v
+            }
+        }
+        foreach ($reqKey in $allowedKeys) {
+            if (-not $kv.ContainsKey($reqKey)) {
+                Fail "CONTEXT_CORRUPT: missing field '$reqKey'" 1
+            }
+        }
+
+        if ($kv['schema'] -cne 'b3-context-v1') {
+            Fail 'CONTEXT_CORRUPT: invalid schema' 1
+        }
+        if (-not (Test-ValidContextScopeId $kv['scope_id'])) {
+            Fail 'CONTEXT_CORRUPT: invalid scope_id' 1
+        }
+        if ($kv['head_sha'] -cnotmatch '^[0-9a-f]{40}$') {
+            Fail 'CONTEXT_CORRUPT: invalid head_sha' 1
+        }
+
+        $recAnchorArr = @()
+        $recAnchorCsv = 'none'
+        if ($kv['anchor_paths'] -ceq 'none') {
+            if ($kv['anchor_hash'] -cne 'none') {
+                Fail 'CONTEXT_CORRUPT: invalid anchor_hash' 1
+            }
+        } else {
+            if ($kv['anchor_hash'] -cnotmatch '^[0-9a-f]{40}$') {
+                Fail 'CONTEXT_CORRUPT: invalid anchor_hash' 1
+            }
+            $recAncParsed = Split-StrictContextPaths $RepoRoot $kv['anchor_paths'] $false
+            if (-not $recAncParsed.Ok -or $recAncParsed.Items.Count -lt 1) {
+                Fail 'CONTEXT_CORRUPT: invalid anchor_paths' 1
+            }
+            $recAnchorArr = @($recAncParsed.Items)
+            $recAnchorCsv = $recAnchorArr -join ','
+        }
+
+        if ($kv['graph_index_sha'] -cne 'none' -and $kv['graph_index_sha'] -cnotmatch '^[0-9a-f]{40}$') {
+            Fail 'CONTEXT_CORRUPT: invalid graph_index_sha' 1
+        }
+
+        $recSumSpec = $null
+        if ($kv['summary_ref'] -ceq 'none') {
+            if ($kv['summary_sha256'] -cne 'none') {
+                Fail 'CONTEXT_CORRUPT: invalid summary_sha256' 1
+            }
+        } else {
+            if ($kv['summary_sha256'] -cnotmatch '^[0-9a-f]{64}$') {
+                Fail 'CONTEXT_CORRUPT: invalid summary_sha256' 1
+            }
+            $recSumSpec = Test-CheckpointFilePath $RepoRoot $kv['summary_ref']
+            if ($recSumSpec.Status -cne 'OK') {
+                Fail 'CONTEXT_CORRUPT: missing or invalid summary_ref' 1
+            }
+        }
+
+        if ($kv['timestamp_utc'] -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$') {
+            Fail 'CONTEXT_CORRUPT: invalid timestamp_utc' 1
+        }
+
+        if ($callerScope -and $callerScope -cne $kv['scope_id']) {
+            Fail "CONTEXT_MISMATCH: scope_id expected=$callerScope got=$($kv['scope_id'])" 1
+        }
+
+        if ($hasCallerSummary -and $callerSummaryVal -cne $kv['summary_ref']) {
+            Fail "CONTEXT_MISMATCH: summary_ref expected=$callerSummaryVal got=$($kv['summary_ref'])" 1
+        }
+
+        if (Test-IgnoreOverlapsPaths $ignArr $recAnchorArr) {
+            Fail 'CONTEXT_ERROR: invalid ignore path' 1
+        }
+
+        $reasons = New-Object System.Collections.Generic.List[string]
+
+        $ancRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $kv['head_sha'], $liveHeadSha)
+        if ($ancRes.ExitCode -ne 0) {
+            [void]$reasons.Add('head_diverged')
+        }
+
+        if ($hasCallerAnchor -and ($callerAnchorCsv -cne $recAnchorCsv)) {
+            [void]$reasons.Add('anchor_scope_changed')
+        }
+
+        if ($recAnchorArr.Count -gt 0) {
+            $liveFp = Get-TreeFingerprint $RepoRoot $recAnchorArr $ignArr
+            if ($liveFp.TreeHash -cne $kv['anchor_hash']) {
+                [void]$reasons.Add('anchor_changed')
+            }
+        }
+
+        if ($kv['summary_ref'] -cne 'none') {
+            if (-not $recSumSpec -or -not (Test-Path -LiteralPath $recSumSpec.Full -PathType Leaf) -or (Test-IsReparsePath $recSumSpec.Full)) {
+                Fail 'CONTEXT_CORRUPT: missing or invalid summary_ref' 1
+            }
+            $liveSumSha = (Get-FileHash -LiteralPath $recSumSpec.Full -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($liveSumSha -cne $kv['summary_sha256']) {
+                [void]$reasons.Add('summary_changed')
+            }
+        }
+
+        $effGraphSha = if ($callerGraphSha) { $callerGraphSha } else { $kv['graph_index_sha'] }
+        $graphIndexStatus = 'NOT_RECORDED'
+        if ($effGraphSha -cne 'none') {
+            $probePaths = @()
+            if ($scopeArr.Count -gt 0) {
+                $probeRaw = New-Object System.Collections.Generic.List[string]
+                foreach ($rp in $recAnchorArr) { [void]$probeRaw.Add($rp) }
+                if ($hasCallerAnchor) {
+                    foreach ($cp in $callerAnchorArr) { [void]$probeRaw.Add($cp) }
+                }
+                foreach ($sp in $scopeArr) { [void]$probeRaw.Add($sp) }
+                $probePaths = @(Sort-Ordinal $probeRaw.ToArray())
+            }
+            if (Test-GraphIndexFresh $RepoRoot $effGraphSha $liveHeadSha $probePaths $ignArr) {
+                $graphIndexStatus = 'FRESH'
+            } else {
+                $graphIndexStatus = 'STALE'
+                [void]$reasons.Add('graph_index_stale')
+            }
+        }
+
+        $anchorStatus = 'FRESH'
+        if (($reasons -ccontains 'head_diverged') -or ($reasons -ccontains 'anchor_scope_changed') -or ($reasons -ccontains 'anchor_changed')) {
+            $anchorStatus = 'STALE'
+        }
+
+        if ($reasons.Count -gt 0) {
+            $reasonCsv = $reasons.ToArray() -join ','
+            Fail "CONTEXT_STALE: scope=$($kv['scope_id']) reasons=$reasonCsv anchor_status=$anchorStatus graph_index=$graphIndexStatus live_lsp_eligible=true" 2
+        }
+
+        Write-Output "CONTEXT_FRESH: scope=$($kv['scope_id']) head=$liveHeadSha anchor_status=FRESH graph_index=$graphIndexStatus live_lsp_eligible=true"
         exit 0
     }
 }
