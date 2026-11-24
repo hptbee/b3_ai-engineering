@@ -1,20 +1,16 @@
 # Behavioral checks for the six standalone commands (/b3-plan, /b3-implement, /b3-debug, /b3-review, /b3-review-loop, /b3-verify).
 # Tests guard/verification/state-isolation/contract behavior in isolated sandboxes (not host IDE UI discovery).
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-standalone-commands.ps1
+param(
+    [switch]$AllowIncompleteBash
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $guardPs = Join-Path $root 'scripts\b3-guard.ps1'
 $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
-$failed = 0
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 $gitBash = $script:GitBash
 $hasBash = $script:HasBash
-
-function Pass([string]$Name) { Write-Output "PASS $Name" }
-function FailCheck([string]$Name, [string]$Detail) {
-    Write-Output "FAIL $Name :: $Detail"
-    $script:failed++
-}
 
 function Invoke-PsGuard([string[]]$GuardArgs) {
     $prev = $ErrorActionPreference
@@ -591,11 +587,14 @@ try {
     $rlBytes = ([System.Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes((Join-Path $root 'review-loop\strategy.md')))).Replace("`r", '').Length
     $hierPath = Join-Path $root 'review-loop\hierarchical.md'
     $sizingTxt = Get-Content -LiteralPath (Join-Path $root 'review-loop\sizing.md') -Raw
+    $singleAgentGateOk = ($strat -match 'SINGLE_AGENT_LIMIT[^.\r\n]*cannot emit `PASS`[^.\r\n]*`HIGH`/`CRITICAL`[^.\r\n]*`INCOMPLETE`') -and
+                         ($strat -match 'UNKNOWN / INCOMPLETE[^.\r\n]*`SINGLE_AGENT_LIMIT` on `HIGH`/`CRITICAL`') -and
+                         ($strat -match 'SINGLE_AGENT_LIMIT[^.\r\n]*blocks `auto_merge`')
     $rlOk = (Test-Path -LiteralPath $hierPath -PathType Leaf) -and
             ($sizingTxt -match 'XS') -and ($sizingTxt -match 'XXL') -and ($sizingTxt -match 'SMALL -> S') -and
-            ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and
+            ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and $singleAgentGateOk -and
             ($strat -match 'dispatch fresh `b3-fixer`') -and ($strat -match '`FAIL` on failed check') -and
-            ($strat -match 'EVIDENCED RISK') -and ($strat -match 'review-inventory') -and ($strat -match 'review-ledger') -and ($rlBytes -le 5400)
+            ($strat -match 'EVIDENCED RISK') -and ($strat -match 'review-inventory') -and ($strat -match 'review-ledger') -and ($rlBytes -le 5200)
     $verOk = ($cmdVer -match 'verify-run') -and ($skVer -match 'verify-check') -and ($skVer -match 'untrusted provenance')
     $agentsContractOk = $true
     foreach ($ra in @('b3-reviewer.md', 'b3-security-reviewer.md', 'b3-architecture-reviewer.md', 'b3-performance-reviewer.md')) {
@@ -618,9 +617,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($failed -gt 0) {
-    Write-Output "$failed check(s) failed"
-    exit 1
-}
-Write-Output 'ok'
-exit 0
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash

@@ -1,17 +1,14 @@
 # Lightweight behavioral checks for Markdown model preferences.
 # Verifies example template, workflow references, installer init/preservation, missing-file fallback, gitignore, and zero always-on bloat.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-model-preferences.ps1
+param(
+    [switch]$AllowIncompleteBash
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$gitBash = 'C:\Program Files\Git\bin\bash.exe'
-$hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
-if (-not $hasBash) { Write-Output "WARNING: Git Bash not found at $gitBash; Bash checks skipped" }
-$failed = 0
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 
-function Pass([string]$Name) { Write-Output "PASS $Name" }
-function FailCheck([string]$Name, [string]$Detail) { Write-Output "FAIL $Name :: $Detail"; $script:failed++ }
-function To-Posix([string]$P) { $P -replace '\\', '/' }
+function To-Posix([string]$P) { To-PosixPath $P }
 
 $sandbox = Join-Path $env:TEMP ('b3-model-pref-test-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
@@ -98,7 +95,7 @@ try {
     $syncPsKeep = ((Get-Content -LiteralPath $syncPersPs -Raw) -match 'keep-sync-ps')
 
     $shOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $prodSh = Join-Path $sandbox 'prod-sh'
         New-Item -ItemType Directory -Path $prodSh | Out-Null
         Push-Location $prodSh
@@ -108,22 +105,22 @@ try {
         $persSh = Join-Path $sandbox 'home-sh\.b3\models.md'
         $persShP = To-Posix $persSh; $prodShP = To-Posix $prodSh; $syncFxP = To-Posix $syncFx
         $env:B3_MODELS_PERSONAL = $persShP
-        & $gitBash -c "'$rootP/adapters/install-product.sh' --product-root '$prodShP' --b3-home '$rootP' --host cursor --dry-run" | Out-Null
+        & $script:GitBash -c "'$rootP/adapters/install-product.sh' --product-root '$prodShP' --b3-home '$rootP' --host cursor --dry-run" | Out-Null
         $shDryClean = -not (Test-Path -LiteralPath $persSh)
-        & $gitBash -c "'$rootP/adapters/install-product.sh' --product-root '$prodShP' --b3-home '$rootP' --host cursor" | Out-Null
+        & $script:GitBash -c "'$rootP/adapters/install-product.sh' --product-root '$prodShP' --b3-home '$rootP' --host cursor" | Out-Null
         $shIpSeed = ($LASTEXITCODE -eq 0) -and (Test-Path -LiteralPath $persSh -PathType Leaf)
         Set-Content -LiteralPath $persSh "keep-sh-custom"
-        & $gitBash -c "'$rootP/adapters/install-product.sh' --product-root '$prodShP' --b3-home '$rootP' --host cursor" | Out-Null
+        & $script:GitBash -c "'$rootP/adapters/install-product.sh' --product-root '$prodShP' --b3-home '$rootP' --host cursor" | Out-Null
         $shIpKeep = ((Get-Content -LiteralPath $persSh -Raw) -match 'keep-sh-custom')
 
         $syncPersSh = Join-Path $sandbox 'sync-sh\.b3\models.md'
         $env:B3_MODELS_PERSONAL = To-Posix $syncPersSh
-        & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' --verify antigravity >/dev/null 2>&1"
+        & $script:GitBash -c "'$syncFxP/adapters/sync-skills.sh' --verify antigravity >/dev/null 2>&1"
         $shVerClean = -not (Test-Path -LiteralPath $syncPersSh)
-        & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
+        & $script:GitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
         $shSyncSeed = ($LASTEXITCODE -eq 0) -and (Test-Path -LiteralPath $syncPersSh -PathType Leaf)
         Set-Content -LiteralPath $syncPersSh "keep-sync-sh"
-        & $gitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
+        & $script:GitBash -c "'$syncFxP/adapters/sync-skills.sh' antigravity" | Out-Null
         $shSyncKeep = ((Get-Content -LiteralPath $syncPersSh -Raw) -match 'keep-sync-sh')
         $shOk = $shDryClean -and $shIpSeed -and $shIpKeep -and $shVerClean -and $shSyncSeed -and $shSyncKeep
     }
@@ -138,8 +135,8 @@ try {
     $fpPsOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\b3-guard.ps1') fingerprint -Scope 'demo' -Criteria @('ac1')
     $fpPsOk = ($LASTEXITCODE -eq 0) -and (($fpPsOut -join "`n") -match 'scope=demo')
     $fpShOk = $true
-    if ($hasBash) {
-        $fpShOut = & $gitBash -c "'$rootP/scripts/b3-guard.sh' fingerprint --scope 'demo' --criterion 'ac1'"
+    if ($script:HasBash) {
+        $fpShOut = & $script:GitBash -c "'$rootP/scripts/b3-guard.sh' fingerprint --scope 'demo' --criterion 'ac1'"
         $fpShOk = ($LASTEXITCODE -eq 0) -and (($fpShOut -join "`n") -match 'scope=demo')
     }
     $fallbackDocs = ($dnTxt -match 'Never block work on missing or malformed') -and ($docTxt -match 'fall back to native model selection')
@@ -159,14 +156,14 @@ try {
         @{ Repo = 'gi-sh-leg'; Script = 'sh'; Init = ".b3/`n.b3/models.md`n" },
         @{ Repo = 'gi-sh-only'; Script = 'sh'; Init = ".b3/models.md`n" }
     )) {
-        if ($pair.Script -eq 'sh' -and -not $hasBash) { continue }
+        if ($pair.Script -eq 'sh' -and -not $script:HasBash) { continue }
         $rDir = Join-Path $sandbox $pair.Repo
         New-Item -ItemType Directory -Path $rDir | Out-Null
         [IO.File]::WriteAllText((Join-Path $rDir '.gitignore'), $pair.Init, [System.Text.UTF8Encoding]::new($false))
         if ($pair.Script -eq 'ps') {
             & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $rDir -B3Home $root -HostName cursor | Out-Null
         } else {
-            & $gitBash -c "'$rootP/adapters/install-product.sh' --product-root '$(To-Posix $rDir)' --b3-home '$rootP' --host cursor" | Out-Null
+            & $script:GitBash -c "'$rootP/adapters/install-product.sh' --product-root '$(To-Posix $rDir)' --b3-home '$rootP' --host cursor" | Out-Null
         }
         $lines = @(Get-Content -LiteralPath (Join-Path $rDir '.gitignore') | ForEach-Object { $_.Trim() })
         if (@($lines | Where-Object { $_ -eq '.b3/ship/' }).Count -ne 1 -or @($lines | Where-Object { $_ -eq '.b3/models.md' }).Count -ne 1) { $dedupOk = $false }
@@ -198,5 +195,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($failed -gt 0) { Write-Output "$failed check(s) failed"; exit 1 }
-Write-Output 'ok'
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash

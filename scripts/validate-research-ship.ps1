@@ -1,38 +1,22 @@
 # Behavioral checks for /b3-research-ship across PowerShell and Git Bash.
 # Covers research evidence freshness, governance fail-closed rules, namespace/wave orchestration, PR/merge gates, and 4-host adapter compatibility.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-research-ship.ps1
+param(
+    [switch]$AllowIncompleteBash
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$guardPs = Join-Path $root 'scripts\b3-guard.ps1'
 $guardShPosix = ($root -replace '\\', '/') + '/scripts/b3-guard.sh'
-$gitBash = 'C:\Program Files\Git\bin\bash.exe'
-$hasBash = Test-Path -LiteralPath $gitBash -PathType Leaf
-$failed = 0
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 
-function Pass([string]$Name) { Write-Output "PASS $Name" }
-function FailCheck([string]$Name, [string]$Detail) {
-    Write-Output "FAIL $Name :: $Detail"
-    $script:failed++
-}
-
-function Invoke-PsGuard([string[]]$GuardArgs) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $guardPs @GuardArgs 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
+function Invoke-ShCmd([string]$BashCmd) {
+    if (-not $script:HasBash) {
+        return @{ Code = 127; Lines = @('bash not found'); Text = 'bash not found' }
     }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function Invoke-ShGuard([string]$BashCmd) {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $raw = & $gitBash -c $BashCmd 2>&1
+        $raw = & $script:GitBash -c $BashCmd 2>&1
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prev
@@ -42,39 +26,7 @@ function Invoke-ShGuard([string]$BashCmd) {
 }
 
 function Init-TestRepo([string]$DirPath) {
-    New-Item -ItemType Directory -Path $DirPath -Force | Out-Null
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        Push-Location $DirPath
-        & git init -q
-        & git symbolic-ref HEAD refs/heads/main
-        & git config user.email 'research-test@example.com'
-        & git config user.name 'Research Test'
-    } finally {
-        Pop-Location -ErrorAction SilentlyContinue
-        $ErrorActionPreference = $prev
-    }
-}
-
-function Remove-ReparseLinksUnder([string]$DirPath) {
-    if (-not (Test-Path -LiteralPath $DirPath)) { return }
-    $rootItem = Get-Item -LiteralPath $DirPath -Force -ErrorAction SilentlyContinue
-    if (-not $rootItem) { return }
-    if ((($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($rootItem.LinkType -in @('Junction', 'SymbolicLink'))) {
-        if ($rootItem.PSIsContainer) { [System.IO.Directory]::Delete($rootItem.FullName, $false) }
-        else { Remove-Item -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue }
-        return
-    }
-    if (-not $rootItem.PSIsContainer) { return }
-    foreach ($child in @(Get-ChildItem -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue)) {
-        if ((($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($child.LinkType -in @('Junction', 'SymbolicLink'))) {
-            if ($child.PSIsContainer) { [System.IO.Directory]::Delete($child.FullName, $false) }
-            else { Remove-Item -LiteralPath $child.FullName -Force -ErrorAction SilentlyContinue }
-        } elseif ($child.PSIsContainer) {
-            Remove-ReparseLinksUnder $child.FullName
-        }
-    }
+    Init-B3TestRepo -RepoPath $DirPath -DefaultBranch 'main' -UserEmail 'research-test@example.com' -UserName 'Research Test'
 }
 
 $sandbox = Join-Path $env:TEMP ('b3-research-ship-test-' + [guid]::NewGuid().ToString('N'))
@@ -116,18 +68,18 @@ try {
     $missPs = Invoke-PsGuard @('evidence-check', '-RepoRoot', $rEv, '-ManifestPath', $mRel)
 
     $evShOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         Set-Content (Join-Path $rEv 'sources\secondary.md') "# Secondary Source`nClause B`n" -NoNewline
-        $wSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --write-manifest --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/secondary.md'"
-        $fSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/secondary.md'"
-        $uncSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/extra.md'"
-        $caseSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'Sources/Primary.md'"
-        $travSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '../escape.manifest'"
-        $juncSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --write-manifest --manifest-path 'linked-out/esc-sh.manifest' --source-paths 'sources/primary.md'"
+        $wSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --write-manifest --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/secondary.md'"
+        $fSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/secondary.md'"
+        $uncSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'sources/primary.md,sources/extra.md'"
+        $caseSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest' --source-paths 'Sources/Primary.md'"
+        $travSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '../escape.manifest'"
+        $juncSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --write-manifest --manifest-path 'linked-out/esc-sh.manifest' --source-paths 'sources/primary.md'"
         Add-Content (Join-Path $rEv 'sources\secondary.md') "drift`n"
-        $stSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest'"
+        $stSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest'"
         Remove-Item (Join-Path $rEv 'sources\secondary.md') -Force
-        $missSh = Invoke-ShGuard "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest'"
+        $missSh = Invoke-ShCmd "'$guardShPosix' evidence-check --repo-root '$rEvPosix' --manifest-path '.b3/research-ship/runs/r1/evidence/sources-sh.manifest'"
         $evShOk = ($wSh.Code -eq 0 -and $wSh.Text -match 'EVIDENCE_WRITTEN') -and
                   ($fSh.Code -eq 0 -and $fSh.Text -match 'EVIDENCE_FRESH') -and
                   ($uncSh.Code -eq 1 -and $uncSh.Text -match 'uncovered') -and
@@ -191,7 +143,7 @@ try {
     $failCi = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PrState', 'OPEN', '-CiStatus', 'FAIL', '-ReviewStatus', 'PASS')
     $blkFind = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-BlockingFindings', '2')
 
-    # Explicit authorized policy
+    # Explicit authorized policy (uncommitted in $rGov used for pre-auth path checks; clean base-bound repo $rAuth for MERGE_AUTHORIZED)
     Set-Content (Join-Path $rGov '.b3\auth-policy.json') (@{
         auto_merge = 'authorized'
         protected_paths = @('releases/')
@@ -199,24 +151,52 @@ try {
         require_ci = $true
         require_review = $true
     } | ConvertTo-Json)
-    $authOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
     $authProtFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'releases/v3.json')
     $authDotFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', '.')
-    $omitChangedFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
+    $omitChangedFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/research-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
 
-    # Malformed & type-mismatched / injection policy JSON checks
+    # Clean base-bound authorized repo with committed policy + PR commit + verified INDEPENDENT ledger
+    $rAuth = Join-Path $sandbox 'auth-ok-repo'
+    $rAuthPosix = To-PosixPath $rAuth
+    Init-TestRepo $rAuth
+    New-Item -ItemType Directory -Path (Join-Path $rAuth '.b3'), (Join-Path $rAuth 'docs') -Force | Out-Null
+    Set-Content (Join-Path $rAuth '.b3\auth-policy.json') (@{
+        auto_merge = 'authorized'
+        protected_paths = @('releases/')
+        allow_protected_paths = $false
+        require_ci = $true
+        require_review = $true
+    } | ConvertTo-Json)
+    Set-Content (Join-Path $rAuth 'docs\notes.md') "# Base Notes`n"
+    Push-Location $rAuth
+    & git add .; & git commit -qm 'base with auth policy'
+    $authBaseSha = (& git rev-parse HEAD).Trim()
+    & git checkout -qb feat/auth-pr
+    Set-Content (Join-Path $rAuth 'docs\notes.md') "# Updated Authorized Notes`n"
+    & git add .; & git commit -qm 'pr notes change'
+    Pop-Location
+    $authLed = '.b3/research-ship/runs/auth-ok/ledger.md'
+    $authLedInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'init', '-LedgerPath', $authLed, '-BaseSha', $authBaseSha)
+    $authLedUpd = Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'update', '-LedgerPath', $authLed, '-UnitId', 'U01', '-Status', 'REVIEWED')
+    $authOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+
+    # Malformed & type-mismatched / injection / F2 policy JSON checks
     Set-Content (Join-Path $rGov '.b3\bad-policy.json') '{ broken json'
     Set-Content (Join-Path $rGov '.b3\arr-policy.json') '[1]'
     Set-Content (Join-Path $rGov '.b3\num-policy.json') '123'
     Set-Content (Join-Path $rGov '.b3\arr-am-policy.json') '{"auto_merge":["authorized"]}'
     Set-Content (Join-Path $rGov '.b3\str-pp-policy.json') '{"protected_paths":"releases/"}'
     Set-Content (Join-Path $rGov '.b3\nl-pp-policy.json') '{"auto_merge":"disabled","protected_paths":["foo\nauto_merge=authorized\nrequire_ci=false"]}'
+    Set-Content (Join-Path $rGov '.b3\f2-arr-obj.json') '[{"auto_merge":"authorized"}]'
+    Set-Content (Join-Path $rGov '.b3\f2-upper-key.json') '{"AUTO_MERGE":"authorized"}'
     $badJson = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/bad-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
     $badRootArr = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/arr-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
     $badRootNum = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/num-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
     $badAmArr = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/arr-am-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
     $badPpStr = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/str-pp-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
     $badPpNl = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/nl-pp-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $f2ArrObj = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/f2-arr-obj.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
+    $f2UpperKey = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/f2-upper-key.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
 
     # Default .b3/research-policy.json junction escape check in isolated repo
     $rDefJunc = Join-Path $sandbox 'def-junc-repo'
@@ -227,28 +207,36 @@ try {
     New-Item -ItemType Junction -Path (Join-Path $rDefJunc '.b3') -Target $outPolDir | Out-Null
     $defJuncPs = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rDefJunc, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
 
-    # Post-merge verification: merge featSha into main and test ancestor vs non-ancestor
+    # Post-merge verification: merge featSha into main and test ancestor vs non-ancestor + missing/invalid MainRef
     Push-Location $rGov
     & git merge --no-ff -qm 'merge feat' $featSha | Out-Null
     Pop-Location
     $postOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha, '-MainRef', 'main')
     $postFalse = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $sideSha, '-MainRef', 'main')
     $postOpen = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'OPEN', '-MergedSha', $featSha, '-MainRef', 'main')
+    $postNoMain = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha)
+    $postHeadRef = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha, '-MainRef', 'HEAD')
+    $postHeadTilde = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha, '-MainRef', 'HEAD~0')
 
     $govShOk = $true
-    if ($hasBash) {
-        $shDisabled = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths docs/notes.md"
-        $shWithheld = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --governance-status WITHHELD_PROMOTION"
-        $shProt = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths releases/v3.json"
-        $shDot = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths ."
-        $shOctalBlk = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --blocking-findings 08"
-        $shOmitChanged = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS"
-        $shAuth = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths docs/notes.md"
-        $shBadJson = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/bad-policy.json --pr-state OPEN --ci-status PASS --review-status PASS"
-        $shBadNl = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/nl-pp-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths docs/notes.md"
-        $shDefJunc = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rDefJuncPosix' --pr-state OPEN --ci-status PASS --review-status PASS"
-        $shPostOk = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --post-merge --pr-state MERGED --merged-sha '$featSha' --main-ref main"
-        $shPostBad = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --post-merge --pr-state MERGED --merged-sha '$sideSha' --main-ref main"
+    if ($script:HasBash) {
+        $shDisabled = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md')
+        $shWithheld = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--governance-status', 'WITHHELD_PROMOTION')
+        $shProt = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/auth-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'releases/v3.json')
+        $shDot = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/auth-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', '.')
+        $shOctalBlk = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--blocking-findings', '08')
+        $shOmitChanged = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/research-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
+        $shAuth = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md')
+        $shBadJson = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/bad-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
+        $shBadNl = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/nl-pp-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md')
+        $shF2ArrObj = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/f2-arr-obj.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
+        $shF2Upper = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/f2-upper-key.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
+        $shDefJunc = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rDefJuncPosix, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
+        $shPostOk = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha, '--main-ref', 'main')
+        $shPostBad = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $sideSha, '--main-ref', 'main')
+        $shPostNoMain = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha)
+        $shPostHead = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha, '--main-ref', 'HEAD')
+        $shPostTilde = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha, '--main-ref', 'HEAD~0')
         $govShOk = ($shDisabled.Code -eq 2 -and $shDisabled.Text -match 'PR_READY: auto_merge=disabled') -and
                    ($shWithheld.Code -eq 1 -and $shWithheld.Text -match 'WITHHELD_PROMOTION') -and
                    ($shProt.Code -eq 1 -and $shProt.Text -match 'protected_paths=releases/v3\.json') -and
@@ -258,9 +246,14 @@ try {
                    ($shAuth.Code -eq 0 -and $shAuth.Text -match 'MERGE_AUTHORIZED') -and
                    ($shBadJson.Code -eq 1 -and $shBadJson.Text -match 'invalid_policy_json') -and
                    ($shBadNl.Code -eq 1 -and $shBadNl.Text -match 'invalid_policy_json') -and
+                   ($shF2ArrObj.Code -eq 1 -and $shF2ArrObj.Text -match 'invalid_policy_json' -and $shF2ArrObj.Text -notmatch 'MERGE_AUTHORIZED') -and
+                   ($shF2Upper.Code -eq 2 -and $shF2Upper.Text -match 'PR_READY: auto_merge=disabled' -and $shF2Upper.Text -notmatch 'MERGE_AUTHORIZED') -and
                    ($shDefJunc.Code -eq 1 -and $shDefJunc.Text -match 'invalid_policy_path') -and
                    ($shPostOk.Code -eq 0 -and $shPostOk.Text -match 'POST_MERGE_VERIFIED' -and $shPostOk.Text -match 'deployed=NOT_VERIFIED') -and
-                   ($shPostBad.Code -eq 1 -and $shPostBad.Text -match 'POST_MERGE_FAILED')
+                   ($shPostBad.Code -eq 1 -and $shPostBad.Text -match 'POST_MERGE_FAILED') -and
+                   ($shPostNoMain.Code -eq 1 -and $shPostNoMain.Text -match 'POST_MERGE_FAILED: missing_main_ref') -and
+                   ($shPostHead.Code -eq 1 -and $shPostHead.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and
+                   ($shPostTilde.Code -eq 1 -and $shPostTilde.Text -match 'POST_MERGE_FAILED: invalid_main_ref')
     }
 
     if (($noPol.Code -eq 2 -and $noPol.Text -match 'PR_READY') -and
@@ -272,6 +265,7 @@ try {
         ($resOnlyPr.Code -eq 2 -and $resOnlyPr.Text -match 'PR_READY') -and
         ($failCi.Code -eq 1 -and $failCi.Text -match 'ci_status=FAIL') -and
         ($blkFind.Code -eq 1 -and $blkFind.Text -match 'blocking_findings=2') -and
+        ($authLedInit.Code -eq 0 -and $authLedUpd.Code -eq 0) -and
         ($authOk.Code -eq 0 -and $authOk.Text -match 'MERGE_AUTHORIZED') -and
         ($authProtFail.Code -eq 1 -and $authProtFail.Text -match 'protected_paths') -and
         ($authDotFail.Code -eq 1 -and $authDotFail.Text -match 'protected_paths=\.') -and
@@ -282,13 +276,142 @@ try {
         ($badAmArr.Code -eq 1 -and $badAmArr.Text -match 'invalid_policy_json') -and
         ($badPpStr.Code -eq 1 -and $badPpStr.Text -match 'invalid_policy_json') -and
         ($badPpNl.Code -eq 1 -and $badPpNl.Text -match 'invalid_policy_json') -and
+        ($f2ArrObj.Code -eq 1 -and $f2ArrObj.Text -match 'invalid_policy_json' -and $f2ArrObj.Text -notmatch 'MERGE_AUTHORIZED') -and
+        ($f2UpperKey.Code -eq 2 -and $f2UpperKey.Text -match 'PR_READY: auto_merge=disabled' -and $f2UpperKey.Text -notmatch 'MERGE_AUTHORIZED') -and
         ($defJuncPs.Code -eq 1 -and $defJuncPs.Text -match 'invalid_policy_path') -and
         ($postOk.Code -eq 0 -and $postOk.Text -match 'POST_MERGE_VERIFIED' -and $postOk.Text -match 'runtime_served=NOT_VERIFIED' -and $postOk.Text -match 'deployed=NOT_VERIFIED') -and
         ($postFalse.Code -eq 1 -and $postFalse.Text -match 'POST_MERGE_FAILED') -and
-        ($postOpen.Code -eq 1 -and $postOpen.Text -match 'POST_MERGE_FAILED') -and $govShOk) {
+        ($postOpen.Code -eq 1 -and $postOpen.Text -match 'POST_MERGE_FAILED') -and
+        ($postNoMain.Code -eq 1 -and $postNoMain.Text -match 'POST_MERGE_FAILED: missing_main_ref') -and
+        ($postHeadRef.Code -eq 1 -and $postHeadRef.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and
+        ($postHeadTilde.Code -eq 1 -and $postHeadTilde.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and $govShOk) {
         Pass 'governance-and-merge-policy-gates'
     } else {
-        FailCheck 'governance-and-merge-policy-gates' "noPol=$($noPol.Code) missOwner=$($missOwner.Code) protHit=$($protHit.Code) omitChg=$($omitChangedFail.Code) badTypes=$($badRootArr.Code)/$($badRootNum.Code)/$($badAmArr.Code)/$($badPpStr.Code)/$($badPpNl.Code) defJunc=$($defJuncPs.Code) postOk=$($postOk.Code) sh=$govShOk"
+        FailCheck 'governance-and-merge-policy-gates' "noPol=$($noPol.Code) authOk=$($authOk.Code)/$($authOk.Text) omitChg=$($omitChangedFail.Code) f2=$($f2ArrObj.Code)/$($f2UpperKey.Code) postNeg=$($postNoMain.Code)/$($postHeadRef.Code)/$($postHeadTilde.Code) sh=$govShOk"
+    }
+
+    # --- 2b. c04-h04-h08-merge-policy-hardening (PS + Bash) ---
+    # (a) Missing -BaseSha or -BaseSha HEAD -> MERGE_BLOCKED
+    $psNoBase = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shNoBase = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psNoBase }
+    $psBaseHead = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', 'HEAD', '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shBaseHead = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', 'HEAD', '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psBaseHead }
+
+    # (b) Missing -LedgerPath or SINGLE_AGENT_LIMIT ledger -> MERGE_BLOCKED
+    $psNoLed = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shNoLed = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psNoLed }
+    $salLed = '.b3/research-ship/runs/auth-sal/ledger.md'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'init', '-LedgerPath', $salLed, '-BaseSha', $authBaseSha, '-ReviewIndependence', 'SINGLE_AGENT_LIMIT'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'update', '-LedgerPath', $salLed, '-UnitId', 'U01', '-Status', 'REVIEWED'))
+    $psSalBlk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $salLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shSalBlk = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $salLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psSalBlk }
+
+    # (c) Dirty working tree outside .b3/ship/ & .b3/research-ship/ -> MERGE_BLOCKED: dirty_worktree
+    Set-Content (Join-Path $rAuth 'dirty-scratch.txt') "uncommitted`n"
+    $psDirty = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shDirty = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psDirty }
+    Remove-Item -LiteralPath (Join-Path $rAuth 'dirty-scratch.txt') -Force
+
+    # (d) Policy modified in PR (policy_modified_in_pr) & policy not in base (policy_not_in_base)
+    $rPolMod = Join-Path $sandbox 'pol-mod-repo'
+    $rPolModPosix = To-PosixPath $rPolMod
+    Init-TestRepo $rPolMod
+    New-Item -ItemType Directory -Path (Join-Path $rPolMod '.b3'), (Join-Path $rPolMod 'docs') -Force | Out-Null
+    Set-Content (Join-Path $rPolMod '.b3\auth-policy.json') (@{
+        auto_merge = 'authorized'
+        protected_paths = @('releases/')
+        allow_protected_paths = $false
+        require_ci = $true
+        require_review = $true
+    } | ConvertTo-Json)
+    Set-Content (Join-Path $rPolMod 'docs\notes.md') "# Base`n"
+    Push-Location $rPolMod
+    & git add .; & git commit -qm 'base'
+    $pmBaseSha = (& git rev-parse HEAD).Trim()
+    & git checkout -qb feat/pol-mod
+    Set-Content (Join-Path $rPolMod '.b3\auth-policy.json') (@{
+        auto_merge = 'authorized'
+        protected_paths = @()
+        allow_protected_paths = $true
+        require_ci = $true
+        require_review = $true
+    } | ConvertTo-Json)
+    & git add .; & git commit -qm 'tamper policy'
+    Pop-Location
+    $psPolMod = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rPolMod, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $pmBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shPolMod = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rPolModPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $pmBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psPolMod }
+
+    Push-Location $rPolMod
+    & git checkout -qb feat/pol-not-in-base $pmBaseSha
+    Set-Content (Join-Path $rPolMod '.b3\new-auth.json') (@{
+        auto_merge = 'authorized'
+        protected_paths = @('releases/')
+        allow_protected_paths = $false
+        require_ci = $true
+        require_review = $true
+    } | ConvertTo-Json)
+    Set-Content (Join-Path $rPolMod 'docs\notes.md') "# PR`n"
+    & git add .; & git commit -qm 'add untracked-in-base policy'
+    Pop-Location
+    $psPolNotBase = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rPolMod, '-PolicyPath', '.b3/new-auth.json', '-BaseSha', $pmBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shPolNotBase = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rPolModPosix, '--policy-path', '.b3/new-auth.json', '--base-sha', $pmBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psPolNotBase }
+
+    # (e) H-04: traversal, dot segment, case mismatch, protected_paths ["./"], and git mv rename bypass
+    $psH04Trav = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/../releases/v3.json')
+    $shH04Trav = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/../releases/v3.json') } else { $psH04Trav }
+    $psH04DotSeg = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'releases/./v3.json')
+    $shH04DotSeg = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'releases/./v3.json') } else { $psH04DotSeg }
+    $psH04Case = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'Releases/v3.json')
+    $shH04Case = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'Releases/v3.json') } else { $psH04Case }
+
+    Set-Content (Join-Path $rGov '.b3\dot-slash-policy.json') '{"auto_merge":"disabled","protected_paths":["./"],"allow_protected_paths":false,"require_ci":true,"require_review":true}'
+    $psH04DotSlash = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/dot-slash-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shH04DotSlash = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/dot-slash-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psH04DotSlash }
+
+    $rRen = Join-Path $sandbox 'h04-rename-repo'
+    $rRenPosix = To-PosixPath $rRen
+    Init-TestRepo $rRen
+    New-Item -ItemType Directory -Path (Join-Path $rRen '.b3'), (Join-Path $rRen 'releases'), (Join-Path $rRen 'docs') -Force | Out-Null
+    Set-Content (Join-Path $rRen '.b3\auth-policy.json') (@{
+        auto_merge = 'authorized'
+        protected_paths = @('releases/')
+        allow_protected_paths = $false
+        require_ci = $true
+        require_review = $true
+    } | ConvertTo-Json)
+    Set-Content (Join-Path $rRen 'releases\a.json') '{"version":1}'
+    Push-Location $rRen
+    & git add .; & git commit -qm 'base with release file'
+    $renBaseSha = (& git rev-parse HEAD).Trim()
+    & git checkout -qb feat/rename-release
+    & git mv releases/a.json docs/a.md
+    & git commit -qm 'rename release file to docs'
+    Pop-Location
+    $renLed = '.b3/research-ship/runs/ren/ledger.md'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rRen, '-Action', 'init', '-LedgerPath', $renLed, '-BaseSha', $renBaseSha))
+    $renLedTxt = Get-Content -LiteralPath (Join-Path $rRen '.b3\research-ship\runs\ren\ledger.md') -Raw
+    foreach ($rm in [regex]::Matches($renLedTxt, '(?m)^\|\s*(U\d+)\s*\|')) {
+        [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rRen, '-Action', 'update', '-LedgerPath', $renLed, '-UnitId', $rm.Groups[1].Value, '-Status', 'REVIEWED'))
+    }
+    $psH04Ren = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rRen, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $renBaseSha, '-LedgerPath', $renLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/a.md')
+    $shH04Ren = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rRenPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $renBaseSha, '--ledger-path', $renLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/a.md') } else { $psH04Ren }
+
+    $hardOk = ($psNoBase.Code -eq 1 -and $psNoBase.Text -match 'MERGE_BLOCKED: missing_base_sha' -and $shNoBase.Code -eq 1 -and $shNoBase.Text -ceq $psNoBase.Text) -and
+              ($psBaseHead.Code -eq 1 -and $psBaseHead.Text -match 'MERGE_BLOCKED: base_sha_equals_head' -and $shBaseHead.Code -eq 1 -and $shBaseHead.Text -ceq $psBaseHead.Text) -and
+              ($psNoLed.Code -eq 1 -and $psNoLed.Text -match 'MERGE_BLOCKED: missing_ledger_path' -and $shNoLed.Code -eq 1 -and $shNoLed.Text -ceq $psNoLed.Text) -and
+              ($psSalBlk.Code -eq 1 -and $psSalBlk.Text -match 'MERGE_BLOCKED: single_agent_limit' -and $shSalBlk.Code -eq 1 -and $shSalBlk.Text -ceq $psSalBlk.Text) -and
+              ($psDirty.Code -eq 1 -and $psDirty.Text -match 'MERGE_BLOCKED: dirty_worktree' -and $shDirty.Code -eq 1 -and $shDirty.Text -ceq $psDirty.Text) -and
+              ($psPolMod.Code -eq 1 -and $psPolMod.Text -match 'MERGE_BLOCKED: policy_modified_in_pr' -and $shPolMod.Code -eq 1 -and $shPolMod.Text -ceq $psPolMod.Text) -and
+              ($psPolNotBase.Code -eq 1 -and $psPolNotBase.Text -match 'MERGE_BLOCKED: policy_not_in_base' -and $shPolNotBase.Code -eq 1 -and $shPolNotBase.Text -ceq $psPolNotBase.Text) -and
+              ($psH04Trav.Code -eq 1 -and $psH04Trav.Text -match 'MERGE_BLOCKED: invalid_changed_path' -and $shH04Trav.Code -eq 1 -and $shH04Trav.Text -ceq $psH04Trav.Text) -and
+              ($psH04DotSeg.Code -eq 1 -and $psH04DotSeg.Text -match 'MERGE_BLOCKED: invalid_changed_path' -and $shH04DotSeg.Code -eq 1 -and $shH04DotSeg.Text -ceq $psH04DotSeg.Text) -and
+              ($psH04Case.Code -eq 1 -and $psH04Case.Text -match 'MERGE_BLOCKED: protected_paths=Releases/v3\.json' -and $shH04Case.Code -eq 1 -and $shH04Case.Text -ceq $psH04Case.Text) -and
+              ($psH04DotSlash.Code -eq 1 -and $psH04DotSlash.Text -match 'MERGE_BLOCKED: protected_paths=docs/notes\.md' -and $shH04DotSlash.Code -eq 1 -and $shH04DotSlash.Text -ceq $psH04DotSlash.Text) -and
+              ($psH04Ren.Code -eq 1 -and $psH04Ren.Text -match 'MERGE_BLOCKED: protected_paths=releases/a\.json' -and $shH04Ren.Code -eq 1 -and $shH04Ren.Text -ceq $psH04Ren.Text)
+    if ($hardOk) {
+        Pass 'c04-h04-h08-merge-policy-hardening'
+    } else {
+        FailCheck 'c04-h04-h08-merge-policy-hardening' "noBase=$($psNoBase.Text)|$($shNoBase.Text) baseHead=$($psBaseHead.Text) noLed=$($psNoLed.Text) sal=$($psSalBlk.Text) dirty=$($psDirty.Text) polMod=$($psPolMod.Text) polNB=$($psPolNotBase.Text) trav=$($psH04Trav.Text) dot=$($psH04DotSeg.Text) case=$($psH04Case.Text) dotSl=$($psH04DotSlash.Text) ren=$($psH04Ren.Text)"
     }
 
     # --- 3. namespace-isolation-checkpoints-and-waves (PS + Bash) ---
@@ -321,21 +444,21 @@ try {
     $waveConflict = Invoke-PsGuard @('check-wave', '-RepoRoot', $rNs, '-ExpectedBaseSha', $nsBase, '-WaveSpecs', 'U001=research/u1.md,ledger/index.json;U002=research/u2.md,ledger/index.json')
 
     $nsShOk = $true
-    if ($hasBash) {
-        $shNew = Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rNsPosix' --namespace research-ship --slug bash-pass --timestamp 20261123-0101"
+    if ($script:HasBash) {
+        $shNew = Invoke-ShCmd "'$guardShPosix' new-run --repo-root '$rNsPosix' --namespace research-ship --slug bash-pass --timestamp 20261123-0101"
         Set-Content (Join-Path $rNs '.b3\research-ship\runs\20261123-0101-bash-pass\progress.md') "- run_status: PASS`n"
-        $shNew2 = Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rNsPosix' --namespace research-ship --slug bash-pass2 --timestamp 20261123-0102"
+        $shNew2 = Invoke-ShCmd "'$guardShPosix' new-run --repo-root '$rNsPosix' --namespace research-ship --slug bash-pass2 --timestamp 20261123-0102"
         Set-Content (Join-Path $rNs '.b3\research-ship\runs\20261123-0102-bash-pass2\progress.md') "- run_status: PASS`n"
-        $shPrune = Invoke-ShGuard "'$guardShPosix' prune --repo-root '$rNsPosix' --namespace research-ship --keep 0"
-        $shRes = Invoke-ShGuard "'$guardShPosix' resolve-run --repo-root '$rNsPosix' --namespace research-ship"
-        $shList = Invoke-ShGuard "'$guardShPosix' list-runs --repo-root '$rNsPosix' --namespace research-ship"
-        $shEmptyShip = Invoke-ShGuard "'$guardShPosix' resolve-run --repo-root '$rNsPosix' --namespace ship"
-        $shDs = Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$rNsPosix' --base-sha '$nsBase'"
-        $shWaveOk = Invoke-ShGuard "'$guardShPosix' check-wave --repo-root '$rNsPosix' --expected-base-sha '$nsBase' --wave-specs 'U001=research/u1.md;U002=research/u2.md' --wave-reads 'U001=sources/a.md;U002=sources/b.md'"
-        $shWaveCon = Invoke-ShGuard "'$guardShPosix' check-wave --repo-root '$rNsPosix' --expected-base-sha '$nsBase' --wave-specs 'U001=research/u1.md,ledger/index.json;U002=research/u2.md,ledger/index.json'"
+        $shPrune = Invoke-ShCmd "'$guardShPosix' prune --repo-root '$rNsPosix' --namespace research-ship --keep 0"
+        $shRes = Invoke-ShCmd "'$guardShPosix' resolve-run --repo-root '$rNsPosix' --namespace research-ship"
+        $shList = Invoke-ShCmd "'$guardShPosix' list-runs --repo-root '$rNsPosix' --namespace research-ship"
+        $shEmptyShip = Invoke-ShCmd "'$guardShPosix' resolve-run --repo-root '$rNsPosix' --namespace ship"
+        $shDs = Invoke-ShCmd "'$guardShPosix' diff-scope --repo-root '$rNsPosix' --base-sha '$nsBase'"
+        $shWaveOk = Invoke-ShCmd "'$guardShPosix' check-wave --repo-root '$rNsPosix' --expected-base-sha '$nsBase' --wave-specs 'U001=research/u1.md;U002=research/u2.md' --wave-reads 'U001=sources/a.md;U002=sources/b.md'"
+        $shWaveCon = Invoke-ShCmd "'$guardShPosix' check-wave --repo-root '$rNsPosix' --expected-base-sha '$nsBase' --wave-specs 'U001=research/u1.md,ledger/index.json;U002=research/u2.md,ledger/index.json'"
         Push-Location $rNs
         & git add -f '.b3/research-ship/runs/20261123-0100-star-compare/progress.md'
-        $shPc = Invoke-ShGuard "'$guardShPosix' precommit --repo-root '$rNsPosix' --allowed-paths '.b3/research-ship'"
+        $shPc = Invoke-ShCmd "'$guardShPosix' precommit --repo-root '$rNsPosix' --allowed-paths '.b3/research-ship'"
         & git reset -q
         Pop-Location
         $nsShOk = ($shNew.Code -eq 0 -and $shNew2.Code -eq 0) -and
@@ -388,24 +511,24 @@ try {
     $prLinkPs = Invoke-PsGuard @('prune', '-RepoRoot', $rLinkRuns, '-Namespace', 'research-ship', '-Keep', '0')
 
     $safeShOk = $true
-    if ($hasBash) {
-        $shVr = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$rNsPosix' --verify-cmd 'echo verified' --receipt-path '.b3/research-ship/runs/vr-sh.receipt' --task-id U001 --scope research-check"
+    if ($script:HasBash) {
+        $shVr = Invoke-ShCmd "'$guardShPosix' verify-run --repo-root '$rNsPosix' --verify-cmd 'echo verified' --receipt-path '.b3/research-ship/runs/vr-sh.receipt' --task-id U001 --scope research-check"
         Set-Content (Join-Path $rNs '.b3\research-ship\runs\extra-sh-checkpoint.md') "# checkpoint note sh`n"
-        $shVc = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$rNsPosix' --receipt-path '.b3/research-ship/runs/vr-sh.receipt'"
+        $shVc = Invoke-ShCmd "'$guardShPosix' verify-check --repo-root '$rNsPosix' --receipt-path '.b3/research-ship/runs/vr-sh.receipt'"
         $rPrSh = Join-Path $sandbox 'prune-rs-sh'
         $rPrShPosix = $rPrSh -replace '\\', '/'
         $rLinkRunsPosix = $rLinkRuns -replace '\\', '/'
         Init-TestRepo $rPrSh
         Set-Content (Join-Path $rPrSh 'a.txt') "a`n"
         Push-Location $rPrSh; & git add .; & git commit -qm 'init'; Pop-Location
-        [void](Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rPrShPosix' --namespace research-ship --slug old-sh --timestamp 20261123-0202")
+        [void](Invoke-ShCmd "'$guardShPosix' new-run --repo-root '$rPrShPosix' --namespace research-ship --slug old-sh --timestamp 20261123-0202")
         $oldShDir = Join-Path $rPrSh '.b3\research-ship\runs\20261123-0202-old-sh'
         Set-Content (Join-Path $oldShDir 'progress.md') "- run_status: PASS`n"
         New-Item -ItemType Junction -Path (Join-Path $oldShDir 'junc-out') -Target $decoyPrune | Out-Null
-        [void](Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rPrShPosix' --namespace research-ship --slug cur-sh --timestamp 20261123-0203")
+        [void](Invoke-ShCmd "'$guardShPosix' new-run --repo-root '$rPrShPosix' --namespace research-ship --slug cur-sh --timestamp 20261123-0203")
         Set-Content (Join-Path $rPrSh '.b3\research-ship\runs\20261123-0203-cur-sh\progress.md') "- run_status: PASS`n"
-        $shPrSafe = Invoke-ShGuard "'$guardShPosix' prune --repo-root '$rPrShPosix' --namespace research-ship --keep 0"
-        $shPrLink = Invoke-ShGuard "'$guardShPosix' prune --repo-root '$rLinkRunsPosix' --namespace research-ship --keep 0"
+        $shPrSafe = Invoke-ShCmd "'$guardShPosix' prune --repo-root '$rPrShPosix' --namespace research-ship --keep 0"
+        $shPrLink = Invoke-ShCmd "'$guardShPosix' prune --repo-root '$rLinkRunsPosix' --namespace research-ship --keep 0"
         $decoyStillSh = Test-Path -LiteralPath (Join-Path $decoyPrune 'preserve.txt') -PathType Leaf
         $safeShOk = ($shVr.Code -eq 0) -and ($shVc.Code -eq 0 -and $shVc.Text -match 'VERIFY_VALID') -and
                     ($shPrSafe.Code -eq 0 -and $shPrSafe.Text -match 'PRUNE_OK: 1 removed') -and
@@ -495,7 +618,7 @@ try {
                       ($giAppPsText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giAppPsText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giAppPsText -match '(?m)^\s*\.b3/models\.md\s*$')
 
     $bashCompatOk = $true
-    if ($hasBash) {
+    if ($script:HasBash) {
         $pShDir = Join-Path $sandbox 'prod-sh-codex'
         $pShPosix = $pShDir -replace '\\', '/'
         $giUpSh = Join-Path $sandbox 'gi-up-sh'
@@ -506,10 +629,10 @@ try {
         New-Item -ItemType Directory -Path $pShDir, $giUpSh, $giAppSh -Force | Out-Null
         Set-Content (Join-Path $giUpSh '.gitignore') ".b3/`nnode_modules/`n" -NoNewline
         Set-Content (Join-Path $giAppSh '.gitignore') ".b3/ship/`n" -NoNewline
-        $shInst = Invoke-ShGuard "'$rootPosix/adapters/install-product.sh' --product-root '$pShPosix' --b3-home '$rootPosix' --host codex"
-        $shUpRes = Invoke-ShGuard "'$rootPosix/adapters/install-product.sh' --product-root '$giUpShPosix' --b3-home '$rootPosix' --host cursor"
-        $shAppRes = Invoke-ShGuard "'$rootPosix/adapters/install-product.sh' --product-root '$giAppShPosix' --b3-home '$rootPosix' --host cursor"
-        $shDryRes = Invoke-ShGuard "'$rootPosix/adapters/install-product.sh' --product-root '$giUpShPosix' --b3-home '$rootPosix' --host cursor --dry-run"
+        $shInst = Invoke-ShCmd "'$rootPosix/adapters/install-product.sh' --product-root '$pShPosix' --b3-home '$rootPosix' --host codex"
+        $shUpRes = Invoke-ShCmd "'$rootPosix/adapters/install-product.sh' --product-root '$giUpShPosix' --b3-home '$rootPosix' --host cursor"
+        $shAppRes = Invoke-ShCmd "'$rootPosix/adapters/install-product.sh' --product-root '$giAppShPosix' --b3-home '$rootPosix' --host cursor"
+        $shDryRes = Invoke-ShCmd "'$rootPosix/adapters/install-product.sh' --product-root '$giUpShPosix' --b3-home '$rootPosix' --host cursor --dry-run"
         $giSh = if (Test-Path -LiteralPath (Join-Path $pShDir '.gitignore')) { Get-Content -LiteralPath (Join-Path $pShDir '.gitignore') -Raw } else { '' }
         $giUpShText = Get-Content -LiteralPath (Join-Path $giUpSh '.gitignore') -Raw
         $giAppShText = Get-Content -LiteralPath (Join-Path $giAppSh '.gitignore') -Raw
@@ -541,9 +664,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-if ($failed -gt 0) {
-    Write-Output "$failed check(s) failed"
-    exit 1
-}
-Write-Output 'ok'
-exit 0
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash
