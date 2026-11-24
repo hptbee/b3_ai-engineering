@@ -2816,26 +2816,26 @@ switch ($Command) {
             }
 
             $scopeAll = ($vr.RelevantPathsCsv -ceq 'ALL')
-            $scopePaths = @()
+            $recScopePaths = @()
             if (-not $scopeAll) {
-                $scopePaths = @(Split-CsvList $vr.RelevantPathsCsv -AsPaths)
-                if ($scopePaths -contains '.') { $scopeAll = $true }
+                $recScopePaths = @(Split-CsvList $vr.RelevantPathsCsv -AsPaths)
+                if ($recScopePaths -contains '.') { $scopeAll = $true }
             }
             $unstagedRaw = @(if ($scopeAll) {
                 Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--ignore-submodules=none', '--name-only')
             } else {
-                Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $scopePaths)
+                Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $recScopePaths)
             })
             $untrackedScopeRaw = @(if ($scopeAll) {
                 Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')
             } else {
-                Invoke-GitLines $RepoRoot (@('ls-files', '--others', '--exclude-standard', '--') + $scopePaths)
+                Invoke-GitLines $RepoRoot (@('ls-files', '--others', '--exclude-standard', '--') + $recScopePaths)
             })
             $unstagedInScope = New-Object System.Collections.Generic.List[string]
             foreach ($u in (@($unstagedRaw) + @($untrackedScopeRaw))) {
                 if (-not $u -or (Test-CheckpointPath $u)) { continue }
                 if ($ignored -and (Test-PathMatch $u $ignored)) { continue }
-                if (-not $scopeAll -and -not (Test-PathMatch $u $scopePaths)) { continue }
+                if (-not $scopeAll -and -not (Test-PathMatch $u $recScopePaths)) { continue }
                 if (-not $unstagedInScope.Contains($u)) { $unstagedInScope.Add($u) }
             }
             if ($unstagedInScope.Count -gt 0) {
