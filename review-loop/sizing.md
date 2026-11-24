@@ -31,12 +31,13 @@ Run `scripts/b3-guard.{ps1,sh} diff-scope` (or `review-inventory`) for determini
 
 | Risk | `XS` / `S` | `M` | `L` / `XL` / `XXL` |
 | --- | --- | --- | --- |
-| **LOW** | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | Inventory -> cohesive units (`b3-reviewer` only; record skip rationale) -> Ledger Gate |
-| **MEDIUM** | Fresh `b3-reviewer` + triggered specialist only | Full-PR + triggered specialist only + checks | Cohesive units (`<=4` conc) + triggered specialist per unit + L3 cross-unit + Ledger Gate |
-| **HIGH** | Fresh `b3-reviewer` + matching specialist(s) + contract check | Deep contract review + specialists + `verify-run` | L0 Inventory -> L1 Contracts (`b3-architecture-reviewer`) -> L2 Units + specialists + receipts -> L3 Cross-unit -> L4 Ledger Gate |
-| **CRITICAL** | **No downgrade:** Deep review + mandatory `b3-security-reviewer`/specialists (or `WAIVER:...`) + fail-closed `verify-run` | Full deep + mandatory specialists (or `WAIVER:...`) + fail-closed `verify-run` | L0–L4 fail-closed pipeline + mandatory `CRITICAL` specialists (or auditable `WAIVER:...`) + bounded ledger & verification |
+| **LOW** | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | Inventory -> skip L1 (`l1_skip_rationale`) -> cohesive units (`b3-reviewer` only) -> Ledger Gate |
+| **MEDIUM** | Fresh `b3-reviewer` + triggered specialist only | Full-PR + triggered specialist only + checks | Cohesive units (`<=4` conc) + conditional L1 / unit triggered specialists + L3 cross-unit + Ledger Gate |
+| **HIGH** | Fresh `b3-reviewer` + matching specialist(s) + contract check | Deep contract review + specialists + `verify-run` | L0 Inventory -> conditional L1 (`l1_specialists`) -> L2 Units + specialists + receipts -> L3 Cross-unit -> L4 Ledger Gate |
+| **CRITICAL** | **No downgrade:** Deep review + mandatory `b3-security-reviewer`/specialists (self-declared waivers disabled) + fail-closed `verify-run` | Full deep + mandatory specialists (self-declared waivers disabled) + fail-closed `verify-run` | L0–L4 fail-closed pipeline + mandatory `CRITICAL` specialists (self-declared waivers disabled) + bounded monotonic ledger & verification |
 
 ## Partitioning rules (`L` / `XL` / `XXL`)
 
-- Unit = one **logical module/feature slice** (handlers + domain + matching tests); never split by arbitrary LOC (`300L` chunks) or create 1-class/1-test-file crumbs.
+- Unit = one **logical module/feature slice** (handlers + domain + matching tests); never split arbitrarily by LOC (`300L` chunks) or create 1-class/1-test-file crumbs.
+- `L` / `XL` PRs are cohesively coalesced to `<= 4` logical units; `XXL` uses dynamic unit count with `<= 4` concurrent. Oversized units (`> 5,000` LOC or `> 100` files & `> 1,000` LOC) are subdivided by deeper directory hierarchy, contract files, feature tokens, and dependency imports; fail `PARTITION_INCOMPLETE` if safe cohesive partitioning is impossible.
 - Recommend PR split when multi-feature units are independently mergeable (`split_recommended=true`); if un-splittable, execute hierarchical review without silently skipping any unit.

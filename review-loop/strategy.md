@@ -11,7 +11,7 @@ You are **orchestrator**: never review+fix in one pass, merge findings, and **al
   - `LOW`: 0-tok checks + 1 fresh `b3-reviewer` only (skip specialists).
   - `MEDIUM`: `b3-reviewer` + triggered specialist only (`b3-{security,architecture,performance}-reviewer`).
   - `HIGH`: `b3-reviewer` + matching specialists + affected-contract/dependency review.
-  - `CRITICAL`: independent deep review + mandatory matching specialists (no free-form bypass; valid `WAIVER:...` only) + cross-boundary `verify-run` receipt.
+  - `CRITICAL`: independent deep review + mandatory matching specialists (self-declared waivers rejected) + cross-boundary `verify-run` receipt.
 - **Fixer:** reuse `impl_agent` (`fixer_agent` cache) until Tier-1 breaker forces fresh `agents/b3-fixer.md` (`verification/SKILL.md` on demand only); standalone -> dispatch fresh `b3-fixer` with `OPEN` items + target files + `verify_cmd`. Without subagents: strict hat-change + log `review_independence: SINGLE_AGENT_LIMIT`.
 - **State & replies:** standalone runs use `.b3/ship/review-loop/<slug>/` (`state.md`, `ledger.md`, `logs/`, `evidence/verify.verify`); normalize legacy `SMALL|MEDIUM|LARGE|VERY_LARGE` via `review-ledger normalize`. Replies: Reviewer <= **25L** (`Verdict` + table + checked/skipped); Fixer <= **20L** (`id (bug_class) -> files -> verify_cmd`; 1L green, <=35L/log red).
 
@@ -30,9 +30,9 @@ You are **orchestrator**: never review+fix in one pass, merge findings, and **al
 
 ## 2. L / XL / XXL — hierarchical L0–L4 (`hierarchical.md`)
 
-1. Run `b3-guard review-inventory` (L0) + `review-ledger init` (L0, `-MaxConcurrency <=4`, bounded default `-MaxPasses` `12` L/XL or `24` XXL unless overridden >0); recommend PR split if independently mergeable; never silently skip units.
-2. **L1–L3:** L1 contracts (`b3-architecture-reviewer`); L2 cohesive module+test unit loops (`<=4` concurrent, max **3** iter/unit, per-unit risk/mandatory specialists); L3 cross-unit integration (max **2** iter).
-3. **L4 Gate:** require `review-ledger check` = `LEDGER_GATE_PASS`; moved `target_ref`, stale contract/risk/receipt, uncovered files, unwaived `CRITICAL` specialist, or exhausted budget -> `INCOMPLETE`/`BLOCKED`.
+1. Run `b3-guard review-inventory` (L0; `PARTITION_INCOMPLETE` if unsafe) + `review-ledger init` (`-MaxConcurrency <=4`, monotonic `passes_used`/`pass_chain`, default `12` L/XL or `24` XXL >0); advise PR split if mergeable; never skip units.
+2. **L1–L3:** L1 specialists ONLY if `l1_specialists != none` (else log `l1_skip_rationale`); L2 cohesive units (`L/XL<=4`; `XXL` dynamic `<=4` conc, max **3**/unit); L3 cross-unit (max **2**).
+3. **L4 Gate:** require `review-ledger check` = `LEDGER_GATE_PASS`; moved `target_ref`, stale state/receipt, uncovered/oversized unit, rejected `CRITICAL` waiver, pass tamper, or exhausted budget -> `INCOMPLETE`/`BLOCKED`.
 
 ## 3. Stop & report
 

@@ -2152,6 +2152,35 @@ function eval_subset(paths_arr, np,   i, p, k, ns, parts, s, has_destr, has_csig
   } else r_sp = "none"
   _EV_RISK = r_lbl; _EV_SIGS = r_sigs; _EV_SPECS = r_sp
 }
+function is_oversized(fc, lc) {
+  return (lc > 5000 || (fc > 100 && lc > 1000))
+}
+function eval_l1_dispatch(cf_csv, rec_specs, pr_risk, rev_arr, n_rev,   i, nsp, sarr, seen, l1, nl1, all_docs) {
+  split("", seen); split("", l1); nl1 = 0
+  if (cf_csv != "" && cf_csv != "none") { seen["b3-architecture-reviewer"] = 1; l1[++nl1] = "b3-architecture-reviewer" }
+  if (rec_specs != "" && rec_specs != "none") {
+    nsp = split(rec_specs, sarr, ",")
+    for (i = 1; i <= nsp; i++) {
+      if ((sarr[i] == "b3-architecture-reviewer" || sarr[i] == "b3-security-reviewer" || sarr[i] == "b3-performance-reviewer") && !(sarr[i] in seen)) {
+        seen[sarr[i]] = 1; l1[++nl1] = sarr[i]
+      }
+    }
+  }
+  if (nl1 > 0) {
+    sort_arr(l1, nl1)
+    _L1_SPECS = l1[1]; for (i = 2; i <= nl1; i++) _L1_SPECS = _L1_SPECS "," l1[i]
+    _L1_SKIP = "none"
+  } else {
+    _L1_SPECS = "none"
+    all_docs = (n_rev > 0 ? 1 : 0)
+    for (i = 1; i <= n_rev; i++) {
+      if (!is_doc_asset(rev_arr[i])) { all_docs = 0; break }
+    }
+    if (all_docs) _L1_SKIP = "low-risk-docs-only"
+    else if (pr_risk == "LOW") _L1_SKIP = "low-risk-isolated-no-contracts"
+    else _L1_SKIP = "no-contract-or-arch-signals"
+  }
+}
 function tshirt_sz(f, l) {
   if (f == 0) return "NOISE_ONLY"
   if (f <= 3 && l <= 100) return "XS"
@@ -2195,15 +2224,48 @@ eval_risk_for_csv_awk() {
   }'
 }
 
+eval_l1_dispatch_awk() {
+  local cf_csv="$1" rec_specs="$2" pr_risk="$3" rev_csv="$4"
+  LC_ALL=C awk -v cf_csv="$cf_csv" -v rec_specs="$rec_specs" -v pr_risk="$pr_risk" -v rev_csv="$rev_csv" "$_B3_RISK_AWK_LIB"'
+  BEGIN {
+    split("", rarr); nr = 0
+    if (rev_csv != "" && rev_csv != "none") {
+      n = split(rev_csv, raw_r, ",")
+      for (i = 1; i <= n; i++) {
+        p = norm_p(raw_r[i])
+        if (p != "" && p != "none") rarr[++nr] = p
+      }
+    }
+    eval_l1_dispatch(cf_csv, rec_specs, pr_risk, rarr, nr)
+    printf "%s\n%s\n", _L1_SPECS, _L1_SKIP
+  }'
+}
+
 run_scope_engine() {
   local root="$1" base_sha="$2" target_commit="$3" ign_csv="$4" max_conc="$5" prefix="$6"
-  local fsig_out_file="${7:-}" flines_out_file="${8:-}"
-  local ns_tmp st_tmp df_tmp unt_tmp root_slash
+  local fsig_out_file="${7:-}" flines_out_file="${8:-}" need_units="${9:-true}"
+  local ns_tmp st_tmp df_tmp unt_tmp raw_u_tmp ov_tmp imp_tmp fsig_use flines_use root_slash
   ns_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-ns.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ns.$$.${RANDOM}.tmp")"
   st_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-st.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-st.$$.${RANDOM}.tmp")"
   df_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-df.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-df.$$.${RANDOM}.tmp")"
   unt_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-unt.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-unt.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$ns_tmp" "$st_tmp" "$df_tmp" "$unt_tmp")
+  raw_u_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-ru.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ru.$$.${RANDOM}.tmp")"
+  ov_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-ov.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ov.$$.${RANDOM}.tmp")"
+  imp_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-imp.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-imp.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$ns_tmp" "$st_tmp" "$df_tmp" "$unt_tmp" "$raw_u_tmp" "$ov_tmp" "$imp_tmp")
+  if [[ -n "$fsig_out_file" ]]; then
+    fsig_use="$fsig_out_file"
+  else
+    fsig_use="$(mktemp "${TMPDIR:-/tmp}/b3-fsi.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-fsi.$$.${RANDOM}.tmp")"
+    _CLEANUP_FILES+=("$fsig_use")
+  fi
+  if [[ -n "$flines_out_file" ]]; then
+    flines_use="$flines_out_file"
+  else
+    flines_use="$(mktemp "${TMPDIR:-/tmp}/b3-fli.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-fli.$$.${RANDOM}.tmp")"
+    _CLEANUP_FILES+=("$flines_use")
+  fi
+  : > "$raw_u_tmp"; : > "$ov_tmp"; : > "$imp_tmp"; : > "$fsig_use"; : > "$flines_use"
 
   if [[ -n "$target_commit" ]]; then
     run_git_cmd "$root" diff --no-renames --numstat "$base_sha" "$target_commit" -- || { echo "${prefix}: git diff --numstat failed: $(git_err_detail)"; return 1; }
@@ -2239,8 +2301,10 @@ run_scope_engine() {
   [[ "$clamped_conc" -lt 1 ]] && clamped_conc=1
   [[ "$clamped_conc" -gt 4 ]] && clamped_conc=4
   root_slash="${root%/}"
+  root_slash="${root_slash//\\//}"
 
-  LC_ALL=C awk \
+  local pass1_out
+  if ! pass1_out="$(LC_ALL=C awk \
     -v ign_csv="$ign_csv" \
     -v root_dir="$root_slash" \
     -v ns_f="$ns_tmp" \
@@ -2248,8 +2312,11 @@ run_scope_engine() {
     -v unt_f="$unt_tmp" \
     -v df_f="$df_tmp" \
     -v max_conc="$clamped_conc" \
-    -v fsig_out="$fsig_out_file" \
-    -v flines_out="$flines_out_file" \
+    -v need_units="$need_units" \
+    -v fsig_out="$fsig_use" \
+    -v flines_out="$flines_use" \
+    -v raw_u_f="$raw_u_tmp" \
+    -v ov_f="$ov_tmp" \
     "$_B3_RISK_AWK_LIB"'
   BEGIN {
     split("", ign); split("", fsig_list); split("", fsig_seen); split("", flines)
@@ -2430,25 +2497,663 @@ run_scope_engine() {
     }
     sort_arr(all_grps, n_ag)
 
-    split_rec = ((sz == "L" || sz == "XL" || sz == "XXL") && (n_ag >= 2 || total_lines > 800) ? "true" : "false")
-    printf "IS_EMPTY=false\nSIZE_CLASS=%s\nFILES=%d\nLINES=%d\nRISK_LEVEL=%s\nRISK_SIGNALS=%s\nREC_SPECS=%s\nREVIEW_FILES=%s\nNOISE_FILES=%s\nCHANGE_TYPES=A:%d,M:%d,D:%d,U:%d\nCONTRACT_FILES=%s\nGENERATED_FILES=%s\nTEST_FILES=%s\nSPLIT_REC=%s\nMAX_CONC=%d\nUNIT_COUNT=%d\n", sz, n_rev, total_lines, pr_risk, pr_sigs, pr_specs, rf_out, nf_out, cnt_a, cnt_m, cnt_d, cnt_u, cf_out, gf_out, tf_out, split_rec, max_conc, n_ag
+    eval_l1_dispatch(cf_out, pr_specs, pr_risk, rev_arr, n_rev)
+    printf "IS_EMPTY=false\nSIZE_CLASS=%s\nFILES=%d\nLINES=%d\nRISK_LEVEL=%s\nRISK_SIGNALS=%s\nREC_SPECS=%s\nL1_SPECS=%s\nL1_SKIP=%s\nREVIEW_FILES=%s\nNOISE_FILES=%s\nCHANGE_TYPES=A:%d,M:%d,D:%d,U:%d\nCONTRACT_FILES=%s\nGENERATED_FILES=%s\nTEST_FILES=%s\nMAX_CONC=%d\n", sz, n_rev, total_lines, pr_risk, pr_sigs, pr_specs, _L1_SPECS, _L1_SKIP, rf_out, nf_out, cnt_a, cnt_m, cnt_d, cnt_u, cf_out, gf_out, tf_out, max_conc
+
+    if (need_units != "true" || n_rev == 0) {
+      split_rec = ((sz == "L" || sz == "XL" || sz == "XXL") && (n_ag >= 2 || total_lines > 800) ? "true" : "false")
+      printf "SPLIT_REC=%s\nUNIT_COUNT=0\n", split_rec
+      exit 0
+    }
+
+    has_ov = 0
+    for (u = 1; u <= n_ag; u++) {
+      g = all_grps[u]
+      nu = split(grp_files[g], u_arr, "\t")
+      ulines = 0
+      for (k = 1; k <= nu; k++) if (u_arr[k] in flines) ulines += flines[u_arr[k]]
+      if (is_oversized(nu, ulines)) {
+        has_ov = 1
+        for (k = 1; k <= nu; k++) {
+          if (!is_test_p(u_arr[k])) printf "%s\n", u_arr[k] > ov_f
+        }
+      }
+    }
+    close(ov_f)
+
+    need_cap = ((sz == "L" || sz == "XL") && n_ag > 4 ? 1 : 0)
+    if (!has_ov && !need_cap) {
+      split_rec = ((sz == "L" || sz == "XL" || sz == "XXL") && (n_ag >= 2 || total_lines > 800) ? "true" : "false")
+      printf "SPLIT_REC=%s\nUNIT_COUNT=%d\n", split_rec, n_ag
+      for (u = 1; u <= n_ag; u++) {
+        g = all_grps[u]
+        nu = split(grp_files[g], u_arr, "\t")
+        sort_arr(u_arr, nu)
+        ulines = 0; ucsv = u_arr[1]
+        if (u_arr[1] in flines) ulines += flines[u_arr[1]]
+        for (k = 2; k <= nu; k++) {
+          ucsv = ucsv "," u_arr[k]
+          if (u_arr[k] in flines) ulines += flines[u_arr[k]]
+        }
+        eval_subset(u_arr, nu)
+        uid = sprintf("U%02d", u)
+        printf "UNIT\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n", uid, g, nu, ulines, _EV_RISK, _EV_SPECS, _EV_SIGS, ucsv
+      }
+      exit 0
+    }
 
     for (u = 1; u <= n_ag; u++) {
       g = all_grps[u]
       nu = split(grp_files[g], u_arr, "\t")
       sort_arr(u_arr, nu)
-      ulines = 0; ucsv = u_arr[1]
-      if (u_arr[1] in flines) ulines += flines[u_arr[1]]
-      for (k = 2; k <= nu; k++) {
-        ucsv = ucsv "," u_arr[k]
-        if (u_arr[k] in flines) ulines += flines[u_arr[k]]
-      }
-      eval_subset(u_arr, nu)
-      uid = sprintf("U%02d", u)
-      printf "UNIT\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n", uid, g, nu, ulines, _EV_RISK, _EV_SPECS, _EV_SIGS, ucsv
+      line_out = g
+      for (k = 1; k <= nu; k++) line_out = line_out "\t" u_arr[k]
+      printf "%s\n", line_out > raw_u_f
     }
-  }'
-  rm -f "$ns_tmp" "$st_tmp" "$df_tmp" "$unt_tmp" 2>/dev/null || true
+    close(raw_u_f)
+    printf "NEED_PART=1\nNEED_IMP=%d\n", has_ov
+  }')"; then
+    echo "${prefix}: scope engine awk failed"
+    return 1
+  fi
+
+  local need_part=0 need_imp=0 out_buf="" ln_p sz_val="" tot_lines_val=0
+  while IFS= read -r ln_p; do
+    case "$ln_p" in
+      NEED_PART=1) need_part=1 ;;
+      NEED_IMP=*) need_imp="${ln_p#NEED_IMP=}" ;;
+      SIZE_CLASS=*) sz_val="${ln_p#SIZE_CLASS=}"; out_buf+="${ln_p}"$'\n' ;;
+      LINES=*) tot_lines_val="${ln_p#LINES=}"; out_buf+="${ln_p}"$'\n' ;;
+      *) out_buf+="${ln_p}"$'\n' ;;
+    esac
+  done <<< "$pass1_out"
+
+  if [[ "$need_part" -eq 1 ]]; then
+    if [[ "$need_imp" -eq 1 && -s "$ov_tmp" ]]; then
+      while IFS= read -r cand_fp; do
+        [[ -n "$cand_fp" ]] || continue
+        if [[ -n "$target_commit" ]]; then
+          if run_git_cmd "$root" show "${target_commit}:${cand_fp}"; then
+            printf '%s\n' "$_GIT_STDOUT" | LC_ALL=C awk -v fp="$cand_fp" '
+            {
+              rest = $0
+              while (match(rest, /["\047]\.\.?\/[^"\047\r\n]+["\047]/)) {
+                sp = substr(rest, RSTART + 1, RLENGTH - 2)
+                printf "%s\t%s\n", fp, sp
+                rest = substr(rest, RSTART + RLENGTH)
+              }
+            }' >> "$imp_tmp"
+          fi
+        else
+          local full_cand="${root_slash}/${cand_fp}"
+          if [[ -f "$full_cand" ]] && ! is_binary_file "$full_cand"; then
+            LC_ALL=C awk -v fp="$cand_fp" '
+            {
+              rest = $0
+              while (match(rest, /["\047]\.\.?\/[^"\047\r\n]+["\047]/)) {
+                sp = substr(rest, RSTART + 1, RLENGTH - 2)
+                printf "%s\t%s\n", fp, sp
+                rest = substr(rest, RSTART + RLENGTH)
+              }
+            }' "$full_cand" >> "$imp_tmp"
+          fi
+        fi
+      done < "$ov_tmp"
+    fi
+
+    local pass2_out
+    if ! pass2_out="$(LC_ALL=C awk \
+      -v sz="$sz_val" \
+      -v total_lines="$tot_lines_val" \
+      -v fsig_f="$fsig_use" \
+      -v flines_f="$flines_use" \
+      -v raw_u_f="$raw_u_tmp" \
+      -v imp_f="$imp_tmp" \
+      "$_B3_RISK_AWK_LIB"'
+    function basename_aw(p,   n, s) { n = split(p, s, "/"); return s[n] }
+    function dirname_aw(p,   i) {
+      for (i = length(p); i >= 1; i--) if (substr(p, i, 1) == "/") return substr(p, 1, i - 1)
+      return ""
+    }
+    function strip_ext_any(s) { sub(/\.[^.]+$/, "", s); return s }
+    function ext_of(p,   lf, i) {
+      lf = basename_aw(p)
+      for (i = length(lf); i >= 1; i--) {
+        if (substr(lf, i, 1) == ".") {
+          if (i < length(lf)) return tolower(substr(lf, i + 1))
+          return "noext"
+        }
+      }
+      return "noext"
+    }
+    function feat_token(p,   lf, stem, lstem, sp, nw, w, end_i, out_s, k, layer_re) {
+      lf = basename_aw(p); stem = lf; sub(/\.[^.]+$/, "", stem)
+      lstem = tolower(stem)
+      if (match(lstem, /\.(test|spec|generated|pb|g|designer)$/)) stem = substr(stem, 1, RSTART - 1)
+      gsub(/[-_.]+/, " ", stem)
+      while (match(stem, /[a-z0-9][A-Z]/)) stem = substr(stem, 1, RSTART) " " substr(stem, RSTART + 1)
+      sp = tolower(stem); gsub(/^[ \t]+|[ \t]+$/, "", sp)
+      if (sp == "") return "misc"
+      nw = split(sp, w, /[ \t]+/)
+      if (nw < 1 || w[1] == "") return "misc"
+      layer_re = "^(controllers?|services?|repositor(y|ies)|repo|handlers?|models?|types?|schemas?|utils?|helpers?|views?|components?|slice|store|routes?|router|api|client|impl|dtos?|spec|test)$"
+      end_i = nw
+      while (end_i > 1 && w[end_i] ~ layer_re) end_i--
+      out_s = w[1]
+      for (k = 2; k <= end_i; k++) out_s = out_s "-" w[k]
+      return out_s
+    }
+    function stem_no_ext(p,   lp) {
+      lp = tolower(p); sub(/\.(tsx|ts|jsx|js|mjs|cjs|py|go|rs|cpp|hpp|c|h|cs|java|proto|graphql|gql)$/, "", lp); return lp
+    }
+    function resolve_rel_imp(from_f, rel_spec,   cl, dp, raw_d, n_d, stk, depth, ns, segs, i, joined) {
+      cl = rel_spec; gsub(/\\/, "/", cl); sub(/[?#].*$/, "", cl); gsub(/^[ \t]+|[ \t]+$/, "", cl)
+      if (cl == "" || (substr(cl, 1, 2) != "./" && substr(cl, 1, 3) != "../")) return ""
+      dp = dirname_aw(from_f); depth = 0
+      if (dp != "") {
+        n_d = split(dp, raw_d, "/")
+        for (i = 1; i <= n_d; i++) if (raw_d[i] != "") stk[++depth] = raw_d[i]
+      }
+      ns = split(cl, segs, "/")
+      for (i = 1; i <= ns; i++) {
+        if (segs[i] == "" || segs[i] == ".") continue
+        if (segs[i] == "..") { if (depth > 0) depth--; else return "" }
+        else stk[++depth] = segs[i]
+      }
+      if (depth == 0) return ""
+      joined = stk[1]; for (i = 2; i <= depth; i++) joined = joined "/" stk[i]
+      return stem_no_ext(joined)
+    }
+    function top_seg_of(g,   sl) {
+      if (g == "root" || substr(g, 1, 1) == "(") return g
+      sl = index(g, "/")
+      return (sl > 0 ? substr(g, 1, sl - 1) : g)
+    }
+    function join_uniq_tsv(a_tsv, b_tsv, sort_flag,   na, nb, a_arr, b_arr, seen, out_a, n_o, i, res) {
+      split("", seen); split("", out_a); n_o = 0
+      if (a_tsv != "") {
+        na = split(a_tsv, a_arr, "\t")
+        for (i = 1; i <= na; i++) if (a_arr[i] != "" && !(a_arr[i] in seen)) { seen[a_arr[i]] = 1; out_a[++n_o] = a_arr[i] }
+      }
+      if (b_tsv != "") {
+        nb = split(b_tsv, b_arr, "\t")
+        for (i = 1; i <= nb; i++) if (b_arr[i] != "" && !(b_arr[i] in seen)) { seen[b_arr[i]] = 1; out_a[++n_o] = b_arr[i] }
+      }
+      if (n_o == 0) return ""
+      if (sort_flag) sort_arr(out_a, n_o)
+      res = out_a[1]; for (i = 2; i <= n_o; i++) res = res "\t" out_a[i]
+      return res
+    }
+    function has_contract_tsv(ftsv,   a, n, i) {
+      n = split(ftsv, a, "\t")
+      for (i = 1; i <= n; i++) if (is_contract_p(a[i])) return 1
+      return 0
+    }
+    function score_bucket(idx, grp, mem, ftsv, fts, arr_g, arr_m, arr_f, arr_ft, arr_fc, arr_lc, arr_rk, arr_sp, arr_sg, arr_csv, arr_top, arr_f0,   fa, nf, k, lc) {
+      nf = split(ftsv, fa, "\t")
+      sort_arr(fa, nf)
+      lc = 0
+      for (k = 1; k <= nf; k++) if (fa[k] in flines) lc += flines[fa[k]]
+      eval_subset(fa, nf)
+      arr_g[idx] = grp; arr_m[idx] = mem; arr_ft[idx] = fts
+      arr_f[idx] = fa[1]; arr_csv[idx] = fa[1]
+      for (k = 2; k <= nf; k++) { arr_f[idx] = arr_f[idx] "\t" fa[k]; arr_csv[idx] = arr_csv[idx] "," fa[k] }
+      arr_f0[idx] = (nf > 0 ? fa[1] : "")
+      arr_fc[idx] = nf; arr_lc[idx] = lc
+      arr_rk[idx] = _EV_RISK; arr_sp[idx] = _EV_SPECS; arr_sg[idx] = _EV_SIGS
+      arr_top[idx] = top_seg_of(grp)
+    }
+    function attach_tests_aw(parent_g, b_cnt, b_grp, b_mem, b_files, b_fts, t_arr, nt,   i, tf, ass, pfx, trem, psl, tseg, tf_lf, tf_st, l_tf, mc, mi, j, nrf, rf_a, k, rf_st, hit, tfeat, nft, ft_a, nex, ex_a, tgrp, ex_f) {
+      split("", ex_a); nex = 0
+      for (i = 1; i <= nt; i++) {
+        tf = t_arr[i]; ass = 0
+        if (parent_g != "root") {
+          pfx = parent_g "/"
+          if (index(tf, pfx) == 1) {
+            trem = substr(tf, length(pfx) + 1)
+            psl = index(trem, "/")
+            if (psl > 0) {
+              tseg = pfx substr(trem, 1, psl - 1)
+              for (j = 1; j <= b_cnt; j++) if (b_grp[j] == tseg) { ass = j; break }
+            }
+          }
+        }
+        if (ass == 0) {
+          tf_lf = basename_aw(tf); tf_st = strip_ext_any(tf_lf); l_tf = tolower(tf_st)
+          if (match(l_tf, /\.(test|spec)$/)) l_tf = substr(l_tf, 1, RSTART - 1)
+          mc = 0; mi = 0
+          for (j = 1; j <= b_cnt; j++) {
+            nrf = split(b_files[j], rf_a, "\t"); hit = 0
+            for (k = 1; k <= nrf; k++) {
+              rf_st = tolower(strip_ext_any(basename_aw(rf_a[k])))
+              if (rf_st == l_tf) { hit = 1; break }
+            }
+            if (hit) { mc++; mi = j }
+          }
+          if (mc == 0) {
+            tfeat = feat_token(tf)
+            for (j = 1; j <= b_cnt; j++) {
+              nft = split(b_fts[j], ft_a, "\t")
+              for (k = 1; k <= nft; k++) if (ft_a[k] == tfeat) { mc++; mi = j; break }
+            }
+          }
+          if (mc == 1) ass = mi
+        }
+        if (ass > 0) b_files[ass] = (b_files[ass] != "" ? b_files[ass] "\t" tf : tf)
+        else ex_a[++nex] = tf
+      }
+      if (nex > 0) {
+        tgrp = (parent_g == "root" ? "(tests)" : parent_g "/(tests)")
+        b_cnt++
+        b_grp[b_cnt] = tgrp; b_mem[b_cnt] = tgrp; b_fts[b_cnt] = ""
+        ex_f = ex_a[1]; for (i = 2; i <= nex; i++) ex_f = ex_f "\t" ex_a[i]
+        b_files[b_cnt] = ex_f
+      }
+      return b_cnt
+    }
+    function coalesce_tiny_aw(n_in, in_g, in_m, in_f, in_ft, out_g, out_m, out_f, out_ft, out_fc, out_lc, out_rk, out_sp, out_sg, out_csv, out_top, out_f0,   i, tiny_i, tiny_l, j, best_j, best_sc, cf, cl, sc, mg, mm, mf, mft, lo, hi, k) {
+      split("", out_g); split("", out_m); split("", out_f); split("", out_ft)
+      split("", out_fc); split("", out_lc); split("", out_rk); split("", out_sp); split("", out_sg); split("", out_csv); split("", out_top); split("", out_f0)
+      for (i = 1; i <= n_in; i++) {
+        score_bucket(i, in_g[i], in_m[i], in_f[i], in_ft[i], out_g, out_m, out_f, out_ft, out_fc, out_lc, out_rk, out_sp, out_sg, out_csv, out_top, out_f0)
+      }
+      while (n_in > 4) {
+        tiny_i = 0; tiny_l = 999999999
+        for (i = 1; i <= n_in; i++) {
+          if (out_fc[i] < 2 && out_lc[i] < 200 && out_rk[i] != "CRITICAL" && !has_contract_tsv(out_f[i])) {
+            if (out_lc[i] < tiny_l) { tiny_l = out_lc[i]; tiny_i = i }
+          }
+        }
+        if (tiny_i == 0) break
+        best_j = 0; best_sc = 999999999999
+        for (j = 1; j <= n_in; j++) {
+          if (j == tiny_i) continue
+          cf = out_fc[tiny_i] + out_fc[j]; cl = out_lc[tiny_i] + out_lc[j]
+          if (is_oversized(cf, cl)) continue
+          sc = cl
+          if (out_rk[j] != out_rk[tiny_i]) sc += 100000
+          if (out_rk[j] == "CRITICAL") sc += 500000
+          if (sc < best_sc) { best_sc = sc; best_j = j }
+        }
+        if (best_j == 0) break
+        mg = (length(out_g[best_j]) >= length(out_g[tiny_i]) ? out_g[best_j] : out_g[tiny_i])
+        mm = join_uniq_tsv(out_m[tiny_i], out_m[best_j], 0)
+        mf = out_f[tiny_i] "\t" out_f[best_j]
+        mft = join_uniq_tsv(out_ft[tiny_i], out_ft[best_j], 0)
+        lo = (tiny_i < best_j ? tiny_i : best_j)
+        hi = (tiny_i > best_j ? tiny_i : best_j)
+        for (k = hi; k < n_in; k++) {
+          out_g[k] = out_g[k+1]; out_m[k] = out_m[k+1]; out_f[k] = out_f[k+1]; out_ft[k] = out_ft[k+1]
+          out_fc[k] = out_fc[k+1]; out_lc[k] = out_lc[k+1]; out_rk[k] = out_rk[k+1]; out_sp[k] = out_sp[k+1]
+          out_sg[k] = out_sg[k+1]; out_csv[k] = out_csv[k+1]; out_top[k] = out_top[k+1]; out_f0[k] = out_f0[k+1]
+        }
+        for (k = lo; k < n_in - 1; k++) {
+          out_g[k] = out_g[k+1]; out_m[k] = out_m[k+1]; out_f[k] = out_f[k+1]; out_ft[k] = out_ft[k+1]
+          out_fc[k] = out_fc[k+1]; out_lc[k] = out_lc[k+1]; out_rk[k] = out_rk[k+1]; out_sp[k] = out_sp[k+1]
+          out_sg[k] = out_sg[k+1]; out_csv[k] = out_csv[k+1]; out_top[k] = out_top[k+1]; out_f0[k] = out_f0[k+1]
+        }
+        n_in -= 2
+        n_in++
+        score_bucket(n_in, mg, mm, mf, mft, out_g, out_m, out_f, out_ft, out_fc, out_lc, out_rk, out_sp, out_sg, out_csv, out_top, out_f0)
+      }
+      return n_in
+    }
+    function uf_find(x, pa,   r) {
+      r = x
+      while (pa[r] != r) { pa[r] = pa[pa[r]]; r = pa[r] }
+      return r
+    }
+    function uf_union(a, b, pa,   ra, rb) {
+      ra = uf_find(a, pa); rb = uf_find(b, pa)
+      if (ra != rb) { if (ra < rb) pa[rb] = ra; else pa[ra] = rb }
+    }
+    function expand_oversized_iter(init_g, init_m, init_f, init_fc, init_lc,   st_top, st_g, st_m, st_f, st_ft, st_dp, st_fc, st_lc, st_rk, st_sp, st_sg, st_csv, st_top_seg, st_f0, ug, um, uf, uft, udp, ufc, ulc, uf_arr, nuf, i, f, fl, nnt, nt, nt_a, t_a, raw_g, base_g, pfx, dir_map, dkeys, n_dk, has_dp, rem, psl, ck, sb_cnt, sb_g, sb_m, sb_f, sb_ft, k, fts_seen, sb_f_arr, nsf, ftv, c_cnt, cg, cm, cf, cft, cfc, clc, crk, csp, csg, ccsv, ctop, cf0, ncon, con_a, nreg, reg_a, b2_cnt, b2_g, b2_m, b2_f, b2_ft, cgrp, p_arr, f_toks, file_exts, stem_m, feat_1st, rf, sk, d_sk, nic, tgt_s, n_ed, ed_a, ed_b, comp_xext, comp_f, comp_idxs, comp_ft, comp_fts_seen, ri, sub_g, nft_t, sorted_ft, st_r, c_fa, c_nf, c_nl, ext_map, ext_keys, n_ek, c_idx_arr, n_ci, ix_v, ex_v, ext_sg, c2_cnt, c2g, c2m, c2f, c2ft, c2fc, c2lc, c2rk, c2sp, c2sg, c2csv, c2top, c2f0) {
+      st_top = 1
+      st_g[1] = init_g; st_m[1] = init_m; st_f[1] = init_f; st_ft[1] = ""; st_dp[1] = 0
+      st_fc[1] = init_fc; st_lc[1] = init_lc
+      while (st_top > 0) {
+        ug = st_g[st_top]; um = st_m[st_top]; uf = st_f[st_top]; uft = st_ft[st_top]; udp = st_dp[st_top]
+        ufc = st_fc[st_top]; ulc = st_lc[st_top]
+        if (udp < 0) {
+          fin_cnt++
+          fin_g[fin_cnt] = ug; fin_m[fin_cnt] = um; fin_f[fin_cnt] = uf; fin_ft[fin_cnt] = uft
+          fin_fc[fin_cnt] = ufc; fin_lc[fin_cnt] = ulc
+          fin_rk[fin_cnt] = st_rk[st_top]; fin_sp[fin_cnt] = st_sp[st_top]; fin_sg[fin_cnt] = st_sg[st_top]
+          fin_csv[fin_cnt] = st_csv[st_top]; fin_top[fin_cnt] = st_top_seg[st_top]; fin_f0[fin_cnt] = st_f0[st_top]
+          st_top--
+          continue
+        }
+        st_top--
+
+        nuf = split(uf, uf_arr, "\t")
+        for (i = 1; i <= nuf; i++) {
+          f = uf_arr[i]
+          fl = (f in flines ? flines[f] : 0)
+          if (fl > 5000) {
+            _PART_ERR = sprintf("PARTITION_INCOMPLETE: single file \047%s\047 (%dL) exceeds max unit bound (5000L); refactor or split PR", f, fl)
+            return 1
+          }
+        }
+
+        split("", nt_a); split("", t_a); nnt = 0; nt = 0
+        for (i = 1; i <= nuf; i++) {
+          if (is_test_p(uf_arr[i])) t_a[++nt] = uf_arr[i]
+          else nt_a[++nnt] = uf_arr[i]
+        }
+        raw_g = ug; base_g = raw_g
+        sub(/\/\((root|contracts)\)$/, "", base_g)
+        pfx = (base_g == "root" || substr(base_g, 1, 1) == "(" ? "" : base_g "/")
+
+        if (udp < 4) {
+          split("", dir_map); split("", dkeys); n_dk = 0; has_dp = 0
+          for (i = 1; i <= nnt; i++) {
+            f = nt_a[i]
+            rem = (pfx != "" && index(f, pfx) == 1 ? substr(f, length(pfx) + 1) : (pfx == "" ? f : ""))
+            psl = (rem != "" ? index(rem, "/") : 0)
+            if (psl > 0) {
+              has_dp = 1
+              ck = (pfx != "" ? pfx substr(rem, 1, psl - 1) : substr(rem, 1, psl - 1))
+            } else if (is_contract_p(f)) {
+              ck = (base_g == "root" ? "(contracts)" : base_g "/(contracts)")
+            } else {
+              ck = (base_g == "root" ? "(root)" : base_g "/(root)")
+            }
+            if (!(ck in dir_map)) dkeys[++n_dk] = ck
+            dir_map[ck] = (ck in dir_map ? dir_map[ck] "\t" f : f)
+          }
+          if (has_dp && n_dk >= 2) {
+            sort_arr(dkeys, n_dk)
+            split("", sb_g); split("", sb_m); split("", sb_f); split("", sb_ft); sb_cnt = 0
+            for (k = 1; k <= n_dk; k++) {
+              ck = dkeys[k]; sb_cnt++
+              sb_g[sb_cnt] = ck; sb_m[sb_cnt] = ck; sb_f[sb_cnt] = dir_map[ck]
+              nsf = split(dir_map[ck], sb_f_arr, "\t")
+              split("", fts_seen); sb_ft[sb_cnt] = ""
+              for (i = 1; i <= nsf; i++) {
+                ftv = feat_token(sb_f_arr[i])
+                if (!(ftv in fts_seen)) { fts_seen[ftv] = 1; sb_ft[sb_cnt] = (sb_ft[sb_cnt] == "" ? ftv : sb_ft[sb_cnt] "\t" ftv) }
+              }
+            }
+            sb_cnt = attach_tests_aw(base_g, sb_cnt, sb_g, sb_m, sb_f, sb_ft, t_a, nt)
+            c_cnt = coalesce_tiny_aw(sb_cnt, sb_g, sb_m, sb_f, sb_ft, cg, cm, cf, cft, cfc, clc, crk, csp, csg, ccsv, ctop, cf0)
+            for (k = c_cnt; k >= 1; k--) {
+              st_top++
+              st_g[st_top] = cg[k]; st_m[st_top] = cm[k]; st_f[st_top] = cf[k]; st_ft[st_top] = cft[k]
+              st_fc[st_top] = cfc[k]; st_lc[st_top] = clc[k]
+              if (is_oversized(cfc[k], clc[k])) {
+                st_dp[st_top] = udp + 1
+              } else {
+                st_dp[st_top] = -1
+                st_rk[st_top] = crk[k]; st_sp[st_top] = csp[k]; st_sg[st_top] = csg[k]
+                st_csv[st_top] = ccsv[k]; st_top_seg[st_top] = ctop[k]; st_f0[st_top] = cf0[k]
+              }
+            }
+            continue
+          }
+        }
+
+        split("", con_a); split("", reg_a); ncon = 0; nreg = 0
+        for (i = 1; i <= nnt; i++) {
+          if (is_contract_p(nt_a[i])) con_a[++ncon] = nt_a[i]
+          else reg_a[++nreg] = nt_a[i]
+        }
+        split("", b2_g); split("", b2_m); split("", b2_f); split("", b2_ft); b2_cnt = 0
+        if (ncon > 0 && nreg > 0) {
+          cgrp = (base_g == "root" || substr(base_g, 1, 1) == "(" ? "(contracts)" : base_g "/(contracts)")
+          b2_cnt++; b2_g[1] = cgrp; b2_m[1] = cgrp; b2_ft[1] = "contracts"
+          b2_f[1] = con_a[1]; for (i = 2; i <= ncon; i++) b2_f[1] = b2_f[1] "\t" con_a[i]
+        } else if (ncon > 0) {
+          for (i = 1; i <= ncon; i++) reg_a[++nreg] = con_a[i]
+        }
+
+        if (nreg > 0) {
+          split("", p_arr); split("", f_toks); split("", file_exts); split("", stem_m); split("", feat_1st)
+          split("", ed_a); split("", ed_b); n_ed = 0
+          for (i = 0; i < nreg; i++) {
+            p_arr[i] = i
+            rf = reg_a[i + 1]
+            ftv = feat_token(rf)
+            f_toks[i] = ftv
+            file_exts[i] = ext_of(rf)
+            sk = stem_no_ext(rf)
+            if (!(sk in stem_m)) stem_m[sk] = i
+            if (length(sk) > 6 && substr(sk, length(sk) - 5) == "/index") {
+              d_sk = substr(sk, 1, length(sk) - 6)
+              if (d_sk != "" && !(d_sk in stem_m)) stem_m[d_sk] = i
+            }
+          }
+          for (i = 0; i < nreg; i++) {
+            ftv = f_toks[i]
+            if (ftv in feat_1st) uf_union(feat_1st[ftv], i, p_arr)
+            else feat_1st[ftv] = i
+            rf = reg_a[i + 1]
+            nic = (rf in imp_cnt ? imp_cnt[rf] : 0)
+            for (k = 1; k <= nic; k++) {
+              tgt_s = resolve_rel_imp(rf, imp_spec[rf SUBSEP k])
+              if (tgt_s != "" && (tgt_s in stem_m)) {
+                uf_union(i, stem_m[tgt_s], p_arr)
+                n_ed++; ed_a[n_ed] = i; ed_b[n_ed] = stem_m[tgt_s]
+              }
+            }
+          }
+          split("", comp_xext)
+          for (k = 1; k <= n_ed; k++) {
+            if (file_exts[ed_a[k]] != file_exts[ed_b[k]]) {
+              comp_xext[uf_find(ed_a[k], p_arr)] = 1
+            }
+          }
+          split("", comp_f); split("", comp_idxs); split("", comp_ft); split("", comp_fts_seen)
+          for (i = 0; i < nreg; i++) {
+            ri = uf_find(i, p_arr)
+            rf = reg_a[i + 1]
+            comp_f[ri] = (ri in comp_f ? comp_f[ri] "\t" rf : rf)
+            comp_idxs[ri] = (ri in comp_idxs ? comp_idxs[ri] "\t" i : "" i)
+            if (!(ri SUBSEP f_toks[i] in comp_fts_seen)) {
+              comp_fts_seen[ri SUBSEP f_toks[i]] = 1
+              comp_ft[ri] = (ri in comp_ft ? comp_ft[ri] "\t" f_toks[i] : f_toks[i])
+            }
+          }
+          for (i = 0; i < nreg; i++) {
+            if (!(i in comp_f)) continue
+            nft_t = split(comp_ft[i], sorted_ft, "\t")
+            sort_arr(sorted_ft, nft_t)
+            st_r = sorted_ft[1]; for (k = 2; k <= nft_t; k++) st_r = st_r "\t" sorted_ft[k]
+            sub_g = (base_g == "root" || substr(base_g, 1, 1) == "(" ? sorted_ft[1] : base_g "/" sorted_ft[1])
+            c_nf = split(comp_f[i], c_fa, "\t")
+            c_nl = 0
+            for (k = 1; k <= c_nf; k++) if (c_fa[k] in flines) c_nl += flines[c_fa[k]]
+            if (is_oversized(c_nf, c_nl) && c_nf >= 2 && !(i in comp_xext)) {
+              split("", ext_map); split("", ext_keys); n_ek = 0
+              n_ci = split(comp_idxs[i], c_idx_arr, "\t")
+              for (k = 1; k <= n_ci; k++) {
+                ix_v = c_idx_arr[k] + 0
+                ex_v = file_exts[ix_v]
+                if (!(ex_v in ext_map)) ext_keys[++n_ek] = ex_v
+                ext_map[ex_v] = (ex_v in ext_map ? ext_map[ex_v] "\t" reg_a[ix_v + 1] : reg_a[ix_v + 1])
+              }
+              if (n_ek >= 2) {
+                sort_arr(ext_keys, n_ek)
+                for (k = 1; k <= n_ek; k++) {
+                  ext_sg = sub_g "(" ext_keys[k] ")"
+                  b2_cnt++; b2_g[b2_cnt] = ext_sg; b2_m[b2_cnt] = ext_sg; b2_f[b2_cnt] = ext_map[ext_keys[k]]; b2_ft[b2_cnt] = st_r
+                }
+                continue
+              }
+            }
+            b2_cnt++; b2_g[b2_cnt] = sub_g; b2_m[b2_cnt] = sub_g; b2_f[b2_cnt] = comp_f[i]; b2_ft[b2_cnt] = st_r
+          }
+        }
+
+        if (b2_cnt >= 2) {
+          b2_cnt = attach_tests_aw(base_g, b2_cnt, b2_g, b2_m, b2_f, b2_ft, t_a, nt)
+          c2_cnt = coalesce_tiny_aw(b2_cnt, b2_g, b2_m, b2_f, b2_ft, c2g, c2m, c2f, c2ft, c2fc, c2lc, c2rk, c2sp, c2sg, c2csv, c2top, c2f0)
+          for (k = 1; k <= c2_cnt; k++) {
+            if (is_oversized(c2fc[k], c2lc[k])) {
+              _PART_ERR = sprintf("PARTITION_INCOMPLETE: oversized unit \047%s\047 (%df, %dL) cannot be cohesively partitioned without arbitrary LOC splitting", c2g[k], c2fc[k], c2lc[k])
+              return 1
+            }
+            fin_cnt++
+            fin_g[fin_cnt] = c2g[k]; fin_m[fin_cnt] = c2m[k]; fin_f[fin_cnt] = c2f[k]; fin_ft[fin_cnt] = c2ft[k]
+            fin_fc[fin_cnt] = c2fc[k]; fin_lc[fin_cnt] = c2lc[k]; fin_rk[fin_cnt] = c2rk[k]; fin_sp[fin_cnt] = c2sp[k]
+            fin_sg[fin_cnt] = c2sg[k]; fin_csv[fin_cnt] = c2csv[k]; fin_top[fin_cnt] = c2top[k]; fin_f0[fin_cnt] = c2f0[k]
+          }
+          continue
+        }
+
+        _PART_ERR = sprintf("PARTITION_INCOMPLETE: oversized unit \047%s\047 (%df, %dL) cannot be cohesively partitioned without arbitrary LOC splitting", raw_g, ufc, ulc)
+        return 1
+      }
+      return 0
+    }
+    function merge_cohesive_to_cap(   bi, bj, btop, bcrit, brisk, blines, bfiles, bga, bgb, i, j, cf, cl, dt, dc, dr, ga, gb, bet, mm, ma, m_cnt, mg, mf, mft, k) {
+      while (fin_cnt > 4) {
+        bi = 0; bj = 0; btop = 9; bcrit = 9; brisk = 9; blines = 999999999; bfiles = 999999999; bga = ""; bgb = ""
+        for (i = 1; i <= fin_cnt; i++) {
+          for (j = i + 1; j <= fin_cnt; j++) {
+            cf = fin_fc[i] + fin_fc[j]; cl = fin_lc[i] + fin_lc[j]
+            if (is_oversized(cf, cl)) continue
+            dt = (fin_top[i] == fin_top[j] ? 0 : 1)
+            dc = ((fin_rk[i] == "CRITICAL") != (fin_rk[j] == "CRITICAL") ? 1 : 0)
+            dr = (fin_rk[i] == fin_rk[j] ? 0 : 1)
+            ga = (fin_g[i] <= fin_g[j] ? fin_g[i] : fin_g[j])
+            gb = (ga == fin_g[i] ? fin_g[j] : fin_g[i])
+            bet = 0
+            if (dt < btop) bet = 1
+            else if (dt == btop) {
+              if (dc < bcrit) bet = 1
+              else if (dc == bcrit) {
+                if (dr < brisk) bet = 1
+                else if (dr == brisk) {
+                  if (cl < blines) bet = 1
+                  else if (cl == blines) {
+                    if (cf < bfiles) bet = 1
+                    else if (cf == bfiles) {
+                      if (ga < bga || (ga == bga && gb < bgb)) bet = 1
+                    }
+                  }
+                }
+              }
+            }
+            if (bet) {
+              bi = i; bj = j; btop = dt; bcrit = dc; brisk = dr; blines = cl; bfiles = cf; bga = ga; bgb = gb
+            }
+          }
+        }
+        if (bi == 0) {
+          _PART_ERR = sprintf("PARTITION_INCOMPLETE: cannot bound %s PR to <= 4 cohesive units without exceeding unit bounds", sz)
+          return 1
+        }
+        mm = join_uniq_tsv(fin_m[bi], fin_m[bj], 1)
+        m_cnt = split(mm, ma, "\t")
+        mg = (m_cnt == 2 ? ma[1] "+" ma[2] : ma[1] "+" (m_cnt - 1) "more")
+        mf = fin_f[bi] "\t" fin_f[bj]
+        mft = join_uniq_tsv(fin_ft[bi], fin_ft[bj], 0)
+        for (k = bj; k < fin_cnt; k++) {
+          fin_g[k] = fin_g[k+1]; fin_m[k] = fin_m[k+1]; fin_f[k] = fin_f[k+1]; fin_ft[k] = fin_ft[k+1]
+          fin_fc[k] = fin_fc[k+1]; fin_lc[k] = fin_lc[k+1]; fin_rk[k] = fin_rk[k+1]; fin_sp[k] = fin_sp[k+1]
+          fin_sg[k] = fin_sg[k+1]; fin_csv[k] = fin_csv[k+1]; fin_top[k] = fin_top[k+1]; fin_f0[k] = fin_f0[k+1]
+        }
+        for (k = bi; k < fin_cnt - 1; k++) {
+          fin_g[k] = fin_g[k+1]; fin_m[k] = fin_m[k+1]; fin_f[k] = fin_f[k+1]; fin_ft[k] = fin_ft[k+1]
+          fin_fc[k] = fin_fc[k+1]; fin_lc[k] = fin_lc[k+1]; fin_rk[k] = fin_rk[k+1]; fin_sp[k] = fin_sp[k+1]
+          fin_sg[k] = fin_sg[k+1]; fin_csv[k] = fin_csv[k+1]; fin_top[k] = fin_top[k+1]; fin_f0[k] = fin_f0[k+1]
+        }
+        fin_cnt -= 2
+        fin_cnt++
+        score_bucket(fin_cnt, mg, mm, mf, mft, fin_g, fin_m, fin_f, fin_ft, fin_fc, fin_lc, fin_rk, fin_sp, fin_sg, fin_csv, fin_top, fin_f0)
+      }
+      return 0
+    }
+    function sort_fin_units(   i, j, tg, tm, tf, tft, tfc, tlc, trk, tsp, tsg, tcsv, ttop, tf0) {
+      for (i = 2; i <= fin_cnt; i++) {
+        tg = fin_g[i]; tm = fin_m[i]; tf = fin_f[i]; tft = fin_ft[i]; tfc = fin_fc[i]; tlc = fin_lc[i]
+        trk = fin_rk[i]; tsp = fin_sp[i]; tsg = fin_sg[i]; tcsv = fin_csv[i]; ttop = fin_top[i]; tf0 = fin_f0[i]
+        j = i - 1
+        while (j >= 1 && (fin_g[j] > tg || (fin_g[j] == tg && fin_f0[j] > tf0))) {
+          fin_g[j+1] = fin_g[j]; fin_m[j+1] = fin_m[j]; fin_f[j+1] = fin_f[j]; fin_ft[j+1] = fin_ft[j]
+          fin_fc[j+1] = fin_fc[j]; fin_lc[j+1] = fin_lc[j]; fin_rk[j+1] = fin_rk[j]; fin_sp[j+1] = fin_sp[j]
+          fin_sg[j+1] = fin_sg[j]; fin_csv[j+1] = fin_csv[j]; fin_top[j+1] = fin_top[j]; fin_f0[j+1] = fin_f0[j]
+          j--
+        }
+        fin_g[j+1] = tg; fin_m[j+1] = tm; fin_f[j+1] = tf; fin_ft[j+1] = tft; fin_fc[j+1] = tfc; fin_lc[j+1] = tlc
+        fin_rk[j+1] = trk; fin_sp[j+1] = tsp; fin_sg[j+1] = tsg; fin_csv[j+1] = tcsv; fin_top[j+1] = ttop; fin_f0[j+1] = tf0
+      }
+    }
+    BEGIN {
+      split("", fsig_list); split("", flines); split("", ign); n_ign = 0
+      split("", imp_cnt); split("", imp_spec)
+      if (fsig_f != "") {
+        while ((getline ln < fsig_f) > 0) {
+          sub(/\r$/, "", ln); t = index(ln, "\t")
+          if (t > 1) fsig_list[substr(ln, 1, t - 1)] = substr(ln, t + 1)
+        }
+        close(fsig_f)
+      }
+      if (flines_f != "") {
+        while ((getline ln < flines_f) > 0) {
+          sub(/\r$/, "", ln); t = index(ln, "\t")
+          if (t > 1) flines[substr(ln, 1, t - 1)] = substr(ln, t + 1) + 0
+        }
+        close(flines_f)
+      }
+      if (imp_f != "") {
+        while ((getline ln < imp_f) > 0) {
+          sub(/\r$/, "", ln); t = index(ln, "\t")
+          if (t > 1) {
+            fp = substr(ln, 1, t - 1); sp = substr(ln, t + 1)
+            imp_cnt[fp] = (fp in imp_cnt ? imp_cnt[fp] + 1 : 1)
+            imp_spec[fp SUBSEP imp_cnt[fp]] = sp
+          }
+        }
+        close(imp_f)
+      }
+      fin_cnt = 0; _PART_ERR = ""
+      while ((getline ln < raw_u_f) > 0) {
+        sub(/\r$/, "", ln)
+        t = index(ln, "\t")
+        if (t < 2) continue
+        rg = substr(ln, 1, t - 1)
+        rf_tsv = substr(ln, t + 1)
+        score_bucket(0, rg, rg, rf_tsv, "", tmp_g, tmp_m, tmp_f, tmp_ft, tmp_fc, tmp_lc, tmp_rk, tmp_sp, tmp_sg, tmp_csv, tmp_top, tmp_f0)
+        if (is_oversized(tmp_fc[0], tmp_lc[0])) {
+          if (expand_oversized_iter(rg, rg, rf_tsv, tmp_fc[0], tmp_lc[0]) != 0) {
+            printf "PART_ERR=%s\n", _PART_ERR
+            exit 0
+          }
+        } else {
+          fin_cnt++
+          fin_g[fin_cnt] = tmp_g[0]; fin_m[fin_cnt] = tmp_m[0]; fin_f[fin_cnt] = tmp_f[0]; fin_ft[fin_cnt] = ""
+          fin_fc[fin_cnt] = tmp_fc[0]; fin_lc[fin_cnt] = tmp_lc[0]; fin_rk[fin_cnt] = tmp_rk[0]; fin_sp[fin_cnt] = tmp_sp[0]
+          fin_sg[fin_cnt] = tmp_sg[0]; fin_csv[fin_cnt] = tmp_csv[0]; fin_top[fin_cnt] = tmp_top[0]; fin_f0[fin_cnt] = tmp_f0[0]
+        }
+      }
+      close(raw_u_f)
+
+      if ((sz == "L" || sz == "XL") && fin_cnt > 4) {
+        if (merge_cohesive_to_cap() != 0) {
+          printf "PART_ERR=%s\n", _PART_ERR
+          exit 0
+        }
+      }
+
+      sort_fin_units()
+      split_rec = ((sz == "L" || sz == "XL" || sz == "XXL") && (fin_cnt >= 2 || total_lines + 0 > 800) ? "true" : "false")
+      printf "SPLIT_REC=%s\nUNIT_COUNT=%d\n", split_rec, fin_cnt
+      for (u = 1; u <= fin_cnt; u++) {
+        uid = sprintf("U%02d", u)
+        printf "UNIT\t%s\t%s\t%d\t%d\t%s\t%s\t%s\t%s\n", uid, fin_g[u], fin_fc[u], fin_lc[u], fin_rk[u], fin_sp[u], fin_sg[u], fin_csv[u]
+      }
+    }')"; then
+      echo "${prefix}: partition engine awk failed"
+      return 1
+    fi
+    out_buf+="$pass2_out"$'\n'
+  fi
+
+  printf '%s' "$out_buf"
+  rm -f "$ns_tmp" "$st_tmp" "$df_tmp" "$unt_tmp" "$raw_u_tmp" "$ov_tmp" "$imp_tmp" 2>/dev/null || true
+  [[ -n "$fsig_out_file" ]] || rm -f "$fsig_use" 2>/dev/null || true
+  [[ -n "$flines_out_file" ]] || rm -f "$flines_use" 2>/dev/null || true
 }
 
 compute_scope_paths_hash() {
@@ -2502,33 +3207,63 @@ default_max_passes() {
   esac
 }
 
-is_valid_critical_waiver() {
-  B3_WAIVER_RAT="$1" LC_ALL=C awk '
-  function trim_aw(s) { gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", s); return s }
-  function is_ph_app(v,   lv) {
-    lv = tolower(trim_aw(v))
-    return (lv == "" || lv == "none" || lv == "auto" || lv == "agent" || lv == "llm" || lv == "ai" || lv == "self" || lv == "n/a" || lv == "na" || lv == "tbd" || lv == "todo" || lv == "unknown")
-  }
-  function is_ph_tkt(v,   lv) {
-    lv = tolower(trim_aw(v))
-    return (lv == "" || lv == "none" || lv == "n/a" || lv == "na" || lv == "tbd" || lv == "todo" || lv == "unknown")
-  }
+hash_git_text() {
+  local root="$1" text="$2" prefix="${3:-GIT_ERROR}" tmp_h h_out
+  tmp_h="$(mktemp "${TMPDIR:-/tmp}/b3-txth.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-txth.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$tmp_h")
+  printf '%s' "$text" > "$tmp_h"
+  if ! run_git_cmd_stdin_file "$root" "$tmp_h" hash-object --stdin; then
+    rm -f "$tmp_h" 2>/dev/null || true
+    echo "${prefix}: git hash-object failed: $(git_err_detail)"
+    return 1
+  fi
+  rm -f "$tmp_h" 2>/dev/null || true
+  h_out="$(trim_str "$_GIT_STDOUT")"
+  if [[ ! "$h_out" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "${prefix}: git hash-object failed: $h_out"
+    return 1
+  fi
+  printf '%s' "$h_out"
+}
+
+is_waiver_attempt() {
+  local rat
+  rat="$(printf '%s' "$(trim_str "${1:-}")" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$rat" == waiver:* ]]
+}
+
+unit_counts_from_flines_awk() {
+  local paths_csv="$1" flines_file="$2"
+  LC_ALL=C awk -v paths_csv="$paths_csv" -v flines_f="$flines_file" "$_B3_RISK_AWK_LIB"'
   BEGIN {
-    r = trim_aw(ENVIRON["B3_WAIVER_RAT"])
-    if (substr(r, 1, 7) != "WAIVER:") exit 1
-    n = split(substr(r, 8), parts, ";")
-    if (n != 3) exit 1
-    if (substr(parts[1], 1, 12) != "approved_by=") exit 1
-    if (substr(parts[2], 1, 7) != "ticket=") exit 1
-    if (substr(parts[3], 1, 7) != "reason=") exit 1
-    app = substr(parts[1], 13)
-    tkt = substr(parts[2], 8)
-    rsn = trim_aw(substr(parts[3], 8))
-    if (length(app) < 2 || app !~ /^[A-Za-z0-9._@-]+$/ || is_ph_app(app)) exit 1
-    if (length(tkt) < 2 || tkt !~ /^[A-Za-z0-9._#:\/-]+$/ || is_ph_tkt(tkt)) exit 1
-    if (length(rsn) < 10 || index(rsn, "|") > 0 || is_ph_app(rsn)) exit 1
-    exit 0
+    split("", flines); split("", seen); split("", ign); n_ign = 0
+    if (flines_f != "") {
+      while ((getline ln < flines_f) > 0) {
+        sub(/\r$/, "", ln); t = index(ln, "\t")
+        if (t > 1) flines[substr(ln, 1, t - 1)] = substr(ln, t + 1) + 0
+      }
+      close(flines_f)
+    }
+    np = split(paths_csv, raw_p, ","); cnt = 0; lines = 0
+    for (i = 1; i <= np; i++) {
+      p = norm_p(raw_p[i])
+      if (p != "" && p != "none" && !(p in seen)) {
+        seen[p] = 1; cnt++
+        if (p in flines) lines += flines[p]
+      }
+    }
+    printf "%d\t%d\n", cnt, lines
   }'
+}
+
+init_pass_chain() {
+  local root="$1" base_sha="$2"
+  hash_git_text "$root" "b3-pass-v1|init|${base_sha}|0"$'\n' "LEDGER_FAIL"
+}
+
+step_pass_chain() {
+  local root="$1" prev="$2" seq="$3" scope_id="$4" kind="$5" delta="$6" ref_sha="$7"
+  hash_git_text "$root" "b3-pass-v1|step|${prev}|${seq}|${scope_id}|${kind}|${delta}|${ref_sha}"$'\n' "LEDGER_FAIL"
 }
 
 case "$CMD" in
@@ -4399,18 +5134,21 @@ timestamp_utc=${TS_UTC}
       exit 1
     fi
 
-    IS_EMPTY="true"; SIZE_CLASS=""; FILE_COUNT="0"; TOTAL_LINES="0"; RISK_LEVEL="LOW"; RISK_SIGNALS="none"; REC_SPECS="none"
+    IS_EMPTY="true"; PART_ERR=""; SIZE_CLASS=""; FILE_COUNT="0"; TOTAL_LINES="0"; RISK_LEVEL="LOW"; RISK_SIGNALS="none"; REC_SPECS="none"; L1_SPECS="none"; L1_SKIP="none"
     CHANGE_TYPES=""; CONTRACT_FILES="none"; GENERATED_FILES="none"; TEST_FILES="none"; NF_OUT="none"; SPLIT_REC="false"; MC_OUT="4"; UNIT_CNT="0"
     UNITS_LINES=()
     while IFS= read -r sline; do
       case "$sline" in
         IS_EMPTY=*) IS_EMPTY="${sline#IS_EMPTY=}" ;;
+        PART_ERR=*) PART_ERR="${sline#PART_ERR=}" ;;
         SIZE_CLASS=*) SIZE_CLASS="${sline#SIZE_CLASS=}" ;;
         FILES=*) FILE_COUNT="${sline#FILES=}" ;;
         LINES=*) TOTAL_LINES="${sline#LINES=}" ;;
         RISK_LEVEL=*) RISK_LEVEL="${sline#RISK_LEVEL=}" ;;
         RISK_SIGNALS=*) RISK_SIGNALS="${sline#RISK_SIGNALS=}" ;;
         REC_SPECS=*) REC_SPECS="${sline#REC_SPECS=}" ;;
+        L1_SPECS=*) L1_SPECS="${sline#L1_SPECS=}" ;;
+        L1_SKIP=*) L1_SKIP="${sline#L1_SKIP=}" ;;
         NOISE_FILES=*) NF_OUT="${sline#NOISE_FILES=}" ;;
         CHANGE_TYPES=*) CHANGE_TYPES="${sline#CHANGE_TYPES=}" ;;
         CONTRACT_FILES=*) CONTRACT_FILES="${sline#CONTRACT_FILES=}" ;;
@@ -4427,9 +5165,13 @@ timestamp_utc=${TS_UTC}
       echo "EMPTY_DIFF"
       exit 2
     fi
+    if [[ -n "$PART_ERR" ]]; then
+      printf '%s\n' "$PART_ERR"
+      exit 2
+    fi
 
-    printf 'size_class=%s\nfiles=%s\nlines=%s\nrisk_level=%s\nrisk_signals=%s\nrecommended_specialists=%s\nchange_types=%s\ncontract_files=%s\ngenerated_files=%s\ntest_files=%s\nnoise_files=%s\nsplit_recommended=%s\nmax_concurrency=%s\nunit_count=%s\n' \
-      "$SIZE_CLASS" "$FILE_COUNT" "$TOTAL_LINES" "$RISK_LEVEL" "$RISK_SIGNALS" "$REC_SPECS" "$CHANGE_TYPES" "$CONTRACT_FILES" "$GENERATED_FILES" "$TEST_FILES" "$NF_OUT" "$SPLIT_REC" "$MC_OUT" "$UNIT_CNT"
+    printf 'size_class=%s\nfiles=%s\nlines=%s\nrisk_level=%s\nrisk_signals=%s\nrecommended_specialists=%s\nl1_specialists=%s\nl1_skip_rationale=%s\nchange_types=%s\ncontract_files=%s\ngenerated_files=%s\ntest_files=%s\nnoise_files=%s\nsplit_recommended=%s\nmax_concurrency=%s\nunit_count=%s\n' \
+      "$SIZE_CLASS" "$FILE_COUNT" "$TOTAL_LINES" "$RISK_LEVEL" "$RISK_SIGNALS" "$REC_SPECS" "$L1_SPECS" "$L1_SKIP" "$CHANGE_TYPES" "$CONTRACT_FILES" "$GENERATED_FILES" "$TEST_FILES" "$NF_OUT" "$SPLIT_REC" "$MC_OUT" "$UNIT_CNT"
     if [[ ${#UNITS_LINES[@]} -gt 0 ]]; then
       for ul in "${UNITS_LINES[@]}"; do
         IFS=$'\t' read -r _tag uid grp ufc ulc urk usp usig ucsv <<< "$ul"
@@ -4458,6 +5200,7 @@ timestamp_utc=${TS_UTC}
     CROSS_UNIT_STATUS=""
     BUDGET_STATUS=""
     PASSES_USED=-1
+    PASSES_USED_SET="false"
     SCOPE=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -4477,7 +5220,7 @@ timestamp_utc=${TS_UTC}
         --receipt-path) RECEIPT_PATH="${2:-}"; shift 2 ;;
         --cross-unit-status) CROSS_UNIT_STATUS="${2:-}"; shift 2 ;;
         --budget-status) BUDGET_STATUS="${2:-}"; shift 2 ;;
-        --passes-used) PASSES_USED="${2:--1}"; shift 2 ;;
+        --passes-used) PASSES_USED="${2:--1}"; PASSES_USED_SET="true"; shift 2 ;;
         --scope) SCOPE="${2:-}"; shift 2 ;;
         *) echo "LEDGER_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
@@ -4584,16 +5327,19 @@ timestamp_utc=${TS_UTC}
         printf '%s\n' "$INV_OUT"
         exit 1
       fi
-      IS_EMPTY="true"; SIZE_CLASS=""; RISK_LEVEL="LOW"; RISK_SIGNALS="none"; REC_SPECS="none"
+      IS_EMPTY="true"; PART_ERR=""; SIZE_CLASS=""; RISK_LEVEL="LOW"; RISK_SIGNALS="none"; REC_SPECS="none"; L1_SPECS="none"; L1_SKIP="none"
       CONTRACT_FILES="none"; GENERATED_FILES="none"; RF_OUT="none"; MC_OUT="4"; UNIT_CNT="0"
       UNITS_LINES=()
       while IFS= read -r sline; do
         case "$sline" in
           IS_EMPTY=*) IS_EMPTY="${sline#IS_EMPTY=}" ;;
+          PART_ERR=*) PART_ERR="${sline#PART_ERR=}" ;;
           SIZE_CLASS=*) SIZE_CLASS="${sline#SIZE_CLASS=}" ;;
           RISK_LEVEL=*) RISK_LEVEL="${sline#RISK_LEVEL=}" ;;
           RISK_SIGNALS=*) RISK_SIGNALS="${sline#RISK_SIGNALS=}" ;;
           REC_SPECS=*) REC_SPECS="${sline#REC_SPECS=}" ;;
+          L1_SPECS=*) L1_SPECS="${sline#L1_SPECS=}" ;;
+          L1_SKIP=*) L1_SKIP="${sline#L1_SKIP=}" ;;
           CONTRACT_FILES=*) CONTRACT_FILES="${sline#CONTRACT_FILES=}" ;;
           GENERATED_FILES=*) GENERATED_FILES="${sline#GENERATED_FILES=}" ;;
           REVIEW_FILES=*) RF_OUT="${sline#REVIEW_FILES=}" ;;
@@ -4604,6 +5350,10 @@ timestamp_utc=${TS_UTC}
       done <<< "$INV_OUT"
       if [[ "$IS_EMPTY" == "true" ]]; then
         echo "LEDGER_FAIL: EMPTY_DIFF"
+        exit 2
+      fi
+      if [[ -n "$PART_ERR" ]]; then
+        printf '%s\n' "$PART_ERR"
         exit 2
       fi
 
@@ -4621,6 +5371,8 @@ timestamp_utc=${TS_UTC}
           SNAP_SHA="$(trim_str "$_GIT_STDOUT")"
         fi
       fi
+
+      INIT_CHAIN="$(init_pass_chain "$REPO_ROOT" "$BASE_SHA")" || exit 1
 
       if [[ "$MAX_PASSES_SET" != "true" ]]; then
         MAX_PASSES="$(default_max_passes "$SIZE_CLASS")"
@@ -4656,11 +5408,14 @@ timestamp_utc=${TS_UTC}
       LED_TXT+="risk_level=${RISK_LEVEL}"$'\n'
       LED_TXT+="risk_signals=${RISK_SIGNALS}"$'\n'
       LED_TXT+="recommended_specialists=${REC_SPECS}"$'\n'
+      LED_TXT+="l1_specialists=${L1_SPECS}"$'\n'
+      LED_TXT+="l1_skip_rationale=${L1_SKIP}"$'\n'
       LED_TXT+="contract_files=${CONTRACT_FILES}"$'\n'
       LED_TXT+="generated_files=${GENERATED_FILES}"$'\n'
       LED_TXT+="max_concurrency=${MC_OUT}"$'\n'
       LED_TXT+="max_passes=${MAX_PASSES}"$'\n'
       LED_TXT+="passes_used=0"$'\n'
+      LED_TXT+="pass_chain=${INIT_CHAIN}"$'\n'
       LED_TXT+="budget_status=OK"$'\n'
       LED_TXT+="cross_unit_status=${CROSS_STATUS}"$'\n'
       LED_TXT+="cross_unit_tree_hash=${CROSS_HASH}"$'\n'
@@ -4674,6 +5429,7 @@ timestamp_utc=${TS_UTC}
           LED_TXT+="| ${uid} | ${grp} | ${ufc} | ${ulc} | ${urk} | none | none | PENDING | none | none | ${UHASH} | ${ucsv} |"$'\n'
         done
       fi
+      LED_TXT+=$'\n## Pass Log\n'
       write_atomic_lf_file "$LEDGER_FULL" "$LED_TXT"
       printf 'LEDGER_INIT: path=%s size=%s risk=%s units=%s max_passes=%s snapshot=%s\n' "$LEDGER_REL" "$SIZE_CLASS" "$RISK_LEVEL" "$UNIT_CNT" "$MAX_PASSES" "$SNAP_SHA"
       exit 0
@@ -4681,11 +5437,13 @@ timestamp_utc=${TS_UTC}
 
     [[ -f "$LEDGER_FULL" ]] || { echo "LEDGER_MISSING: $LEDGER_REL"; exit 1; }
 
-    # Parse ledger metadata + unit rows
+    # Parse ledger metadata + unit rows + pass log
     L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
+    L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"
     L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
     L_SEEN_KEYS=""
     U_ROWS=()
+    P_ROWS=()
     while IFS= read -r rawln || [[ -n "$rawln" ]]; do
       ln="$(trim_str "${rawln%$'\r'}")"
       [[ -z "$ln" || "$ln" == \#* ]] && continue
@@ -4703,7 +5461,13 @@ timestamp_utc=${TS_UTC}
         [[ "$c_cnt" -eq 12 ]] || { echo "LEDGER_CORRUPT: malformed unit row column count"; exit 1; }
         [[ "$c0" == "unit_id" || "$c0" == "---" ]] && continue
         [[ "$c0" =~ ^U[0-9]{2,}$ ]] || { echo "LEDGER_CORRUPT: invalid unit_id '$c0'"; exit 1; }
+        [[ "$c2" =~ ^[0-9]+$ && "$c3" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid unit row numeric field"; exit 1; }
         U_ROWS+=("${c0}|${c1}|${c2}|${c3}|${c4}|${c5}|${c6}|${c7}|${c8}|${c9}|${c10}|${c11}")
+        continue
+      fi
+      if [[ "$ln" == pass\|* ]]; then
+        [[ "$ln" =~ ^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$ ]] || { printf "LEDGER_CORRUPT: malformed pass log entry '%s'\n" "$ln"; exit 1; }
+        P_ROWS+=("$ln")
         continue
       fi
       [[ "$ln" == *"="* ]] || { echo "LEDGER_CORRUPT: unexpected line '$ln'"; exit 1; }
@@ -4714,6 +5478,7 @@ timestamp_utc=${TS_UTC}
         schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
         target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
         risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
+        l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
         contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;; max_concurrency) L_MCONC="$lv" ;;
         max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;; budget_status) L_BSTAT="$lv" ;;
         cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
@@ -4740,6 +5505,14 @@ timestamp_utc=${TS_UTC}
       [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
     fi
     [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid pass counter"; exit 1; }
+    if [[ "$L_HAS_CHAIN" == "true" ]]; then
+      [[ "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid pass_chain"; exit 1; }
+    elif [[ ${#P_ROWS[@]} -gt 0 ]]; then
+      echo "LEDGER_CORRUPT: pass_chain missing with non-empty pass log"
+      exit 1
+    fi
+    [[ -z "$L_L1SPEC" ]] && L_L1SPEC="none"
+    [[ -z "$L_L1SKIP" ]] && L_L1SKIP="none"
     ORIG_RAW_SIZE="$L_SIZE"
     NORM_SIZE="$(normalize_size_class "$ORIG_RAW_SIZE")" || { echo "LEDGER_CORRUPT: invalid size_class '$ORIG_RAW_SIZE'"; exit 1; }
     [[ "$L_UCNT" =~ ^[0-9]+$ && "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
@@ -4750,13 +5523,46 @@ timestamp_utc=${TS_UTC}
     TARGET_COMMIT_SHA=""
     [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TSHA"
 
+    verify_ledger_pass_chain() {
+      [[ "$L_HAS_CHAIN" == "true" ]] || return 0
+      local cur sum idx row _pt p_seq p_scope p_kind p_delta p_ref p_hash expect_seq
+      cur="$(init_pass_chain "$REPO_ROOT" "$L_BASE")" || exit 1
+      sum=0; idx=0
+      if [[ ${#P_ROWS[@]} -gt 0 ]]; then
+        for row in "${P_ROWS[@]}"; do
+          IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
+          expect_seq=$((idx + 1))
+          if [[ "$p_seq" -ne "$expect_seq" || "$p_delta" -lt 1 ]]; then
+            printf 'LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index %s)\n' "$expect_seq"
+            exit 1
+          fi
+          sum=$((sum + p_delta))
+          cur="$(step_pass_chain "$REPO_ROOT" "$cur" "$p_seq" "$p_scope" "$p_kind" "$p_delta" "$p_ref")" || exit 1
+          if [[ "$cur" != "$p_hash" ]]; then
+            printf 'LEDGER_CORRUPT: passes_used tamper detected (chain hash mismatch at seq %s)\n' "$p_seq"
+            exit 1
+          fi
+          idx=$((idx + 1))
+        done
+      fi
+      if [[ "$sum" -ne "$L_PUSED" || "$cur" != "$L_PCHAIN" ]]; then
+        printf 'LEDGER_CORRUPT: passes_used tamper detected (passes=%s log_sum=%s)\n' "$L_PUSED" "$sum"
+        exit 1
+      fi
+    }
+
     if [[ "$ACT_LOW" == "update" ]]; then
+      verify_ledger_pass_chain
       if [[ "$MAX_PASSES_SET" == "true" ]]; then
         [[ "$MAX_PASSES" =~ ^[0-9]+$ && "$MAX_PASSES" -gt 0 ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+      fi
+      if [[ "$PASSES_USED_SET" == "true" ]]; then
+        [[ "$PASSES_USED" =~ ^[0-9]+$ ]] || { echo "LEDGER_FAIL: --passes-used must be non-negative"; exit 1; }
       fi
       UNIT_ID="$(trim_str "$UNIT_ID")"
       FOUND_IDX=-1
       ST_VAL=""
+      ADDED_NEW_SPEC="false"
       u0=""; u1=""; u2=""; u3=""; u4=""; u5=""; u6=""; u7=""; u8=""; u9=""; u10=""; u11=""
       if [[ -n "$UNIT_ID" ]]; then
         if [[ ${#U_ROWS[@]} -gt 0 ]]; then
@@ -4776,6 +5582,11 @@ timestamp_utc=${TS_UTC}
         if [[ -n "$F_VAL" ]]; then u8="$(printf '%s' "$F_VAL" | tr '\r\n|' ';;;' | sed 's/;;;*/;/g')"; fi
         SP_VAL="$(trim_str "$SPECIALISTS")"
         if [[ -n "$SP_VAL" ]]; then
+          OLD_U5="$u5"
+          while IFS= read -r nsi; do
+            [[ -n "$nsi" ]] || continue
+            case ",${OLD_U5}," in *,"${nsi}",*) ;; *) ADDED_NEW_SPEC="true"; break ;; esac
+          done < <(split_csv_lines "$SP_VAL" false)
           SP_LIST="$(split_csv_lines "$SP_VAL" false | LC_ALL=C sort -u | paste -sd ',' -)"
           u5="${SP_LIST:-none}"
         fi
@@ -4819,7 +5630,7 @@ timestamp_utc=${TS_UTC}
         _CLEANUP_FILES+=("$UPD_FSIG_TMP" "$UPD_FLINES_TMP")
         : > "$UPD_FSIG_TMP"; : > "$UPD_FLINES_TMP"
         UPD_OUT=""
-        if ! UPD_OUT="$(run_scope_engine "$REPO_ROOT" "$L_BASE" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$L_MCONC" "LEDGER_FAIL" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP")"; then
+        if ! UPD_OUT="$(run_scope_engine "$REPO_ROOT" "$L_BASE" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$L_MCONC" "LEDGER_FAIL" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP" "false")"; then
           printf '%s\n' "$UPD_OUT"
           exit 1
         fi
@@ -4834,8 +5645,11 @@ timestamp_utc=${TS_UTC}
         if [[ -n "$UPD_RF" && "$UPD_RF" != "none" ]]; then
           ALL_RISK_OUT="$(eval_risk_for_csv_awk "$UPD_RF" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP")"
           { IFS= read -r L_RISK; IFS= read -r L_RSIG; IFS= read -r L_RSPEC; } <<< "$ALL_RISK_OUT"
+          L1_UPD_OUT="$(eval_l1_dispatch_awk "$L_CFILES" "$L_RSPEC" "$L_RISK" "$UPD_RF")"
+          { IFS= read -r L_L1SPEC; IFS= read -r L_L1SKIP; } <<< "$L1_UPD_OUT"
         fi
         if [[ $FOUND_IDX -ge 0 && "$ST_VAL" == "REVIEWED" ]]; then
+          IFS=$'\t' read -r u2 u3 < <(unit_counts_from_flines_awk "$u11" "$UPD_FLINES_TMP")
           U_RISK_OUT="$(eval_risk_for_csv_awk "$u11" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP")"
           { IFS= read -r U_LIVE_LVL; } <<< "$U_RISK_OUT"
           u4="$U_LIVE_LVL"
@@ -4872,13 +5686,76 @@ timestamp_utc=${TS_UTC}
         fi
         L_CHASH="$(compute_scope_paths_hash "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$CU_PATHS" "$IGNORE_DIRTY")" || exit 1
       fi
-      [[ "$PASSES_USED" =~ ^[0-9]+$ ]] && L_PUSED="$PASSES_USED"
+
+      PASS_EVT_ROWS=()
+      AUTO_DELTA=0
+      if [[ $FOUND_IDX -ge 0 && ( "$ST_VAL" == "REVIEWED" || "$ST_VAL" == "INCOMPLETE" || "$ST_VAL" == "BLOCKED" ) ]]; then
+        PASS_EVT_ROWS+=("${u0}|unit:${ST_VAL}|1")
+        AUTO_DELTA=$((AUTO_DELTA + 1))
+      elif [[ $FOUND_IDX -ge 0 && "$ADDED_NEW_SPEC" == "true" ]]; then
+        PASS_EVT_ROWS+=("${u0}|specialist|1")
+        AUTO_DELTA=$((AUTO_DELTA + 1))
+      fi
+      if [[ "$CU_VAL" == "REVIEWED" || "$CU_VAL" == "INCOMPLETE" || "$CU_VAL" == "BLOCKED" ]]; then
+        PASS_EVT_ROWS+=("cross_unit|cross_unit:${CU_VAL}|1")
+        AUTO_DELTA=$((AUTO_DELTA + 1))
+      fi
+      CUR_PASSES="$L_PUSED"
+      MIN_NEXT_PASSES=$((CUR_PASSES + AUTO_DELTA))
+      if [[ "$PASSES_USED_SET" == "true" ]]; then
+        if [[ "$PASSES_USED" -lt "$CUR_PASSES" ]]; then
+          printf 'LEDGER_FAIL: passes_used cannot be reduced or reset (%s->%s)\n' "$CUR_PASSES" "$PASSES_USED"
+          exit 1
+        fi
+        if [[ "$PASSES_USED" -lt "$MIN_NEXT_PASSES" ]]; then
+          printf 'LEDGER_FAIL: passes_used (%s) cannot bypass consumed passes (minimum %s)\n' "$PASSES_USED" "$MIN_NEXT_PASSES"
+          exit 1
+        fi
+        NEW_PASSES="$PASSES_USED"
+        EXTRA_MANUAL=$((NEW_PASSES - MIN_NEXT_PASSES))
+        if [[ "$EXTRA_MANUAL" -gt 0 ]]; then
+          PASS_EVT_ROWS+=("manual|manual|${EXTRA_MANUAL}")
+        fi
+      else
+        NEW_PASSES="$MIN_NEXT_PASSES"
+      fi
+
+      if [[ "$L_HAS_CHAIN" != "true" ]]; then
+        L_PCHAIN="$(init_pass_chain "$REPO_ROOT" "$L_BASE")" || exit 1
+        P_ROWS=()
+        if [[ "$CUR_PASSES" -gt 0 ]]; then
+          L_PCHAIN="$(step_pass_chain "$REPO_ROOT" "$L_PCHAIN" 1 "legacy" "bootstrap" "$CUR_PASSES" "none")" || exit 1
+          P_ROWS+=("pass|1|legacy|bootstrap|${CUR_PASSES}|none|${L_PCHAIN}")
+        fi
+        L_HAS_CHAIN="true"
+      fi
+
+      EVT_REF_SHA="none"
+      if [[ -n "$TARGET_COMMIT_SHA" ]]; then
+        EVT_REF_SHA="$TARGET_COMMIT_SHA"
+      elif [[ "$L_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+        EVT_REF_SHA="$L_HEAD"
+      fi
+      if [[ ${#PASS_EVT_ROWS[@]} -gt 0 ]]; then
+        for pev in "${PASS_EVT_ROWS[@]}"; do
+          IFS='|' read -r p_sc p_kd p_dt <<< "$pev"
+          NEXT_SEQ=$(( ${#P_ROWS[@]} + 1 ))
+          L_PCHAIN="$(step_pass_chain "$REPO_ROOT" "$L_PCHAIN" "$NEXT_SEQ" "$p_sc" "$p_kd" "$p_dt" "$EVT_REF_SHA")" || exit 1
+          P_ROWS+=("pass|${NEXT_SEQ}|${p_sc}|${p_kd}|${p_dt}|${EVT_REF_SHA}|${L_PCHAIN}")
+        done
+      fi
+      L_PUSED="$NEW_PASSES"
+
       if [[ "$MAX_PASSES_SET" == "true" ]]; then
         L_MPASS="$MAX_PASSES"
       fi
       BS_VAL="$(printf '%s' "$(trim_str "$BUDGET_STATUS")" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
       if [[ -n "$BS_VAL" ]]; then
         case "$BS_VAL" in OK|EXHAUSTED) ;; *) echo "LEDGER_FAIL: invalid --budget-status '$BS_VAL'"; exit 1 ;; esac
+        if [[ "$BS_VAL" == "OK" && "$L_MPASS" -gt 0 && "$L_PUSED" -gt "$L_MPASS" ]]; then
+          printf 'LEDGER_FAIL: cannot set budget_status=OK while passes_used (%s) exceeds max_passes (%s)\n' "$L_PUSED" "$L_MPASS"
+          exit 1
+        fi
         L_BSTAT="$BS_VAL"
       elif [[ "$L_MPASS" -gt 0 && "$L_PUSED" -gt "$L_MPASS" ]]; then
         L_BSTAT="EXHAUSTED"
@@ -4898,11 +5775,14 @@ timestamp_utc=${TS_UTC}
       LED_TXT+="risk_level=${L_RISK}"$'\n'
       LED_TXT+="risk_signals=${L_RSIG}"$'\n'
       LED_TXT+="recommended_specialists=${L_RSPEC}"$'\n'
+      LED_TXT+="l1_specialists=${L_L1SPEC}"$'\n'
+      LED_TXT+="l1_skip_rationale=${L_L1SKIP}"$'\n'
       LED_TXT+="contract_files=${L_CFILES}"$'\n'
       LED_TXT+="generated_files=${L_GFILES}"$'\n'
       LED_TXT+="max_concurrency=${L_MCONC}"$'\n'
       LED_TXT+="max_passes=${L_MPASS}"$'\n'
       LED_TXT+="passes_used=${L_PUSED}"$'\n'
+      LED_TXT+="pass_chain=${L_PCHAIN}"$'\n'
       LED_TXT+="budget_status=${L_BSTAT}"$'\n'
       LED_TXT+="cross_unit_status=${L_CSTAT}"$'\n'
       LED_TXT+="cross_unit_tree_hash=${L_CHASH}"$'\n'
@@ -4913,12 +5793,19 @@ timestamp_utc=${TS_UTC}
           LED_TXT+="| ${r0} | ${r1} | ${r2} | ${r3} | ${r4} | ${r5} | ${r6} | ${r7} | ${r8} | ${r9} | ${r10} | ${r11} |"$'\n'
         done
       fi
+      LED_TXT+=$'\n## Pass Log\n'
+      if [[ ${#P_ROWS[@]} -gt 0 ]]; then
+        for pr in "${P_ROWS[@]}"; do
+          LED_TXT+="${pr}"$'\n'
+        done
+      fi
       write_atomic_lf_file "$LEDGER_FULL" "$LED_TXT"
       printf 'LEDGER_UPDATED: path=%s\n' "$LEDGER_REL"
       exit 0
     fi
 
     # check
+    verify_ledger_pass_chain
     if [[ "$L_MPASS" -le 0 ]]; then
       printf 'LEDGER_INCOMPLETE: unbounded or invalid max_passes (%s)\n' "$L_MPASS"
       exit 2
@@ -4926,6 +5813,32 @@ timestamp_utc=${TS_UTC}
     if [[ "$L_BSTAT" == "EXHAUSTED" || "$L_PUSED" -gt "$L_MPASS" ]]; then
       printf 'LEDGER_INCOMPLETE: budget exhausted (passes=%s/%s)\n' "$L_PUSED" "$L_MPASS"
       exit 2
+    fi
+    REV_CNT_CHK=0
+    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+      for ur in "${U_ROWS[@]}"; do
+        IFS='|' read -r _0 _1 _2 _3 _4 _5 _6 ust_chk _rest <<< "$ur"
+        [[ "$ust_chk" == "REVIEWED" ]] && REV_CNT_CHK=$((REV_CNT_CHK + 1))
+      done
+    fi
+    MIN_REQ_PASSES="$REV_CNT_CHK"
+    [[ "$L_CSTAT" == "REVIEWED" ]] && MIN_REQ_PASSES=$((MIN_REQ_PASSES + 1))
+    if [[ "$L_PUSED" -lt "$MIN_REQ_PASSES" ]]; then
+      printf 'LEDGER_INCOMPLETE: passes_used (%s) below minimum reviewed passes (%s)\n' "$L_PUSED" "$MIN_REQ_PASSES"
+      exit 2
+    fi
+    if [[ ( "$L_SIZE" == "L" || "$L_SIZE" == "XL" ) && "$L_UCNT" -gt 4 ]]; then
+      printf 'LEDGER_INCOMPLETE: %s PR exceeds max 4 units (%s)\n' "$L_SIZE" "$L_UCNT"
+      exit 2
+    fi
+    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+      for ur in "${U_ROWS[@]}"; do
+        IFS='|' read -r uid_b _gb ufc_b ulc_b _rest <<< "$ur"
+        if [[ "$ulc_b" -gt 5000 || ( "$ufc_b" -gt 100 && "$ulc_b" -gt 1000 ) ]]; then
+          printf 'LEDGER_INCOMPLETE: oversized unit %s (%sf, %sL)\n' "$uid_b" "$ufc_b" "$ulc_b"
+          exit 2
+        fi
+      done
     fi
     if [[ "$L_TREF" != "working_tree" ]]; then
       if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${L_TREF}^{commit}"; then
@@ -4949,7 +5862,7 @@ timestamp_utc=${TS_UTC}
     : > "$FSIG_TMP"; : > "$FLINES_TMP"
 
     LIVE_OUT=""
-    if ! LIVE_OUT="$(run_scope_engine "$REPO_ROOT" "$L_BASE" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$L_MCONC" "LEDGER_FAIL" "$FSIG_TMP" "$FLINES_TMP")"; then
+    if ! LIVE_OUT="$(run_scope_engine "$REPO_ROOT" "$L_BASE" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$L_MCONC" "LEDGER_FAIL" "$FSIG_TMP" "$FLINES_TMP" "false")"; then
       printf '%s\n' "$LIVE_OUT"
       exit 1
     fi
@@ -4993,7 +5906,6 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
-    WAIVED_UNITS=()
     if [[ ${#U_ROWS[@]} -gt 0 ]]; then
       for ur in "${U_ROWS[@]}"; do
       IFS='|' read -r uid grp ufc ulc urisk uspec urat ust ufind urec uhash ufcsv <<< "$ur"
@@ -5021,11 +5933,12 @@ timestamp_utc=${TS_UTC}
         }')"
         if [[ -n "$MISS_SP" ]]; then
           if [[ "$LU_LVL" == "CRITICAL" ]]; then
-            if ! is_valid_critical_waiver "$urat"; then
-              printf 'LEDGER_INCOMPLETE: mandatory CRITICAL specialist (%s) requires specialist run or valid WAIVER:approved_by=<id>;ticket=<ref>;reason=<10+ chars> on %s\n' "$MISS_SP" "$uid"
+            if is_waiver_attempt "$urat"; then
+              printf 'LEDGER_BLOCKED: unverified CRITICAL specialist waiver rejected on %s (missing %s; self-declared waivers are disabled without trusted owner approval)\n' "$uid" "$MISS_SP"
               exit 2
             fi
-            WAIVED_UNITS+=("${uid}:$(printf '%s' "$MISS_SP" | tr ',' '+')")
+            printf 'LEDGER_INCOMPLETE: mandatory CRITICAL specialist (%s) required on %s (waivers disabled without trusted owner approval)\n' "$MISS_SP" "$uid"
+            exit 2
           else
             rat_t="$(trim_str "$urat")"
             if [[ "$rat_t" == "none" || ${#rat_t} -lt 5 ]]; then
@@ -5041,6 +5954,12 @@ timestamp_utc=${TS_UTC}
       CUR_UHASH="$(compute_scope_paths_hash "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$COMB_U" "$IGNORE_DIRTY")" || exit 1
       if [[ "$CUR_UHASH" != "$uhash" ]]; then
         printf 'LEDGER_STALE: unit %s invalidated (files or shared contracts changed)\n' "$uid"
+        exit 2
+      fi
+
+      IFS=$'\t' read -r LIVE_UFC LIVE_ULC < <(unit_counts_from_flines_awk "$ufcsv" "$FLINES_TMP")
+      if [[ "$LIVE_ULC" -gt 5000 || ( "$LIVE_UFC" -gt 100 && "$LIVE_ULC" -gt 1000 ) ]]; then
+        printf 'LEDGER_INCOMPLETE: oversized unit %s (%sf, %sL)\n' "$uid" "$LIVE_UFC" "$LIVE_ULC"
         exit 2
       fi
 
@@ -5082,12 +6001,7 @@ timestamp_utc=${TS_UTC}
     rm -f "$FSIG_TMP" "$FLINES_TMP" 2>/dev/null || true
     NORM_TAG=""
     [[ "$ORIG_RAW_SIZE" != "$L_SIZE" ]] && NORM_TAG=" normalized_from=${ORIG_RAW_SIZE}"
-    WAIVER_TAG=""
-    if [[ ${#WAIVED_UNITS[@]} -gt 0 ]]; then
-      WAIVER_TAG=" waivers=$(printf '%s,' "${WAIVED_UNITS[@]}")"
-      WAIVER_TAG="${WAIVER_TAG%,}"
-    fi
-    printf 'LEDGER_GATE_PASS: size=%s risk=%s units=%s/%s cross_unit=%s%s%s\n' "$L_SIZE" "$L_RISK" "$L_UCNT" "$L_UCNT" "$L_CSTAT" "$NORM_TAG" "$WAIVER_TAG"
+    printf 'LEDGER_GATE_PASS: size=%s risk=%s units=%s/%s cross_unit=%s%s\n' "$L_SIZE" "$L_RISK" "$L_UCNT" "$L_UCNT" "$L_CSTAT" "$NORM_TAG"
     exit 0
     ;;
 

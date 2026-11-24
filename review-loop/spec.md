@@ -184,7 +184,7 @@ Any of these → stop, escalate, or mark **INCOMPLETE** — not success.
 
 ### Iteration & resource limits
 
-Default **`MAX_ITERATIONS = 5`** for a full-PR (`XS`/`S`/`M`) scope. `L`/`XL` unit loops use **3** per unit, **2** for cross-cutting, and a **12** cap on total reviewer passes; `XXL` uses dynamic cohesive units (`<= 4` concurrent) with bounded per-unit iterations (**3**), configurable `max_passes`, and a mandatory fail-closed coverage ledger (`review-loop/strategy.md`, [`hierarchical.md`](hierarchical.md)). Resource/cost budgets are stopping/escalation controls — never permission to skip required units, risk checks, or verification.
+Default **`MAX_ITERATIONS = 5`** for a full-PR (`XS`/`S`/`M`) scope. `L`/`XL` PRs are bounded to **`<= 4`** cohesive units, **3** iter/unit, **2** for cross-cutting, and a **12** cap on total reviewer passes; `XXL` uses dynamic cohesive units (`<= 4` concurrent) with bounded per-unit iterations (**3**), default **24** `max_passes` (configurable via positive integer), monotonic tamper-evident `passes_used` accounting, and a mandatory fail-closed coverage ledger (`review-loop/strategy.md`, [`hierarchical.md`](hierarchical.md)). Resource/cost budgets are stopping/escalation controls — never permission to skip required units, risk checks, or verification.
 
 When a budget or iteration maximum is reached:
 

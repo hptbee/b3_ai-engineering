@@ -4,7 +4,7 @@ intent: Huge XXL docs-only PR must classify LOW risk and skip unnecessary specia
 scenario: |
   Changed files: 120 (docs/**/*.md), Changed LOC: 25000 (XXL)
   Risk classification: LOW (zero security/contract/schema/concurrency/hot-path signals)
-  Agent dispatches 1 b3-reviewer (recording specialist skip rationale) rather than forcing all 3 specialists
+  Inventory emits l1_specialists=none and l1_skip_rationale=low-risk-docs-only; agent skips Level 1 architecture/specialist calls and dispatches 1 b3-reviewer per bounded unit rather than forcing specialists
 expected_outcome: PASS
 failure_mode: specialist-spam-on-low-risk-xxl
 notes: Specialists trigger on risk signals, never on LOC volume alone
