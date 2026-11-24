@@ -74,14 +74,24 @@ if (Test-Path -LiteralPath $homeDest) {
 }
 
 function Remove-JunctionOrSymlink([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $item = Get-Item -LiteralPath $Path -Force
-    if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
-        & cmd.exe /c rmdir "$Path"
-        if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $Path)) { Fail "could not remove junction $Path" }
-        return
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return }
+    $isLink = ($item.LinkType -in @('Junction', 'SymbolicLink')) -or (($item.Attributes.ToString()) -match 'ReparsePoint')
+    if (-not $isLink) {
+        Fail "refusing to replace existing $Path"
     }
-    Fail "refusing to replace existing $Path"
+    try {
+        if ($item.PSIsContainer -and ($env:OS -eq 'Windows_NT')) {
+            [System.IO.Directory]::Delete($Path, $false)
+        } else {
+            Remove-Item -LiteralPath $Path -Force
+        }
+    } catch {
+        Fail "could not remove junction $Path : $($_.Exception.Message)"
+    }
+    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+        Fail "could not remove junction $Path"
+    }
 }
 
 function Get-SkillNameFromFile([string]$Path) {
@@ -147,9 +157,10 @@ function Update-B3Gitignore([string]$Root) {
     $gi = Join-Path $Root '.gitignore'
     $block = @"
 
-# B3: commit .b3/home; keep run checkpoints local
+# B3: commit .b3/home; keep run checkpoints and local model preferences private
 .b3/ship/
 .b3/research-ship/
+.b3/models.md
 "@
     if (-not (Test-Path -LiteralPath $gi)) {
         Set-Content -LiteralPath $gi -Value ($block.TrimStart() + "`n")
@@ -158,18 +169,52 @@ function Update-B3Gitignore([string]$Root) {
     $text = Get-Content -LiteralPath $gi -Raw
     $hasShip = ($text -match '(?m)^\s*\.b3/ship/\s*$')
     $hasResearch = ($text -match '(?m)^\s*\.b3/research-ship/\s*$')
-    if ($hasShip -and $hasResearch) { return 'present' }
+    $hasModels = ($text -match '(?m)^\s*\.b3/models\.md\s*$')
+    if ($hasShip -and $hasResearch -and $hasModels) { return 'present' }
+
+    $missing = @()
+    if (-not $hasShip) { $missing += '.b3/ship/' }
+    if (-not $hasResearch) { $missing += '.b3/research-ship/' }
+    if (-not $hasModels) { $missing += '.b3/models.md' }
+
     if ($text -match '(?m)^\s*\.b3/\s*$') {
-        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', ".b3/ship/`n.b3/research-ship/")
+        $replacement = $missing -join "`n"
+        $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', $replacement)
         Set-Content -LiteralPath $gi -Value $text -NoNewline
         return 'upgraded'
     }
-    if ($hasShip -and -not $hasResearch) {
-        Add-Content -LiteralPath $gi -Value "`n.b3/research-ship/"
-        return 'appended'
+    if ($hasShip -or $hasResearch -or $hasModels) {
+        Add-Content -LiteralPath $gi -Value ("`n" + ($missing -join "`n"))
+        return 'upgraded'
     }
     Add-Content -LiteralPath $gi -Value $block
     return 'appended'
+}
+
+function Initialize-PersonalModelPreferences([string]$HomeDir, [switch]$IsDryRun) {
+    if ($env:B3_SKIP_MODEL_INIT -eq '1') { return 'skipped' }
+    $templateMd = Join-Path $HomeDir 'config\models.example.md'
+    if (-not (Test-Path -LiteralPath $templateMd -PathType Leaf)) { return 'no-template' }
+    $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
+        $env:B3_MODELS_PERSONAL.Trim()
+    } else {
+        $uHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+        Join-Path $uHome '.b3\models.md'
+    }
+    if (Test-Path -LiteralPath $dest) {
+        if ($IsDryRun) { Write-Output "dry-run: keep existing personal model preferences $dest" }
+        return "kept:$dest"
+    }
+    if ($IsDryRun) {
+        Write-Output "dry-run: initialize personal model preferences at $dest from $templateMd"
+        return "dry-run:$dest"
+    }
+    $parent = Split-Path -Parent $dest
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $templateMd -Destination $dest
+    return "created:$dest"
 }
 
 function Update-HostSkillGitignore([string]$Root, [string]$HostName) {
@@ -217,7 +262,7 @@ if ($DryRun) {
         if (Test-Path -LiteralPath $claudeMdDest) { Write-Output "dry-run: keep existing $claudeMdDest" }
         elseif (Test-Path -LiteralPath $claudeMdTemplate) { Write-Output "dry-run: write $claudeMdDest from $claudeMdTemplate" }
     }
-    Write-Output "dry-run: gitignore .b3/ship/ and .b3/research-ship/ (see Update-B3Gitignore)"
+    Write-Output "dry-run: gitignore .b3/ship/, .b3/research-ship/, and .b3/models.md (see Update-B3Gitignore)"
     if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: gitignore .agents/skills" }
     if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills and .claude/agents" }
     if (Test-Path -LiteralPath $b3Commands) {
@@ -236,6 +281,7 @@ if ($DryRun) {
         Write-Output "dry-run: flatten $claudeSkillsDest (one junction per skill + command skills)"
         Write-Output "dry-run: junction $claudeAgentsDest -> $b3Agents"
     }
+    [void](Initialize-PersonalModelPreferences $B3Home -IsDryRun)
     exit 0
 }
 
@@ -278,6 +324,8 @@ if ($HostName -in @('codex', 'antigravity')) {
     }
 }
 
+$modelPrefStatus = Initialize-PersonalModelPreferences $B3Home
+
 Write-Output "installed B3 pointer in $ProductRoot"
 Write-Output "B3_HOME=$B3Home"
 Write-Output "command=$commandDest"
@@ -285,6 +333,7 @@ Write-Output "agents.md=$agentsMdDest"
 if ($HostName -eq 'claude') { Write-Output "claude.md=$claudeMdDest" }
 Write-Output "gitignore.b3=$ignorePlan"
 Write-Output "gitignore.skills=$skillIgnorePlan"
+Write-Output "model_preferences=$modelPrefStatus"
 Write-Output "host=$HostName"
 if ($HostName -eq 'codex') {
     Write-Output "skills=$agentsDest (flattened junctions + `$b3-ship; gitignored, not copied)"

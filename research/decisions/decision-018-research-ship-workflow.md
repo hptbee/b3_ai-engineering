@@ -1,4 +1,4 @@
-# Decision 017 — Portable `/b3-research-ship` Research-First Delivery Workflow
+# Decision 018 — Portable `/b3-research-ship` Research-First Delivery Workflow
 
 ## Context
 
@@ -25,6 +25,6 @@ An audit of `b3_ai-engineering` alongside the reference pilot `hptbee/b3_tuvi` (
 
 ## Consequences
 
-- `always_on_total` rises minimally from `14,940 B` (`~3,735 tok`) to `15,232 B` (`~3,808 tok`, `+292 B`: `AGENTS.md` `+51 B` and `b3-research-ship/SKILL.md` frontmatter `+241 B`); existing 7 commands, `workflows/ship.md` (`9,416 B`), and `agents/*.md` (`8,478 B`) stay untouched.
+- `always_on_total` rises minimally by `+292 B` (`AGENTS.md` `+51 B` and `b3-research-ship/SKILL.md` frontmatter `+241 B`) to `15,414 B` (`~3,854 tok` on merged `origin/main`; `14,940 B` → `15,232 B` at initial proposal); existing 7 commands, `workflows/ship.md` (`9,460 B`), and `agents/*.md` (`8,478 B`) stay unmodified by this feature.
 - Deterministic source freshness, governance fail-closed merge checks, and `.b3/research-ship/` isolation are verifiable offline across PowerShell and Git Bash (`scripts/validate-research-ship.ps1`).
 - Live multi-host slash-command UX and live GitHub branch-protection/auto-merge execution against real PRs remain `UNKNOWN / INCOMPLETE` until exercised in live host sessions.

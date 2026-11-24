@@ -69,6 +69,26 @@ Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), `{product}/.c
 - **codex / antigravity:** writes gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`).
 - **claude:** writes thin `CLAUDE.md` (`@AGENTS.md`, when missing), gitignored flattened `.claude/skills/<name>`, and gitignored `.claude/agents` → `{B3_HOME}/agents`.
 
-For a machine-global Antigravity plugin (`~/.gemini/config/plugins/b3-ai-engineering/`), use `adapters/antigravity/install-plugin.{ps1,sh}`. See [`antigravity/README.md`](antigravity/README.md).
+## Machine-global installation (`install-global`)
 
-Layout decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`).
+Install, verify, update, or uninstall global B3 integration across **Cursor** (`~/.cursor/`), **Antigravity** (`~/.gemini/config/plugins/b3-ai-engineering/`), or both from one canonical `B3_HOME`:
+
+```powershell
+# Windows PowerShell
+.\adapters\install-global.ps1 -HostName cursor
+.\adapters\install-global.ps1 -HostName antigravity
+.\adapters\install-global.ps1 -HostName all
+.\adapters\install-global.ps1 verify -HostName all
+```
+
+```bash
+# macOS / Linux / Git Bash
+./adapters/install-global.sh --host cursor
+./adapters/install-global.sh --host antigravity
+./adapters/install-global.sh --host all
+./adapters/install-global.sh verify --host all
+```
+
+Host-specific installers ([`cursor/install-global.ps1`](cursor/install-global.ps1) / [`cursor/install-global.sh`](cursor/install-global.sh) and [`antigravity/install-plugin.ps1`](antigravity/install-plugin.ps1) / [`antigravity/install-plugin.sh`](antigravity/install-plugin.sh)) stay independent, share filesystem/hashing/manifest/discovery primitives via [`lib/global-common.ps1`](lib/global-common.ps1) / [`lib/global-common.sh`](lib/global-common.sh), support `install`, `verify`, `update`, `uninstall`, `-DryRun`/`--dry-run`, and `-Force`/`--force`, and are documented in [`cursor/README.md`](cursor/README.md) and [`antigravity/README.md`](antigravity/README.md).
+
+Layout decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`), global host integration: [`../research/decisions/decision-017-global-cursor-integration.md`](../research/decisions/decision-017-global-cursor-integration.md).

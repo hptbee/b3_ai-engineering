@@ -18,6 +18,28 @@ function Fail([string]$Message) {
     exit 1
 }
 
+function Initialize-PersonalModelPreferences([string]$HomeDir) {
+    if ($DryRun -or $VerifyOnly -or $env:B3_SKIP_MODEL_INIT -eq '1') { return }
+    $templateMd = Join-Path $HomeDir 'config\models.example.md'
+    if (-not (Test-Path -LiteralPath $templateMd -PathType Leaf)) { return }
+    $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
+        $env:B3_MODELS_PERSONAL.Trim()
+    } else {
+        $uHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+        Join-Path $uHome '.b3\models.md'
+    }
+    if (Test-Path -LiteralPath $dest) {
+        Write-Output "model_preferences=$dest (kept existing)"
+        return
+    }
+    $parent = Split-Path -Parent $dest
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $templateMd -Destination $dest
+    Write-Output "model_preferences=$dest (created from example)"
+}
+
 function Test-IsLink([System.IO.FileSystemInfo]$Item) {
     return ($Item.LinkType -in @('Junction', 'SymbolicLink')) -or (($Item.Attributes.ToString()) -match 'ReparsePoint')
 }
@@ -82,11 +104,19 @@ function Test-LinkTarget([string]$Dest, [string]$Src) {
 }
 
 function Remove-LinkPath([string]$Path) {
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $item = Get-Item -LiteralPath $Path -Force
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return }
     if (-not (Test-IsLink $item)) { Fail "refusing to remove non-link path: $Path" }
-    & cmd.exe /c rmdir "$Path" | Out-Null
-    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $Path)) {
+    try {
+        if ($item.PSIsContainer -and ($env:OS -eq 'Windows_NT')) {
+            [System.IO.Directory]::Delete($Path, $false)
+        } else {
+            Remove-Item -LiteralPath $Path -Force
+        }
+    } catch {
+        Fail "could not remove link $Path : $($_.Exception.Message)"
+    }
+    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
         Fail "could not remove link $Path"
     }
 }
@@ -334,6 +364,7 @@ if ($HostName -eq 'antigravity') {
 
     $check = Test-AntigravityManifest $root $antigravityManifest
     if (-not $check.Ok) { Fail "manifest written but verification failed: $($check.Reason)" }
+    Initialize-PersonalModelPreferences $root
     Write-Output "synced: $antigravityManifest (antigravity); $($check.Count) SKILL.md entries visible"
     Write-Output "note: this proves .agents/skills.json resolves to 1-level SKILL.md entries, not Antigravity runtime discovery"
     exit 0
@@ -367,6 +398,7 @@ if ($HostName -eq 'cursor') {
     Sync-DirectoryLink $cursorSkillsDest $skillsSource 'cursor skills'
     Sync-DirectoryLink $cursorCommandsDest $commandsSource 'cursor commands'
     Sync-DirectoryLink $cursorAgentsDest $agentsSource 'cursor agents'
+    Initialize-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Cursor runtime skill discovery"
     exit 0
 }
@@ -390,6 +422,7 @@ if ($HostName -eq 'codex') {
     }
 
     Sync-FlatSkillIndex $codexSkillsDest $expectedFlatSkills 'codex'
+    Initialize-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Codex runtime skill discovery"
     exit 0
 }
@@ -413,6 +446,7 @@ if ($HostName -eq 'claude') {
 
     Sync-FlatSkillIndex $claudeSkillsDest $expectedFlatSkills 'claude'
     Sync-DirectoryLink $claudeAgentsDest $agentsSource 'claude agents'
+    Initialize-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Claude Code runtime skill discovery"
     exit 0
 }

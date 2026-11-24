@@ -12,7 +12,7 @@ Links: [`feature-implementation.md`](feature-implementation.md), [`../review-loo
 
 ## Context, hosts & B3 roots
 
-- **Use:** full lifecycle, `resume [<run_id>]`, `status [<run_id>|--all]`. **Not for:** single plan/implement/debug/review/review-loop/verify. Overrides `planning`/`problem-solving` stops (`docs/precedence.md`).
+- **Use:** full run, `resume [<run_id>]`, `status [<run_id>|--all]`. **Not:** single plan/impl/debug/review/loop/verify. Overrides `planning`/`problem-solving` stops (`docs/precedence.md`).
 - **Hosts:** Cursor (`/b3-ship`), Codex (`$b3-ship`), Antigravity (`b3-ship`), Claude (`/b3-ship`). Resume needs re-invocation.
 - **Roots:** `PRODUCT_ROOT` = git root; `B3_HOME` = first dir with `workflows/ship.md` (this repo, `B3_HOME` env, `{PRODUCT_ROOT}/.b3/home`; else `BLOCKED`). Load skills/rules/agents from `B3_HOME`; checkpoints/commits stay in `PRODUCT_ROOT`; never copy `skills/`.
 
@@ -20,10 +20,10 @@ Links: [`feature-implementation.md`](feature-implementation.md), [`../review-loo
 
 Under `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (1-line `<run_id>`, `YYYYMMDD-HHMM-<slug>`, no symlink) and `runs/<run_id>/` (`{RUN_DIR}` via `b3-guard resolve-run`: `master-plan.md`, `progress.md`, sole `findings.md`, optional `approach/T00N.md`, `logs/`).
 - **Token hygiene:** read `CURRENT` → `{RUN_DIR}/` directly; never scan `.b3/ship/runs/` except `status --all` (`list-runs`) or `prune` (keeps 10 `PASS`; never deletes `CURRENT`/non-`PASS`).
-1. Product repos ignore `.b3/ship/` (upgrade bare `.b3/` so `.b3/home` commits); this repo ignores `.b3/`.
+1. Product repos ignore `.b3/ship/` (upgrade `.b3/` so `.b3/home` commits); B3 repo ignores `.b3/`.
 2. Never `git add .b3/ship/`, `git add -A`, or `git add .`; run `b3-guard precommit` before every commit.
 3. Ignored `.b3/` files never dirty the tree; non-ignored files added during run block `PASS`.
-4. **Compression & thin Parent:** after `T00N` commits, collapse its `## Approach` in `progress.md` to 1 line; once delegated, Parent reads only summaries/diffs/contracts (never full files) and logs red output `>35` lines to `{RUN_DIR}/logs/`.
+4. **Thin Parent:** after `T00N` commits, collapse `## Approach` in `progress.md` to 1L; delegated Parent reads only summaries/diffs/contracts (no full files) and logs red `>35L` to `{RUN_DIR}/logs/`.
 
 ## Input & Preflight
 
@@ -34,10 +34,10 @@ Under `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (1-line `<run_id>`, `YYYYMMDD-HHMM-<
 
 ### Scenario A / B (Preflight & Plan)
 
-1. Restate request and inspected current/desired behavior (reuse existing code).
+1. Restate request + inspected current/desired behavior (reuse code).
 2. **Preflight:** record `initial_dirty_paths` and canonical `build`/`typecheck`/`lint`/`test` from CI/manifests. Run baseline at `run_base_sha` **background/on-demand if `Verify` fails** (never block `Plan`/`Scope` or swallow exit codes); set `baseline_status` (`PASS`|`FAIL(...)`|`NOT_RUN(verify_green)`).
 3. **Plan:** write `{RUN_DIR}/master-plan.md` via [`references/ship-templates.md`](references/ship-templates.md) (`planning`+`simplest-correct`): 3–5 `Invariants`, `AC1..ACn`, verbatim shared contracts; put hotspots (`package.json`, `.csproj`, `index.ts`, migrations, contracts) in task 1; add split note if `>~800L`/`>=2 areas`; on Scenario B keep intent, mark `completed` only with Git proof, copy external plan once.
-4. Start Execution directly. `BLOCKED` only for ambiguity, overlapping `initial_dirty_paths`, external ops (push/merge/deploy/destructive git/secrets/prod), or unrequested breaking changes. Routine `>=4`-task or `auth`/`migration`/`shared` plans stay autonomous (`detailed`).
+4. Start Execution directly. `BLOCKED` only for ambiguity, overlapping `initial_dirty_paths`, external ops (push/merge/deploy/destructive git/secrets/prod), or unasked breaking changes. Routine `>=4`-task/`auth`/`migration`/`shared` plans run autonomously (`detailed`).
 
 ## Execution
 
@@ -50,22 +50,22 @@ Skip `planning`; use `skills/engineering/problem-solving/SKILL.md`:
 2. **Depth:** `inline` (`progress.md` lean), `notes` (`approach/T00N.md`, multi-file), `detailed` (`approach/T00N.md`, API/schema/auth/migration/prod/new layer/`>=4`-task contracts; risk-triggered `failure_matrix:`, `write_paths:` for `>=2` stores+invalidation, `io_budget:` for query/render loops).
 3. **Evidence-based refinement:** if >1 commit, narrow task, add unused `T00N` slices, chain `depends_on`, retarget dependents, bump `version`/`plan_id`/`plan_version`, log under `Plan changes`, continue Scope.
 4. **Implementation Readiness Gate:** start `readiness: draft`; Empty template headings are not evidence. Set `readiness: ready` only when `inspected`, `files` (or new-file intent), `watched_paths`, `reuse`, `obsoletes`, `changes`, `verification`, `task_spec_fingerprint` (`b3-guard fingerprint`) are filled; record `approach_at_sha` (`git rev-parse HEAD`). Else `INCOMPLETE`.
-5. **Pre-code Review (`detailed` only — no Debate):** run `b3-architecture-reviewer.md` (`design-only`, contrarian) + `b3-security-reviewer.md` (`design-only`) for auth/untrusted input/race/abuse (no diff). On `CONFIRMED` flaw: revise, reset `readiness: draft`, **re-run the Implementation Readiness Gate** before `Build`.
+5. **Pre-code Review (`detailed` only — no Debate):** run `b3-architecture-reviewer.md` (`design-only`, contrarian) + `b3-security-reviewer.md` (`design-only`; per `dispatch-naming.md`) for auth/untrusted input/race/abuse (no diff). On `CONFIRMED` flaw: revise, reset `readiness: draft`, **re-run the Implementation Readiness Gate** before `Build`.
 
-### Build (Parallel Waves) & Verify
+### Build (Subagents & Waves) & Verify
 
-- **Build (Subagents & Waves):** on `>=2` ready `notes`/`detailed` tasks, Parent launches 2–3 subagents ([names](references/dispatch-naming.md); `b3-impl-t00N`) in ONE turn (no polling) **only** after `b3-guard check-wave` (`-WaveReads`, `-ExpectedBaseSha`) → `WAVE_OK` (+ `check-worktree` on isolated workspaces; sequential on mismatch). Record host `impl_agent` ID in `progress.md` for Fix resume/cache. Subagents use `Context Packet` (`ship-templates.md`): `approach/T00N.md`/inline, `files`/`read_only_deps`, smallest skill, verbatim contract; **never** `ship.md`/`master-plan.md`. Reply ≤ 25 lines: `files_changed`, `commands_run`, `obsoletes_removed`, `discoveries`, `change_requests` (`none` if empty). Parent is Hub.
-- **Verify:** minimal edits (`problem-solving`+domain skill), delete `obsoletes`. Run checks via `b3-guard verify-run` (writes `{RUN_DIR}/evidence/T00N.verify`, logs >35L/red to `{RUN_DIR}/logs/`; reuse via `verify-check` if unchanged; no pipe masking): fix self-caused reds; if red and baseline deferred, check `run_base_sha` on-demand and report (don't fix) pre-existing reds.
+- **Build (Subagents):** dispatch `b3-impl-t00N` ([dispatch](references/dispatch-naming.md), optional `models.md`) for **every** ready task (1+ tasks, any depth; inline only without subagents) so `implementation` model overrides `main`. Launch 2–3 in 1 turn (no poll) **only** after `b3-guard check-wave` (`-WaveReads`, `-ExpectedBaseSha`) → `WAVE_OK` (+ `check-worktree` if isolated; else sequential). Save `impl_agent` ID in `progress.md` (Fix cache). Brief via `Context Packet` (`ship-templates.md`): `approach/T00N.md`/inline, `files`/`read_only_deps`, smallest skill, verbatim contract; **never** `ship.md`/`master-plan.md`. Reply ≤ 25L: `files_changed`, `commands_run`, `obsoletes_removed`, `discoveries`, `change_requests` (`none` if empty). Parent is Hub.
+- **Verify:** minimal edits (`problem-solving`+domain skill), delete `obsoletes`. Run checks via `b3-guard verify-run` (`{RUN_DIR}/evidence/T00N.verify`, scoped `-RelevantPaths` on waves, logs >35L/red to `{RUN_DIR}/logs/`; reuse `verify-check`; no pipe masking): fix own reds; if red and baseline deferred, check `run_base_sha` and report (don't fix) prior reds.
 
 ### Review (Guard → Reviewer → Fix) & Commit
 
 1. **Guard (0 tokens):** run `b3-guard diff-scope` (`-BaseSha {task_base}`, `-PrevSha {pre_fix_object}` Iter 2+; fallback: `git diff --name-only {task_base}`, `git diff --cached --name-only`, `git ls-files --others --exclude-standard`) + `mechanical-check` (`-BaseSha`, `-AllowedPaths`, `-Obsoletes`) + `symbol-check` on refactors (`notes`/`detailed`), excluding `.b3/ship/`, unchanged `initial_dirty_paths`, noise. Never `HEAD~1`. Fix `exit 2` hits (`safety_hits` destructive/secret → `BLOCKED` unless approved).
-2. **Reviewer & Fix (Risk-tiered + lazy snapshot):** `inline`+`SMALL` diff (no auth/contract/schema/hot-path) → 1 fresh `b3-reviewer.md` pass (escalate on blocker). Else [`../review-loop/strategy.md`](../review-loop/strategy.md). Capture `pre_fix_object` (`b3-guard snapshot`) **only if Review finds blocking `CONFIRMED` items and before `Fix`** (skip Pass-1 clean); resume `impl_agent` with bug-class sweep + 2-tier breaker (log hat-change if unisolated).
-3. **Commit:** require passing ACs, `verify-check` (when receipt exists), 0 blocking `CONFIRMED`, diff in declared `files`/`tests`, no residue (`INCOMPLETE` missing evidence; `FAIL` red/defect; `BLOCKED` dirty overlap/decision). Commit sequentially: `b3-guard precommit` (`-RequireVerifyReceipt` when receipt exists), commit once (no `--no-verify`/amend/reset/push/merge/deploy), record SHA + `completed`, collapse `T00N`, next task/wave.
+2. **Reviewer & Fix (Risk-tiered + lazy snapshot):** `inline`+`SMALL` diff (no auth/contract/schema/hot-path) → 1 fresh `b3-reviewer.md` pass (per `dispatch-naming.md`, escalate on blocker). Else [`../review-loop/strategy.md`](../review-loop/strategy.md). Capture `pre_fix_object` (`b3-guard snapshot`) **only if Review finds blocking `CONFIRMED` items and before `Fix`** (skip Pass-1 clean); resume `impl_agent` with bug-class sweep + 2-tier breaker (log hat-change if unisolated).
+3. **Commit:** require passing ACs, valid `verify-check` receipt, 0 blocking `CONFIRMED`, diff in `files`/`tests`, no residue (`INCOMPLETE` missing/stale receipt; `FAIL` red/defect; `BLOCKED` dirty overlap/decision). Commit sequentially: `b3-guard precommit -RequireVerifyReceipt {RUN_DIR}/evidence/T00N.verify`, commit once (no `--no-verify`/amend/reset/push/merge/deploy), record SHA + `completed`, collapse `T00N`, next task/wave.
 
 ## Finalize & Outcomes
 
 When all required tasks are `completed`:
-1. Verify `AC1..ACn` end-to-end, `Invariants`, full checks vs `baseline_status` (reuse valid `verify-check` receipt if HEAD/tree unchanged since final task; `PASS` sets deferred baseline to `NOT_RUN(verify_green)`), and confirm `completed` commits descend into `HEAD` (`git log --oneline {run_base_sha}..HEAD`).
-2. Cumulative Cross-Cutting `review-loop` on `{run_base_sha}..HEAD` (excl. unchanged `initial_dirty_paths`): run **only if `>=2` tasks completed** (or post-review edits exist; skip duplicate 1-task re-review). Default **Cross-Cutting** (`git diff --stat` + boundary files, contracts, duplication); 1 final commit (`final`).
-3. Non-ignored dirty files added in run block `PASS` (`INCOMPLETE`). Set `run_status` (`PASS`|`FAIL`|`INCOMPLETE`|`BLOCKED`) and report ACs, SHAs, checks vs baseline, review, remaining issues, unverified claims, PR readiness.
+1. Verify `AC1..ACn` end-to-end, `Invariants`, full checks vs `baseline_status` (reuse valid `verify-check` if final task tree unchanged across commits; `PASS` sets deferred baseline to `NOT_RUN(verify_green)`), and confirm `completed` commits descend into `HEAD` (`git log --oneline {run_base_sha}..HEAD`).
+2. Cumulative `review-loop` on `{run_base_sha}..HEAD` (excl. unchanged `initial_dirty_paths`): **only if `>=2` tasks completed** (or post-review edits; skip duplicate 1-task re-review). Default **Cross-Cutting** (`git diff --stat` + boundaries, contracts, duplication); review edits need `verify-run` + `precommit -RequireVerifyReceipt` for 1 `final` commit.
+3. Non-ignored dirty files added in run block `PASS` (`INCOMPLETE`). Set `run_status` (`PASS`|`FAIL`|`INCOMPLETE`|`BLOCKED`); report ACs, SHAs, checks vs baseline, review, issues, unverified claims, PR ([pr-template.md](references/pr-template.md)).

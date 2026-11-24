@@ -2,9 +2,12 @@
 # This is not a Cursor slash-command test and not a Codex/Claude runtime test.
 # Usage: powershell -File scripts/smoke-ship-product.ps1
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $sandbox = Join-Path $env:TEMP ("b3-ship-smoke-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
+$prevSkipModelInit = $env:B3_SKIP_MODEL_INIT
+$env:B3_SKIP_MODEL_INIT = '1'
 
 function Fail([string]$Message) {
     Write-Output "SMOKE FAIL: $Message"
@@ -182,6 +185,8 @@ module.exports = { greet, greetAlias };
     Write-Output 'classification: Git/checkpoint/resume/install contracts VERIFIED in an isolated repo. Host /b3-ship slash UX NOT VERIFIED. Independent reviewer subagent NOT used (hat-change residue removal only).'
 }
 finally {
-    Pop-Location
+    if ($null -eq $prevSkipModelInit) { Remove-Item Env:B3_SKIP_MODEL_INIT -ErrorAction SilentlyContinue } else { $env:B3_SKIP_MODEL_INIT = $prevSkipModelInit }
+    Pop-Location -ErrorAction SilentlyContinue
+    Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }

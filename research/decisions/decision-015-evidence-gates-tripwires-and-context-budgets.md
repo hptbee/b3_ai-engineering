@@ -2,7 +2,7 @@
 
 ## Context
 
-An architectural and external-ecosystem audit against 8 public agent harnesses (`apokamo/kaji`, `open-gsd/gsd-core`, `Ralph-Workflow/Ralph-Workflow`, `umputun/ralphex`, `github/spec-kit`, `bmad-code-org/BMAD-METHOD`, `ruvnet/ruflo`, `Geodesiasur/everything-claude-code`) plus `/leader` patterns confirmed that B3's core lifecycle was lean on static context (`14,940 B` always-on) but lacked:
+An architectural and external-ecosystem audit against 8 public agent harnesses (`apokamo/kaji`, `open-gsd/gsd-core`, `Ralph-Workflow/Ralph-Workflow`, `umputun/ralphex`, `github/spec-kit`, `bmad-code-org/BMAD-METHOD`, `ruvnet/ruflo`, `Geodesiasur/everything-claude-code`) confirmed that B3's core lifecycle was lean on static context (`14,940 B` always-on) but lacked:
 1. Cryptographically/Git-bound verification evidence (`b3-verify-v1` receipt tied to `HEAD` and working-tree content hash).
 2. Deterministic safety tripwires for secrets, destructive SQL on non-test/non-doc paths, mass deletion, and mid-operation Git states.
 3. Lightweight symbol-ledger checks for dangling references and orphan internal code after refactors.
@@ -20,7 +20,7 @@ An architectural and external-ecosystem audit against 8 public agent harnesses (
 | `github/spec-kit` | `src/specify_cli/workflows/step/gate/__init__.py`, `templates/checklist-template.md` | **ADAPT** (AC-to-check readiness check in `planning`) | Added crisp readiness check in `skills/engineering/planning/SKILL.md`; rejected heavy Python workflow engine and multi-file spec directories by default. |
 | `bmad-code-org/BMAD-METHOD` | `skills/method/bmad-architecture/references/reviewer-gate.md`, `skills/method/bmad-retrospective/scripts/git_evidence.py` | **ADAPT** (deterministic CLI audit before semantic review, clean JSON/line exit contracts) | Kept `0`-token `mechanical-check` + `symbol-check` ahead of LLM review and read-only subagent outputs; rejected heavyweight agile ceremony/role explosion. |
 | `ruvnet/ruflo` & `everything-claude-code` | `.claude-plugin/hooks/`, `.cursor/hooks/` | **DEFER / REJECT** for core | Vector DB hooks, MCP daemons, and host-specific JS hook adapters violate host-neutral zero-runtime-daemon simplicity (`rules/portability.md`). |
-| `/leader` concepts | Invariant bug-class sweep, Symbol Ledger, Failure/Write-path Matrix | **ADAPT** (risk-gated in `ship-templates.md`, `b3-guard symbol-check`) | Kept `failure_matrix`, `write_paths`, and `io_budget` conditional on `depth: detailed` risk triggers so small edits stay zero-ceremony. |
+| Internal shift-left patterns | Invariant bug-class sweep, Symbol Ledger, Failure/Write-path Matrix | **ADAPT** (risk-gated in `ship-templates.md`, `b3-guard symbol-check`) | Kept `failure_matrix`, `write_paths`, and `io_budget` conditional on `depth: detailed` risk triggers so small edits stay zero-ceremony. |
 
 ## Decision
 

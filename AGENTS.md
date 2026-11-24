@@ -13,6 +13,7 @@ Personal AI Engineering System with a **host-neutral canonical core** (`rules/`,
 | Default sequence | `workflows/feature-implementation.md` | Single-stage feature work |
 | Full lifecycle | `workflows/ship.md`; `workflows/research-ship.md` | `/b3-ship` (delivery); `/b3-research-ship` (research-first delivery) |
 | Review loop | `review-loop/strategy.md` (`spec.md` contract) | `/b3-review-loop` |
+| PR & review templates | `workflows/references/pr-template.md`; `skills/engineering/code-review/references/review-template.md` | Creating PRs; rendering `/b3-review` & PR reviews |
 | Docs / Provenance / Evals | `docs/`, `research/`, `evals/` | Definitions, external intake, system fixtures |
 | Personal context / Adapters | `knowledge/personal/`, `adapters/` | Background (never overrides rules); host wiring |
 

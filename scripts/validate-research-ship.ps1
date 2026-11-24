@@ -57,8 +57,30 @@ function Init-TestRepo([string]$DirPath) {
     }
 }
 
+function Remove-ReparseLinksUnder([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath)) { return }
+    $rootItem = Get-Item -LiteralPath $DirPath -Force -ErrorAction SilentlyContinue
+    if (-not $rootItem) { return }
+    if ((($rootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($rootItem.LinkType -in @('Junction', 'SymbolicLink'))) {
+        if ($rootItem.PSIsContainer) { [System.IO.Directory]::Delete($rootItem.FullName, $false) }
+        else { Remove-Item -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue }
+        return
+    }
+    if (-not $rootItem.PSIsContainer) { return }
+    foreach ($child in @(Get-ChildItem -LiteralPath $rootItem.FullName -Force -ErrorAction SilentlyContinue)) {
+        if ((($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ($child.LinkType -in @('Junction', 'SymbolicLink'))) {
+            if ($child.PSIsContainer) { [System.IO.Directory]::Delete($child.FullName, $false) }
+            else { Remove-Item -LiteralPath $child.FullName -Force -ErrorAction SilentlyContinue }
+        } elseif ($child.PSIsContainer) {
+            Remove-ReparseLinksUnder $child.FullName
+        }
+    }
+}
+
 $sandbox = Join-Path $env:TEMP ('b3-research-ship-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
+$prevModelsPersonal = $env:B3_MODELS_PERSONAL
+$env:B3_MODELS_PERSONAL = Join-Path $sandbox 'personal-models.md'
 
 try {
     # --- 1. research-evidence-freshness-and-containment (PS + Bash) ---
@@ -330,6 +352,67 @@ try {
         FailCheck 'namespace-isolation-and-waves' "rsId=$($rsId.Code) rsRes=$($rsRes.Text) shipEmpty=$($shipResEmpty.Code) ds=$($dsIgnored.Code) pc=$($pcBlocked.Code) wave=$($waveOk.Code)/$($waveConflict.Code) sh=$nsShOk"
     }
 
+    # --- 3b. research-ship-safety-and-receipt-exclusion (PS + Bash) ---
+    $vrOk = $true
+    $vrPs = Invoke-PsGuard @('verify-run', '-RepoRoot', $rNs, '-VerifyCmd', 'Write-Output verified', '-ReceiptPath', '.b3/research-ship/runs/vr.receipt', '-TaskId', 'U001', '-Scope', 'research-check')
+    Set-Content (Join-Path $rNs '.b3\research-ship\runs\extra-checkpoint.md') "# checkpoint note`n"
+    $vcPs = Invoke-PsGuard @('verify-check', '-RepoRoot', $rNs, '-ReceiptPath', '.b3/research-ship/runs/vr.receipt')
+    $vrOk = ($vrPs.Code -eq 0) -and ($vcPs.Code -eq 0) -and ($vcPs.Text -match 'VERIFY_VALID')
+
+    $decoyPrune = Join-Path $sandbox 'prune-decoy'
+    New-Item -ItemType Directory -Path $decoyPrune -Force | Out-Null
+    Set-Content (Join-Path $decoyPrune 'preserve.txt') "keep me`n"
+    $rPrPs = Join-Path $sandbox 'prune-rs-ps'
+    Init-TestRepo $rPrPs
+    Set-Content (Join-Path $rPrPs 'a.txt') "a`n"
+    Push-Location $rPrPs; & git add .; & git commit -qm 'init'; Pop-Location
+    [void](Invoke-PsGuard @('new-run', '-RepoRoot', $rPrPs, '-Namespace', 'research-ship', '-Slug', 'old-pass', '-Timestamp', '20261123-0200'))
+    $oldPassDir = Join-Path $rPrPs '.b3\research-ship\runs\20261123-0200-old-pass'
+    Set-Content (Join-Path $oldPassDir 'progress.md') "- run_status: PASS`n"
+    New-Item -ItemType Junction -Path (Join-Path $oldPassDir 'junc-out') -Target $decoyPrune | Out-Null
+    [void](Invoke-PsGuard @('new-run', '-RepoRoot', $rPrPs, '-Namespace', 'research-ship', '-Slug', 'cur-pass', '-Timestamp', '20261123-0201'))
+    Set-Content (Join-Path $rPrPs '.b3\research-ship\runs\20261123-0201-cur-pass\progress.md') "- run_status: PASS`n"
+    $prSafePs = Invoke-PsGuard @('prune', '-RepoRoot', $rPrPs, '-Namespace', 'research-ship', '-Keep', '0')
+    $decoyStillPs = Test-Path -LiteralPath (Join-Path $decoyPrune 'preserve.txt') -PathType Leaf
+
+    $rLinkRuns = Join-Path $sandbox 'prune-rs-link'
+    Init-TestRepo $rLinkRuns
+    New-Item -ItemType Directory -Path (Join-Path $rLinkRuns '.b3\research-ship') -Force | Out-Null
+    New-Item -ItemType Junction -Path (Join-Path $rLinkRuns '.b3\research-ship\runs') -Target $decoyPrune | Out-Null
+    $prLinkPs = Invoke-PsGuard @('prune', '-RepoRoot', $rLinkRuns, '-Namespace', 'research-ship', '-Keep', '0')
+
+    $safeShOk = $true
+    if ($hasBash) {
+        $shVr = Invoke-ShGuard "'$guardShPosix' verify-run --repo-root '$rNsPosix' --verify-cmd 'echo verified' --receipt-path '.b3/research-ship/runs/vr-sh.receipt' --task-id U001 --scope research-check"
+        Set-Content (Join-Path $rNs '.b3\research-ship\runs\extra-sh-checkpoint.md') "# checkpoint note sh`n"
+        $shVc = Invoke-ShGuard "'$guardShPosix' verify-check --repo-root '$rNsPosix' --receipt-path '.b3/research-ship/runs/vr-sh.receipt'"
+        $rPrSh = Join-Path $sandbox 'prune-rs-sh'
+        $rPrShPosix = $rPrSh -replace '\\', '/'
+        $rLinkRunsPosix = $rLinkRuns -replace '\\', '/'
+        Init-TestRepo $rPrSh
+        Set-Content (Join-Path $rPrSh 'a.txt') "a`n"
+        Push-Location $rPrSh; & git add .; & git commit -qm 'init'; Pop-Location
+        [void](Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rPrShPosix' --namespace research-ship --slug old-sh --timestamp 20261123-0202")
+        $oldShDir = Join-Path $rPrSh '.b3\research-ship\runs\20261123-0202-old-sh'
+        Set-Content (Join-Path $oldShDir 'progress.md') "- run_status: PASS`n"
+        New-Item -ItemType Junction -Path (Join-Path $oldShDir 'junc-out') -Target $decoyPrune | Out-Null
+        [void](Invoke-ShGuard "'$guardShPosix' new-run --repo-root '$rPrShPosix' --namespace research-ship --slug cur-sh --timestamp 20261123-0203")
+        Set-Content (Join-Path $rPrSh '.b3\research-ship\runs\20261123-0203-cur-sh\progress.md') "- run_status: PASS`n"
+        $shPrSafe = Invoke-ShGuard "'$guardShPosix' prune --repo-root '$rPrShPosix' --namespace research-ship --keep 0"
+        $shPrLink = Invoke-ShGuard "'$guardShPosix' prune --repo-root '$rLinkRunsPosix' --namespace research-ship --keep 0"
+        $decoyStillSh = Test-Path -LiteralPath (Join-Path $decoyPrune 'preserve.txt') -PathType Leaf
+        $safeShOk = ($shVr.Code -eq 0) -and ($shVc.Code -eq 0 -and $shVc.Text -match 'VERIFY_VALID') -and
+                    ($shPrSafe.Code -eq 0 -and $shPrSafe.Text -match 'PRUNE_OK: 1 removed') -and
+                    ($shPrLink.Code -eq 1 -and $shPrLink.Text -match 'is a link') -and $decoyStillSh
+    }
+
+    if ($vrOk -and $prSafePs.Code -eq 0 -and ($prSafePs.Text -match 'PRUNE_OK: 1 removed') -and $decoyStillPs -and
+        $prLinkPs.Code -eq 1 -and ($prLinkPs.Text -match 'is a link') -and $safeShOk) {
+        Pass 'research-ship-safety-and-receipt-exclusion'
+    } else {
+        FailCheck 'research-ship-safety-and-receipt-exclusion' "vr=$vrOk pr=$($prSafePs.Code) decoy=$decoyStillPs link=$($prLinkPs.Code) sh=$safeShOk"
+    }
+
     # --- 4. workflow-contracts-and-domain-decoupling ---
     $cmdText = Get-Content -LiteralPath (Join-Path $root 'commands\b3-research-ship.md') -Raw
     $skillText = Get-Content -LiteralPath (Join-Path $root 'adapters\command-skills\b3-research-ship\SKILL.md') -Raw
@@ -371,7 +454,7 @@ try {
         if ($LASTEXITCODE -ne 0) { $hostsOk = $false; break }
         $cmdCopy = Test-Path -LiteralPath (Join-Path $pDir '.cursor\commands\b3-research-ship.md')
         $giText = Get-Content -LiteralPath (Join-Path $pDir '.gitignore') -Raw
-        $giBoth = ($giText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giText -match '(?m)^\s*\.b3/research-ship/\s*$')
+        $giBoth = ($giText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giText -match '(?m)^\s*\.b3/models\.md\s*$')
         if (-not ($cmdCopy -and $giBoth)) { $hostsOk = $false; break }
         if ($hName -in @('codex', 'antigravity')) {
             if (-not (Test-Path -LiteralPath (Join-Path $pDir '.agents\skills\b3-research-ship\SKILL.md'))) { $hostsOk = $false; break }
@@ -400,8 +483,8 @@ try {
     $giUpPsText = Get-Content -LiteralPath (Join-Path $giUpPs '.gitignore') -Raw
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $giAppPs -B3Home $root -HostName cursor | Out-Null
     $giAppPsText = Get-Content -LiteralPath (Join-Path $giAppPs '.gitignore') -Raw
-    $giMigrationsOk = ($giUpPsText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giUpPsText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giUpPsText -notmatch '(?m)^\s*\.b3/\s*$') -and
-                      ($giAppPsText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giAppPsText -match '(?m)^\s*\.b3/research-ship/\s*$')
+    $giMigrationsOk = ($giUpPsText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giUpPsText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giUpPsText -match '(?m)^\s*\.b3/models\.md\s*$') -and ($giUpPsText -notmatch '(?m)^\s*\.b3/\s*$') -and
+                      ($giAppPsText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giAppPsText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giAppPsText -match '(?m)^\s*\.b3/models\.md\s*$')
 
     $bashCompatOk = $true
     if ($hasBash) {
@@ -424,10 +507,10 @@ try {
         $giAppShText = Get-Content -LiteralPath (Join-Path $giAppSh '.gitignore') -Raw
         $bashCompatOk = ($shInst.Code -eq 0) -and ($shUpRes.Code -eq 0) -and ($shAppRes.Code -eq 0) -and ($shDryRes.Code -eq 0) -and
                         (Test-Path -LiteralPath (Join-Path $pShDir '.cursor\commands\b3-research-ship.md')) -and
-                        ($giSh -match '(?m)^\s*\.b3/research-ship/\s*$') -and
-                        ($giUpShText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giUpShText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giUpShText -notmatch '(?m)^\s*\.b3/\s*$') -and
-                        ($giAppShText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giAppShText -match '(?m)^\s*\.b3/research-ship/\s*$') -and
-                        ($shDryRes.Text -match '\.b3/research-ship/')
+                        ($giSh -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giSh -match '(?m)^\s*\.b3/models\.md\s*$') -and
+                        ($giUpShText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giUpShText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giUpShText -match '(?m)^\s*\.b3/models\.md\s*$') -and ($giUpShText -notmatch '(?m)^\s*\.b3/\s*$') -and
+                        ($giAppShText -match '(?m)^\s*\.b3/ship/\s*$') -and ($giAppShText -match '(?m)^\s*\.b3/research-ship/\s*$') -and ($giAppShText -match '(?m)^\s*\.b3/models\.md\s*$') -and
+                        ($shDryRes.Text -match '\.b3/research-ship/') -and ($shDryRes.Text -match '\.b3/models\.md')
     }
 
     if ($hostsOk -and $pluginOk -and $syncAgOk -and $giMigrationsOk -and $bashCompatOk) {
@@ -444,7 +527,9 @@ try {
     }
 }
 finally {
+    if ($null -eq $prevModelsPersonal) { Remove-Item Env:B3_MODELS_PERSONAL -ErrorAction SilentlyContinue } else { $env:B3_MODELS_PERSONAL = $prevModelsPersonal }
     Pop-Location -ErrorAction SilentlyContinue
+    Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
