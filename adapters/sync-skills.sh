@@ -40,7 +40,7 @@ CMD_SKILLS_SRC="${ROOT}/adapters/command-skills"
 
 has_skill_md() {
   local dir="$1"
-  [[ -d "$dir" ]] && [[ -n "$(find -L "$dir" -name 'SKILL.md' -type f -print -quit 2>/dev/null || true)" ]]
+  [[ -d "$dir" ]] && [[ -n "$({ find -L "$dir" -name 'SKILL.md' -type f -print 2>/dev/null || true; } | head -n 1)" ]]
 }
 
 has_active_path() {

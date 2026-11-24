@@ -18,7 +18,7 @@ End-to-end research-first delivery complementing [`ship.md`](ship.md) without du
 
 ## Lifecycle (Phases A–K)
 
-For schemas load [`references/research-ship-templates.md`](references/research-ship-templates.md) only on creation; for verification/review/PR/merge load [`references/research-ship-gates.md`](references/research-ship-gates.md) only at phases E/H/I/J/K; for codebase exploration or Phase G implementation load [`references/context-routing.md`](references/context-routing.md) on demand (strictly `repo-evidence` only — never substitute codebase MCP output for verified domain sources, `evidence-check`, Research Gate, or Editorial/Authority governance).
+For schemas load [`references/research-ship-templates.md`](references/research-ship-templates.md) only on creation; for verification/review/PR/merge load [`references/research-ship-gates.md`](references/research-ship-gates.md) only at phases E/H/I/J/K; for codebase exploration/Phase G load [`references/context-routing.md`](references/context-routing.md) on demand (`repo-evidence` only; see boundary in [gates](references/research-ship-gates.md)).
 
 ### A. Preflight
 - **In:** user prompt / plan path, repo state. **Out:** `B3_HOME`, `PRODUCT_ROOT`, branch/HEAD, existing PR check (`gh pr list --head <branch>`), optional `.b3/research-profile.md` & `.b3/research-policy.json`, protected/single-writer paths, `{RUN_DIR}`.
@@ -43,7 +43,7 @@ For schemas load [`references/research-ship-templates.md`](references/research-s
 ### E. Independent Evidence Verification
 - **In:** unit claims + `evidence-index.md` + `sources.manifest`. **Out:** verification verdict (`VERIFIED` | `DISPUTED` | `INCOMPLETE`).
 - **Readiness:** for non-trivial/high-risk evidence, dispatch isolated read-only verification subagent ([gates](references/research-ship-gates.md)) with compact refs + fingerprints; check fidelity, provenance, conditions, contradiction handling, inferences.
-- **Failure / Recovery:** `EVIDENCE_STALE` (`exit 2`) or `DISPUTED` → re-verify against updated source or return to C/D; no subagent isolation → log `SINGLE_AGENT_LIMIT` hat-change.
+- **Failure / Recovery:** `EVIDENCE_STALE` (`exit 2`) or `DISPUTED` → re-verify against updated source or return to C/D; no subagent isolation → log `SINGLE_AGENT_LIMIT` hat-change (cannot emit `PASS`/`VERIFIED`/`MERGE_AUTHORIZED` on `HIGH`/`CRITICAL` — cap `INCOMPLETE`, needs independent/human review; unconditionally blocks `auto_merge`).
 
 ### F. Formalization & Knowledge Readiness
 - **In:** verified unit outputs + domain policy. **Out:** target classification per unit (`research-doc` | `structured-knowledge` | `executable-predicate` | `witness-fixture` | `internal-only` | `impl-spec` | `release-candidate` | `WITHHELD` | `BLOCKED`).
@@ -51,7 +51,7 @@ For schemas load [`references/research-ship-templates.md`](references/research-s
 
 ### G. Implementation (Skip in `research-only`)
 - **In:** formalized specs. **Out:** code/structured artifact commits.
-- **Readiness:** reuse [`ship.md`](ship.md) (`check-wave`, `Context Packet`, `verify-run`/`verify-check`, `diff-scope`, `mechanical-check`, `symbol-check`, `context-cache`, `precommit`), on-demand [`references/context-routing.md`](references/context-routing.md) (`repo-evidence` only; pass 1L `context_hint:` — never substitute for verified domain sources or editorial/release gates), + [`../review-loop/strategy.md`](../review-loop/strategy.md). Enforce single-writer serialization on shared ledgers/manifests/authority pins.
+- **Readiness:** reuse [`ship.md`](ship.md) (`check-wave`, `Context Packet`, `verify-run`/`verify-check`, `diff-scope`, `mechanical-check`, `symbol-check`, `context-cache`, `precommit`), on-demand [`references/context-routing.md`](references/context-routing.md) (`repo-evidence` only; pass 1L `context_hint:`), + [`../review-loop/strategy.md`](../review-loop/strategy.md). Enforce single-writer serialization on shared ledgers/manifests/authority pins.
 - **Failure / Recovery:** `WAVE_CONFLICT` → degrade to sequential; Tier-1/2 review breaker → follow `strategy.md`.
 
 ### H. Technical Verification & Independent Review / Editorial Gates
@@ -64,7 +64,7 @@ For schemas load [`references/research-ship-templates.md`](references/research-s
 
 ### J. Merge Eligibility Evaluation
 - **In:** PR state, CI status, review status, governance status, changed paths, `.b3/research-policy.json`.
-- **Readiness:** run `b3-guard merge-policy-check` ([gates](references/research-ship-gates.md)). Default `auto_merge: disabled` → stop at **`PR_READY`** (`exit 2`) or **`BLOCKED`** (`exit 1`). Never infer merge permission from repo write access; respect branch protection, required checks, CODEOWNERS, and domain release authority.
+- **Readiness:** run `b3-guard merge-policy-check` ([gates](references/research-ship-gates.md)). Default `auto_merge: disabled` → stop at **`PR_READY`** (`exit 2`) or **`BLOCKED`** (`exit 1`); `SINGLE_AGENT_LIMIT` unconditionally blocks `auto_merge`. Never infer merge permission from repo write access; respect branch protection, required checks, CODEOWNERS, and domain release authority.
 
 ### K. Authorized Auto-Merge & Post-Merge Verification
 - **In:** `MERGE_AUTHORIZED` (`exit 0` from `merge-policy-check`).

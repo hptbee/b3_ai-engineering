@@ -50,7 +50,7 @@ CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
 
 [[ -f "$WORKFLOW" ]] || { echo "error: B3_HOME missing workflow: $WORKFLOW" >&2; exit 1; }
 [[ -f "$TEMPLATE" ]] || { echo "error: missing template: $TEMPLATE" >&2; exit 1; }
-[[ -n "$(find "$SKILLS_SRC" -name 'SKILL.md' -type f -print -quit 2>/dev/null || true)" ]] || {
+[[ -n "$({ find "$SKILLS_SRC" -name 'SKILL.md' -type f -print 2>/dev/null || true; } | head -n 1)" ]] || {
   echo "error: B3_HOME has no SKILL.md under skills: $SKILLS_SRC" >&2; exit 1
 }
 
@@ -64,7 +64,7 @@ AGENTS_MD_DEST="${PRODUCT_ROOT}/AGENTS.md"
 CLAUDE_MD_DEST="${PRODUCT_ROOT}/CLAUDE.md"
 CURSOR_README_DEST="${PRODUCT_ROOT}/.cursor/README.md"
 
-if [[ -d "$PRODUCT_SKILLS" ]] && [[ -n "$(find "$PRODUCT_SKILLS" -name 'SKILL.md' -type f -print -quit 2>/dev/null || true)" ]]; then
+if [[ -d "$PRODUCT_SKILLS" ]] && [[ -n "$({ find "$PRODUCT_SKILLS" -name 'SKILL.md' -type f -print 2>/dev/null || true; } | head -n 1)" ]]; then
   echo "error: product already has SKILL.md under .cursor/skills; refusing to install a duplicate skill tree" >&2
   exit 1
 fi

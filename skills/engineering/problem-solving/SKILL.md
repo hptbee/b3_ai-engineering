@@ -26,14 +26,14 @@ Scope → Plan → Build → Verify → Review → Fix → Verify
 - Failure with unknown cause, before a patch → `debugging`
 - “Research how other repos do X” → `research-engineering-patterns`
 - Pure knowledge questions with no change
-- Running the full independent review loop after work is already implemented → `review-loop/strategy.md` (specified; not a substitute for this skill’s lighter review step)
+- Full independent review loop on completed work → `review-loop/strategy.md`
 
 Near miss: “is this design sound?” with no code change yet → stay in Scope/Plan; do not skip to Build.
 
 ## Procedure
 
 1. **Scope**  
-   Restate the problem, current/desired behavior, and constraints. Read known targets directly (short-circuit) or use `workflows/references/context-routing.md` on demand for unfamiliar arch/symbols (optional MCP acceleration, native fallback). If incomplete, gather; do not guess.
+   Restate problem, current/desired behavior, and constraints. Read known targets directly, or load `workflows/references/context-routing.md` on demand for unfamiliar code. If incomplete, gather; do not guess.
 
 2. **Plan**  
    Write a short plan: approach, files likely touched, risks, and how success will be verified. Prefer the smallest change. Call out open questions. Inside `/b3-ship`, this step is `Scope` + `Gate` (Implementation Readiness Gate): inspect code first, then persist by **depth** (`inline` / `notes` / `detailed`). Do not skip it. Do not stop for the user after it.
@@ -46,8 +46,8 @@ Near miss: “is this design sound?” with no code change yet → stay in Scope
 
 5. **Review (risk-sensitive)**
    Run `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) first; check plan alignment, callers, tests, and `CONFIRMED` residue:
-   - **Low-risk:** 1 focused independent `b3-reviewer` pass if subagents exist (else self-review noting single-agent limit).
-   - **High-risk** (authz, data/schema, concurrency/state, hot perf, cross-module contracts): add matching `b3-{security,architecture,performance}-reviewer`. Not `/b3-review-loop` or `/b3-ship`.
+   - **Low-risk:** 1 independent `b3-reviewer` pass if subagents exist (else self-review noting `SINGLE_AGENT_LIMIT`).
+   - **High-risk** (authz, schema, concurrency, hot perf, cross-module contracts): add matching `b3-{security,architecture,performance}-reviewer` (`SINGLE_AGENT_LIMIT` caps to `INCOMPLETE`). Not `/b3-review-loop` or `/b3-ship`.
 
 6. **Fix**
    Fix confirmed causes in scope, add regression tests, delete only `CONFIRMED` redundancy (`LIKELY REDUNDANT`/`INTENTIONAL COMPLEXITY` untouched); map each edit to a finding.
@@ -57,10 +57,8 @@ Near miss: “is this design sound?” with no code change yet → stay in Scope
 
 ## Progressive disclosure
 
-- Context routing (on demand): `workflows/references/context-routing.md`
 - Constraints: `rules/engineering-principles.md`, `rules/verification.md`
-- Full independent loop: `review-loop/strategy.md`
-- Review method: `skills/engineering/code-review/SKILL.md`
+- Review / loop: `skills/engineering/code-review/SKILL.md`, `review-loop/strategy.md`
 
 ## Verification
 
