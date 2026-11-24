@@ -470,10 +470,12 @@ try {
         }
     }
 
+    $pluginHome = Join-Path $sandbox 'ag-plugin-home'
     $pluginOut = Join-Path $sandbox 'ag-plugin'
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginOut -B3Home $root | Out-Null
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginOut -UserHome $pluginHome -B3Home $root | Out-Null
     $pluginOk = ($LASTEXITCODE -eq 0) -and
                 (Test-Path -LiteralPath (Join-Path $pluginOut 'skills\b3-research-ship\SKILL.md')) -and
+                (Test-Path -LiteralPath (Join-Path $pluginHome '.gemini\config\skills.json') -PathType Leaf) -and
                 (@(Get-ChildItem -LiteralPath (Join-Path $pluginOut 'agents') -Filter '*.md' -File).Count -eq 5)
 
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'adapters\sync-skills.ps1') -HostName antigravity -VerifyOnly | Out-Null
