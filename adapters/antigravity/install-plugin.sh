@@ -482,7 +482,7 @@ if [[ "$ACTION" == "verify" ]]; then
         fi
       done
     fi
-    for core_cmd in b3-plan b3-implement b3-debug b3-review b3-verify b3-review-loop b3-ship; do
+    for core_cmd in b3-plan b3-implement b3-debug b3-review b3-verify b3-review-loop b3-ship b3-research-ship; do
       if ! array_contains "$core_cmd" "${CMD_SKILL_NAMES[@]}"; then
         COMMANDS_OK=false; ERRORS+=("missing expected command skill in B3_HOME: $core_cmd")
       fi

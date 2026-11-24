@@ -201,6 +201,7 @@ try {
     } | ConvertTo-Json)
     $authOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
     $authProtFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'releases/v3.json')
+    $authDotFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', '.')
     $omitChangedFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
 
     # Malformed & type-mismatched / injection policy JSON checks
@@ -239,6 +240,8 @@ try {
         $shDisabled = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths docs/notes.md"
         $shWithheld = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --governance-status WITHHELD_PROMOTION"
         $shProt = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths releases/v3.json"
+        $shDot = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths ."
+        $shOctalBlk = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --pr-state OPEN --ci-status PASS --review-status PASS --blocking-findings 08"
         $shOmitChanged = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS"
         $shAuth = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/auth-policy.json --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths docs/notes.md"
         $shBadJson = Invoke-ShGuard "'$guardShPosix' merge-policy-check --repo-root '$rGovPosix' --policy-path .b3/bad-policy.json --pr-state OPEN --ci-status PASS --review-status PASS"
@@ -249,6 +252,8 @@ try {
         $govShOk = ($shDisabled.Code -eq 2 -and $shDisabled.Text -match 'PR_READY: auto_merge=disabled') -and
                    ($shWithheld.Code -eq 1 -and $shWithheld.Text -match 'WITHHELD_PROMOTION') -and
                    ($shProt.Code -eq 1 -and $shProt.Text -match 'protected_paths=releases/v3\.json') -and
+                   ($shDot.Code -eq 1 -and $shDot.Text -match 'protected_paths=\.') -and
+                   ($shOctalBlk.Code -eq 1 -and $shOctalBlk.Text -match 'blocking_findings=8') -and
                    ($shOmitChanged.Code -eq 1 -and $shOmitChanged.Text -match 'missing_changed_paths') -and
                    ($shAuth.Code -eq 0 -and $shAuth.Text -match 'MERGE_AUTHORIZED') -and
                    ($shBadJson.Code -eq 1 -and $shBadJson.Text -match 'invalid_policy_json') -and
@@ -269,6 +274,7 @@ try {
         ($blkFind.Code -eq 1 -and $blkFind.Text -match 'blocking_findings=2') -and
         ($authOk.Code -eq 0 -and $authOk.Text -match 'MERGE_AUTHORIZED') -and
         ($authProtFail.Code -eq 1 -and $authProtFail.Text -match 'protected_paths') -and
+        ($authDotFail.Code -eq 1 -and $authDotFail.Text -match 'protected_paths=\.') -and
         ($omitChangedFail.Code -eq 1 -and $omitChangedFail.Text -match 'missing_changed_paths') -and
         ($badJson.Code -eq 1 -and $badJson.Text -match 'invalid_policy_json') -and
         ($badRootArr.Code -eq 1 -and $badRootArr.Text -match 'invalid_policy_json') -and

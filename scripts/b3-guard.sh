@@ -3607,7 +3607,7 @@ ${el}"
     HAS_SCHEMA=false
     HAS_HEAD=false
     HAS_TS=false
-    SEEN_ENTRIES="|"
+    SEEN_ENTRIES=$'\n'
     ENT_RELS=()
     ENT_HASHES=()
     while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
@@ -3627,11 +3627,11 @@ ${el}"
           exit 1
         fi
         rel="$_CONTAINED_REL"
-        if [[ "$SEEN_ENTRIES" == *"|${rel}|"* ]]; then
+        if [[ "$SEEN_ENTRIES" == *$'\n'"${rel}"$'\n'* ]]; then
           echo "EVIDENCE_MISSING: duplicate entry $rel"
           exit 1
         fi
-        SEEN_ENTRIES="${SEEN_ENTRIES}${rel}|"
+        SEEN_ENTRIES="${SEEN_ENTRIES}${rel}"$'\n'
         ENT_RELS+=("$rel")
         ENT_HASHES+=("$h")
       else
@@ -3653,7 +3653,7 @@ ${el}"
           exit 1
         fi
         rel="$_CONTAINED_REL"
-        if [[ "$SEEN_ENTRIES" != *"|${rel}|"* ]]; then
+        if [[ "$SEEN_ENTRIES" != *$'\n'"${rel}"$'\n'* ]]; then
           UNCOVERED+=("$rel")
         fi
       done
@@ -3741,6 +3741,7 @@ ${el}"
       echo "MERGE_BLOCKED: invalid_blocking_findings=$BLOCKING_FINDINGS"
       exit 1
     fi
+    BLOCKING_FINDINGS="$((10#$BLOCKING_FINDINGS))"
 
     if $POST_MERGE; then
       if [[ "$PR_STATE" != "MERGED" ]]; then
@@ -3844,7 +3845,7 @@ ${el}"
           continue
         fi
         for pp in "${PROT_ARR[@]}"; do
-          if [[ "$pp" == "$cp/"* ]]; then
+          if [[ "$cp" == "." || "$pp" == "$cp/"* ]]; then
             PROT_HITS+=("$cp")
             break
           fi

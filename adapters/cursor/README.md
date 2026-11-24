@@ -69,7 +69,7 @@ Do **not** also activate `.agents/skills` or `.claude/skills` in the same checko
 
 Run this manual check on two local Git repos (`repo-a`, `repo-b`) that have **never** run `install-product`:
 1. Paste `~/.cursor/b3-user-rules.txt` into **Cursor Settings > Rules > User Rules**.
-2. **Commands (`/b3-plan`, `/b3-verify`):** in `repo-a` and `repo-b`, confirm `/` shows `/b3-plan`..`/b3-ship` and resolves `B3_HOME` via `~/.cursor/b3-home` without creating `.b3/home` in the repo.
+2. **Commands (`/b3-plan`, `/b3-verify`):** in `repo-a` and `repo-b`, confirm `/` shows `/b3-plan`..`/b3-ship` and `/b3-research-ship`, and resolves `B3_HOME` via `~/.cursor/b3-home` without creating `.b3/home` in the repo.
 3. **Skills:** verify skill triggers (e.g., review/debugging) load from `~/.cursor/skills/<name>/SKILL.md` cleanly.
 4. **Rules precedence:** add a temporary project rule in `repo-a/.cursor/rules/` or `repo-a/AGENTS.md` and confirm Cursor honors the project rule over personal defaults.
 5. **Subagents:** invoke an independent review (`b3-reviewer` / `b3-security-reviewer`) and confirm isolated read-only findings return cleanly (if the host cannot isolate subagents, mark independence `UNKNOWN / INCOMPLETE` / `SINGLE_AGENT_LIMIT`).

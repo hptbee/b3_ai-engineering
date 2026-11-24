@@ -2534,7 +2534,7 @@ switch ($Command) {
                     continue
                 }
                 foreach ($pp in $protectedPaths) {
-                    if ($pp.StartsWith("$cp/")) {
+                    if ($cp -ceq '.' -or $pp.StartsWith("$cp/")) {
                         if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
                         break
                     }

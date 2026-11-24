@@ -366,7 +366,7 @@ if ($Action -eq 'verify') {
                 }
             }
         }
-        foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship')) {
+        foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship')) {
             if (-not $cmdSkillMap.ContainsKey($coreCmd)) {
                 $commandsOk = $false; $errors.Add("missing expected command skill in B3_HOME: $coreCmd")
             }
