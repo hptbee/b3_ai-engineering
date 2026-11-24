@@ -3388,9 +3388,10 @@ check_checkpoint_file_path() {
 
 _CTX_PATHS=()
 _CTX_BAD_TOKEN=""
-split_strict_context_paths() {
+_IGN_PATHS=()
+split_strict_paths() {
   local LC_ALL=C
-  local root="$1" csv="$2" allow_empty="${3:-true}"
+  local root="$1" csv="$2" allow_empty="${3:-true}" block_b3_and_secrets="${4:-true}"
   _CTX_PATHS=()
   _CTX_BAD_TOKEN=""
   if [[ -z "$csv" ]]; then
@@ -3440,13 +3441,15 @@ split_strict_context_paths() {
     fi
     rel="$_CONTAINED_REL"
     rel_low="$(printf '%s' "$rel" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    if [[ -z "$rel" || "$rel" == -* || "$rel" == *"//"* || "$rel" =~ $re_dot || "$rel_low" =~ $re_git_any || "$rel_low" =~ $re_b3_root ]]; then
+    if [[ -z "$rel" || "$rel" == "." || "$rel" == -* || "$rel" == *"//"* || "$rel" =~ $re_dot || "$rel_low" =~ $re_git_any ]]; then
       _CTX_BAD_TOKEN="$tok"
       return 1
     fi
-    if is_secret_path "$rel"; then
-      _CTX_BAD_TOKEN="$tok"
-      return 1
+    if [[ "$block_b3_and_secrets" == "true" ]]; then
+      if [[ "$rel_low" =~ $re_b3_root ]] || is_secret_path "$rel"; then
+        _CTX_BAD_TOKEN="$tok"
+        return 1
+      fi
     fi
     collected+=("$rel")
   done
@@ -3459,55 +3462,6 @@ split_strict_context_paths() {
   while IFS= read -r sorted_item; do
     [[ -n "$sorted_item" ]] && _CTX_PATHS+=("$sorted_item")
   done < <(printf '%s\n' "${collected[@]}" | LC_ALL=C sort -u)
-  return 0
-}
-
-_IGN_PATHS=()
-split_strict_ignore_paths() {
-  local LC_ALL=C
-  local root="$1" csv="$2"
-  _IGN_PATHS=()
-  if [[ -z "$csv" ]]; then return 0; fi
-  if [[ "$csv" =~ [[:cntrl:]] ]]; then return 1; fi
-  local cleaned
-  cleaned="$(trim_str "$csv")"
-  if [[ -z "$cleaned" || "$csv" == "none" || "$csv" == "[]" ]]; then
-    return 0
-  fi
-  local had_noglob=false
-  [[ "$-" == *f* ]] && had_noglob=true
-  set -f
-  local -a raw_parts=()
-  IFS=',' read -r -a raw_parts <<< "$csv" || true
-  if ! $had_noglob; then set +f; fi
-  if [[ "$csv" == *, ]]; then
-    raw_parts+=("")
-  fi
-
-  local -a collected=()
-  local raw_p tok rel rel_low
-  local re_dot='(^|/)\.(/|$)' re_git_any='(^|/)\.git(/|$)'
-  for raw_p in "${raw_parts[@]}"; do
-    tok="${raw_p#"${raw_p%%[! ]*}"}"
-    if [[ -z "$tok" || "$tok" == "none" || "$tok" == -* || "$tok" == *:* || "$tok" == *'*'* || "$tok" == *'?'* || "$tok" == *'['* || "$tok" == *']'* ]]; then
-      return 1
-    fi
-    if ! check_contained_repo_path "$root" "$tok"; then
-      return 1
-    fi
-    rel="$_CONTAINED_REL"
-    rel_low="$(printf '%s' "$rel" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    if [[ -z "$rel" || "$rel" == "." || "$rel" == -* || "$rel" == *"//"* || "$rel" =~ $re_dot || "$rel_low" =~ $re_git_any ]]; then
-      return 1
-    fi
-    collected+=("$rel")
-  done
-  if [[ ${#collected[@]} -gt 0 ]]; then
-    local sorted_item
-    while IFS= read -r sorted_item; do
-      [[ -n "$sorted_item" ]] && _IGN_PATHS+=("$sorted_item")
-    done < <(printf '%s\n' "${collected[@]}" | LC_ALL=C sort -u)
-  fi
   return 0
 }
 
@@ -3655,8 +3609,12 @@ check_graph_index_fresh() {
     xy="${rec:0:2}"
     p1="${rec:3}"
     while [[ "$p1" == */ && "$p1" != "/" ]]; do p1="${p1%/}"; done
+    if [[ -z "$p1" ]]; then
+      fresh_rc=1
+      break
+    fi
     p1_ign=false
-    if [[ -z "$p1" ]] || is_checkpoint_dir "$p1" || { [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p1" "${_IGN_PATHS[@]}"; }; then
+    if is_checkpoint_dir "$p1" || { [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p1" "${_IGN_PATHS[@]}"; }; then
       p1_ign=true
     fi
     if [[ "$xy" == *R* || "$xy" == *C* ]]; then
@@ -3666,8 +3624,12 @@ check_graph_index_fresh() {
       fi
       p2="$orig_rec"
       while [[ "$p2" == */ && "$p2" != "/" ]]; do p2="${p2%/}"; done
+      if [[ -z "$p2" ]]; then
+        fresh_rc=1
+        break
+      fi
       p2_ign=false
-      if [[ -z "$p2" ]] || is_checkpoint_dir "$p2" || { [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p2" "${_IGN_PATHS[@]}"; }; then
+      if is_checkpoint_dir "$p2" || { [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p2" "${_IGN_PATHS[@]}"; }; then
         p2_ign=true
       fi
       if ! $p1_ign || ! $p2_ign; then
@@ -6864,7 +6826,7 @@ ${el}"
         exit 1
       fi
 
-      if ! split_strict_context_paths "$REPO_ROOT" "$ANCHOR_PATHS" true; then
+      if ! split_strict_paths "$REPO_ROOT" "$ANCHOR_PATHS" true true; then
         echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
         exit 1
       fi
@@ -6873,7 +6835,7 @@ ${el}"
         ANC_ARR=("${_CTX_PATHS[@]}")
       fi
 
-      if ! split_strict_context_paths "$REPO_ROOT" "$SCOPE_PATHS" true; then
+      if ! split_strict_paths "$REPO_ROOT" "$SCOPE_PATHS" true true; then
         echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
         exit 1
       fi
@@ -6882,9 +6844,13 @@ ${el}"
         REC_SCOPE_ARR=("${_CTX_PATHS[@]}")
       fi
 
-      if ! split_strict_ignore_paths "$REPO_ROOT" "$IGNORE_DIRTY_PATHS"; then
+      _IGN_PATHS=()
+      if ! split_strict_paths "$REPO_ROOT" "$IGNORE_DIRTY_PATHS" true false; then
         echo "CONTEXT_ERROR: invalid ignore path"
         exit 1
+      fi
+      if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+        _IGN_PATHS=("${_CTX_PATHS[@]}")
       fi
       if [[ ${#ANC_ARR[@]} -gt 0 ]] && ignore_overlaps_paths "${ANC_ARR[@]}"; then
         echo "CONTEXT_ERROR: invalid ignore path"
@@ -6981,7 +6947,7 @@ timestamp_utc=${TS_UTC}
     ANC_RAW_TRIM="$(trim_str "$ANCHOR_PATHS")"
     if [[ -n "$ANC_RAW_TRIM" ]]; then
       HAS_CALLER_ANCHOR=true
-      if ! split_strict_context_paths "$REPO_ROOT" "$ANCHOR_PATHS" true; then
+      if ! split_strict_paths "$REPO_ROOT" "$ANCHOR_PATHS" true true; then
         echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
         exit 1
       fi
@@ -6991,7 +6957,7 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
-    if ! split_strict_context_paths "$REPO_ROOT" "$SCOPE_PATHS" true; then
+    if ! split_strict_paths "$REPO_ROOT" "$SCOPE_PATHS" true true; then
       echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
       exit 1
     fi
@@ -7000,23 +6966,33 @@ timestamp_utc=${TS_UTC}
       SCOPE_ARR=("${_CTX_PATHS[@]}")
     fi
 
-    if ! split_strict_ignore_paths "$REPO_ROOT" "$IGNORE_DIRTY_PATHS"; then
+    _IGN_PATHS=()
+    if ! split_strict_paths "$REPO_ROOT" "$IGNORE_DIRTY_PATHS" true false; then
       echo "CONTEXT_ERROR: invalid ignore path"
       exit 1
+    fi
+    if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+      _IGN_PATHS=("${_CTX_PATHS[@]}")
     fi
     IGN_CSV=""
     if [[ ${#_IGN_PATHS[@]} -gt 0 ]]; then
       IGN_CSV="$(join_csv "${_IGN_PATHS[@]}")"
     fi
 
+    HAS_CALLER_GRAPH=false
+    CALLER_GRAPH_VAL="none"
     CALLER_GRAPH_TRIM="$(trim_str "$GRAPH_INDEX_SHA")"
-    CALLER_GRAPH_SHA=""
-    if [[ -n "$CALLER_GRAPH_TRIM" && "$CALLER_GRAPH_TRIM" != "none" ]]; then
-      if ! resolve_strict_commit_sha "$REPO_ROOT" "$CALLER_GRAPH_TRIM"; then
-        echo "CONTEXT_ERROR: invalid graph_index_sha"
-        exit 1
+    if [[ -n "$CALLER_GRAPH_TRIM" ]]; then
+      HAS_CALLER_GRAPH=true
+      if [[ "$CALLER_GRAPH_TRIM" == "none" ]]; then
+        CALLER_GRAPH_VAL="none"
+      else
+        if ! resolve_strict_commit_sha "$REPO_ROOT" "$CALLER_GRAPH_TRIM"; then
+          echo "CONTEXT_ERROR: invalid graph_index_sha"
+          exit 1
+        fi
+        CALLER_GRAPH_VAL="$_COMMIT_SHA"
       fi
-      CALLER_GRAPH_SHA="$_COMMIT_SHA"
     fi
 
     HAS_CALLER_SUMMARY=false
@@ -7146,7 +7122,7 @@ timestamp_utc=${TS_UTC}
         echo "CONTEXT_CORRUPT: invalid anchor_hash"
         exit 1
       fi
-      if ! split_strict_context_paths "$REPO_ROOT" "$REC_ANCHOR_PATHS" false || [[ ${#_CTX_PATHS[@]} -lt 1 ]]; then
+      if ! split_strict_paths "$REPO_ROOT" "$REC_ANCHOR_PATHS" false true || [[ ${#_CTX_PATHS[@]} -lt 1 ]]; then
         echo "CONTEXT_CORRUPT: invalid anchor_paths"
         exit 1
       fi
@@ -7231,12 +7207,8 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
-    EFF_GRAPH_SHA="$REC_GRAPH_INDEX_SHA"
-    if [[ -n "$CALLER_GRAPH_SHA" ]]; then
-      EFF_GRAPH_SHA="$CALLER_GRAPH_SHA"
-    fi
     GRAPH_INDEX_STATUS="NOT_RECORDED"
-    if [[ "$EFF_GRAPH_SHA" != "none" ]]; then
+    if [[ "$REC_GRAPH_INDEX_SHA" != "none" ]] || { $HAS_CALLER_GRAPH && [[ "$CALLER_GRAPH_VAL" != "none" ]]; }; then
       PROBE_PATHS=()
       if [[ ${#SCOPE_ARR[@]} -gt 0 ]]; then
         PROBE_RAW=()
@@ -7251,21 +7223,48 @@ timestamp_utc=${TS_UTC}
           [[ -n "$pp" ]] && PROBE_PATHS+=("$pp")
         done < <(printf '%s\n' "${PROBE_RAW[@]}" | LC_ALL=C sort -u)
       fi
-      GRAPH_FRESH=false
-      if [[ ${#PROBE_PATHS[@]} -gt 0 ]]; then
-        if check_graph_index_fresh "$REPO_ROOT" "$EFF_GRAPH_SHA" "$LIVE_HEAD_SHA" "${PROBE_PATHS[@]}"; then
-          GRAPH_FRESH=true
+      if [[ "$REC_GRAPH_INDEX_SHA" != "none" ]]; then
+        GRAPH_MISMATCH=false
+        if $HAS_CALLER_GRAPH && [[ "$CALLER_GRAPH_VAL" != "$REC_GRAPH_INDEX_SHA" ]]; then
+          GRAPH_MISMATCH=true
         fi
-      else
-        if check_graph_index_fresh "$REPO_ROOT" "$EFF_GRAPH_SHA" "$LIVE_HEAD_SHA"; then
-          GRAPH_FRESH=true
+        REC_GRAPH_FRESH=false
+        if [[ ${#PROBE_PATHS[@]} -gt 0 ]]; then
+          if check_graph_index_fresh "$REPO_ROOT" "$REC_GRAPH_INDEX_SHA" "$LIVE_HEAD_SHA" "${PROBE_PATHS[@]}"; then
+            REC_GRAPH_FRESH=true
+          fi
+        else
+          if check_graph_index_fresh "$REPO_ROOT" "$REC_GRAPH_INDEX_SHA" "$LIVE_HEAD_SHA"; then
+            REC_GRAPH_FRESH=true
+          fi
         fi
-      fi
-      if $GRAPH_FRESH; then
-        GRAPH_INDEX_STATUS="FRESH"
+        if $GRAPH_MISMATCH; then
+          REASONS+=("graph_index_mismatch")
+        fi
+        if ! $REC_GRAPH_FRESH; then
+          REASONS+=("graph_index_stale")
+        fi
+        if $GRAPH_MISMATCH || ! $REC_GRAPH_FRESH; then
+          GRAPH_INDEX_STATUS="STALE"
+        else
+          GRAPH_INDEX_STATUS="FRESH"
+        fi
       else
         GRAPH_INDEX_STATUS="STALE"
-        REASONS+=("graph_index_stale")
+        REASONS+=("graph_index_mismatch")
+        CALLER_GRAPH_FRESH=false
+        if [[ ${#PROBE_PATHS[@]} -gt 0 ]]; then
+          if check_graph_index_fresh "$REPO_ROOT" "$CALLER_GRAPH_VAL" "$LIVE_HEAD_SHA" "${PROBE_PATHS[@]}"; then
+            CALLER_GRAPH_FRESH=true
+          fi
+        else
+          if check_graph_index_fresh "$REPO_ROOT" "$CALLER_GRAPH_VAL" "$LIVE_HEAD_SHA"; then
+            CALLER_GRAPH_FRESH=true
+          fi
+        fi
+        if ! $CALLER_GRAPH_FRESH; then
+          REASONS+=("graph_index_stale")
+        fi
       fi
     fi
 

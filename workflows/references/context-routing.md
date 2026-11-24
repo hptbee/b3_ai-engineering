@@ -1,6 +1,6 @@
 # Context routing (on-demand)
 
-Host-neutral, on-demand routing (`0 B` always-on). Load <=1x/phase; never paste into subagents — pass 1L `context_hint:`.
+On-demand routing (`0 B` always-on). Load <=1x/phase only when triggered (optional MCPs active, cross-file symbol/impact nav, or multi-iter cache reuse); skip on native-only / direct-known diffs. Never paste to subagents; pass 1L `context_hint:`.
 
 ## Detection & 4 MCP states
 Detect active host tools once/phase; never assume MCP exists, repeat absent probes, or mutate host/IDE/MCP configs.
@@ -18,7 +18,7 @@ Detect active host tools once/phase; never assume MCP exists, repeat absent prob
 | Diff/Git/mechanical & verify | `b3-guard` + native Git (`0 LLM tokens`) | n/a |
 
 ## Staleness, disclosure & reuse
-- **Staleness:** commit-indexed `codebase-memory` is stale if `HEAD` moved past `graph_index_sha` or uncommitted edits touch watched/anchor/delta paths -> untrusted; fall back unless refreshed. Live LSP `serena` reads working tree (dirty-tree eligible).
+- **Staleness:** commit-indexed `codebase-memory` is stale on `HEAD != graph_index_sha` (incl. reset/amend/branch-switch), uncommitted/untracked edits on watched/anchor/delta paths, or mismatched caller `graph_index_sha` (fails closed `graph_index_mismatch` until re-recorded) -> untrusted; fallback unless refreshed. Live LSP `serena` reads working tree (dirty-tree eligible).
 - **Disclosure:** bounded slices, symbol bodies, or summaries only; never dump repos, raw graphs, or full files. Subagent `context_hint: tools=<both|codebase-memory|serena|native> cache=<ref|none> delta=<files|none>`.
 - **Cache:** optional `b3-guard.{ps1,sh} context-cache` (`record|check`, `b3-context-v1`, strictly under `.b3/{ship,research-ship}/`) keyed on immutable `anchor_paths` (`read_only_deps`+`contract_files`) + SHA-256 `summary_ref` + optional `graph_index_sha`; mutable edits use `diff-scope -PrevSha` (`delta_files`). Invalidate (`CONTEXT_STALE`) on anchor/contract/summary/`HEAD`/graph-index drift.
 

@@ -2521,7 +2521,7 @@ function Test-CheckpointFilePath([string]$Root, [string]$PathArg) {
     return @{ Status = 'OK'; Rel = $c.Rel; Full = $c.Full }
 }
 
-function Split-StrictContextPaths([string]$Root, [string]$Csv, [bool]$AllowEmptySentinel = $true) {
+function Split-StrictPaths([string]$Root, [string]$Csv, [bool]$AllowEmptySentinel = $true, [bool]$BlockB3AndSecrets = $true) {
     if ([string]::IsNullOrEmpty($Csv)) {
         if ($AllowEmptySentinel) { return @{ Ok = $true; Items = @(); BadToken = '' } }
         return @{ Ok = $false; Items = @(); BadToken = '<empty>' }
@@ -2550,10 +2550,10 @@ function Split-StrictContextPaths([string]$Root, [string]$Csv, [bool]$AllowEmpty
             return @{ Ok = $false; Items = @(); BadToken = $tok }
         }
         $rel = $c.Rel
-        if (-not $rel -or $rel.StartsWith('-') -or $rel.Contains('//') -or ($rel -match '(^|/)\.(/|$)') -or ($rel -imatch '(^|/)\.git(/|$)')) {
+        if (-not $rel -or $rel -ceq '.' -or $rel.StartsWith('-') -or $rel.Contains('//') -or ($rel -match '(^|/)\.(/|$)') -or ($rel -imatch '(^|/)\.git(/|$)')) {
             return @{ Ok = $false; Items = @(); BadToken = $tok }
         }
-        if (($rel -imatch '^\.b3(/|$)') -or (Test-SecretPath $rel)) {
+        if ($BlockB3AndSecrets -and (($rel -imatch '^\.b3(/|$)') -or (Test-SecretPath $rel))) {
             return @{ Ok = $false; Items = @(); BadToken = $tok }
         }
         $list.Add($rel)
@@ -2563,36 +2563,6 @@ function Split-StrictContextPaths([string]$Root, [string]$Csv, [bool]$AllowEmpty
     }
     $sorted = @(Sort-Ordinal $list.ToArray())
     return @{ Ok = $true; Items = $sorted; BadToken = '' }
-}
-
-function Split-StrictIgnorePaths([string]$Root, [string]$Csv) {
-    if ([string]::IsNullOrEmpty($Csv)) {
-        return @{ Ok = $true; Items = @() }
-    }
-    if ($Csv -match '[\x00-\x1F\x7F]') {
-        return @{ Ok = $false; Items = @() }
-    }
-    $cleaned = $Csv.Trim()
-    if (-not $cleaned -or $Csv -ceq 'none' -or $Csv -ceq '[]') {
-        return @{ Ok = $true; Items = @() }
-    }
-    $list = New-Object System.Collections.Generic.List[string]
-    foreach ($rawPart in ($Csv -split ',')) {
-        $tok = $rawPart.TrimStart(' ')
-        if (-not $tok -or $tok -ceq 'none' -or $tok.StartsWith('-') -or $tok.Contains(':') -or ($tok -match '[\*\?\[\]]')) {
-            return @{ Ok = $false; Items = @() }
-        }
-        $c = Test-ContainedRepoPath $Root $tok
-        if (-not $c) {
-            return @{ Ok = $false; Items = @() }
-        }
-        $rel = $c.Rel
-        if (-not $rel -or $rel -ceq '.' -or $rel.StartsWith('-') -or $rel.Contains('//') -or ($rel -match '(^|/)\.(/|$)') -or ($rel -imatch '(^|/)\.git(/|$)')) {
-            return @{ Ok = $false; Items = @() }
-        }
-        $list.Add($rel)
-    }
-    return @{ Ok = $true; Items = @(Sort-Ordinal $list.ToArray()) }
 }
 
 function Test-IgnoreOverlapsPaths([string[]]$IgnPaths, [string[]]$TargetPaths) {
@@ -2649,18 +2619,22 @@ function Test-GraphIndexFresh([string]$Root, [string]$GraphSha, [string]$LiveHea
     if ($stRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git status failed' 1 }
     $nul = [char]0
     $records = $stRes.StdOut.Split($nul)
-    for ($i = 0; $i -lt $records.Length; $i++) {
+    $recLen = $records.Length
+    if ($recLen -gt 0 -and $records[$recLen - 1] -eq '') { $recLen-- }
+    for ($i = 0; $i -lt $recLen; $i++) {
         $rec = $records[$i]
         if ([string]::IsNullOrEmpty($rec)) { continue }
         if ($rec.Length -lt 4) { return $false }
         $xy = $rec.Substring(0, 2)
         $p1 = ($rec.Substring(3)).TrimEnd('/')
-        $p1Ign = (-not $p1) -or (Test-CheckpointPath $p1) -or ($IgnPaths -and (Test-PathMatch $p1 $IgnPaths))
+        if (-not $p1) { return $false }
+        $p1Ign = (Test-CheckpointPath $p1) -or ($IgnPaths -and (Test-PathMatch $p1 $IgnPaths))
         if ($xy[0] -ceq 'R' -or $xy[0] -ceq 'C' -or $xy[1] -ceq 'R' -or $xy[1] -ceq 'C') {
             $i++
-            if ($i -ge $records.Length) { return $false }
+            if ($i -ge $recLen) { return $false }
             $p2 = ($records[$i]).TrimEnd('/')
-            $p2Ign = (-not $p2) -or (Test-CheckpointPath $p2) -or ($IgnPaths -and (Test-PathMatch $p2 $IgnPaths))
+            if (-not $p2) { return $false }
+            $p2Ign = (Test-CheckpointPath $p2) -or ($IgnPaths -and (Test-PathMatch $p2 $IgnPaths))
             if (-not ($p1Ign -and $p2Ign)) { return $false }
         } else {
             if (-not $p1Ign) { return $false }
@@ -4679,19 +4653,19 @@ switch ($Command) {
                 Fail 'CONTEXT_ERROR: invalid scope_id' 1
             }
 
-            $ancParsed = Split-StrictContextPaths $RepoRoot $AnchorPaths $true
+            $ancParsed = Split-StrictPaths $RepoRoot $AnchorPaths $true $true
             if (-not $ancParsed.Ok) {
                 Fail "CONTEXT_ERROR: invalid path $($ancParsed.BadToken)" 1
             }
             $ancArr = @($ancParsed.Items)
 
-            $recScopeParsed = Split-StrictContextPaths $RepoRoot $ScopePaths $true
+            $recScopeParsed = Split-StrictPaths $RepoRoot $ScopePaths $true $true
             if (-not $recScopeParsed.Ok) {
                 Fail "CONTEXT_ERROR: invalid path $($recScopeParsed.BadToken)" 1
             }
             $recScopeArr = @($recScopeParsed.Items)
 
-            $ignParsed = Split-StrictIgnorePaths $RepoRoot $IgnoreDirtyPaths
+            $ignParsed = Split-StrictPaths $RepoRoot $IgnoreDirtyPaths $true $false
             if (-not $ignParsed.Ok) {
                 Fail 'CONTEXT_ERROR: invalid ignore path' 1
             }
@@ -4771,7 +4745,7 @@ switch ($Command) {
         $ancRawTrim = if ($AnchorPaths) { $AnchorPaths.Trim() } else { '' }
         if ($ancRawTrim.Length -gt 0) {
             $hasCallerAnchor = $true
-            $cAncParsed = Split-StrictContextPaths $RepoRoot $AnchorPaths $true
+            $cAncParsed = Split-StrictPaths $RepoRoot $AnchorPaths $true $true
             if (-not $cAncParsed.Ok) {
                 Fail "CONTEXT_ERROR: invalid path $($cAncParsed.BadToken)" 1
             }
@@ -4781,26 +4755,32 @@ switch ($Command) {
             }
         }
 
-        $scopeParsed = Split-StrictContextPaths $RepoRoot $ScopePaths $true
+        $scopeParsed = Split-StrictPaths $RepoRoot $ScopePaths $true $true
         if (-not $scopeParsed.Ok) {
             Fail "CONTEXT_ERROR: invalid path $($scopeParsed.BadToken)" 1
         }
         $scopeArr = @($scopeParsed.Items)
 
-        $ignParsed = Split-StrictIgnorePaths $RepoRoot $IgnoreDirtyPaths
+        $ignParsed = Split-StrictPaths $RepoRoot $IgnoreDirtyPaths $true $false
         if (-not $ignParsed.Ok) {
             Fail 'CONTEXT_ERROR: invalid ignore path' 1
         }
         $ignArr = @($ignParsed.Items)
 
+        $hasCallerGraph = $false
+        $callerGraphVal = 'none'
         $callerGraphTrim = if ($GraphIndexSha) { $GraphIndexSha.Trim() } else { '' }
-        $callerGraphSha = ''
-        if ($callerGraphTrim -and $callerGraphTrim -cne 'none') {
-            $resCallerGraph = Resolve-StrictCommitSha $RepoRoot $callerGraphTrim
-            if (-not $resCallerGraph) {
-                Fail 'CONTEXT_ERROR: invalid graph_index_sha' 1
+        if ($callerGraphTrim.Length -gt 0) {
+            $hasCallerGraph = $true
+            if ($callerGraphTrim -ceq 'none') {
+                $callerGraphVal = 'none'
+            } else {
+                $resCallerGraph = Resolve-StrictCommitSha $RepoRoot $callerGraphTrim
+                if (-not $resCallerGraph) {
+                    Fail 'CONTEXT_ERROR: invalid graph_index_sha' 1
+                }
+                $callerGraphVal = $resCallerGraph
             }
-            $callerGraphSha = $resCallerGraph
         }
 
         $hasCallerSummary = $false
@@ -4891,7 +4871,7 @@ switch ($Command) {
             if ($kv['anchor_hash'] -cnotmatch '^[0-9a-f]{40}$') {
                 Fail 'CONTEXT_CORRUPT: invalid anchor_hash' 1
             }
-            $recAncParsed = Split-StrictContextPaths $RepoRoot $kv['anchor_paths'] $false
+            $recAncParsed = Split-StrictPaths $RepoRoot $kv['anchor_paths'] $false $true
             if (-not $recAncParsed.Ok -or $recAncParsed.Items.Count -lt 1) {
                 Fail 'CONTEXT_CORRUPT: invalid anchor_paths' 1
             }
@@ -4962,9 +4942,9 @@ switch ($Command) {
             }
         }
 
-        $effGraphSha = if ($callerGraphSha) { $callerGraphSha } else { $kv['graph_index_sha'] }
+        $recGraphSha = $kv['graph_index_sha']
         $graphIndexStatus = 'NOT_RECORDED'
-        if ($effGraphSha -cne 'none') {
+        if (($recGraphSha -cne 'none') -or ($hasCallerGraph -and ($callerGraphVal -cne 'none'))) {
             $probePaths = @()
             if ($scopeArr.Count -gt 0) {
                 $probeRaw = New-Object System.Collections.Generic.List[string]
@@ -4975,11 +4955,26 @@ switch ($Command) {
                 foreach ($sp in $scopeArr) { [void]$probeRaw.Add($sp) }
                 $probePaths = @(Sort-Ordinal $probeRaw.ToArray())
             }
-            if (Test-GraphIndexFresh $RepoRoot $effGraphSha $liveHeadSha $probePaths $ignArr) {
-                $graphIndexStatus = 'FRESH'
+            if ($recGraphSha -cne 'none') {
+                $graphMismatch = $hasCallerGraph -and ($callerGraphVal -cne $recGraphSha)
+                $recFresh = Test-GraphIndexFresh $RepoRoot $recGraphSha $liveHeadSha $probePaths $ignArr
+                if ($graphMismatch) {
+                    [void]$reasons.Add('graph_index_mismatch')
+                }
+                if (-not $recFresh) {
+                    [void]$reasons.Add('graph_index_stale')
+                }
+                if ($graphMismatch -or (-not $recFresh)) {
+                    $graphIndexStatus = 'STALE'
+                } else {
+                    $graphIndexStatus = 'FRESH'
+                }
             } else {
                 $graphIndexStatus = 'STALE'
-                [void]$reasons.Add('graph_index_stale')
+                [void]$reasons.Add('graph_index_mismatch')
+                if (-not (Test-GraphIndexFresh $RepoRoot $callerGraphVal $liveHeadSha $probePaths $ignArr)) {
+                    [void]$reasons.Add('graph_index_stale')
+                }
             }
         }
 
