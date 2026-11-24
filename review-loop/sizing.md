@@ -22,7 +22,7 @@ Legacy state migration (`review-ledger normalize`): `SMALL -> S`, `MEDIUM -> M`,
 
 Run `scripts/b3-guard.{ps1,sh} diff-scope` (or `review-inventory`) for deterministic signals, supplemented by reviewer judgment with recorded evidence (never silently downgrade uncertain risk):
 
-- **CRITICAL:** auth/authn/authz/secrets/trust boundaries, security-sensitive filesystem or Git ops, destructive DB migrations (`DROP`/`TRUNCATE`), or exploit primitives.
+- **CRITICAL:** auth/authn/authz/security/secrets/trust boundaries (directory or filename paths and content signals), security-sensitive filesystem or Git ops, destructive DB migrations (`DROP`/`TRUNCATE`), or exploit primitives.
 - **HIGH:** DB schema/migrations/transactions, public APIs/shared contracts, concurrency/caching/async state, latency-critical/rendering/query hot paths, or wide multi-module blast radius (`>= 4` modules + contracts).
 - **MEDIUM:** multi-file/medium behavioral code, generated code requiring provenance check, or 3+ module changes without higher triggers.
 - **LOW:** docs-only (any size, e.g., 25k LOC `docs/*.md`), test-only, lockfiles, or isolated trivial code (`<= 1` file, `<= 100` LOC) with zero risk signals.
@@ -34,7 +34,7 @@ Run `scripts/b3-guard.{ps1,sh} diff-scope` (or `review-inventory`) for determini
 | **LOW** | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | Inventory -> cohesive units (`b3-reviewer` only; record skip rationale) -> Ledger Gate |
 | **MEDIUM** | Fresh `b3-reviewer` + triggered specialist only | Full-PR + triggered specialist only + checks | Cohesive units (`<=4` conc) + triggered specialist per unit + L3 cross-unit + Ledger Gate |
 | **HIGH** | Fresh `b3-reviewer` + matching specialist(s) + contract check | Deep contract review + specialists + `verify-run` | L0 Inventory -> L1 Contracts (`b3-architecture-reviewer`) -> L2 Units + specialists + receipts -> L3 Cross-unit -> L4 Ledger Gate |
-| **CRITICAL** | **No downgrade:** Deep review + `b3-security-reviewer`/matching specialists + fail-closed `verify-run` receipt | Full deep + security/contract evidence + fail-closed `verify-run` | L0–L4 full fail-closed pipeline + security/architecture boundary verification + complete coverage ledger |
+| **CRITICAL** | **No downgrade:** Deep review + mandatory `b3-security-reviewer`/specialists (or `WAIVER:...`) + fail-closed `verify-run` | Full deep + mandatory specialists (or `WAIVER:...`) + fail-closed `verify-run` | L0–L4 fail-closed pipeline + mandatory `CRITICAL` specialists (or auditable `WAIVER:...`) + bounded ledger & verification |
 
 ## Partitioning rules (`L` / `XL` / `XXL`)
 

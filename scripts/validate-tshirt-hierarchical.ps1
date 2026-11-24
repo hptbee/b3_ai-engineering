@@ -320,7 +320,7 @@ try {
 
     $ok4 = ($psLInit.Code -eq 0) -and ($psLInit.Text -match 'LEDGER_INIT:.*size=L risk=CRITICAL units=4') -and
            ($chkPending.Code -eq 2) -and ($chkPending.Text -match 'LEDGER_INCOMPLETE: unit U01 status=PENDING') -and
-           ($chkNoSpec.Code -eq 2) -and ($chkNoSpec.Text -match 'missing specialist') -and
+           ($chkNoSpec.Code -eq 2) -and ($chkNoSpec.Text -match 'mandatory CRITICAL specialist') -and
            ($chkNoRec.Code -eq 2) -and ($chkNoRec.Text -match 'missing verify_receipt') -and
            ($chkResume.Code -eq 2) -and ($chkResume.Text -match 'U04 status=IN_PROGRESS') -and
            ($chkOpenF.Code -eq 2) -and ($chkOpenF.Text -match 'unresolved findings') -and
@@ -486,12 +486,200 @@ try {
            ($psTrChk.Code -eq 0) -and ($psTrChk.Text -match 'LEDGER_GATE_PASS:') -and ($shTrChk.Code -eq 0) -and ($shTrChk.Text -ceq $psTrChk.Text) -and
            ($psEscLow.Code -eq 0) -and ($psEscLow.Text -match 'risk=LOW') -and
            ($psEscStale.Code -eq 2) -and ($psEscStale.Text -match 'LEDGER_STALE: unit U01 risk changed \(LOW->CRITICAL\)') -and ($shEscStale.Text -ceq $psEscStale.Text) -and
-           ($chkEscNeedSpec.Code -eq 2) -and ($chkEscNeedSpec.Text -match 'missing specialist') -and
+           ($chkEscNeedSpec.Code -eq 2) -and ($chkEscNeedSpec.Text -match 'mandatory CRITICAL specialist') -and
            ($chkEscNeedRec.Code -eq 2) -and ($chkEscNeedRec.Text -match 'missing verify_receipt for CRITICAL unit U01') -and
            ($psEscPass.Code -eq 0) -and ($psEscPass.Text -match 'LEDGER_GATE_PASS:.*risk=CRITICAL') -and ($shEscPass.Code -eq 0) -and ($shEscPass.Text -ceq $psEscPass.Text) -and
            $shNormOk
     if ($ok6) { Pass 'ledger-cross-shell-targetref-and-risk-escalation' } else {
         FailCheck 'ledger-cross-shell-targetref-and-risk-escalation' "msys=$($shMissingMsys.Text) dot=$($shDotAbs.Text) trEq=$($trTxt -ceq $trShTxt) trChk=(ps=$($psTrChk.Text)|sh=$($shTrChk.Text)) stale=$($psEscStale.Text) needSp=$($chkEscNeedSpec.Text) needRec=$($chkEscNeedRec.Text) escPass=(ps=$($psEscPass.Text)|sh=$($shEscPass.Text)) norm=$shNormOk"
+    }
+
+    # --- 7. security-dir-path-detection ---
+    $r7 = Join-Path $sandbox 'sec-dir-repo'
+    $r7Posix = $r7 -replace '\\', '/'
+    Init-Repo $r7
+    $base7 = (& git -C $r7 rev-parse HEAD).Trim()
+    $secDirOk = $true
+    $secDirFail = ''
+    foreach ($secRel in @('src/auth/login.ts', 'src/security/access.ts', 'src/permissions/guard.ts', 'src/oauth/callback.ts', 'src/auth.ts')) {
+        & git -C $r7 reset -q HEAD -- . 2>$null
+        & git -C $r7 clean -qf -d -- src docs tests evals 2>$null
+        $fullSec = Join-Path $r7 ($secRel -replace '/', '\')
+        New-Item -ItemType Directory -Path (Split-Path -Parent $fullSec) -Force | Out-Null
+        [IO.File]::WriteAllText($fullSec, "export const handler = (v: number) => v + 1;`n", $utf8NoBom)
+        $psSd = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r7, '-BaseSha', $base7)
+        $shSd = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r7Posix' --base-sha '$base7'" } else { $psSd }
+        if ($psSd.Code -ne 0 -or ($psSd.Text -notmatch 'risk_level=CRITICAL') -or ($psSd.Text -notmatch 'risk_signals=auth_security') -or ($psSd.Text -notmatch 'recommended_specialists=b3-security-reviewer') -or ($shSd.Text -cne $psSd.Text)) {
+            $secDirOk = $false
+            $secDirFail = "secFile=$secRel ps=$($psSd.Text) sh=$($shSd.Text)"
+            break
+        }
+    }
+    if ($secDirOk) {
+        foreach ($safeRel in @('docs/auth/guide.md', 'tests/auth/login.test.ts', 'src/authors/list.ts', 'evals/auth/case.yaml')) {
+            & git -C $r7 reset -q HEAD -- . 2>$null
+            & git -C $r7 clean -qf -d -- src docs tests evals 2>$null
+            $fullSafe = Join-Path $r7 ($safeRel -replace '/', '\')
+            New-Item -ItemType Directory -Path (Split-Path -Parent $fullSafe) -Force | Out-Null
+            [IO.File]::WriteAllText($fullSafe, "export const item = 1;`n", $utf8NoBom)
+            $psSf = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r7, '-BaseSha', $base7)
+            $shSf = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' diff-scope --repo-root '$r7Posix' --base-sha '$base7'" } else { $psSf }
+            if ($psSf.Code -ne 0 -or ($psSf.Text -notmatch 'risk_level=LOW') -or ($psSf.Text -notmatch 'risk_signals=none') -or ($psSf.Text -notmatch 'recommended_specialists=none') -or ($shSf.Text -cne $psSf.Text)) {
+                $secDirOk = $false
+                $secDirFail = "safeFile=$safeRel ps=$($psSf.Text) sh=$($shSf.Text)"
+                break
+            }
+        }
+    }
+    if ($secDirOk) { Pass 'security-dir-path-detection' } else { FailCheck 'security-dir-path-detection' $secDirFail }
+
+    # --- 8. critical-specialist-waiver-policy ---
+    $r8 = Join-Path $sandbox 'waiver-repo'
+    $r8Posix = $r8 -replace '\\', '/'
+    Init-Repo $r8
+    $base8 = (& git -C $r8 rev-parse HEAD).Trim()
+    New-Item -ItemType Directory -Path (Join-Path $r8 'src\contracts'), (Join-Path $r8 'src\security') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r8 'src\contracts\api.ts'), "export interface Dto { id: string; }`n", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $r8 'src\security\access.ts'), "export const ok = (x: number) => x > 0;`n", $utf8NoBom)
+    & git -C $r8 add .; & git -C $r8 commit -qm 'sec-and-contract'
+    $wLp = '.b3/ship/waiver-ledger.md'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'init', '-LedgerPath', $wLp, '-BaseSha', $base8))
+    [void](Invoke-PsGuard @('verify-run', '-RepoRoot', $r8, '-VerifyCmd', 'echo w-u01', '-ReceiptPath', '.b3/ship/w1.verify', '-RelevantPaths', 'src/contracts/api.ts'))
+    [void](Invoke-PsGuard @('verify-run', '-RepoRoot', $r8, '-VerifyCmd', 'echo w-u02', '-ReceiptPath', '.b3/ship/w2.verify', '-RelevantPaths', 'src/security/access.ts'))
+    # U01=src/contracts (HIGH): non-none rationale >=5 chars allowed
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'update', '-LedgerPath', $wLp, '-UnitId', 'U01', '-Status', 'REVIEWED', '-Rationale', 'Reviewed contract inline', '-ReceiptPath', '.b3/ship/w1.verify'))
+    # U02=src/security (CRITICAL): free-form rationale must FAIL CLOSED
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'update', '-LedgerPath', $wLp, '-UnitId', 'U02', '-Status', 'REVIEWED', '-Rationale', 'looks fine no security risk needed', '-ReceiptPath', '.b3/ship/w2.verify'))
+    $psFreeDeny = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'check', '-LedgerPath', $wLp)
+    $shFreeDeny = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r8Posix' --action check --ledger-path '$wLp'" } else { $psFreeDeny }
+    # Placeholder approver waiver must FAIL CLOSED
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'update', '-LedgerPath', $wLp, '-UnitId', 'U02', '-Status', 'REVIEWED', '-Rationale', 'WAIVER:approved_by=agent;ticket=SEC-101;reason=Static schema adapter only no auth'))
+    $psPhDeny = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'check', '-LedgerPath', $wLp)
+    $shPhDeny = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r8Posix' --action check --ledger-path '$wLp'" } else { $psPhDeny }
+    # Short reason / placeholder ticket must FAIL CLOSED
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'update', '-LedgerPath', $wLp, '-UnitId', 'U02', '-Status', 'REVIEWED', '-Rationale', 'WAIVER:approved_by=sec-lead;ticket=TBD;reason=Valid length reason text'))
+    $psTktDeny = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'check', '-LedgerPath', $wLp)
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'update', '-LedgerPath', $wLp, '-UnitId', 'U02', '-Status', 'REVIEWED', '-Rationale', 'WAIVER:approved_by=sec-lead;ticket=SEC-101;reason=short'))
+    $psLenDeny = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'check', '-LedgerPath', $wLp)
+    # Valid auditable waiver with backslashes (exactly 10 literal chars: 123456\n78) passes identically in PS and Bash awk
+    $bsWaiver = 'WAIVER:approved_by=sec-lead@corp;ticket=SEC-404;reason=123456\n78'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'update', '-LedgerPath', $wLp, '-UnitId', 'U02', '-Status', 'REVIEWED', '-Rationale', $bsWaiver))
+    $psBsWaiverOk = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'check', '-LedgerPath', $wLp)
+    $shBsWaiverOk = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r8Posix' --action check --ledger-path '$wLp'" } else { $psBsWaiverOk }
+    # Valid auditable prose waiver passes and surfaces in LEDGER_GATE_PASS
+    $validWaiver = 'WAIVER:approved_by=sec-lead@corp;ticket=SEC-404;reason=Pure DTO mapper verified by security owner'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'update', '-LedgerPath', $wLp, '-UnitId', 'U02', '-Status', 'REVIEWED', '-Rationale', $validWaiver))
+    $psWaiverOk = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'check', '-LedgerPath', $wLp)
+    $shWaiverOk = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r8Posix' --action check --ledger-path '$wLp'" } else { $psWaiverOk }
+    $ok8 = ($psFreeDeny.Code -eq 2) -and ($psFreeDeny.Text -match 'mandatory CRITICAL specialist') -and ($shFreeDeny.Code -eq 2) -and ($shFreeDeny.Text -ceq $psFreeDeny.Text) -and
+           ($psPhDeny.Code -eq 2) -and ($shPhDeny.Code -eq 2) -and ($shPhDeny.Text -ceq $psPhDeny.Text) -and
+           ($psTktDeny.Code -eq 2) -and ($psLenDeny.Code -eq 2) -and
+           ($psBsWaiverOk.Code -eq 0) -and ($psBsWaiverOk.Text -match 'LEDGER_GATE_PASS:.*waivers=U02:b3-security-reviewer') -and ($shBsWaiverOk.Code -eq 0) -and ($shBsWaiverOk.Text -ceq $psBsWaiverOk.Text) -and
+           ($psWaiverOk.Code -eq 0) -and ($psWaiverOk.Text -match 'LEDGER_GATE_PASS:.*waivers=U02:b3-security-reviewer') -and ($shWaiverOk.Code -eq 0) -and ($shWaiverOk.Text -ceq $psWaiverOk.Text)
+    if ($ok8) { Pass 'critical-specialist-waiver-policy' } else {
+        FailCheck 'critical-specialist-waiver-policy' "free=$($psFreeDeny.Text) ph=$($psPhDeny.Text) tkt=$($psTktDeny.Text) len=$($psLenDeny.Text) pass=(ps=$($psWaiverOk.Text)|sh=$($shWaiverOk.Text))"
+    }
+
+    # --- 9. target-ref-branch-movement-invalidation ---
+    $r9 = Join-Path $sandbox 'branch-move-repo'
+    $r9Posix = $r9 -replace '\\', '/'
+    Init-Repo $r9
+    New-Item -ItemType Directory -Path (Join-Path $r9 'src\a'), (Join-Path $r9 'src\b') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r9 'src\a\m.ts'), "export const a = 1;`n", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $r9 'src\b\m.ts'), "export const b = 1;`n", $utf8NoBom)
+    & git -C $r9 add .; & git -C $r9 commit -qm 'base9'
+    $base9 = (& git -C $r9 rev-parse HEAD).Trim()
+    & git -C $r9 checkout -qb 'pr-branch'
+    [IO.File]::WriteAllText((Join-Path $r9 'src\a\m.ts'), "export const a = 2;`n", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $r9 'src\b\m.ts'), "export const b = 2;`n", $utf8NoBom)
+    & git -C $r9 add .; & git -C $r9 commit -qm 'pr9-c1'
+    $sha9_1 = (& git -C $r9 rev-parse HEAD).Trim()
+    $brLp = '.b3/ship/branch-ledger.md'
+    $psBrInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'init', '-LedgerPath', $brLp, '-BaseSha', $base9, '-TargetRef', 'pr-branch')
+    $brTxt = [IO.File]::ReadAllText((Join-Path $r9 '.b3\ship\branch-ledger.md'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'update', '-LedgerPath', $brLp, '-UnitId', 'U01', '-Status', 'REVIEWED'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'update', '-LedgerPath', $brLp, '-UnitId', 'U02', '-Status', 'REVIEWED'))
+    $psBrPass1 = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'check', '-LedgerPath', $brLp)
+    # Advance pr-branch touching only src/b/m.ts
+    [IO.File]::WriteAllText((Join-Path $r9 'src\b\m.ts'), "export const b = 3;`n", $utf8NoBom)
+    & git -C $r9 add src/b/m.ts; & git -C $r9 commit -qm 'pr9-c2'
+    $sha9_2 = (& git -C $r9 rev-parse HEAD).Trim()
+    $psBrMoved = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'check', '-LedgerPath', $brLp)
+    $shBrMoved = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r9Posix' --action check --ledger-path '$brLp'" } else { $psBrMoved }
+    # Metadata-only update without -Status REVIEWED must NOT refresh target_sha or unit_tree_hash
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'update', '-LedgerPath', $brLp, '-UnitId', 'U02', '-Findings', 'none'))
+    $psBrMetaStillStale = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'check', '-LedgerPath', $brLp)
+    if ($hasBash) {
+        [void](Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r9Posix' --action update --ledger-path '$brLp' --unit-id U02 --findings none")
+    }
+    $shBrMetaStillStale = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r9Posix' --action check --ledger-path '$brLp'" } else { $psBrMetaStillStale }
+    # Re-review only moved U02 -> updates target_sha to sha9_2 and U01 stays valid
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'update', '-LedgerPath', $brLp, '-UnitId', 'U02', '-Status', 'REVIEWED'))
+    $psBrRecov = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'check', '-LedgerPath', $brLp)
+    # Advance pr-branch touching src/a/m.ts (U01) while updating only U02 -> U01 must catch unit_tree_hash stale
+    [IO.File]::WriteAllText((Join-Path $r9 'src\a\m.ts'), "export const a = 3;`n", $utf8NoBom)
+    & git -C $r9 add src/a/m.ts; & git -C $r9 commit -qm 'pr9-c3'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'update', '-LedgerPath', $brLp, '-UnitId', 'U02', '-Status', 'REVIEWED'))
+    $psBrUnitStale = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'check', '-LedgerPath', $brLp)
+    # Delete pr-branch -> unresolvable target_ref must FAIL CLOSED
+    & git -C $r9 checkout -q $base9
+    & git -C $r9 branch -D 'pr-branch' -q
+    $psBrMissing = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r9, '-Action', 'check', '-LedgerPath', $brLp)
+    $shBrMissing = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r9Posix' --action check --ledger-path '$brLp'" } else { $psBrMissing }
+    $ok9 = ($psBrInit.Code -eq 0) -and ($brTxt -match '(?m)^target_ref=pr-branch$') -and ($brTxt -match "(?m)^target_sha=$sha9_1$") -and
+           ($psBrPass1.Code -eq 0) -and
+           ($psBrMoved.Code -eq 2) -and ($psBrMoved.Text -match "LEDGER_STALE: target_ref 'pr-branch' moved \($sha9_1->$sha9_2\)") -and ($shBrMoved.Code -eq 2) -and ($shBrMoved.Text -ceq $psBrMoved.Text) -and
+           ($psBrMetaStillStale.Code -eq 2) -and ($psBrMetaStillStale.Text -match "LEDGER_STALE: target_ref 'pr-branch' moved \($sha9_1->$sha9_2\)") -and ($shBrMetaStillStale.Code -eq 2) -and ($shBrMetaStillStale.Text -ceq $psBrMetaStillStale.Text) -and
+           ($psBrRecov.Code -eq 0) -and ($psBrUnitStale.Code -eq 2) -and ($psBrUnitStale.Text -match 'LEDGER_STALE: unit U01 invalidated') -and
+           ($psBrMissing.Code -eq 2) -and ($psBrMissing.Text -match "LEDGER_STALE: target_ref 'pr-branch' cannot be resolved") -and ($shBrMissing.Code -eq 2) -and ($shBrMissing.Text -ceq $psBrMissing.Text)
+    if ($ok9) { Pass 'target-ref-branch-movement-invalidation' } else {
+        FailCheck 'target-ref-branch-movement-invalidation' "moved=$($psBrMoved.Text) recov=$($psBrRecov.Text) uStale=$($psBrUnitStale.Text) miss=$($psBrMissing.Text)"
+    }
+
+    # --- 10. default-bounded-xxl-budget-and-overrides ---
+    $r10 = Join-Path $sandbox 'xxl-budget-repo'
+    $r10Posix = $r10 -replace '\\', '/'
+    Init-Repo $r10
+    $base10 = (& git -C $r10 rev-parse HEAD).Trim()
+    New-Item -ItemType Directory -Path (Join-Path $r10 'docs') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r10 'docs\d001.md'), "Small doc`n", $utf8NoBom)
+    $psXsDef = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'init', '-LedgerPath', '.b3/ship/xs-def.md', '-BaseSha', $base10)
+    $xsDefTxt = [IO.File]::ReadAllText((Join-Path $r10 '.b3\ship\xs-def.md'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'update', '-LedgerPath', '.b3/ship/xs-def.md', '-UnitId', 'U01', '-Status', 'REVIEWED', '-PassesUsed', '6'))
+    $psXsExh = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'check', '-LedgerPath', '.b3/ship/xs-def.md')
+    # Expand to 101 docs -> XXL (single unit U01), default max_passes=24
+    2..101 | ForEach-Object {
+        $n = '{0:D3}' -f $_
+        [IO.File]::WriteAllText((Join-Path $r10 "docs\d${n}.md"), "Doc line`n", $utf8NoBom)
+    }
+    $psXxlDef = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'init', '-LedgerPath', '.b3/ship/xxl-ps.md', '-BaseSha', $base10)
+    $shXxlDef = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r10Posix' --action init --ledger-path '.b3/ship/xxl-sh.md' --base-sha '$base10'" } else { $psXxlDef }
+    $xxlPsTxt = [IO.File]::ReadAllText((Join-Path $r10 '.b3\ship\xxl-ps.md'))
+    $xxlShTxt = if ($hasBash) { [IO.File]::ReadAllText((Join-Path $r10 '.b3\ship\xxl-sh.md')) } else { $xxlPsTxt }
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'update', '-LedgerPath', '.b3/ship/xxl-ps.md', '-UnitId', 'U01', '-Status', 'REVIEWED', '-PassesUsed', '25'))
+    $psXxlExh = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'check', '-LedgerPath', '.b3/ship/xxl-ps.md')
+    $shXxlExh = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r10Posix' --action check --ledger-path '.b3/ship/xxl-ps.md'" } else { $psXxlExh }
+    # Override --max-passes 30 allows 25, rejects 31; --max-passes 0 rejected
+    if ($hasBash) {
+        [void](Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r10Posix' --action update --ledger-path '.b3/ship/xxl-ps.md' --max-passes 30")
+    } else {
+        [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'update', '-LedgerPath', '.b3/ship/xxl-ps.md', '-MaxPasses', '30'))
+    }
+    $psXxlOvOk = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'check', '-LedgerPath', '.b3/ship/xxl-ps.md')
+    $shXxlOvOk = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r10Posix' --action check --ledger-path '.b3/ship/xxl-ps.md'" } else { $psXxlOvOk }
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'update', '-LedgerPath', '.b3/ship/xxl-ps.md', '-PassesUsed', '31'))
+    $psXxlOvExh = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'check', '-LedgerPath', '.b3/ship/xxl-ps.md')
+    $psZeroBad = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'init', '-LedgerPath', '.b3/ship/xxl-zero.md', '-BaseSha', $base10, '-MaxPasses', '0')
+    $shZeroBad = if ($hasBash) { Invoke-ShGuard "'$guardShPosix' review-ledger --repo-root '$r10Posix' --action init --ledger-path '.b3/ship/xxl-zero.md' --base-sha '$base10' --max-passes 0" } else { $psZeroBad }
+    $psUpdZeroBad = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r10, '-Action', 'update', '-LedgerPath', '.b3/ship/xxl-ps.md', '-MaxPasses', '0')
+    $ok10 = ($psXsDef.Code -eq 0) -and ($xsDefTxt -match '(?m)^max_passes=5$') -and ($psXsExh.Code -eq 2) -and ($psXsExh.Text -match 'budget exhausted \(passes=6/5\)') -and
+            ($psXxlDef.Code -eq 0) -and ($shXxlDef.Code -eq 0) -and ($xxlPsTxt -match '(?m)^max_passes=24$') -and ($xxlShTxt -match '(?m)^max_passes=24$') -and
+            ($psXxlExh.Code -eq 2) -and ($psXxlExh.Text -match 'budget exhausted \(passes=25/24\)') -and ($shXxlExh.Code -eq 2) -and ($shXxlExh.Text -ceq $psXxlExh.Text) -and
+            ($psXxlOvOk.Code -eq 0) -and ($psXxlOvOk.Text -match 'LEDGER_GATE_PASS:') -and ($shXxlOvOk.Code -eq 0) -and ($shXxlOvOk.Text -ceq $psXxlOvOk.Text) -and
+            ($psXxlOvExh.Code -eq 2) -and ($psXxlOvExh.Text -match 'budget exhausted \(passes=31/30\)') -and
+            ($psZeroBad.Code -eq 1) -and ($shZeroBad.Code -eq 1) -and ($psUpdZeroBad.Code -eq 1)
+    if ($ok10) { Pass 'default-bounded-xxl-budget-and-overrides' } else {
+        FailCheck 'default-bounded-xxl-budget-and-overrides' "xsExh=$($psXsExh.Text) xxlInit=$($psXxlDef.Text) xxlExh=$($psXxlExh.Text) ovOk=(ps=$($psXxlOvOk.Text)|sh=$($shXxlOvOk.Text)) ovExh=$($psXxlOvExh.Text) zero=$($psZeroBad.Code)/$($shZeroBad.Code)/$($psUpdZeroBad.Code)"
     }
 }
 finally {

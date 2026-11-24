@@ -391,7 +391,7 @@ build_working_tree_oid() {
   tmp_idx="$(mktemp "${TMPDIR:-/tmp}/b3-snap-idx.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-snap-idx.$$.${RANDOM}.tmp")"
   _CLEANUP_FILES+=("$tmp_idx")
   if [[ -f "$real_idx" ]]; then
-    cp "$real_idx" "$tmp_idx"
+    cp -p "$real_idx" "$tmp_idx"
   else
     rm -f "$tmp_idx"
   fi
@@ -1886,7 +1886,7 @@ function scan_path_sigs(p,   lp) {
   lp = tolower(p)
   if (is_gen_p(lp)) add_sig(p, "generated_code")
   if (is_doc_asset(lp) || is_test_p(lp)) return
-  if (is_secret_p(lp) || lp ~ /(^|\/)(auth|authn|authz|oauth|oidc|jwt|rbac|acl|session|security|crypto|cipher|secret|token|credential|permission|policy)[^\/]*\./) add_sig(p, "auth_security")
+  if (is_secret_p(lp) || lp ~ /(^|\/)(auth|authn|authz|oauth|oidc|jwt|rbac|acl|sessions?|security|crypto|cipher|secrets?|tokens?|credentials?|permissions?|polic(y|ies))(\/|$|[^\/]*\.)/) add_sig(p, "auth_security")
   if (lp ~ /(^|\/)(b3-guard|install[^\/]*|sync[^\/]*)\.(ps1|sh)$/) add_sig(p, "fs_git_security")
   if (lp ~ /(^|\/)(migrations?|schema|prisma|alembic|flyway|liquibase|db|database|persistence|repositories|efcore)(\/|$)|\.sql$/) add_sig(p, "db_migration_tx")
   if (lp ~ /(^|\/)(openapi|swagger|proto|graphql|contracts?|api|routes?|controllers?|endpoints?|schemas?|interfaces?|public)(\/|$)|\.(proto|graphql|gql)$|(^|\/)(contracts?|shared-types|api-types)\.[^\/]+$/) add_sig(p, "public_api_contract")
@@ -2319,6 +2319,43 @@ compute_scope_paths_hash() {
   fi
   rm -f "$tmp_manifest"
   trim_str "$_GIT_STDOUT"
+}
+
+default_max_passes() {
+  case "$(normalize_size_class "$1" 2>/dev/null || printf '%s' "$1")" in
+    L|XL) printf '12' ;;
+    XXL) printf '24' ;;
+    *) printf '5' ;;
+  esac
+}
+
+is_valid_critical_waiver() {
+  B3_WAIVER_RAT="$1" LC_ALL=C awk '
+  function trim_aw(s) { gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", s); return s }
+  function is_ph_app(v,   lv) {
+    lv = tolower(trim_aw(v))
+    return (lv == "" || lv == "none" || lv == "auto" || lv == "agent" || lv == "llm" || lv == "ai" || lv == "self" || lv == "n/a" || lv == "na" || lv == "tbd" || lv == "todo" || lv == "unknown")
+  }
+  function is_ph_tkt(v,   lv) {
+    lv = tolower(trim_aw(v))
+    return (lv == "" || lv == "none" || lv == "n/a" || lv == "na" || lv == "tbd" || lv == "todo" || lv == "unknown")
+  }
+  BEGIN {
+    r = trim_aw(ENVIRON["B3_WAIVER_RAT"])
+    if (substr(r, 1, 7) != "WAIVER:") exit 1
+    n = split(substr(r, 8), parts, ";")
+    if (n != 3) exit 1
+    if (substr(parts[1], 1, 12) != "approved_by=") exit 1
+    if (substr(parts[2], 1, 7) != "ticket=") exit 1
+    if (substr(parts[3], 1, 7) != "reason=") exit 1
+    app = substr(parts[1], 13)
+    tkt = substr(parts[2], 8)
+    rsn = trim_aw(substr(parts[3], 8))
+    if (length(app) < 2 || app !~ /^[A-Za-z0-9._@-]+$/ || is_ph_app(app)) exit 1
+    if (length(tkt) < 2 || tkt !~ /^[A-Za-z0-9._#:\/-]+$/ || is_ph_tkt(tkt)) exit 1
+    if (length(rsn) < 10 || index(rsn, "|") > 0 || is_ph_app(rsn)) exit 1
+    exit 0
+  }'
 }
 
 case "$CMD" in
@@ -4205,7 +4242,8 @@ timestamp_utc=${TS_UTC}
     TARGET_REF=""
     IGNORE_DIRTY=""
     MAX_CONC=4
-    MAX_PASSES=0
+    MAX_PASSES=-1
+    MAX_PASSES_SET="false"
     UNIT_ID=""
     STATUS=""
     FINDINGS=""
@@ -4225,7 +4263,7 @@ timestamp_utc=${TS_UTC}
         --target-ref) TARGET_REF="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         --max-concurrency) MAX_CONC="${2:-4}"; shift 2 ;;
-        --max-passes) MAX_PASSES="${2:-0}"; shift 2 ;;
+        --max-passes) MAX_PASSES="${2:-0}"; MAX_PASSES_SET="true"; shift 2 ;;
         --unit-id) UNIT_ID="${2:-}"; shift 2 ;;
         --status) STATUS="${2:-}"; shift 2 ;;
         --findings) FINDINGS="${2:-}"; shift 2 ;;
@@ -4306,10 +4344,13 @@ timestamp_utc=${TS_UTC}
 
     if [[ "$ACT_LOW" == "init" ]]; then
       [[ ! -d "$LEDGER_FULL" ]] || { echo "LEDGER_FAIL: --ledger-path is a directory"; exit 1; }
+      if [[ "$MAX_PASSES_SET" == "true" ]]; then
+        [[ "$MAX_PASSES" =~ ^[0-9]+$ && "$MAX_PASSES" -gt 0 ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+      fi
       TARGET_REF="$(trim_str "$TARGET_REF")"
       TARGET_COMMIT_SHA=""
       if [[ -n "$TARGET_REF" ]]; then
-        if [[ "$TARGET_REF" == -* ]]; then echo "LEDGER_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; fi
+        if [[ "$TARGET_REF" == -* || "$TARGET_REF" == *$'\n'* || "$TARGET_REF" == *$'\r'* ]]; then echo "LEDGER_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; fi
         run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" || { echo "LEDGER_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; }
         TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
         [[ -n "$TARGET_COMMIT_SHA" ]] || { echo "LEDGER_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; }
@@ -4376,8 +4417,9 @@ timestamp_utc=${TS_UTC}
         fi
       fi
 
-      [[ "$MAX_PASSES" =~ ^[0-9]+$ ]] || MAX_PASSES=0
-      [[ "$MAX_PASSES" -lt 0 ]] && MAX_PASSES=0
+      if [[ "$MAX_PASSES_SET" != "true" ]]; then
+        MAX_PASSES="$(default_max_passes "$SIZE_CLASS")"
+      fi
 
       NEED_CROSS=false
       if [[ ( "$SIZE_CLASS" == "L" || "$SIZE_CLASS" == "XL" || "$SIZE_CLASS" == "XXL" ) && "$UNIT_CNT" -gt 1 ]]; then
@@ -4392,12 +4434,17 @@ timestamp_utc=${TS_UTC}
       fi
 
       TREF_VAL="working_tree"
-      [[ -n "$TARGET_REF" ]] && TREF_VAL="$TARGET_COMMIT_SHA"
+      TSHA_VAL="none"
+      if [[ -n "$TARGET_REF" ]]; then
+        TREF_VAL="$TARGET_REF"
+        TSHA_VAL="$TARGET_COMMIT_SHA"
+      fi
       LED_TXT="# B3 Review Coverage Ledger"$'\n'
       LED_TXT+="schema=b3-review-ledger-v1"$'\n'
       LED_TXT+="base_sha=${BASE_SHA}"$'\n'
       LED_TXT+="head_sha=${HEAD_SHA}"$'\n'
       LED_TXT+="target_ref=${TREF_VAL}"$'\n'
+      LED_TXT+="target_sha=${TSHA_VAL}"$'\n'
       LED_TXT+="snapshot_sha=${SNAP_SHA}"$'\n'
       LED_TXT+="size_class=${SIZE_CLASS}"$'\n'
       LED_TXT+="normalized_legacy_size=none"$'\n'
@@ -4423,14 +4470,14 @@ timestamp_utc=${TS_UTC}
         done
       fi
       write_atomic_lf_file "$LEDGER_FULL" "$LED_TXT"
-      printf 'LEDGER_INIT: path=%s size=%s risk=%s units=%s snapshot=%s\n' "$LEDGER_REL" "$SIZE_CLASS" "$RISK_LEVEL" "$UNIT_CNT" "$SNAP_SHA"
+      printf 'LEDGER_INIT: path=%s size=%s risk=%s units=%s max_passes=%s snapshot=%s\n' "$LEDGER_REL" "$SIZE_CLASS" "$RISK_LEVEL" "$UNIT_CNT" "$MAX_PASSES" "$SNAP_SHA"
       exit 0
     fi
 
     [[ -f "$LEDGER_FULL" ]] || { echo "LEDGER_MISSING: $LEDGER_REL"; exit 1; }
 
     # Parse ledger metadata + unit rows
-    L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
+    L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
     L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
     L_SEEN_KEYS=""
     U_ROWS=()
@@ -4460,7 +4507,7 @@ timestamp_utc=${TS_UTC}
       L_SEEN_KEYS+="|${lk}|"
       case "$lk" in
         schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
-        snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
+        target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
         risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
         contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;; max_concurrency) L_MCONC="$lv" ;;
         max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;; budget_status) L_BSTAT="$lv" ;;
@@ -4473,6 +4520,21 @@ timestamp_utc=${TS_UTC}
     done
     [[ "$L_SCHEMA" == "b3-review-ledger-v1" ]] || { echo "LEDGER_CORRUPT: unsupported schema '$L_SCHEMA'"; exit 1; }
     [[ "$L_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid base_sha"; exit 1; }
+    if [[ -z "$L_TSHA" ]]; then
+      if [[ "$L_TREF" == "working_tree" ]]; then
+        L_TSHA="none"
+      elif [[ "$L_TREF" =~ ^[0-9a-f]{40}$ ]]; then
+        L_TSHA="$L_TREF"
+      else
+        echo "LEDGER_CORRUPT: missing target_sha for symbolic target_ref"; exit 1
+      fi
+    fi
+    if [[ "$L_TREF" == "working_tree" ]]; then
+      [[ "$L_TSHA" == "none" ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
+    else
+      [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
+    fi
+    [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid pass counter"; exit 1; }
     ORIG_RAW_SIZE="$L_SIZE"
     NORM_SIZE="$(normalize_size_class "$ORIG_RAW_SIZE")" || { echo "LEDGER_CORRUPT: invalid size_class '$ORIG_RAW_SIZE'"; exit 1; }
     [[ "$L_UCNT" =~ ^[0-9]+$ && "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
@@ -4481,11 +4543,15 @@ timestamp_utc=${TS_UTC}
     fi
     L_SIZE="$NORM_SIZE"
     TARGET_COMMIT_SHA=""
-    [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TREF"
+    [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TSHA"
 
     if [[ "$ACT_LOW" == "update" ]]; then
+      if [[ "$MAX_PASSES_SET" == "true" ]]; then
+        [[ "$MAX_PASSES" =~ ^[0-9]+$ && "$MAX_PASSES" -gt 0 ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+      fi
       UNIT_ID="$(trim_str "$UNIT_ID")"
       FOUND_IDX=-1
+      ST_VAL=""
       u0=""; u1=""; u2=""; u3=""; u4=""; u5=""; u6=""; u7=""; u8=""; u9=""; u10=""; u11=""
       if [[ -n "$UNIT_ID" ]]; then
         if [[ ${#U_ROWS[@]} -gt 0 ]]; then
@@ -4527,7 +4593,22 @@ timestamp_utc=${TS_UTC}
         L_CSTAT="$CU_VAL"
       fi
 
-      if [[ ( $FOUND_IDX -ge 0 && "$u7" == "REVIEWED" ) || "$CU_VAL" == "REVIEWED" ]]; then
+      if [[ ( $FOUND_IDX -ge 0 && "$ST_VAL" == "REVIEWED" ) || "$CU_VAL" == "REVIEWED" ]]; then
+        if [[ "$L_TREF" != "working_tree" ]]; then
+          if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${L_TREF}^{commit}"; then
+            printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
+            exit 2
+          fi
+          _UPD_TR_SHA="$(trim_str "$_GIT_STDOUT")"
+          if [[ ! "$_UPD_TR_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
+            exit 2
+          fi
+          TARGET_COMMIT_SHA="$_UPD_TR_SHA"
+          L_TSHA="$_UPD_TR_SHA"
+          L_HEAD="$_UPD_TR_SHA"
+          L_SNAP="$_UPD_TR_SHA"
+        fi
         UPD_FSIG_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-ufsig.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ufsig.$$.${RANDOM}.tmp")"
         UPD_FLINES_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-ufln.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ufln.$$.${RANDOM}.tmp")"
         _CLEANUP_FILES+=("$UPD_FSIG_TMP" "$UPD_FLINES_TMP")
@@ -4549,7 +4630,7 @@ timestamp_utc=${TS_UTC}
           ALL_RISK_OUT="$(eval_risk_for_csv_awk "$UPD_RF" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP")"
           { IFS= read -r L_RISK; IFS= read -r L_RSIG; IFS= read -r L_RSPEC; } <<< "$ALL_RISK_OUT"
         fi
-        if [[ $FOUND_IDX -ge 0 && "$u7" == "REVIEWED" ]]; then
+        if [[ $FOUND_IDX -ge 0 && "$ST_VAL" == "REVIEWED" ]]; then
           U_RISK_OUT="$(eval_risk_for_csv_awk "$u11" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP")"
           { IFS= read -r U_LIVE_LVL; } <<< "$U_RISK_OUT"
           u4="$U_LIVE_LVL"
@@ -4587,11 +4668,17 @@ timestamp_utc=${TS_UTC}
         L_CHASH="$(compute_scope_paths_hash "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$CU_PATHS" "$IGNORE_DIRTY")" || exit 1
       fi
       [[ "$PASSES_USED" =~ ^[0-9]+$ ]] && L_PUSED="$PASSES_USED"
-      [[ "$MAX_PASSES" =~ ^[0-9]+$ && "$MAX_PASSES" -gt 0 ]] && L_MPASS="$MAX_PASSES"
+      if [[ "$MAX_PASSES_SET" == "true" ]]; then
+        L_MPASS="$MAX_PASSES"
+      fi
       BS_VAL="$(printf '%s' "$(trim_str "$BUDGET_STATUS")" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
       if [[ -n "$BS_VAL" ]]; then
         case "$BS_VAL" in OK|EXHAUSTED) ;; *) echo "LEDGER_FAIL: invalid --budget-status '$BS_VAL'"; exit 1 ;; esac
         L_BSTAT="$BS_VAL"
+      elif [[ "$L_MPASS" -gt 0 && "$L_PUSED" -gt "$L_MPASS" ]]; then
+        L_BSTAT="EXHAUSTED"
+      elif [[ "$MAX_PASSES_SET" == "true" && "$L_BSTAT" == "EXHAUSTED" && "$L_PUSED" -le "$L_MPASS" ]]; then
+        L_BSTAT="OK"
       fi
 
       LED_TXT="# B3 Review Coverage Ledger"$'\n'
@@ -4599,6 +4686,7 @@ timestamp_utc=${TS_UTC}
       LED_TXT+="base_sha=${L_BASE}"$'\n'
       LED_TXT+="head_sha=${L_HEAD}"$'\n'
       LED_TXT+="target_ref=${L_TREF}"$'\n'
+      LED_TXT+="target_sha=${L_TSHA}"$'\n'
       LED_TXT+="snapshot_sha=${L_SNAP}"$'\n'
       LED_TXT+="size_class=${L_SIZE}"$'\n'
       LED_TXT+="normalized_legacy_size=${L_NLSIZE}"$'\n'
@@ -4626,9 +4714,28 @@ timestamp_utc=${TS_UTC}
     fi
 
     # check
-    if [[ "$L_BSTAT" == "EXHAUSTED" ]] || ([[ "$L_MPASS" -gt 0 && "$L_PUSED" -gt "$L_MPASS" ]]); then
+    if [[ "$L_MPASS" -le 0 ]]; then
+      printf 'LEDGER_INCOMPLETE: unbounded or invalid max_passes (%s)\n' "$L_MPASS"
+      exit 2
+    fi
+    if [[ "$L_BSTAT" == "EXHAUSTED" || "$L_PUSED" -gt "$L_MPASS" ]]; then
       printf 'LEDGER_INCOMPLETE: budget exhausted (passes=%s/%s)\n' "$L_PUSED" "$L_MPASS"
       exit 2
+    fi
+    if [[ "$L_TREF" != "working_tree" ]]; then
+      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${L_TREF}^{commit}"; then
+        printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
+        exit 2
+      fi
+      _CHK_TR_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$_CHK_TR_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
+        exit 2
+      fi
+      if [[ "$_CHK_TR_SHA" != "$L_TSHA" ]]; then
+        printf "LEDGER_STALE: target_ref '%s' moved (%s->%s)\n" "$L_TREF" "$L_TSHA" "$_CHK_TR_SHA"
+        exit 2
+      fi
     fi
 
     FSIG_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-fsig.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-fsig.$$.${RANDOM}.tmp")"
@@ -4681,6 +4788,7 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
+    WAIVED_UNITS=()
     if [[ ${#U_ROWS[@]} -gt 0 ]]; then
       for ur in "${U_ROWS[@]}"; do
       IFS='|' read -r uid grp ufc ulc urisk uspec urat ust ufind urec uhash ufcsv <<< "$ur"
@@ -4706,9 +4814,20 @@ timestamp_utc=${TS_UTC}
           for (i = 1; i <= n2; i++) if (b[i] != "" && !(b[i] in g)) m[++nm] = b[i]
           if (nm > 0) { out = m[1]; for (i = 2; i <= nm; i++) out = out "," m[i]; print out }
         }')"
-        if [[ -n "$MISS_SP" && "$urat" == "none" ]]; then
-          printf 'LEDGER_INCOMPLETE: missing specialist (%s) or rationale on %s\n' "$MISS_SP" "$uid"
-          exit 2
+        if [[ -n "$MISS_SP" ]]; then
+          if [[ "$LU_LVL" == "CRITICAL" ]]; then
+            if ! is_valid_critical_waiver "$urat"; then
+              printf 'LEDGER_INCOMPLETE: mandatory CRITICAL specialist (%s) requires specialist run or valid WAIVER:approved_by=<id>;ticket=<ref>;reason=<10+ chars> on %s\n' "$MISS_SP" "$uid"
+              exit 2
+            fi
+            WAIVED_UNITS+=("${uid}:$(printf '%s' "$MISS_SP" | tr ',' '+')")
+          else
+            rat_t="$(trim_str "$urat")"
+            if [[ "$rat_t" == "none" || ${#rat_t} -lt 5 ]]; then
+              printf 'LEDGER_INCOMPLETE: missing specialist (%s) or rationale on %s\n' "$MISS_SP" "$uid"
+              exit 2
+            fi
+          fi
         fi
       fi
 
@@ -4758,7 +4877,12 @@ timestamp_utc=${TS_UTC}
     rm -f "$FSIG_TMP" "$FLINES_TMP" 2>/dev/null || true
     NORM_TAG=""
     [[ "$ORIG_RAW_SIZE" != "$L_SIZE" ]] && NORM_TAG=" normalized_from=${ORIG_RAW_SIZE}"
-    printf 'LEDGER_GATE_PASS: size=%s risk=%s units=%s/%s cross_unit=%s%s\n' "$L_SIZE" "$L_RISK" "$L_UCNT" "$L_UCNT" "$L_CSTAT" "$NORM_TAG"
+    WAIVER_TAG=""
+    if [[ ${#WAIVED_UNITS[@]} -gt 0 ]]; then
+      WAIVER_TAG=" waivers=$(printf '%s,' "${WAIVED_UNITS[@]}")"
+      WAIVER_TAG="${WAIVER_TAG%,}"
+    fi
+    printf 'LEDGER_GATE_PASS: size=%s risk=%s units=%s/%s cross_unit=%s%s%s\n' "$L_SIZE" "$L_RISK" "$L_UCNT" "$L_UCNT" "$L_CSTAT" "$NORM_TAG" "$WAIVER_TAG"
     exit 0
     ;;
 

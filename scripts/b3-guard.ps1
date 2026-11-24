@@ -35,7 +35,7 @@ param(
     [string]$Action = '',
     [string]$LedgerPath = '',
     [int]$MaxConcurrency = 4,
-    [int]$MaxPasses = 0,
+    [int]$MaxPasses = -1,
     [string]$UnitId = '',
     [string]$Status = '',
     [string]$Findings = '',
@@ -1278,7 +1278,7 @@ function Scan-PathRiskSignals([System.Collections.Hashtable]$Map, [string]$PathV
     $low = $PathVal.ToLowerInvariant()
     if (Test-GeneratedCodePath $low) { Add-SignalTag $Map $PathVal 'generated_code' }
     if ((Test-DocOrAssetPath $low) -or (Test-TestPath $low)) { return }
-    if ((Test-SecretPath $low) -or ($low -match '(^|/)(auth|authn|authz|oauth|oidc|jwt|rbac|acl|session|security|crypto|cipher|secret|token|credential|permission|policy)[^/]*\.')) {
+    if ((Test-SecretPath $low) -or ($low -match '(^|/)(auth|authn|authz|oauth|oidc|jwt|rbac|acl|sessions?|security|crypto|cipher|secrets?|tokens?|credentials?|permissions?|polic(y|ies))(/|$|[^/]*\.)')) {
         Add-SignalTag $Map $PathVal 'auth_security'
     }
     if ($low -match '(^|/)(b3-guard|install[^/]*|sync[^/]*)\.(ps1|sh)$') {
@@ -1730,10 +1730,35 @@ function Get-ScopePathsTreeHash([string]$Root, [string]$TargetCommitSha, [string
     return $hOut
 }
 
+function Get-DefaultMaxPasses([string]$SizeClass) {
+    switch (Normalize-SizeClass $SizeClass) {
+        'L' { return 12 }
+        'XL' { return 12 }
+        'XXL' { return 24 }
+        default { return 5 }
+    }
+}
+
+function Test-CriticalSpecialistWaiver([string]$RationaleVal) {
+    $t = if ($RationaleVal) { $RationaleVal.Trim() } else { '' }
+    if ($t -cnotmatch '^WAIVER:approved_by=([A-Za-z0-9._@-]{2,});ticket=([A-Za-z0-9._#:/-]{2,});reason=([^|;]+)$') {
+        return $false
+    }
+    $app = $Matches[1].Trim()
+    $tkt = $Matches[2].Trim()
+    $rsn = $Matches[3].Trim()
+    $phApp = '^(none|auto|agent|llm|ai|self|n/a|na|tbd|todo|unknown)$'
+    $phTkt = '^(none|n/a|na|tbd|todo|unknown)$'
+    if ($app.Length -lt 2 -or ($app.ToLowerInvariant() -match $phApp)) { return $false }
+    if ($tkt.Length -lt 2 -or ($tkt.ToLowerInvariant() -match $phTkt)) { return $false }
+    if ($rsn.Length -lt 10 -or ($rsn.ToLowerInvariant() -match $phApp)) { return $false }
+    return $true
+}
+
 function Serialize-ReviewLedger([hashtable]$L) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append("# B3 Review Coverage Ledger`n")
-    foreach ($k in @('schema', 'base_sha', 'head_sha', 'target_ref', 'snapshot_sha', 'size_class', 'normalized_legacy_size', 'risk_level', 'risk_signals', 'recommended_specialists', 'contract_files', 'generated_files', 'max_concurrency', 'max_passes', 'passes_used', 'budget_status', 'cross_unit_status', 'cross_unit_tree_hash', 'unit_count')) {
+    foreach ($k in @('schema', 'base_sha', 'head_sha', 'target_ref', 'target_sha', 'snapshot_sha', 'size_class', 'normalized_legacy_size', 'risk_level', 'risk_signals', 'recommended_specialists', 'contract_files', 'generated_files', 'max_concurrency', 'max_passes', 'passes_used', 'budget_status', 'cross_unit_status', 'cross_unit_tree_hash', 'unit_count')) {
         [void]$sb.Append("${k}=$($L[$k])`n")
     }
     [void]$sb.Append("`n## Units`n")
@@ -1785,6 +1810,23 @@ function Parse-ReviewLedger([string]$FullPath) {
     }
     if ($meta['schema'] -cne 'b3-review-ledger-v1') { Fail "LEDGER_CORRUPT: unsupported schema '$($meta['schema'])'" 1 }
     if ($meta['base_sha'] -cnotmatch '^[0-9a-f]{40}$') { Fail 'LEDGER_CORRUPT: invalid base_sha' 1 }
+    if (-not $meta.ContainsKey('target_sha') -or $meta['target_sha'] -eq '') {
+        if ($meta['target_ref'] -ceq 'working_tree') {
+            $meta['target_sha'] = 'none'
+        } elseif ($meta['target_ref'] -cmatch '^[0-9a-f]{40}$') {
+            $meta['target_sha'] = $meta['target_ref']
+        } else {
+            Fail 'LEDGER_CORRUPT: missing target_sha for symbolic target_ref' 1
+        }
+    }
+    if ($meta['target_ref'] -ceq 'working_tree') {
+        if ($meta['target_sha'] -cne 'none') { Fail 'LEDGER_CORRUPT: invalid target_sha' 1 }
+    } elseif ($meta['target_sha'] -cnotmatch '^[0-9a-f]{40}$') {
+        Fail 'LEDGER_CORRUPT: invalid target_sha' 1
+    }
+    if ($meta['max_passes'] -cnotmatch '^[0-9]+$' -or $meta['passes_used'] -cnotmatch '^[0-9]+$') {
+        Fail 'LEDGER_CORRUPT: invalid pass counter' 1
+    }
     $normSize = Normalize-SizeClass $meta['size_class']
     if (-not $normSize) { Fail "LEDGER_CORRUPT: invalid size_class '$($meta['size_class'])'" 1 }
     if ([int]$meta['unit_count'] -ne $units.Count) { Fail 'LEDGER_CORRUPT: unit_count mismatch' 1 }
@@ -3079,10 +3121,14 @@ switch ($Command) {
 
         if ($act -eq 'init') {
             if (Test-Path -LiteralPath $ledgerFull -PathType Container) { Fail 'LEDGER_FAIL: -LedgerPath is a directory' 1 }
+            $maxPassesExplicit = $PSBoundParameters.ContainsKey('MaxPasses')
+            if ($maxPassesExplicit -and $MaxPasses -le 0) {
+                Fail 'LEDGER_FAIL: -MaxPasses must be a positive integer' 1
+            }
             $targetTrim = $TargetRef.Trim()
             $targetCommitSha = ''
             if ($targetTrim) {
-                if ($targetTrim.StartsWith('-')) { Fail "LEDGER_FAIL: invalid -TargetRef '$targetTrim'" 1 }
+                if ($targetTrim.StartsWith('-') -or $targetTrim -match '[\r\n]') { Fail "LEDGER_FAIL: invalid -TargetRef '$targetTrim'" 1 }
                 $trRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetTrim}^{commit}")
                 $targetCommitSha = $trRes.StdOut.Trim()
                 if ($trRes.ExitCode -ne 0 -or -not $targetCommitSha) { Fail "LEDGER_FAIL: invalid -TargetRef '$targetTrim'" 1 }
@@ -3096,6 +3142,7 @@ switch ($Command) {
 
             $inv = Invoke-BuildInventory $RepoRoot $resolvedBase $targetCommitSha $ignored $MaxConcurrency 'LEDGER_FAIL'
             if ($inv.IsEmpty) { Fail 'LEDGER_FAIL: EMPTY_DIFF' 2 }
+            $effectiveMaxPasses = if ($maxPassesExplicit) { $MaxPasses } else { Get-DefaultMaxPasses $inv.SizeClass }
 
             if ($targetCommitSha) {
                 $snapSha = $targetCommitSha
@@ -3140,7 +3187,8 @@ switch ($Command) {
                 schema = 'b3-review-ledger-v1'
                 base_sha = $resolvedBase
                 head_sha = $headSha
-                target_ref = if ($targetTrim) { $targetCommitSha } else { 'working_tree' }
+                target_ref = if ($targetTrim) { $targetTrim } else { 'working_tree' }
+                target_sha = if ($targetCommitSha) { $targetCommitSha } else { 'none' }
                 snapshot_sha = $snapSha
                 size_class = $inv.SizeClass
                 normalized_legacy_size = 'none'
@@ -3150,7 +3198,7 @@ switch ($Command) {
                 contract_files = if ($inv.ContractFiles.Count -gt 0) { $inv.ContractFiles -join ',' } else { 'none' }
                 generated_files = if ($inv.GeneratedFiles.Count -gt 0) { $inv.GeneratedFiles -join ',' } else { 'none' }
                 max_concurrency = [string]$inv.MaxConcurrency
-                max_passes = [string]([Math]::Max(0, $MaxPasses))
+                max_passes = [string]$effectiveMaxPasses
                 passes_used = '0'
                 budget_status = 'OK'
                 cross_unit_status = $crossStatus
@@ -3159,7 +3207,7 @@ switch ($Command) {
                 Units = @($unitRows)
             }
             Write-AtomicLfFile $ledgerFull (Serialize-ReviewLedger $ledger)
-            Write-Output "LEDGER_INIT: path=$ledgerRel size=$($inv.SizeClass) risk=$($inv.RiskLevel) units=$($unitRows.Count) snapshot=$snapSha"
+            Write-Output "LEDGER_INIT: path=$ledgerRel size=$($inv.SizeClass) risk=$($inv.RiskLevel) units=$($unitRows.Count) max_passes=$effectiveMaxPasses snapshot=$snapSha"
             exit 0
         }
 
@@ -3172,12 +3220,18 @@ switch ($Command) {
         $legacyNormNote = if ($origRawSize -cne $normSize) { "${origRawSize}:${normSize}" } else { $ledger['normalized_legacy_size'] }
         $ledger['size_class'] = $normSize
         $ledger['normalized_legacy_size'] = $legacyNormNote
-        $targetCommitSha = if ($ledger['target_ref'] -cne 'working_tree') { $ledger['target_ref'] } else { '' }
+        $targetRefVal = $ledger['target_ref']
+        $targetCommitSha = if ($targetRefVal -cne 'working_tree') { $ledger['target_sha'] } else { '' }
 
         if ($act -eq 'update') {
+            $maxPassesExplicit = $PSBoundParameters.ContainsKey('MaxPasses')
+            if ($maxPassesExplicit -and $MaxPasses -le 0) {
+                Fail 'LEDGER_FAIL: -MaxPasses must be a positive integer' 1
+            }
             $liveScopeUpd = $null
             $liveContractsUpd = @()
             $found = $null
+            $stVal = ''
             $cuVal = if ($CrossUnitStatus.Trim()) { $CrossUnitStatus.Trim().ToUpperInvariant() } else { '' }
             if ($UnitId.Trim()) {
                 $targetU = $UnitId.Trim()
@@ -3208,7 +3262,18 @@ switch ($Command) {
                     }
                 }
             }
-            if (($found -and $found.status -ceq 'REVIEWED') -or ($cuVal -ceq 'REVIEWED')) {
+            if (($found -and $stVal -ceq 'REVIEWED') -or ($cuVal -ceq 'REVIEWED')) {
+                if ($targetRefVal -cne 'working_tree') {
+                    $trLiveRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetRefVal}^{commit}")
+                    $trLiveSha = $trLiveRes.StdOut.Trim()
+                    if ($trLiveRes.ExitCode -ne 0 -or $trLiveSha -cnotmatch '^[0-9a-f]{40}$') {
+                        Fail "LEDGER_STALE: target_ref '$targetRefVal' cannot be resolved" 2
+                    }
+                    $targetCommitSha = $trLiveSha
+                    $ledger['target_sha'] = $trLiveSha
+                    $ledger['head_sha'] = $trLiveSha
+                    $ledger['snapshot_sha'] = $trLiveSha
+                }
                 $liveScopeUpd = Invoke-CollectScopeData $RepoRoot $ledger['base_sha'] $targetCommitSha $ignored 'LEDGER_FAIL'
                 $liveContractsUpd = @($liveScopeUpd.ReviewFiles | Where-Object { Test-ContractPath $_ })
                 $ledger['contract_files'] = if ($liveContractsUpd.Count -gt 0) { $liveContractsUpd -join ',' } else { 'none' }
@@ -3219,7 +3284,7 @@ switch ($Command) {
                     $ledger['recommended_specialists'] = $overallUpdRisk.RecommendedSpecialists
                 }
             }
-            if ($found -and $found.status -ceq 'REVIEWED') {
+            if ($found -and $stVal -ceq 'REVIEWED') {
                 $uFiles = @(Split-CsvList $found.files_csv -AsPaths)
                 $liveURiskUpd = Eval-RiskForSubset $uFiles $liveScopeUpd.FileSignals $liveScopeUpd.FileLines
                 $found.risk = $liveURiskUpd.RiskLevel
@@ -3243,11 +3308,15 @@ switch ($Command) {
                 }
             }
             if ($PassesUsed -ge 0) { $ledger['passes_used'] = [string]$PassesUsed }
-            if ($MaxPasses -gt 0) { $ledger['max_passes'] = [string]$MaxPasses }
+            if ($maxPassesExplicit) { $ledger['max_passes'] = [string]$MaxPasses }
             if ($BudgetStatus.Trim()) {
                 $bs = $BudgetStatus.Trim().ToUpperInvariant()
                 if ($bs -notin @('OK', 'EXHAUSTED')) { Fail "LEDGER_FAIL: invalid -BudgetStatus '$bs'" 1 }
                 $ledger['budget_status'] = $bs
+            } elseif ([int]$ledger['passes_used'] -gt [int]$ledger['max_passes'] -and [int]$ledger['max_passes'] -gt 0) {
+                $ledger['budget_status'] = 'EXHAUSTED'
+            } elseif ($maxPassesExplicit -and $ledger['budget_status'] -ceq 'EXHAUSTED' -and [int]$ledger['passes_used'] -le [int]$ledger['max_passes']) {
+                $ledger['budget_status'] = 'OK'
             }
             Write-AtomicLfFile $ledgerFull (Serialize-ReviewLedger $ledger)
             Write-Output "LEDGER_UPDATED: path=$ledgerRel"
@@ -3257,8 +3326,21 @@ switch ($Command) {
         # check
         $maxP = [int]$ledger['max_passes']
         $usedP = [int]$ledger['passes_used']
-        if ($ledger['budget_status'] -ceq 'EXHAUSTED' -or ($maxP -gt 0 -and $usedP -gt $maxP)) {
+        if ($maxP -le 0) {
+            Fail "LEDGER_INCOMPLETE: unbounded or invalid max_passes ($maxP)" 2
+        }
+        if ($ledger['budget_status'] -ceq 'EXHAUSTED' -or $usedP -gt $maxP) {
             Fail "LEDGER_INCOMPLETE: budget exhausted (passes=$usedP/$maxP)" 2
+        }
+        if ($targetRefVal -cne 'working_tree') {
+            $trChkRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetRefVal}^{commit}")
+            $trChkSha = $trChkRes.StdOut.Trim()
+            if ($trChkRes.ExitCode -ne 0 -or $trChkSha -cnotmatch '^[0-9a-f]{40}$') {
+                Fail "LEDGER_STALE: target_ref '$targetRefVal' cannot be resolved" 2
+            }
+            if ($trChkSha -cne $targetCommitSha) {
+                Fail "LEDGER_STALE: target_ref '$targetRefVal' moved (${targetCommitSha}->${trChkSha})" 2
+            }
         }
 
         $liveScope = Invoke-CollectScopeData $RepoRoot $ledger['base_sha'] $targetCommitSha $ignored 'LEDGER_FAIL'
@@ -3276,6 +3358,7 @@ switch ($Command) {
         }
 
         $liveContracts = @($liveScope.ReviewFiles | Where-Object { Test-ContractPath $_ })
+        $waivedUnits = New-Object System.Collections.Generic.List[string]
         $unitCount = $ledger.Units.Count
         foreach ($u in $ledger.Units) {
             $uid = $u.unit_id
@@ -3294,8 +3377,18 @@ switch ($Command) {
             if ($liveURisk.RecommendedSpecialists -cne 'none') {
                 $recSp = @(Split-CsvList $u.specialists)
                 $missingSp = @((Split-CsvList $liveURisk.RecommendedSpecialists) | Where-Object { $_ -notin $recSp })
-                if ($missingSp.Count -gt 0 -and $u.rationale -ceq 'none') {
-                    Fail "LEDGER_INCOMPLETE: missing specialist ($($missingSp -join ',')) or rationale on $uid" 2
+                if ($missingSp.Count -gt 0) {
+                    if ($liveURisk.RiskLevel -ceq 'CRITICAL') {
+                        if (-not (Test-CriticalSpecialistWaiver $u.rationale)) {
+                            Fail "LEDGER_INCOMPLETE: mandatory CRITICAL specialist ($($missingSp -join ',')) requires specialist run or valid WAIVER:approved_by=<id>;ticket=<ref>;reason=<10+ chars> on $uid" 2
+                        }
+                        [void]$waivedUnits.Add("${uid}:$($missingSp -join '+')")
+                    } else {
+                        $ratTrim = if ($u.rationale) { $u.rationale.Trim() } else { '' }
+                        if ($ratTrim -ceq 'none' -or $ratTrim.Length -lt 5) {
+                            Fail "LEDGER_INCOMPLETE: missing specialist ($($missingSp -join ',')) or rationale on $uid" 2
+                        }
+                    }
                 }
             }
 
@@ -3328,7 +3421,8 @@ switch ($Command) {
         }
 
         $normTag = if ($origRawSize -cne $normSize) { " normalized_from=$origRawSize" } else { '' }
-        Write-Output "LEDGER_GATE_PASS: size=$normSize risk=$($ledger['risk_level']) units=$unitCount/$unitCount cross_unit=$($ledger['cross_unit_status'])$normTag"
+        $waiverTag = if ($waivedUnits.Count -gt 0) { " waivers=$($waivedUnits -join ',')" } else { '' }
+        Write-Output "LEDGER_GATE_PASS: size=$normSize risk=$($ledger['risk_level']) units=$unitCount/$unitCount cross_unit=$($ledger['cross_unit_status'])${normTag}${waiverTag}"
         exit 0
     }
 }

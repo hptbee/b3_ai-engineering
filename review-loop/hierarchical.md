@@ -8,7 +8,7 @@ Load **only** when `size_class` is `L`, `XL`, or `XXL` (never on `always-on` or 
 | --- | --- | --- | --- | --- |
 | `L` (`<50f, <2000L`) | Cohesive logical units when multi-module (<= 4) | 3 iter/unit | Up to 4 | Total reviewer passes <= 12; recommend split if multi-feature |
 | `XL` (`<=100f, <=5000L`) | Cohesive logical units (<= 4) | 3 iter/unit | Up to 4 | Total reviewer passes <= 12; deeper contract + cross-unit review |
-| `XXL` (`>100f or >5000L`, 5k–30k+ LOC) | **Dynamic** cohesive module+test units (no fixed total-unit cap) | 3 iter/unit | Up to 4 (`--max-concurrency 1..4`) | Configurable `--max-passes`; stopping control only (never silently skip units) |
+| `XXL` (`>100f or >5000L`, 5k–30k+ LOC) | **Dynamic** cohesive module+test units (no fixed total-unit cap) | 3 iter/unit | Up to 4 (`--max-concurrency 1..4`) | Default `max_passes=24` (explicit positive `--max-passes N` override; stop `INCOMPLETE` on exhaustion, never skip units) |
 
 ## Five Hierarchical Levels (`XXL` & Multi-Unit `L`/`XL`)
 
@@ -29,7 +29,8 @@ Process active `PENDING`/`IN_PROGRESS`/`STALE` units in batches of `<= max_concu
 2. **Risk-based specialist dispatch per unit:**
    - `LOW`: 1 fresh `b3-reviewer` only (skip specialists; record `rationale=low-risk-doc-or-local`).
    - `MEDIUM`: fresh `b3-reviewer`; add triggered specialist only if domain signal justifies.
-   - `HIGH` / `CRITICAL`: fresh `b3-reviewer` + `recommended_specialists` (unless explicit skip `rationale` recorded) + scoped `verify-run` receipt covering `files_csv` (mandatory for `HIGH`/`CRITICAL` code units).
+   - `HIGH`: fresh `b3-reviewer` + `recommended_specialists` (or explicit `>=5`-char skip rationale) + scoped `verify-run` receipt covering `files_csv` on code units.
+   - `CRITICAL`: fresh `b3-reviewer` + mandatory `recommended_specialists` + scoped `verify-run` receipt on code units (fail closed; free-form rationale rejected — exception allowed only via auditable `WAIVER:approved_by=<id>;ticket=<ref>;reason=<10+ chars>` surfaced in `LEDGER_GATE_PASS`).
 3. **Bounded unit loop:** `Review -> Fix -> Verify (verify-run) -> fresh Re-review` (max 3 iter/unit, `diff-scope -PrevSha` deltas Iter 2+; reuse `fixer_agent` per unit until Tier-1 breaker).
 4. **Update ledger after each unit:** `review-ledger -Action update -LedgerPath ... -UnitId U0N -Status REVIEWED|BLOCKED|INCOMPLETE -Specialists ... -Findings ... -ReceiptPath ... [-PassesUsed N]`.
    - Never rely solely on file-extension exemptions for **generated code** (`*.generated.*`, `*.pb.*`, `*.Designer.cs`, `*.g.cs`): inspect generator inputs/provenance and record verification/rationale in unit notes.
@@ -39,6 +40,6 @@ After units complete (`0` blocking `OPEN`), dispatch fresh `b3-reviewer` (+ `b3-
 
 ### Level 4 — Final Fail-Closed Quality Gate
 Run `scripts/b3-guard.{ps1,sh} review-ledger -Action check -LedgerPath ...` (plus `mechanical-check` / `symbol-check` if edits occurred):
-- Verifies complete live file coverage (no uncovered `review_files`), every unit `REVIEWED` with `0` `OPEN`/unverified `FIXED` findings, fresh `unit_tree_hash` (including `contract_files`) and fresh `cross_unit_tree_hash`, matching live `risk_level` + specialist/rationale compliance, valid non-stale `verify_receipt` (mandatory for `HIGH`/`CRITICAL` code units), and budget within bounds (`OK`).
+- Verifies complete live file coverage (no uncovered `review_files`), unchanged `target_ref` -> `target_sha` (branch movement or missing ref -> `LEDGER_STALE`), every unit `REVIEWED` with `0` `OPEN`/unverified `FIXED` findings, fresh `unit_tree_hash` (including `contract_files`) and fresh `cross_unit_tree_hash`, matching live `risk_level` + mandatory `CRITICAL` specialist/waiver compliance, valid non-stale `verify_receipt` (mandatory for `HIGH`/`CRITICAL` code units), and bounded `max_passes` (`XS/S/M: 5`, `L/XL: 12`, `XXL: 24` unless explicitly overridden with a positive integer).
 - **Resume after interruption:** read `ledger.md`, run `review-ledger normalize` if legacy `SMALL|MEDIUM|LARGE|VERY_LARGE` sizes appear, run `review-ledger check` to identify `PENDING`/`INCOMPLETE`/`STALE` units invalidated by changed files, shared contracts, or risk changes, and re-run only invalidated/unreviewed units plus Level 3 when needed.
 - Budget exhaustion, missing receipt/tool failure, stale unit, or incomplete ledger -> **`INCOMPLETE` or `BLOCKED`** (never `PASS` from silence).
