@@ -681,14 +681,37 @@ function Remove-DirTreeSafely([string]$TargetDir) {
     [System.IO.Directory]::Delete($TargetDir, $false)
 }
 
+function Test-SafeRepoPathSegments([string]$PathValue, [bool]$BlockGit = $true) {
+    if ([string]::IsNullOrEmpty($PathValue)) { return $false }
+    if ($PathValue -match '[\x00-\x1F\x7F]') { return $false }
+    $s = $PathValue -replace '\\', '/'
+    if ($s.Contains(':') -or $s.StartsWith('/') -or $s.EndsWith('/') -or $s.StartsWith('~')) { return $false }
+    foreach ($seg in ($s -split '/')) {
+        if ([string]::IsNullOrEmpty($seg) -or $seg -ceq '.' -or $seg -ceq '..' -or ($seg -match '[\. ]$')) {
+            return $false
+        }
+    }
+    if ($BlockGit -and ($s -imatch '(^|/)\.git(/|$)')) {
+        return $false
+    }
+    return $true
+}
+
 function Resolve-SafeRepoWritePath([string]$Root, [string]$PathArg) {
     if ([string]::IsNullOrWhiteSpace($PathArg)) { return $null }
+    if ($PathArg -match '[\x00-\x1F\x7F]' -or $PathArg.EndsWith(' ')) { return $null }
     $trimmed = $PathArg.Trim()
     $slashArg = $trimmed -replace '\\', '/'
     if (-not $slashArg -or $slashArg -eq '.' -or $slashArg.StartsWith('~') -or $slashArg.EndsWith('/')) { return $null }
-    if ($trimmed -match '[\x00-\x1F\x7F]') { return $null }
-    if ($slashArg -match '(^|/)\.\.(/|$)') { return $null }
-    if ([IO.Path]::DirectorySeparatorChar -eq '\' -and $slashArg -match '^[A-Za-z]:' -and $slashArg -notmatch '^[A-Za-z]:/') { return $null }
+
+    $rawTail = if (([IO.Path]::DirectorySeparatorChar -eq '\') -and ($slashArg -match '^[A-Za-z]:/')) {
+        $slashArg.Substring(3)
+    } elseif ($slashArg.StartsWith('/')) {
+        $slashArg.Substring(1)
+    } else {
+        $slashArg
+    }
+    if (-not (Test-SafeRepoPathSegments $rawTail $false)) { return $null }
 
     $full = $null
     try {
@@ -714,7 +737,7 @@ function Resolve-SafeRepoWritePath([string]$Root, [string]$PathArg) {
     }
 
     $rel = Get-RepoRelativePath $Root $full
-    if (-not $rel -or $rel -eq '.' -or [IO.Path]::IsPathRooted($rel) -or $rel.StartsWith('/') -or $rel.StartsWith('~') -or ($rel -match '^[A-Za-z]:') -or ($rel -match '(^|/)\.\.(/|$)') -or ($rel -match '^\.git(/|$)')) {
+    if (-not $rel -or [IO.Path]::IsPathRooted($rel) -or -not (Test-SafeRepoPathSegments $rel $true)) {
         return $null
     }
 
@@ -905,20 +928,26 @@ function Get-SubmoduleEntryIdentity([string]$Root, [string]$RelPath, [string]$Fa
     return $null
 }
 
-function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnPaths) {
-    $headRes = Invoke-GitCommand $Root @('rev-parse', 'HEAD')
-    $headSha = $headRes.StdOut.Trim()
-    if ($headRes.ExitCode -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') {
-        $detail = if ($headRes.StdErr.Trim()) { $headRes.StdErr.Trim() } else { $headSha }
-        Fail "GIT_ERROR: git rev-parse HEAD failed: $detail" 1
-    }
-
-    $fmRes = Invoke-GitCommand $Root @('config', '--bool', 'core.filemode')
-    $isWinOs = ($env:OS -eq 'Windows_NT')
-    $coreFilemode = if ($fmRes.ExitCode -eq 0) {
-        ($fmRes.StdOut.Trim() -ceq 'true')
+function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnPaths, [string]$TargetCommitSha = '') {
+    $hasTargetCommit = -not [string]::IsNullOrWhiteSpace($TargetCommitSha)
+    if ($hasTargetCommit) {
+        $tArg = $TargetCommitSha.Trim()
+        if ($tArg.StartsWith('-')) {
+            Fail "GIT_ERROR: invalid target commit sha: $tArg" 1
+        }
+        $headRes = Invoke-GitCommand $Root @('rev-parse', '--verify', "$tArg^{commit}")
+        $headSha = $headRes.StdOut.Trim()
+        if ($headRes.ExitCode -ne 0 -or $headSha -cnotmatch '^[0-9a-f]{40}$') {
+            $detail = if ($headRes.StdErr.Trim()) { $headRes.StdErr.Trim() } else { $headSha }
+            Fail "GIT_ERROR: git rev-parse $tArg failed: $detail" 1
+        }
     } else {
-        (-not $isWinOs)
+        $headRes = Invoke-GitCommand $Root @('rev-parse', 'HEAD')
+        $headSha = $headRes.StdOut.Trim()
+        if ($headRes.ExitCode -ne 0 -or $headSha -notmatch '^[0-9a-f]{40}$') {
+            $detail = if ($headRes.StdErr.Trim()) { $headRes.StdErr.Trim() } else { $headSha }
+            Fail "GIT_ERROR: git rev-parse HEAD failed: $detail" 1
+        }
     }
 
     $cleanRel = @()
@@ -938,7 +967,8 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
     $pathsCsv = if ($cleanRel.Count -gt 0) { $cleanRel -join ',' } else { 'ALL' }
 
     $effective = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
-    $lsArgs = @('ls-tree', '-r', 'HEAD')
+    $treeRef = if ($hasTargetCommit) { $headSha } else { 'HEAD' }
+    $lsArgs = @('ls-tree', '-r', $treeRef)
     if ($cleanRel.Count -gt 0) {
         $lsArgs += '--'
         $lsArgs += $cleanRel
@@ -961,124 +991,134 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
         $effective[$p] = "$($meta[0]) $($meta[1]) $($meta[2])"
     }
 
-    $scopeSuffix = if ($cleanRel.Count -gt 0) { @('--') + $cleanRel } else { @() }
-    $hdRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none', 'HEAD') + $scopeSuffix)
-    if ($hdRes.ExitCode -ne 0) {
-        $detail = if ($hdRes.StdErr.Trim()) { $hdRes.StdErr.Trim() } else { $hdRes.StdOut.Trim() }
-        Fail "GIT_ERROR: git diff --raw HEAD failed: $detail" 1
-    }
-    $caRes = Invoke-GitCommand $Root (@('diff', '--cached', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
-    if ($caRes.ExitCode -ne 0) {
-        $detail = if ($caRes.StdErr.Trim()) { $caRes.StdErr.Trim() } else { $caRes.StdOut.Trim() }
-        Fail "GIT_ERROR: git diff --cached --raw failed: $detail" 1
-    }
-    $iwRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
-    if ($iwRes.ExitCode -ne 0) {
-        $detail = if ($iwRes.StdErr.Trim()) { $iwRes.StdErr.Trim() } else { $iwRes.StdOut.Trim() }
-        Fail "GIT_ERROR: git diff --raw index-wt failed: $detail" 1
-    }
-    $untracked = @(Invoke-GitLines $Root (@('ls-files', '--others', '--exclude-standard') + $scopeSuffix))
-
-    $headDiff = Parse-GitRawDiff $hdRes.StdOut $IgnPaths $cleanRel
-    $cachedDiff = Parse-GitRawDiff $caRes.StdOut $IgnPaths $cleanRel
-    $idxWtDiff = Parse-GitRawDiff $iwRes.StdOut $IgnPaths $cleanRel
-
-    $zeroOid = '0000000000000000000000000000000000000000'
-    foreach ($p in @(Sort-Ordinal @($headDiff.Keys))) {
-        $entry = $headDiff[$p]
-        $m = $entry.NewMode
-        $oid = $entry.NewOid
-        $full = Join-Path $Root ($p -replace '/', '\')
-        if ($m -ceq '000000') {
-            if ($effective.ContainsKey($p)) { $effective.Remove($p) }
-            continue
+    $indexDiv = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
+    if (-not $hasTargetCommit) {
+        $fmRes = Invoke-GitCommand $Root @('config', '--bool', 'core.filemode')
+        $isWinOs = ($env:OS -eq 'Windows_NT')
+        $coreFilemode = if ($fmRes.ExitCode -eq 0) {
+            ($fmRes.StdOut.Trim() -ceq 'true')
+        } else {
+            (-not $isWinOs)
         }
-        if ($m -ceq '160000') {
-            $fbOid = if ($oid -cne $zeroOid) {
-                $oid
-            } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq '160000' -and $cachedDiff[$p].NewOid -cne $zeroOid) {
-                $cachedDiff[$p].NewOid
-            } else {
-                ''
-            }
-            $subVal = Get-SubmoduleEntryIdentity $Root $p $fbOid
-            if ($subVal) {
-                $effective[$p] = $subVal
-            } elseif ($effective.ContainsKey($p)) {
-                $effective.Remove($p)
-            }
-            continue
+
+        $scopeSuffix = if ($cleanRel.Count -gt 0) { @('--') + $cleanRel } else { @() }
+        $hdRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none', 'HEAD') + $scopeSuffix)
+        if ($hdRes.ExitCode -ne 0) {
+            $detail = if ($hdRes.StdErr.Trim()) { $hdRes.StdErr.Trim() } else { $hdRes.StdOut.Trim() }
+            Fail "GIT_ERROR: git diff --raw HEAD failed: $detail" 1
         }
-        if ($m -ceq '120000') {
-            if ($oid -cne $zeroOid) {
-                $effective[$p] = "120000 blob $oid"
-            } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq '120000' -and $cachedDiff[$p].NewOid -cne $zeroOid -and (-not $idxWtDiff.ContainsKey($p))) {
-                $effective[$p] = "120000 blob $($cachedDiff[$p].NewOid)"
-            } else {
-                $lSha = Get-SymlinkBlobOid $Root $p
-                if ($lSha) {
-                    $effective[$p] = "120000 blob $lSha"
+        $caRes = Invoke-GitCommand $Root (@('diff', '--cached', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
+        if ($caRes.ExitCode -ne 0) {
+            $detail = if ($caRes.StdErr.Trim()) { $caRes.StdErr.Trim() } else { $caRes.StdOut.Trim() }
+            Fail "GIT_ERROR: git diff --cached --raw failed: $detail" 1
+        }
+        $iwRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
+        if ($iwRes.ExitCode -ne 0) {
+            $detail = if ($iwRes.StdErr.Trim()) { $iwRes.StdErr.Trim() } else { $iwRes.StdOut.Trim() }
+            Fail "GIT_ERROR: git diff --raw index-wt failed: $detail" 1
+        }
+        $untracked = @(Invoke-GitLines $Root (@('ls-files', '--others', '--exclude-standard') + $scopeSuffix))
+
+        $headDiff = Parse-GitRawDiff $hdRes.StdOut $IgnPaths $cleanRel
+        $cachedDiff = Parse-GitRawDiff $caRes.StdOut $IgnPaths $cleanRel
+        $idxWtDiff = Parse-GitRawDiff $iwRes.StdOut $IgnPaths $cleanRel
+
+        $zeroOid = '0000000000000000000000000000000000000000'
+        foreach ($p in @(Sort-Ordinal @($headDiff.Keys))) {
+            $entry = $headDiff[$p]
+            $m = $entry.NewMode
+            $oid = $entry.NewOid
+            $full = Join-Path $Root ($p -replace '/', '\')
+            if ($m -ceq '000000') {
+                if ($effective.ContainsKey($p)) { $effective.Remove($p) }
+                continue
+            }
+            if ($m -ceq '160000') {
+                $fbOid = if ($oid -cne $zeroOid) {
+                    $oid
+                } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq '160000' -and $cachedDiff[$p].NewOid -cne $zeroOid) {
+                    $cachedDiff[$p].NewOid
+                } else {
+                    ''
+                }
+                $subVal = Get-SubmoduleEntryIdentity $Root $p $fbOid
+                if ($subVal) {
+                    $effective[$p] = $subVal
                 } elseif ($effective.ContainsKey($p)) {
                     $effective.Remove($p)
                 }
+                continue
             }
-            continue
-        }
-        if ($oid -cne $zeroOid) {
-            $effective[$p] = "$m blob $oid"
-        } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq $m -and $cachedDiff[$p].NewOid -cne $zeroOid -and (-not $idxWtDiff.ContainsKey($p))) {
-            $effective[$p] = "$m blob $($cachedDiff[$p].NewOid)"
-        } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
-            $wRes = Invoke-GitCommand $Root @('hash-object', '--', $p)
-            $wSha = $wRes.StdOut.Trim()
-            if ($wRes.ExitCode -ne 0 -or $wSha -notmatch '^[0-9a-f]{40}$') {
-                $detail = if ($wRes.StdErr.Trim()) { $wRes.StdErr.Trim() } else { $wSha }
-                Fail "GIT_ERROR: git hash-object failed for ${p}: $detail" 1
+            if ($m -ceq '120000') {
+                if ($oid -cne $zeroOid) {
+                    $effective[$p] = "120000 blob $oid"
+                } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq '120000' -and $cachedDiff[$p].NewOid -cne $zeroOid -and (-not $idxWtDiff.ContainsKey($p))) {
+                    $effective[$p] = "120000 blob $($cachedDiff[$p].NewOid)"
+                } else {
+                    $lSha = Get-SymlinkBlobOid $Root $p
+                    if ($lSha) {
+                        $effective[$p] = "120000 blob $lSha"
+                    } elseif ($effective.ContainsKey($p)) {
+                        $effective.Remove($p)
+                    }
+                }
+                continue
             }
-            $effective[$p] = "$m blob $wSha"
-        } elseif ($effective.ContainsKey($p)) {
-            $effective.Remove($p)
+            if ($oid -cne $zeroOid) {
+                $effective[$p] = "$m blob $oid"
+            } elseif ($cachedDiff.ContainsKey($p) -and $cachedDiff[$p].NewMode -ceq $m -and $cachedDiff[$p].NewOid -cne $zeroOid -and (-not $idxWtDiff.ContainsKey($p))) {
+                $effective[$p] = "$m blob $($cachedDiff[$p].NewOid)"
+            } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
+                $wRes = Invoke-GitCommand $Root @('hash-object', '--', $p)
+                $wSha = $wRes.StdOut.Trim()
+                if ($wRes.ExitCode -ne 0 -or $wSha -notmatch '^[0-9a-f]{40}$') {
+                    $detail = if ($wRes.StdErr.Trim()) { $wRes.StdErr.Trim() } else { $wSha }
+                    Fail "GIT_ERROR: git hash-object failed for ${p}: $detail" 1
+                }
+                $effective[$p] = "$m blob $wSha"
+            } elseif ($effective.ContainsKey($p)) {
+                $effective.Remove($p)
+            }
         }
-    }
 
-    foreach ($p in @(Sort-Ordinal $untracked)) {
-        if (-not $p -or (Test-CheckpointPath $p)) { continue }
-        if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
-        if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
-        if ($headDiff.ContainsKey($p) -and $headDiff[$p].NewMode -cne '000000') { continue }
-        $full = Join-Path $Root ($p -replace '/', '\')
-        $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
-        if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -and ((-not $item.PSObject.Properties['LinkType']) -or ($item.LinkType -ceq 'SymbolicLink'))) {
-            $lSha = Get-SymlinkBlobOid $Root $p
-            if ($lSha) { $effective[$p] = "120000 blob $lSha" }
-        } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
-            $wRes = Invoke-GitCommand $Root @('hash-object', '--', $p)
-            $wSha = $wRes.StdOut.Trim()
-            if ($wRes.ExitCode -ne 0 -or $wSha -notmatch '^[0-9a-f]{40}$') {
-                $detail = if ($wRes.StdErr.Trim()) { $wRes.StdErr.Trim() } else { $wSha }
-                Fail "GIT_ERROR: git hash-object failed for ${p}: $detail" 1
+        foreach ($p in @(Sort-Ordinal $untracked)) {
+            if (-not $p -or (Test-CheckpointPath $p)) { continue }
+            if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
+            if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
+            if ($headDiff.ContainsKey($p) -and $headDiff[$p].NewMode -cne '000000') { continue }
+            $full = Join-Path $Root ($p -replace '/', '\')
+            $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+            if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -and ((-not $item.PSObject.Properties['LinkType']) -or ($item.LinkType -ceq 'SymbolicLink'))) {
+                $lSha = Get-SymlinkBlobOid $Root $p
+                if ($lSha) { $effective[$p] = "120000 blob $lSha" }
+            } elseif (Test-Path -LiteralPath $full -PathType Leaf) {
+                $wRes = Invoke-GitCommand $Root @('hash-object', '--', $p)
+                $wSha = $wRes.StdOut.Trim()
+                if ($wRes.ExitCode -ne 0 -or $wSha -notmatch '^[0-9a-f]{40}$') {
+                    $detail = if ($wRes.StdErr.Trim()) { $wRes.StdErr.Trim() } else { $wSha }
+                    Fail "GIT_ERROR: git hash-object failed for ${p}: $detail" 1
+                }
+                $uMode = '100644'
+                if ($coreFilemode -and (-not $isWinOs) -and (Get-Command test -ErrorAction SilentlyContinue)) {
+                    & test -x $full 2>$null
+                    if ($LASTEXITCODE -eq 0) { $uMode = '100755' }
+                }
+                $effective[$p] = "$uMode blob $wSha"
+            } elseif ((Test-Path -LiteralPath $full -PathType Container) -and (Test-Path -LiteralPath (Join-Path $full '.git'))) {
+                $subVal = Get-SubmoduleEntryIdentity $Root $p ''
+                if ($subVal) { $effective[$p] = $subVal }
             }
-            $uMode = '100644'
-            if ($coreFilemode -and (-not $isWinOs) -and (Get-Command test -ErrorAction SilentlyContinue)) {
-                & test -x $full 2>$null
-                if ($LASTEXITCODE -eq 0) { $uMode = '100755' }
-            }
-            $effective[$p] = "$uMode blob $wSha"
-        } elseif ((Test-Path -LiteralPath $full -PathType Container) -and (Test-Path -LiteralPath (Join-Path $full '.git'))) {
-            $subVal = Get-SubmoduleEntryIdentity $Root $p ''
-            if ($subVal) { $effective[$p] = $subVal }
         }
-    }
 
-    $indexDiv = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
-    foreach ($p in @(Sort-Ordinal @($cachedDiff.Keys))) {
-        $c = $cachedDiff[$p]
-        $hasEff = $effective.ContainsKey($p)
-        $effMode = if ($hasEff) { ($effective[$p] -split ' ', 2)[0] } else { '' }
-        if (($c.NewMode -ceq '000000' -and $hasEff) -or
-            ($c.NewMode -cne '000000' -and ((-not $hasEff) -or ($effMode -cne $c.NewMode)))) {
+        foreach ($p in @(Sort-Ordinal @($cachedDiff.Keys))) {
+            $c = $cachedDiff[$p]
+            $hasEff = $effective.ContainsKey($p)
             $cType = Get-GitEntryType $c.NewMode
-            $indexDiv[$p] = "$($c.NewMode) $cType $($c.NewOid)"
+            $cEntry = "$($c.NewMode) $cType $($c.NewOid)"
+            if (($c.NewMode -ceq '000000' -and $hasEff) -or
+                ($c.NewMode -cne '000000' -and ((-not $hasEff) -or ($effective[$p] -cne $cEntry)))) {
+                $indexDiv[$p] = $cEntry
+            }
         }
     }
 
@@ -1526,25 +1566,36 @@ function Invoke-CollectScopeData([string]$Root, [string]$ResolvedBase, [string]$
             $hdrOldPath = ''
             $curPath = ''
             $curScan = $false
+            $inHunk = $false
             foreach ($dl in ($dRes.StdOut -split "\r?\n")) {
                 if ($dl.StartsWith('diff --git ')) {
-                    $hdrOldPath = ''; $curPath = ''; $curScan = $false
+                    $hdrOldPath = ''; $curPath = ''; $curScan = $false; $inHunk = $false
                     continue
                 }
-                if ($dl.StartsWith('--- ')) {
-                    $hdrOldPath = if ($dl -cne '--- /dev/null' -and $dl.Length -gt 6) { Normalize-PathValue ($dl.Substring(6)) } else { '' }
-                    continue
-                }
-                if ($dl.StartsWith('+++ ')) {
-                    if ($dl -cne '+++ /dev/null' -and $dl.Length -gt 6) {
-                        $curPath = Normalize-PathValue ($dl.Substring(6))
-                    } else {
-                        $curPath = $hdrOldPath
+                if (-not $inHunk) {
+                    if ($dl.StartsWith('--- ')) {
+                        $hdrOldPath = if ($dl -cne '--- /dev/null' -and $dl.Length -gt 6) { Normalize-PathValue ($dl.Substring(6)) } else { '' }
+                        continue
                     }
-                    $curScan = ($curPath -and $scanContentSet.ContainsKey($curPath))
+                    if ($dl.StartsWith('+++ ')) {
+                        if ($dl -cne '+++ /dev/null' -and $dl.Length -gt 6) {
+                            $curPath = Normalize-PathValue ($dl.Substring(6))
+                        } else {
+                            $curPath = $hdrOldPath
+                        }
+                        $curScan = ($curPath -and $scanContentSet.ContainsKey($curPath))
+                        continue
+                    }
+                    if ($dl.StartsWith('@@ ')) {
+                        $inHunk = $true
+                        continue
+                    }
                     continue
                 }
-                if ($curScan -and $curPath -and (($dl.StartsWith('+') -and -not $dl.StartsWith('+++')) -or ($dl.StartsWith('-') -and -not $dl.StartsWith('---')))) {
+                if ($dl.StartsWith('@@ ')) {
+                    continue
+                }
+                if ($curScan -and $curPath -and ($dl.StartsWith('+') -or $dl.StartsWith('-'))) {
                     Scan-LineRiskSignals $fileSignals $curPath ($dl.Substring(1).ToLowerInvariant())
                 }
             }
@@ -4684,6 +4735,10 @@ switch ($Command) {
                 $graphVal = $resGraph
             }
 
+            if ($ancArr.Count -eq 0 -and $graphVal -ceq 'none') {
+                Fail 'CONTEXT_ERROR: empty cache (anchor_paths or graph_index_sha required)' 1
+            }
+
             $sumTrim = if ($SummaryRef) { $SummaryRef.Trim() } else { '' }
             $sumRefVal = 'none'
             $sumShaVal = 'none'
@@ -4882,6 +4937,9 @@ switch ($Command) {
         if ($kv['graph_index_sha'] -cne 'none' -and $kv['graph_index_sha'] -cnotmatch '^[0-9a-f]{40}$') {
             Fail 'CONTEXT_CORRUPT: invalid graph_index_sha' 1
         }
+        if ($kv['anchor_paths'] -ceq 'none' -and $kv['graph_index_sha'] -ceq 'none') {
+            Fail 'CONTEXT_CORRUPT: empty cache (anchor_paths or graph_index_sha required)' 1
+        }
 
         $recSumSpec = $null
         if ($kv['summary_ref'] -ceq 'none') {
@@ -4978,7 +5036,7 @@ switch ($Command) {
             }
         }
 
-        $anchorStatus = 'FRESH'
+        $anchorStatus = if ($kv['anchor_paths'] -ceq 'none') { 'NOT_RECORDED' } else { 'FRESH' }
         if (($reasons -ccontains 'head_diverged') -or ($reasons -ccontains 'anchor_scope_changed') -or ($reasons -ccontains 'anchor_changed')) {
             $anchorStatus = 'STALE'
         }
@@ -4988,7 +5046,7 @@ switch ($Command) {
             Fail "CONTEXT_STALE: scope=$($kv['scope_id']) reasons=$reasonCsv anchor_status=$anchorStatus graph_index=$graphIndexStatus live_lsp_eligible=true" 2
         }
 
-        Write-Output "CONTEXT_FRESH: scope=$($kv['scope_id']) head=$liveHeadSha anchor_status=FRESH graph_index=$graphIndexStatus live_lsp_eligible=true"
+        Write-Output "CONTEXT_FRESH: scope=$($kv['scope_id']) head=$liveHeadSha anchor_status=$anchorStatus graph_index=$graphIndexStatus live_lsp_eligible=true"
         exit 0
     }
 }

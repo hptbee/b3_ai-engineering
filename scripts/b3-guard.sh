@@ -146,17 +146,26 @@ split_csv_lines() {
     raw="${raw%]}"
   fi
   local as_paths="${2:-false}"
-  local IFS=','
-  local part trimmed
-  for part in $raw; do
-    if [[ "$as_paths" == "true" ]]; then
-      trimmed="$(norm_path "$part")"
-    else
-      trimmed="$(trim_str "$part")"
-    fi
-    [[ -z "$trimmed" || "$trimmed" == "none" ]] && continue
-    printf '%s\n' "$trimmed"
-  done
+  local _had_noglob=false
+  case "$-" in
+    *f*) _had_noglob=true ;;
+  esac
+  set -f
+  local -a parts=()
+  IFS=',' read -r -d '' -a parts < <(printf '%s\0' "$raw") || true
+  if [[ ${#parts[@]} -gt 0 ]]; then
+    local part trimmed
+    for part in "${parts[@]}"; do
+      if [[ "$as_paths" == "true" ]]; then
+        trimmed="$(norm_path "$part")"
+      else
+        trimmed="$(trim_str "$part")"
+      fi
+      [[ -z "$trimmed" || "$trimmed" == "none" ]] && continue
+      printf '%s\n' "$trimmed"
+    done
+  fi
+  if ! $_had_noglob; then set +f; fi
 }
 
 path_in_list() {
@@ -902,6 +911,42 @@ _path_within_or_equal() {
   [[ "$cand_cmp" == "$root_cmp" || "$cand_cmp" == "$root_base/"* ]]
 }
 
+check_safe_repo_path_segments() {
+  local LC_ALL=C
+  local raw="$1"
+  local block_git="${2:-true}"
+  [[ -n "$raw" ]] || return 1
+  if [[ "$raw" =~ [[:cntrl:]] ]]; then
+    return 1
+  fi
+  local s="${raw//\\//}"
+  if [[ "$s" == *:* || "$s" == /* || "$s" == */ || "$s" == ~* ]]; then
+    return 1
+  fi
+  local rem="$s" seg
+  while true; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    if [[ -z "$seg" || "$seg" == "." || "$seg" == ".." || "$seg" == *. || "$seg" == *" " ]]; then
+      return 1
+    fi
+    [[ -n "$rem" ]] || break
+  done
+  if [[ "$block_git" == "true" ]]; then
+    local s_low re_git_any='(^|/)\.git(/|$)'
+    s_low="$(printf '%s' "$s" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$s_low" =~ $re_git_any ]]; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
 _SAFE_FULL=""
 _SAFE_REL=""
 validate_repo_write_path() {
@@ -910,6 +955,10 @@ validate_repo_write_path() {
   local LC_ALL=C
   local root="$1"
   local raw_arg="$2"
+  [[ -n "$raw_arg" ]] || return 1
+  if [[ "$raw_arg" =~ [[:cntrl:]] || "$raw_arg" == *" " ]]; then
+    return 1
+  fi
   local p
   p="$(trim_str "$raw_arg")"
   [[ -n "$p" ]] || return 1
@@ -917,14 +966,14 @@ validate_repo_write_path() {
   if [[ "$p" == "." || "$p" == ~* || "$p" == */ ]]; then
     return 1
   fi
-  if [[ "$p" =~ [[:cntrl:]] ]]; then
-    return 1
+
+  local raw_tail="$p"
+  if [[ "$_B3_IS_WINDOWS" == "true" && "$p" =~ ^[A-Za-z]:/ ]]; then
+    raw_tail="${p:3}"
+  elif [[ "$p" == /* ]]; then
+    raw_tail="${p#/}"
   fi
-  local re_dotdot='(^|/)\.\.(/|$)'
-  if [[ "$p" =~ $re_dotdot ]]; then
-    return 1
-  fi
-  if [[ "$_B3_IS_WINDOWS" == "true" ]] && [[ "$p" =~ ^[A-Za-z]: && ! "$p" =~ ^[A-Za-z]:/ ]]; then
+  if ! check_safe_repo_path_segments "$raw_tail" false; then
     return 1
   fi
 
@@ -955,24 +1004,7 @@ validate_repo_write_path() {
     rel="${full:${#prefix}}"
   fi
 
-  while [[ "$rel" == *"//"* ]]; do
-    rel="${rel//\/\///}"
-  done
-  rel="${rel#/}"
-  while [[ "$rel" == ./* ]]; do
-    rel="${rel#./}"
-  done
-  while [[ "$rel" == *"/./"* ]]; do
-    rel="${rel//\/.\///}"
-  done
-  rel="${rel%/.}"
-  [[ -n "$rel" && "$rel" != "." ]] || return 1
-  if [[ "$rel" == /* || "$rel" == ~* || "$rel" =~ ^[A-Za-z]: || "$rel" =~ $re_dotdot ]]; then
-    return 1
-  fi
-  local rel_low re_git='^\.git(/|$)'
-  rel_low="$(printf '%s' "$rel" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-  if [[ "$rel_low" =~ $re_git ]]; then
+  if ! check_safe_repo_path_segments "$rel" true; then
     return 1
   fi
 
@@ -1278,26 +1310,34 @@ compute_tree_fingerprint() {
   local root="$1"
   local rel_csv="$2"
   local ign_csv="$3"
+  local target_commit_sha="${4:-}"
+  local target_trim
+  target_trim="$(trim_str "$target_commit_sha")"
   local head_sha
-  if ! run_git_cmd "$root" rev-parse HEAD; then
-    echo "GIT_ERROR: git rev-parse HEAD failed: $(git_err_detail)"
-    return 1
-  fi
-  head_sha="$(trim_str "$_GIT_STDOUT")"
-  if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"
-    return 1
-  fi
-
-  local is_win_os=false
-  case "$(uname -s 2>/dev/null || printf '')" in
-    MINGW*|MSYS*|CYGWIN*) is_win_os=true ;;
-  esac
-  local core_filemode=false
-  if run_git_cmd "$root" config --bool core.filemode; then
-    [[ "$(trim_str "$_GIT_STDOUT")" == "true" ]] && core_filemode=true
+  if [[ -n "$target_trim" ]]; then
+    if [[ "$target_trim" == -* ]]; then
+      echo "GIT_ERROR: invalid target commit sha: $target_trim"
+      return 1
+    fi
+    if ! run_git_cmd "$root" rev-parse --verify "${target_trim}^{commit}"; then
+      echo "GIT_ERROR: git rev-parse ${target_trim} failed: $(git_err_detail)"
+      return 1
+    fi
+    head_sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git rev-parse ${target_trim} failed: $head_sha"
+      return 1
+    fi
   else
-    ! $is_win_os && core_filemode=true
+    if ! run_git_cmd "$root" rev-parse HEAD; then
+      echo "GIT_ERROR: git rev-parse HEAD failed: $(git_err_detail)"
+      return 1
+    fi
+    head_sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"
+      return 1
+    fi
   fi
 
   local -a ign_arr=()
@@ -1328,204 +1368,226 @@ compute_tree_fingerprint() {
     clean_ign_csv="$(printf '%s\n' "${ign_arr[@]}" | paste -sd ',' -)"
   fi
 
-  local ls_out diff_head_raw diff_cached_raw diff_idx_wt_raw untracked
-  if [[ ${#clean_rel[@]} -gt 0 ]]; then
-    run_git_cmd "$root" ls-tree -r HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
-    ls_out="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
-    diff_head_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
-    diff_cached_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
-    diff_idx_wt_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
-    untracked="$_GIT_STDOUT"
-  else
-    run_git_cmd "$root" ls-tree -r HEAD || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
-    ls_out="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
-    diff_head_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
-    diff_cached_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
-    diff_idx_wt_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
-    untracked="$_GIT_STDOUT"
+  local tree_ref="HEAD"
+  if [[ -n "$target_trim" ]]; then
+    tree_ref="$head_sha"
   fi
 
-  local tasks_raw
-  tasks_raw="$({
-    printf '__HEAD__\n%s\n' "$diff_head_raw"
-    printf '__CACHED__\n%s\n' "$diff_cached_raw"
-    printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
-    printf '__UNTRACKED__\n%s\n' "$untracked"
-  } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
-    function norm_p(s) {
-      gsub(/\r/, "", s)
-      gsub(/\\/, "/", s)
-      sub(/^[ \t]+/, "", s)
-      sub(/[ \t]+$/, "", s)
-      sub(/^\.\//, "", s)
-      while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
-      return s
-    }
-    function is_cp(s) {
-      return (s ~ /^\.b3\/(ship|research-ship|autodev)(\/|$)/)
-    }
-    function in_list(s, arr, n,    i, pat) {
-      for (i = 1; i <= n; i++) {
-        pat = arr[i]
-        if (pat == "") continue
-        if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
-      }
-      return 0
-    }
-    function accept_path(fp) {
-      if (fp == "" || is_cp(fp)) return 0
-      if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
-      if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
-      return 1
-    }
-    function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
-      if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
-      ti = index(line, "\t")
-      if (ti < 3) return
-      meta = substr(line, 2, ti - 2)
-      nmp = split(meta, mp, /[ \t]+/)
-      if (nmp < 5) return
-      nm = mp[2]; noid = mp[4]
-      if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
-      fp = norm_p(substr(line, ti + 1))
-      if (!accept_path(fp)) return
-      if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
-      out_m[fp] = nm
-      out_o[fp] = noid
-    }
-    BEGIN {
-      split("", ign_arr); split("", rel_arr)
-      split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", untr)
-      n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
-      n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
-      sec = ""
-    }
-    { gsub(/\r$/, "", $0) }
-    $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__UNTRACKED__" { sec = $0; next }
-    $0 == "" { next }
-    sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
-    sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
-    sec == "__IDXWT__" {
-      if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
-      ti = index($0, "\t")
-      if (ti < 3) next
-      fp = norm_p(substr($0, ti + 1))
-      if (accept_path(fp)) iw[fp] = 1
-      next
-    }
-    sec == "__UNTRACKED__" {
-      fp = norm_p($0)
-      if (accept_path(fp)) untr[fp] = 1
-      next
-    }
-    END {
-      z = "0000000000000000000000000000000000000000"
-      for (fp in h_m) {
-        m = h_m[fp]; oid = h_o[fp]
-        if (m == "000000") continue
-        if (m == "160000") {
-          fb = (oid != z ? oid : ((fp in c_m && c_m[fp] == "160000" && c_o[fp] != z) ? c_o[fp] : "-"))
-          printf "SUB\t%s\t%s\n", fb, fp
-          continue
-        }
-        if (m == "120000") {
-          if (oid != z) continue
-          if ((fp in c_m) && c_m[fp] == "120000" && c_o[fp] != z && !(fp in iw)) continue
-          printf "LINK\t-\t%s\n", fp
-          continue
-        }
-        if (oid != z) continue
-        if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) continue
-        printf "BLOB\t%s\t%s\n", m, fp
-      }
-      for (fp in untr) {
-        if (!(fp in h_m) || h_m[fp] == "000000") {
-          printf "UNTR\t-\t%s\n", fp
-        }
-      }
-    }
-  ')"
+  local ls_out="" diff_head_raw="" diff_cached_raw="" diff_idx_wt_raw="" untracked="" resolved_lines=""
+  if [[ ${#clean_rel[@]} -gt 0 ]]; then
+    run_git_cmd "$root" ls-tree -r "$tree_ref" -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
+    ls_out="$_GIT_STDOUT"
+  else
+    run_git_cmd "$root" ls-tree -r "$tree_ref" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
+    ls_out="$_GIT_STDOUT"
+  fi
 
-  local resolved_lines="" kind arg p full_p res_val rc_r=0 w_sha l_sha u_mode
-  while IFS=$'\t' read -r kind arg p; do
-    [[ -n "$kind" && -n "$p" ]] || continue
-    full_p="${root}/${p}"
-    case "$kind" in
-      SUB)
-        [[ "$arg" == "-" ]] && arg=""
-        if res_val="$(resolve_submodule_entry "$root" "$p" "$arg")"; then
-          resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
-        else
-          rc_r=$?
-          if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
-        fi
-        ;;
-      LINK)
-        if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
-          resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
-        else
-          rc_r=$?
-          if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
-        fi
-        ;;
-      BLOB)
-        if [[ -f "$full_p" ]]; then
-          if ! run_git_cmd "$root" hash-object -- "$p"; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
-            return 1
+  if [[ -z "$target_trim" ]]; then
+    local is_win_os=false
+    case "$(uname -s 2>/dev/null || printf '')" in
+      MINGW*|MSYS*|CYGWIN*) is_win_os=true ;;
+    esac
+    local core_filemode=false
+    if run_git_cmd "$root" config --bool core.filemode; then
+      [[ "$(trim_str "$_GIT_STDOUT")" == "true" ]] && core_filemode=true
+    else
+      ! $is_win_os && core_filemode=true
+    fi
+
+    if [[ ${#clean_rel[@]} -gt 0 ]]; then
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+      diff_head_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+      diff_cached_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+      diff_idx_wt_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
+      untracked="$_GIT_STDOUT"
+    else
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+      diff_head_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+      diff_cached_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+      diff_idx_wt_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
+      untracked="$_GIT_STDOUT"
+    fi
+
+    local tasks_raw
+    tasks_raw="$({
+      printf '__HEAD__\n%s\n' "$diff_head_raw"
+      printf '__CACHED__\n%s\n' "$diff_cached_raw"
+      printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
+      printf '__UNTRACKED__\n%s\n' "$untracked"
+    } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
+      function norm_p(s) {
+        gsub(/\r/, "", s)
+        gsub(/\\/, "/", s)
+        sub(/^[ \t]+/, "", s)
+        sub(/[ \t]+$/, "", s)
+        sub(/^\.\//, "", s)
+        while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
+        return s
+      }
+      function is_cp(s) {
+        return (s ~ /^\.b3\/(ship|research-ship|autodev)(\/|$)/)
+      }
+      function in_list(s, arr, n,    i, pat) {
+        for (i = 1; i <= n; i++) {
+          pat = arr[i]
+          if (pat == "") continue
+          if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
+        }
+        return 0
+      }
+      function accept_path(fp) {
+        if (fp == "" || is_cp(fp)) return 0
+        if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
+        if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
+        return 1
+      }
+      function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
+        if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
+        ti = index(line, "\t")
+        if (ti < 3) return
+        meta = substr(line, 2, ti - 2)
+        nmp = split(meta, mp, /[ \t]+/)
+        if (nmp < 5) return
+        nm = mp[2]; noid = mp[4]
+        if (length(nm) != 6 || nm !~ /^[0-9]+$/ || length(noid) != 40 || noid !~ /^[0-9a-f]+$/) return
+        fp = norm_p(substr(line, ti + 1))
+        if (!accept_path(fp)) return
+        if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
+        out_m[fp] = nm
+        out_o[fp] = noid
+      }
+      BEGIN {
+        split("", ign_arr); split("", rel_arr)
+        split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", untr)
+        n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
+        n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
+        sec = ""
+      }
+      { gsub(/\r$/, "", $0) }
+      $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__UNTRACKED__" { sec = $0; next }
+      $0 == "" { next }
+      sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
+      sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
+      sec == "__IDXWT__" {
+        if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
+        ti = index($0, "\t")
+        if (ti < 3) next
+        fp = norm_p(substr($0, ti + 1))
+        if (accept_path(fp)) iw[fp] = 1
+        next
+      }
+      sec == "__UNTRACKED__" {
+        fp = norm_p($0)
+        if (accept_path(fp)) untr[fp] = 1
+        next
+      }
+      END {
+        z = "0000000000000000000000000000000000000000"
+        for (fp in h_m) {
+          m = h_m[fp]; oid = h_o[fp]
+          if (m == "000000") continue
+          if (m == "160000") {
+            fb = (oid != z ? oid : ((fp in c_m && c_m[fp] == "160000" && c_o[fp] != z) ? c_o[fp] : "-"))
+            printf "SUB\t%s\t%s\n", fb, fp
+            continue
+          }
+          if (m == "120000") {
+            if (oid != z) continue
+            if ((fp in c_m) && c_m[fp] == "120000" && c_o[fp] != z && !(fp in iw)) continue
+            printf "LINK\t-\t%s\n", fp
+            continue
+          }
+          if (oid != z) continue
+          if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) continue
+          printf "BLOB\t%s\t%s\n", m, fp
+        }
+        for (fp in untr) {
+          if (!(fp in h_m) || h_m[fp] == "000000") {
+            printf "UNTR\t-\t%s\n", fp
+          }
+        }
+      }
+    ')"
+
+    local kind arg p full_p res_val rc_r=0 w_sha l_sha u_mode
+    while IFS=$'\t' read -r kind arg p; do
+      [[ -n "$kind" && -n "$p" ]] || continue
+      full_p="${root}/${p}"
+      case "$kind" in
+        SUB)
+          [[ "$arg" == "-" ]] && arg=""
+          if res_val="$(resolve_submodule_entry "$root" "$p" "$arg")"; then
+            resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+          else
+            rc_r=$?
+            if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
           fi
-          w_sha="$(trim_str "$_GIT_STDOUT")"
-          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
-            return 1
-          fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"${arg} blob ${w_sha}"$'\n'
-        else
-          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
-        fi
-        ;;
-      UNTR)
-        if [[ -L "$full_p" ]]; then
+          ;;
+        LINK)
           if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
             resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
           else
             rc_r=$?
             if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
           fi
-        elif [[ -f "$full_p" ]]; then
-          if ! run_git_cmd "$root" hash-object -- "$p"; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
-            return 1
-          fi
-          w_sha="$(trim_str "$_GIT_STDOUT")"
-          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
-            return 1
-          fi
-          u_mode="100644"
-          if ! $is_win_os && $core_filemode && [[ -x "$full_p" ]]; then u_mode="100755"; fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"${u_mode} blob ${w_sha}"$'\n'
-        elif [[ -d "$full_p" && -e "${full_p}/.git" ]]; then
-          if res_val="$(resolve_submodule_entry "$root" "$p" "")"; then
-            resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+          ;;
+        BLOB)
+          if [[ -f "$full_p" ]]; then
+            if ! run_git_cmd "$root" hash-object -- "$p"; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+              return 1
+            fi
+            w_sha="$(trim_str "$_GIT_STDOUT")"
+            if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+              return 1
+            fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"${arg} blob ${w_sha}"$'\n'
           else
-            rc_r=$?
-            if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
           fi
-        fi
-        ;;
-    esac
-  done <<< "$tasks_raw"
+          ;;
+        UNTR)
+          if [[ -L "$full_p" ]]; then
+            if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
+              resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
+            else
+              rc_r=$?
+              if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+            fi
+          elif [[ -f "$full_p" ]]; then
+            if ! run_git_cmd "$root" hash-object -- "$p"; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+              return 1
+            fi
+            w_sha="$(trim_str "$_GIT_STDOUT")"
+            if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+              return 1
+            fi
+            u_mode="100644"
+            if ! $is_win_os && $core_filemode && [[ -x "$full_p" ]]; then u_mode="100755"; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"${u_mode} blob ${w_sha}"$'\n'
+          elif [[ -d "$full_p" && -e "${full_p}/.git" ]]; then
+            if res_val="$(resolve_submodule_entry "$root" "$p" "")"; then
+              resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+            else
+              rc_r=$?
+              if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+            fi
+          fi
+          ;;
+      esac
+    done <<< "$tasks_raw"
+  fi
 
   local tmp_fp tree_hash
   tmp_fp="$(mktemp "${TMPDIR:-/tmp}/b3-tree-fp.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-tree-fp.$$.${RANDOM}.tmp")"
@@ -1580,7 +1642,7 @@ compute_tree_fingerprint() {
         nmp = split(meta, mp, /[ \t]+/)
         if (nmp < 5) return
         nm = mp[2]; noid = mp[4]
-        if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
+        if (length(nm) != 6 || nm !~ /^[0-9]+$/ || length(noid) != 40 || noid !~ /^[0-9a-f]+$/) return
         fp = norm_p(substr(line, ti + 1))
         if (!accept_path(fp)) return
         if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
@@ -1602,7 +1664,7 @@ compute_tree_fingerprint() {
         if (ti < 2) next
         meta = substr($0, 1, ti - 1)
         nm = split(meta, mp, /[ \t]+/)
-        if (nm < 3 || mp[1] !~ /^[0-9]{6}$/ || (mp[2] != "blob" && mp[2] != "commit") || mp[3] !~ /^[0-9a-f]{40}$/) next
+        if (nm < 3 || length(mp[1]) != 6 || mp[1] !~ /^[0-9]+$/ || (mp[2] != "blob" && mp[2] != "commit") || length(mp[3]) != 40 || mp[3] !~ /^[0-9a-f]+$/) next
         fp = norm_p(substr($0, ti + 1))
         if (!accept_path(fp)) next
         eff[fp] = mp[1] " " mp[2] " " mp[3]
@@ -1651,10 +1713,9 @@ compute_tree_fingerprint() {
         for (fp in c_m) {
           cm = c_m[fp]
           has_e = (fp in eff)
-          em = ""
-          if (has_e) { split(eff[fp], e_p, " "); em = e_p[1] }
-          if ((cm == "000000" && has_e) || (cm != "000000" && (!has_e || em != cm))) {
-            printf "I\t%s\t%s %s %s\n", fp, cm, entry_type(cm), c_o[fp]
+          c_entry = cm " " entry_type(cm) " " c_o[fp]
+          if ((cm == "000000" && has_e) || (cm != "000000" && (!has_e || eff[fp] != c_entry))) {
+            printf "I\t%s\t%s\n", fp, c_entry
           }
         }
         for (fp in eff) {
@@ -2433,20 +2494,28 @@ run_scope_engine() {
     }
     close(unt_f)
 
-    hdr_old = ""; cur_p = ""; cur_s = 0
+    hdr_old = ""; cur_p = ""; cur_s = 0; in_hunk = 0
     while ((getline dl < df_f) > 0) {
       sub(/\r$/, "", dl)
-      if (substr(dl, 1, 11) == "diff --git ") { hdr_old = ""; cur_p = ""; cur_s = 0; continue }
-      if (substr(dl, 1, 4) == "--- ") {
-        hdr_old = (dl != "--- /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : "")
+      if (substr(dl, 1, 11) == "diff --git ") { hdr_old = ""; cur_p = ""; cur_s = 0; in_hunk = 0; continue }
+      if (!in_hunk) {
+        if (substr(dl, 1, 4) == "--- ") {
+          hdr_old = (dl != "--- /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : "")
+          continue
+        }
+        if (substr(dl, 1, 4) == "+++ ") {
+          cur_p = (dl != "+++ /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : hdr_old)
+          cur_s = (cur_p != "" && (cur_p in scan_set) ? 1 : 0)
+          continue
+        }
+        if (substr(dl, 1, 3) == "@@ ") {
+          in_hunk = 1
+          continue
+        }
         continue
       }
-      if (substr(dl, 1, 4) == "+++ ") {
-        cur_p = (dl != "+++ /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : hdr_old)
-        cur_s = (cur_p != "" && (cur_p in scan_set) ? 1 : 0)
-        continue
-      }
-      if (cur_s && ((substr(dl, 1, 1) == "+" && substr(dl, 1, 3) != "+++") || (substr(dl, 1, 1) == "-" && substr(dl, 1, 3) != "---"))) {
+      if (substr(dl, 1, 3) == "@@ ") { continue }
+      if (cur_s && (substr(dl, 1, 1) == "+" || substr(dl, 1, 1) == "-")) {
         scan_line_sigs(cur_p, tolower(substr(dl, 2)))
       }
     }
@@ -6871,6 +6940,11 @@ ${el}"
         GRAPH_VAL="$_COMMIT_SHA"
       fi
 
+      if [[ ${#ANC_ARR[@]} -eq 0 && "$GRAPH_VAL" == "none" ]]; then
+        echo "CONTEXT_ERROR: empty cache (anchor_paths or graph_index_sha required)"
+        exit 1
+      fi
+
       SUM_TRIM="$(trim_str "$SUMMARY_REF")"
       SUM_REF_VAL="none"
       SUM_SHA_VAL="none"
@@ -7134,6 +7208,10 @@ timestamp_utc=${TS_UTC}
       echo "CONTEXT_CORRUPT: invalid graph_index_sha"
       exit 1
     fi
+    if [[ "$REC_ANCHOR_PATHS" == "none" && "$REC_GRAPH_INDEX_SHA" == "none" ]]; then
+      echo "CONTEXT_CORRUPT: empty cache (anchor_paths or graph_index_sha required)"
+      exit 1
+    fi
 
     REC_SUM_FULL=""
     if [[ "$REC_SUMMARY_REF" == "none" ]]; then
@@ -7269,6 +7347,9 @@ timestamp_utc=${TS_UTC}
     fi
 
     ANCHOR_STATUS="FRESH"
+    if [[ "$REC_ANCHOR_PATHS" == "none" ]]; then
+      ANCHOR_STATUS="NOT_RECORDED"
+    fi
     if [[ ${#REASONS[@]} -gt 0 ]]; then
       for r in "${REASONS[@]}"; do
         if [[ "$r" == "head_diverged" || "$r" == "anchor_scope_changed" || "$r" == "anchor_changed" ]]; then
@@ -7281,7 +7362,7 @@ timestamp_utc=${TS_UTC}
       exit 2
     fi
 
-    printf 'CONTEXT_FRESH: scope=%s head=%s anchor_status=FRESH graph_index=%s live_lsp_eligible=true\n' "$REC_SCOPE_ID" "$LIVE_HEAD_SHA" "$GRAPH_INDEX_STATUS"
+    printf 'CONTEXT_FRESH: scope=%s head=%s anchor_status=%s graph_index=%s live_lsp_eligible=true\n' "$REC_SCOPE_ID" "$LIVE_HEAD_SHA" "$ANCHOR_STATUS" "$GRAPH_INDEX_STATUS"
     exit 0
     ;;
 
