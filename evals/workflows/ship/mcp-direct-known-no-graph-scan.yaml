@@ -1,0 +1,9 @@
+id: ship-mcp-direct-known-no-graph-scan-001
+artifact: workflows/ship.md
+intent: When task owned_files and target symbols are already known, /b3-ship applies the direct-known short-circuit instead of running redundant graph scans or repeated MCP probes
+scenario: |
+  A /b3-ship task specifies exact owned_files and target function names in its Context Packet, and codebase-memory is available (or absent).
+  The worker reads the known target files directly (using serena surgical edit if active, else native edit) without running a repository-wide codebase-memory graph scan or re-probing absent MCP tools.
+expected_outcome: PASS
+failure_mode: redundant-graph-scan-or-repeated-absent-mcp-probing
+notes: Verifies direct-known short-circuit and single-detection-per-phase discipline

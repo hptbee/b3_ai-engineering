@@ -1,0 +1,9 @@
+id: review-loop-mcp-fallback-no-false-pass-001
+artifact: review-loop/strategy.md
+intent: MCP timeout, error, or stale graph index during review loop must trigger immediate native fallback and never yield a false PASS
+scenario: |
+  During /b3-review-loop Iteration 1 on a MEDIUM-risk backend diff, codebase-memory returns a timeout and serena errors on a symbol lookup.
+  The reviewer notes MCP degradation concisely, falls back immediately to native Git diff, direct file reads, and b3-guard diff-scope/symbol-check, keeps verify-check mandatory, and emits NO_BLOCKING_FINDINGS only if verified or INCOMPLETE if inspection coverage has a gap.
+expected_outcome: PASS
+failure_mode: mcp-failure-treated-as-clean-pass-or-skips-verification
+notes: Verifies graceful MCP degradation without false PASS or silent gate skipping
