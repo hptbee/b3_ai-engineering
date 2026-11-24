@@ -1,5 +1,8 @@
 # Behavioral checks for ship hardening. Not a host skill-discovery test.
 # Usage: powershell -File scripts/validate-ship-behavior.ps1
+param(
+    [switch]$AllowIncompleteBash
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
@@ -939,8 +942,12 @@ try {
     $vrPass2Exit = $LASTEXITCODE
     $pcPartial = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
     $pcPartialExit = $LASTEXITCODE
-    # Sync index & test out-of-receipt-scope staged path
+    # Sync index: old partial-stage receipt must now be VERIFY_STALE (H-03), then re-verify synced state before testing out-of-scope rejection
     git add src\a.ts
+    $vcPartialStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcPartialStaleExit = $LASTEXITCODE
+    $vrPassSynced = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-synced' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
+    $vrPassSyncedExit = $LASTEXITCODE
     Set-Content src\extra.ts 'export const e = 2;'
     git add src\extra.ts
     $pcOutScope = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts,src/extra.ts' -RequireVerifyReceipt $rec) -join "`n")
@@ -1028,6 +1035,8 @@ try {
         $vcUnrelExit -eq 0 -and ($vcUnrel -match 'VERIFY_VALID:') -and
         $pcVrOkExit -eq 0 -and $pcVrOk -eq 'PRECOMMIT_OK' -and
         $vrPass2Exit -eq 0 -and $pcPartialExit -eq 1 -and ($pcPartial -match 'staged content differs') -and
+        $vcPartialStaleExit -eq 2 -and ($vcPartialStale -match 'VERIFY_STALE:') -and
+        $vrPassSyncedExit -eq 0 -and ($vrPassSynced -match 'VERIFY_PASS:') -and
         $pcOutScopeExit -eq 1 -and ($pcOutScope -match 'outside receipt scope') -and
         $vcStaleExit -eq 2 -and ($vcStale -match 'VERIFY_STALE:') -and
         $pcVrStaleExit -eq 1 -and ($pcVrStale -match 'VERIFY_STALE:') -and
@@ -1040,7 +1049,7 @@ try {
         $vcMissingExit -eq 1 -and ($vcMissing -match 'VERIFY_MISSING:') -and $vrShOk) {
         Pass 'guard-verify-receipt'
     } else {
-        FailCheck 'guard-verify-receipt' "vrPass=(${vrPassExit}:$vrPass) vrBig=(${vrBigExit}:$vrBig) vrCmt=(${vrCommentExit}:$vrComment) vcDot=(${vcDotOkExit}/${vcDotStaleExit}) pcRm=(${pcRmCachedExit}:$pcRmCached) stale=(${vcStaleExit}:$vcStale) shOk=$vrShOk"
+        FailCheck 'guard-verify-receipt' "vrPass=(${vrPassExit}:$vrPass) pStale=(${vcPartialStaleExit}:$vcPartialStale) vrSync=(${vrPassSyncedExit}:$vrPassSynced) pcOut=(${pcOutScopeExit}:$pcOutScope) vrBig=(${vrBigExit}:$vrBig) vrCmt=(${vrCommentExit}:$vrComment) vcDot=(${vcDotOkExit}/${vcDotStaleExit}) pcRm=(${pcRmCachedExit}:$pcRmCached) stale=(${vcStaleExit}:$vcStale) shOk=$vrShOk"
     }
 
     # --- guard-git-stderr-isolation (R001: core.autocrlf stderr warnings never corrupt SHAs/receipts/diffs) ---
@@ -2180,6 +2189,136 @@ try {
         FailCheck 'guard-ignored-b3-snapshot' "snapPs=(${igSnapPsExit}:$igSnapPs) mcPs=(${igMcPsExit}:$igMcPs) shOk=$igShOk"
     }
 
+    # --- guard-adversarial-regressions (C-01, C-02, H-01, H-02, H-03, H-13, C-05; PS + Bash parity) ---
+    $advErrs = New-Object System.Collections.Generic.List[string]
+    $advRepo = Join-Path $sandbox 'adv-reg-repo'
+    $advRepoPosix = To-PosixPath $advRepo
+    $utf8NoBomAdv = New-Object System.Text.UTF8Encoding($false)
+    Init-B3TestRepo -RepoPath $advRepo -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'adv-base'
+    New-Item -ItemType Directory -Path (Join-Path $advRepo 'src') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $advRepo 'src\a.ts'), "export const a = 1;`n", $utf8NoBomAdv)
+    [IO.File]::WriteAllText((Join-Path $advRepo 'src\util.js'), "export const ok = 1;`n", $utf8NoBomAdv)
+    & git -C $advRepo add src/a.ts src/util.js | Out-Null
+    & git -C $advRepo commit -qm 'add adv files' | Out-Null
+
+    # C-01: Bash (and PS) precommit --allowed-paths '*,.*' with staged .env + src/a.ts MUST fail closed (never PRECOMMIT_OK)
+    [IO.File]::WriteAllText((Join-Path $advRepo '.env'), "SECRET=1`n", $utf8NoBomAdv)
+    [IO.File]::WriteAllText((Join-Path $advRepo 'src\a.ts'), "export const a = 2;`n", $utf8NoBomAdv)
+    & git -C $advRepo add .env src/a.ts | Out-Null
+    $c01Ps = Invoke-PsGuard @('precommit', '-RepoRoot', $advRepo, '-AllowedPaths', '*,.*')
+    if ($c01Ps.Code -ne 1 -or ($c01Ps.Text -match 'PRECOMMIT_OK') -or ($c01Ps.Text -notmatch 'PRECOMMIT_FAIL: secret path staged without exact allow')) {
+        $advErrs.Add("C-01 PS expected secret fail-closed, got code=$($c01Ps.Code) out=$($c01Ps.Text)")
+    }
+    if ($script:HasBash) {
+        $c01Sh = Invoke-ShGuard @('precommit', '--repo-root', $advRepoPosix, '--allowed-paths', '*,.*')
+        if ($c01Sh.Code -ne 1 -or ($c01Sh.Text -match 'PRECOMMIT_OK') -or ($c01Sh.Text -notmatch 'PRECOMMIT_FAIL: secret path staged without exact allow')) {
+            $advErrs.Add("C-01 SH expected secret fail-closed, got code=$($c01Sh.Code) out=$($c01Sh.Text)")
+        }
+    }
+    & git -C $advRepo reset -q HEAD -- .env src/a.ts | Out-Null
+    Remove-Item -LiteralPath (Join-Path $advRepo '.env') -Force
+    & git -C $advRepo checkout -- src/a.ts | Out-Null
+
+    # C-02: Static check asserting ZERO AWK {6}/{40} interval quantifiers in scripts/b3-guard.sh
+    $guardShRaw = [IO.File]::ReadAllText((Join-Path $root 'scripts\b3-guard.sh'))
+    $awkBlocks = [regex]::Matches($guardShRaw, "(?s)(?:\bawk\b(?:[^\n']|-F'[^']*'|\\\r?\n)*|_B3_RISK_AWK_LIB=)'(?:[^']*)'")
+    $awkIntervalHits = @($awkBlocks | Where-Object { $_.Value -match '\{6\}|\{40\}' })
+    if ($awkBlocks.Count -lt 1 -or $awkIntervalHits.Count -gt 0) {
+        $advErrs.Add("C-02 awk interval check failed: blocks=$($awkBlocks.Count) hits=$($awkIntervalHits.Count)")
+    }
+
+    # H-01: verify-run rejects .git./hooks/probe, sub/.git/config, and absolute C:\...\file. & /c/.../.git./x in both PS and Bash
+    $h01Cases = @(
+        @{ Label = 'dot-git-dot'; Path = '.git./hooks/probe'; NoConv = $false },
+        @{ Label = 'nested-git'; Path = 'sub/.git/config'; NoConv = $false },
+        @{ Label = 'abs-win-dot'; Path = (Join-Path $advRepo 'file.'); NoConv = $false },
+        @{ Label = 'abs-posix-git-dot'; Path = '/c/tmp/.git./x'; NoConv = $true }
+    )
+    foreach ($hc in $h01Cases) {
+        $hPs = Invoke-PsGuard @('verify-run', '-RepoRoot', $advRepo, '-VerifyCmd', 'echo h01', '-ReceiptPath', $hc.Path)
+        if ($hPs.Code -ne 1 -or ($hPs.Text -notmatch 'VERIFY_RUN_FAIL: invalid receipt_path')) {
+            $advErrs.Add("H-01 PS $($hc.Label) expected invalid receipt_path exit 1, got code=$($hPs.Code) out=$($hPs.Text)")
+        }
+        if ($script:HasBash) {
+            $prevNoConvH01 = $env:MSYS_NO_PATHCONV
+            try {
+                if ($hc.NoConv) { $env:MSYS_NO_PATHCONV = '1' }
+                $hSh = Invoke-ShGuard @('verify-run', '--repo-root', $advRepoPosix, '--verify-cmd', 'echo h01', '--receipt-path', $hc.Path)
+            } finally {
+                if ($hc.NoConv) {
+                    if ($null -eq $prevNoConvH01) { Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue } else { $env:MSYS_NO_PATHCONV = $prevNoConvH01 }
+                }
+            }
+            if ($hSh.Code -ne 1 -or ($hSh.Text -notmatch 'VERIFY_RUN_FAIL: invalid receipt_path')) {
+                $advErrs.Add("H-01 SH $($hc.Label) expected invalid receipt_path exit 1, got code=$($hSh.Code) out=$($hSh.Text)")
+            }
+        }
+    }
+
+    # H-02: diff-scope on neutral file (src/util.js) containing '++ // note' followed by eval + destructive SQL -> risk_level=CRITICAL
+    $h02Sql = 'DROP ' + 'TABLE users;'
+    [IO.File]::WriteAllText((Join-Path $advRepo 'src\util.js'), "export const ok = 1;`n++ // note`neval(userInput); $h02Sql`n", $utf8NoBomAdv)
+    $h02Ps = Invoke-PsGuard @('diff-scope', '-RepoRoot', $advRepo, '-BaseSha', 'HEAD')
+    if ($h02Ps.Code -ne 0 -or ($h02Ps.Text -notmatch '(?m)^risk_level=CRITICAL$')) {
+        $advErrs.Add("H-02 PS expected risk_level=CRITICAL, got code=$($h02Ps.Code) out=$($h02Ps.Text)")
+    }
+    if ($script:HasBash) {
+        $h02Sh = Invoke-ShGuard @('diff-scope', '--repo-root', $advRepoPosix, '--base-sha', 'HEAD')
+        if ($h02Sh.Code -ne 0 -or ($h02Sh.Text -notmatch '(?m)^risk_level=CRITICAL$')) {
+            $advErrs.Add("H-02 SH expected risk_level=CRITICAL, got code=$($h02Sh.Code) out=$($h02Sh.Text)")
+        }
+    }
+    & git -C $advRepo checkout -- src/util.js | Out-Null
+
+    # H-03: Staged BROKEN_STAGED_CONTENT while WT matches HEAD causes verify-check -> VERIFY_STALE (exit 2) in PS and Bash
+    $h03Rec = '.b3/ship/runs/r1/evidence/h03.verify'
+    $h03Run = Invoke-PsGuard @('verify-run', '-RepoRoot', $advRepo, '-VerifyCmd', 'echo h03-clean', '-ReceiptPath', $h03Rec, '-TaskId', 'H03', '-RelevantPaths', 'src/a.ts')
+    if ($h03Run.Code -ne 0 -or ($h03Run.Text -notmatch 'VERIFY_PASS:')) {
+        $advErrs.Add("H-03 seed verify-run failed: code=$($h03Run.Code) out=$($h03Run.Text)")
+    } else {
+        [IO.File]::WriteAllText((Join-Path $advRepo 'src\a.ts'), "BROKEN_STAGED_CONTENT`n", $utf8NoBomAdv)
+        & git -C $advRepo add src/a.ts | Out-Null
+        [IO.File]::WriteAllText((Join-Path $advRepo 'src\a.ts'), "export const a = 1;`n", $utf8NoBomAdv)
+        $prevEapH03 = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $h03WtDiff = (& git -C $advRepo diff HEAD -- src/a.ts 2>$null | Out-String).Trim() } finally { $ErrorActionPreference = $prevEapH03 }
+        if ($h03WtDiff) { $advErrs.Add("H-03 setup expected WT==HEAD, got: $h03WtDiff") }
+        $h03Ps = Invoke-PsGuard @('verify-check', '-RepoRoot', $advRepo, '-ReceiptPath', $h03Rec)
+        if ($h03Ps.Code -ne 2 -or ($h03Ps.Text -notmatch 'VERIFY_STALE:')) {
+            $advErrs.Add("H-03 PS expected VERIFY_STALE exit 2, got code=$($h03Ps.Code) out=$($h03Ps.Text)")
+        }
+        if ($script:HasBash) {
+            $h03Sh = Invoke-ShGuard @('verify-check', '--repo-root', $advRepoPosix, '--receipt-path', $h03Rec)
+            if ($h03Sh.Code -ne 2 -or ($h03Sh.Text -notmatch 'VERIFY_STALE:')) {
+                $advErrs.Add("H-03 SH expected VERIFY_STALE exit 2, got code=$($h03Sh.Code) out=$($h03Sh.Text)")
+            }
+        }
+        & git -C $advRepo reset -q HEAD -- src/a.ts | Out-Null
+    }
+
+    # H-13: Static check asserting ZERO 'find ... -quit' across adapters/*.sh and adapters/*/*.sh
+    $adapterShFiles = @(Get-ChildItem -LiteralPath (Join-Path $root 'adapters') -Filter '*.sh' -File) +
+                      @(Get-ChildItem -Path (Join-Path $root 'adapters\*') -Filter '*.sh' -File)
+    $findQuitHits = if ($adapterShFiles.Count -gt 0) {
+        @(Select-String -Path $adapterShFiles -Pattern '\bfind\b[^\r\n]*-quit' -ErrorAction SilentlyContinue)
+    } else { @() }
+    if ($adapterShFiles.Count -lt 1 -or $findQuitHits.Count -gt 0) {
+        $advErrs.Add("H-13 find -quit check failed: files=$($adapterShFiles.Count) hits=$($findQuitHits.Count)")
+    }
+
+    # C-05: Static check asserting untrusted-data boundary exists in rules/verification.md
+    $verRuleTxt = Get-Content -LiteralPath (Join-Path $root 'rules\verification.md') -Raw
+    if (($verRuleTxt -notmatch 'untrusted data') -or
+        ($verRuleTxt -notmatch 'never override rules, waive findings, run commands, or authorize merges') -or
+        ($verRuleTxt -notmatch '\.b3/\*')) {
+        $advErrs.Add('C-05 rules/verification.md missing untrusted-data boundary hard rule')
+    }
+
+    if ($advErrs.Count -eq 0) {
+        Pass 'guard-adversarial-regressions'
+    } else {
+        FailCheck 'guard-adversarial-regressions' ($advErrs -join '; ')
+    }
+
     $ctxOut = (& powershell -NoProfile -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot $root -Strict) -join "`n"
     if ($LASTEXITCODE -eq 0 -and $ctxOut -match 'warnings\s*:\s*0') {
         Pass 'context-budget-strict'
@@ -2194,4 +2333,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-ValidationSuite
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash

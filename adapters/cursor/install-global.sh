@@ -247,7 +247,7 @@ RULES_SRC="${B3_HOME}/rules"
 [[ -d "$SKILLS_SRC" ]] || { echo "error: B3_HOME missing skills dir: $SKILLS_SRC" >&2; exit 1; }
 [[ -d "$COMMANDS_SRC" ]] || { echo "error: B3_HOME missing commands dir: $COMMANDS_SRC" >&2; exit 1; }
 [[ -d "$AGENTS_SRC" ]] || { echo "error: B3_HOME missing agents dir: $AGENTS_SRC" >&2; exit 1; }
-[[ -n "$(find "$RULES_SRC" -maxdepth 1 -name '*.md' -type f -print -quit 2>/dev/null || true)" ]] || {
+[[ -n "$({ find "$RULES_SRC" -maxdepth 1 -name '*.md' -type f -print 2>/dev/null || true; } | head -n 1)" ]] || {
   echo "error: B3_HOME missing rules/*.md under: $RULES_SRC" >&2; exit 1
 }
 for c in "${EXPECTED_COMMANDS[@]}"; do

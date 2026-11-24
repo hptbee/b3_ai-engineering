@@ -1,6 +1,9 @@
 # Lightweight behavioral checks for Markdown model preferences.
 # Verifies example template, workflow references, installer init/preservation, missing-file fallback, gitignore, and zero always-on bloat.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-model-preferences.ps1
+param(
+    [switch]$AllowIncompleteBash
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
@@ -190,4 +193,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-ValidationSuite
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash

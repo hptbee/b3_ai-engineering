@@ -2,6 +2,9 @@
 # Verifies routing contract, 6 workflow hooks + hint-only subagents, Iter 2+ cache reuse/invalidation,
 # stale graph-index vs live-LSP semantics, security containment/tamper fail-closed, 4-host compat, and 0 always-on bloat.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-context-routing.ps1
+param(
+    [switch]$AllowIncompleteBash
+)
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -321,6 +324,17 @@ try {
     Add-Err $g3Errs (Test-CrossShellCheck -Rec $r1 -Label 'inv-contract-changed' -ExpectedCode 2 -MatchPattern $c3AncStale -Opts @{ ScopeId = 'rl-iter1' })
     [void](Invoke-GitQuiet $rCache @('checkout', '--', 'src/contracts/order.ts'))
 
+    # Invalidation 2b (H-03): staged broken content in anchor while WT matches HEAD -> anchor_changed (exit 2)
+    $authOrig = [System.IO.File]::ReadAllText((Join-Path $rCache 'src\deps\auth.ts'), $utf8NoBom)
+    Write-LfFile (Join-Path $rCache 'src\deps\auth.ts') "BROKEN_STAGED_CONTENT`n"
+    [void](Invoke-GitQuiet $rCache @('add', 'src/deps/auth.ts'))
+    Write-LfFile (Join-Path $rCache 'src\deps\auth.ts') $authOrig
+    $prevEapH03 = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $wtDiffAuth = (& git -C $rCache diff HEAD -- src/deps/auth.ts 2>$null | Out-String).Trim() } finally { $ErrorActionPreference = $prevEapH03 }
+    if ($wtDiffAuth) { $g3Errs.Add("H-03 setup expected WT==HEAD on src/deps/auth.ts, got: $wtDiffAuth") }
+    Add-Err $g3Errs (Test-CrossShellCheck -Rec $r1 -Label 'inv-anchor-staged-divergence' -ExpectedCode 2 -MatchPattern $c3AncStale -Opts @{ ScopeId = 'rl-iter1' })
+    [void](Invoke-GitQuiet $rCache @('reset', '-q', 'HEAD', '--', 'src/deps/auth.ts'))
+
     # Invalidation 3: changed summary_ref digest
     Write-LfFile $sumFull "# Iter 1 Summary`nMutated digest`n"
     Add-Err $g3Errs (Test-CrossShellCheck -Rec $r1 -Label 'inv-summary-changed' -ExpectedCode 2 `
@@ -601,6 +615,36 @@ try {
         -MatchPattern '^CONTEXT_ERROR: mid-operation git state$' -Opts @{ ScopeId = 'sec-scope' }).Err
     Remove-Item -LiteralPath $mergeHead -Force
 
+    # 5i. Empty context-cache fail-closed (record & tampered check) + graph-only anchor_status=NOT_RECORDED
+    $emptyRecPat = '^CONTEXT_ERROR: empty cache \(anchor_paths or graph_index_sha required\)$'
+    Add-Err $g5Errs (Invoke-CtxParity -RepoDir $rSec -Action 'record' -CachePath '.b3/ship/ctx/empty-no-sum.cache' -Label 'empty-cache-record-no-summary' `
+        -ExpectedCode 1 -MatchPattern $emptyRecPat -Opts @{ ScopeId = 'sec-empty'; AnchorPaths = 'none'; GraphIndexSha = 'none' }).Err
+    Add-Err $g5Errs (Invoke-CtxParity -RepoDir $rSec -Action 'record' -CachePath '.b3/ship/ctx/empty-with-sum.cache' -Label 'empty-cache-record-with-summary' `
+        -ExpectedCode 1 -MatchPattern $emptyRecPat -Opts @{ ScopeId = 'sec-empty'; AnchorPaths = 'none'; GraphIndexSha = 'none'; SummaryRef = $secSumRel }).Err
+
+    $secSumSha = (Get-FileHash -LiteralPath $secSumFull -Algorithm SHA256).Hash.ToLowerInvariant()
+    $emptyCorruptPat = '^CONTEXT_CORRUPT: empty cache \(anchor_paths or graph_index_sha required\)$'
+    $tamperEmptyNoSum = "schema=b3-context-v1`nscope_id=sec-empty`nhead_sha=$secHead`nanchor_paths=none`nanchor_hash=none`ngraph_index_sha=none`nsummary_ref=none`nsummary_sha256=none`ntimestamp_utc=2026-11-24T00:00:00Z`n"
+    Write-LfFile $tamperFull $tamperEmptyNoSum
+    Add-Err $g5Errs (Invoke-CtxParity -RepoDir $rSec -Action 'check' -CachePath $tamperRel -Label 'tamper-empty-cache-no-summary' `
+        -ExpectedCode 1 -MatchPattern $emptyCorruptPat).Err
+    $tamperEmptyWithSum = "schema=b3-context-v1`nscope_id=sec-empty`nhead_sha=$secHead`nanchor_paths=none`nanchor_hash=none`ngraph_index_sha=none`nsummary_ref=$secSumRel`nsummary_sha256=$secSumSha`ntimestamp_utc=2026-11-24T00:00:00Z`n"
+    Write-LfFile $tamperFull $tamperEmptyWithSum
+    Add-Err $g5Errs (Invoke-CtxParity -RepoDir $rSec -Action 'check' -CachePath $tamperRel -Label 'tamper-empty-cache-with-summary' `
+        -ExpectedCode 1 -MatchPattern $emptyCorruptPat).Err
+
+    # Remove untracked linked-out junction from 5a so repo WT is clean for graph-only freshness check
+    [System.IO.Directory]::Delete((Join-Path $rSec 'linked-out'), $false)
+    $graphOnlyRec = Test-RecordParity -RepoDir $rSec -BaseCacheRel '.b3/ship/ctx/graph-only' -Label 'graph-only-record' `
+        -MatchPattern "^CONTEXT_RECORDED: \.b3/ship/ctx/graph-only-ps\.ctx scope=sec-graph-only head=$secHead anchor_hash=none graph_index_sha=$secHead$" `
+        -Opts @{ ScopeId = 'sec-graph-only'; AnchorPaths = 'none'; GraphIndexSha = $secHead }
+    Add-Err $g5Errs $graphOnlyRec.Err
+    if ($graphOnlyRec.Ok) {
+        Add-Err $g5Errs (Test-CrossShellCheck -Rec $graphOnlyRec -Label 'graph-only-anchor-not-recorded' -ExpectedCode 0 `
+            -MatchPattern "^CONTEXT_FRESH: scope=sec-graph-only head=$secHead anchor_status=NOT_RECORDED graph_index=FRESH live_lsp_eligible=true$" `
+            -Opts @{ ScopeId = 'sec-graph-only'; GraphIndexSha = $secHead })
+    }
+
     if ($g5Errs.Count -eq 0) { Pass 'security-containment-and-tamper-fail-closed' } else { FailCheck 'security-containment-and-tamper-fail-closed' ($g5Errs -join '; ') }
 
     # =========================================================================
@@ -631,9 +675,21 @@ try {
     if ($mcPs.Text -notmatch '(?m)^warnings\s*:\s*0$') { $g6Errs.Add('measure-context warnings != 0') }
     if ($mcPs.Text -match '(?m)^context_routing\s*:\s*(\d+)\s+B\b') {
         $crMeasured = [int]$Matches[1]
-        if ($crMeasured -lt 1 -or $crMeasured -gt 3200) { $g6Errs.Add("context_routing measured=$crMeasured B (> 3200 B)") }
+        if ($crMeasured -lt 1 -or $crMeasured -gt 3000) { $g6Errs.Add("context_routing measured=$crMeasured B (> 3000 B)") }
     } else {
         $g6Errs.Add('measure-context missing context_routing line')
+    }
+
+    # M-13 headroom caps (LF bytes)
+    foreach ($hb in @(
+        @{ Rel = 'review-loop\strategy.md'; Max = 5200 },
+        @{ Rel = 'workflows\references\context-routing.md'; Max = 3000 },
+        @{ Rel = 'skills\engineering\problem-solving\SKILL.md'; Max = 3850 }
+    )) {
+        $hBytes = Get-LfByteLength (Join-Path $root $hb.Rel)
+        if ($hBytes -lt 1 -or $hBytes -gt $hb.Max) {
+            $g6Errs.Add("M-13 headroom exceeded: $($hb.Rel)=$hBytes B (> $($hb.Max) B)")
+        }
     }
 
     $aoPattern = 'context-routing\.md|context-cache|codebase[\s-]*memory|serena'
@@ -664,4 +720,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-ValidationSuite
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash

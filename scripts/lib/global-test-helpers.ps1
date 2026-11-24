@@ -5,25 +5,37 @@ $script:HelpersRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:FailedCount = 0
 $script:PassedCount = 0
 
-$script:GitBash = ''
-foreach ($candidate in @('C:\Program Files\Git\bin\bash.exe', 'C:\Program Files (x86)\Git\bin\bash.exe')) {
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-        $script:GitBash = $candidate
-        break
+function Resolve-B3BashPath {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:ProgramFiles) {
+        $candidates.Add((Join-Path $env:ProgramFiles 'Git\bin\bash.exe'))
     }
-}
-if (-not $script:GitBash) {
-    foreach ($bashCmd in @(Get-Command bash -All -ErrorAction SilentlyContinue)) {
-        if ($bashCmd.Source -and
-            ($bashCmd.Source -notmatch '[\\/]Windows[\\/]System32[\\/]bash\.exe$') -and
-            ($bashCmd.Source -notmatch '[\\/]Microsoft[\\/]WindowsApps[\\/]bash\.exe$') -and
-            (Test-Path -LiteralPath $bashCmd.Source -PathType Leaf)) {
-            $script:GitBash = $bashCmd.Source
-            break
+    if (${env:ProgramFiles(x86)}) {
+        $candidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe'))
+    }
+    $candidates.Add('C:\Program Files\Git\bin\bash.exe')
+    $candidates.Add('C:\Program Files (x86)\Git\bin\bash.exe')
+
+    foreach ($cand in $candidates) {
+        if ($cand -and (Test-Path -LiteralPath $cand -PathType Leaf)) {
+            return $cand
         }
     }
+
+    foreach ($bashCmd in @(Get-Command bash -All -CommandType Application -ErrorAction SilentlyContinue)) {
+        $src = $bashCmd.Source
+        if (-not $src) { continue }
+        if ($src -match '[\\/]Windows[\\/]System32[\\/]bash\.exe$') { continue }
+        if ($src -match '[\\/]Microsoft[\\/]WindowsApps[\\/]bash\.exe$') { continue }
+        if (Test-Path -LiteralPath $src -PathType Leaf) {
+            return $src
+        }
+    }
+    return ''
 }
-$script:HasBash = [bool]($script:GitBash -and (Test-Path -LiteralPath $script:GitBash -PathType Leaf))
+
+$script:GitBash = Resolve-B3BashPath
+$script:HasBash = (-not [string]::IsNullOrEmpty($script:GitBash)) -and (Test-Path -LiteralPath $script:GitBash -PathType Leaf)
 if (-not $script:HasBash) {
     Write-Output 'WARNING: bash not found; cross-shell .sh checks skipped (INCOMPLETE)'
 }
@@ -39,15 +51,22 @@ function FailCheck([string]$Name, [string]$Detail) {
 }
 
 function Complete-ValidationSuite {
+    param(
+        [switch]$AllowIncompleteBash
+    )
     if ($script:FailedCount -gt 0) {
         Write-Output "$($script:FailedCount) check(s) failed"
         exit 1
     }
     if (-not $script:HasBash) {
-        Write-Output 'ok (PS-only; bash skipped - INCOMPLETE)'
-    } else {
-        Write-Output 'ok'
+        if ($AllowIncompleteBash) {
+            Write-Output 'ok (PS-only; bash skipped - AllowIncompleteBash)'
+            exit 0
+        }
+        Write-Output 'INCOMPLETE: bash unavailable (use -AllowIncompleteBash to accept PS-only)'
+        exit 2
     }
+    Write-Output 'ok'
     exit 0
 }
 
@@ -72,30 +91,6 @@ function Invoke-ShScript([string]$ScriptPosix, [string]$ArgsLine) {
     $ErrorActionPreference = 'Continue'
     try {
         $raw = & $script:GitBash -c "'$ScriptPosix' $ArgsLine" 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
-    }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
-    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
-}
-
-function To-PosixPath([string]$PathValue) {
-    return ($PathValue -replace '\\', '/')
-}
-
-function Invoke-PsGuard([string[]]$GuardArgs, [string]$GuardPath = (Join-Path $script:HelpersRepoRoot 'scripts\b3-guard.ps1')) {
-    return (Invoke-PsScript -ScriptPath $GuardPath -ScriptArgs $GuardArgs)
-}
-
-function Invoke-ShGuard([string]$BashCmd) {
-    if (-not $script:HasBash) {
-        return @{ Code = 127; Lines = @('bash not found'); Text = 'bash not found' }
-    }
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & $script:GitBash -c $BashCmd 2>&1
         $code = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prev
@@ -198,6 +193,122 @@ function New-TempGitRepo {
             $out = & git @gitArgs 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "git $($gitArgs -join ' ') failed in ${RepoPath}: $($out -join ' ')"
+            }
+        }
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $prev
+    }
+}
+
+function To-PosixPath([string]$PathValue) {
+    if ($null -eq $PathValue) { return '' }
+    return ($PathValue -replace '\\', '/')
+}
+
+function Format-BashArg([string]$Value) {
+    if ($null -eq $Value) { return "''" }
+    if ($Value -match '["\x00-\x1F\x7F]') {
+        $sb = New-Object System.Text.StringBuilder
+        [void]$sb.Append("`$'")
+        foreach ($ch in $Value.ToCharArray()) {
+            $code = [int]$ch
+            if ($ch -eq '\') { [void]$sb.Append('\\') }
+            elseif ($ch -eq "'") { [void]$sb.Append("\'") }
+            elseif ($ch -eq '"') { [void]$sb.Append('\x22') }
+            elseif ($code -le 0x1F -or $code -eq 0x7F) { [void]$sb.Append(('\x{0:x2}' -f $code)) }
+            else { [void]$sb.Append($ch) }
+        }
+        [void]$sb.Append("'")
+        return $sb.ToString()
+    }
+    return ("'" + ($Value -replace "'", "'\''") + "'")
+}
+
+function Invoke-PsGuard {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)][AllowEmptyString()][string[]]$GuardArgs,
+        [string]$GuardPath = (Join-Path $script:HelpersRepoRoot 'scripts\b3-guard.ps1')
+    )
+    return (Invoke-PsScript -ScriptPath $GuardPath -ScriptArgs $GuardArgs)
+}
+
+function Invoke-ShGuard {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)][AllowEmptyString()][string[]]$GuardArgs,
+        [string]$GuardPosix = (To-PosixPath (Join-Path $script:HelpersRepoRoot 'scripts\b3-guard.sh'))
+    )
+    if (-not $script:HasBash) {
+        return @{ Code = 127; Lines = @('bash not found'); Text = 'bash not found' }
+    }
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add((Format-BashArg $GuardPosix))
+    foreach ($a in @($GuardArgs)) {
+        $parts.Add((Format-BashArg ([string]$a)))
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = & $script:GitBash -c ($parts -join ' ') 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
+    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
+}
+
+function Invoke-ShCmd([string]$BashCmd) {
+    if (-not $script:HasBash) {
+        return @{ Code = 127; Lines = @('bash not found'); Text = 'bash not found' }
+    }
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = & $script:GitBash -c $BashCmd 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
+    return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
+}
+
+function Init-B3TestRepo {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)][string]$RepoPath,
+        [string]$DefaultBranch = 'main',
+        [string]$UserEmail = 'b3-test@example.com',
+        [string]$UserName = 'B3 Test',
+        [switch]$InitialCommit,
+        [string]$InitialFileName = 'README.md',
+        [string]$InitialFileContent = 'base'
+    )
+    New-Item -ItemType Directory -Path $RepoPath -Force | Out-Null
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    Push-Location $RepoPath
+    try {
+        $cmds = @(
+            @('init', '-q'),
+            @('symbolic-ref', 'HEAD', "refs/heads/$DefaultBranch"),
+            @('config', 'user.email', $UserEmail),
+            @('config', 'user.name', $UserName)
+        )
+        foreach ($gitArgs in $cmds) {
+            $out = & git @gitArgs 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "git $($gitArgs -join ' ') failed in ${RepoPath}: $($out -join ' ')"
+            }
+        }
+        if ($InitialCommit) {
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText((Join-Path $RepoPath $InitialFileName), "$InitialFileContent`n", $utf8NoBom)
+            foreach ($gitArgs in @(@('add', $InitialFileName), @('commit', '-qm', 'init'))) {
+                $out = & git @gitArgs 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw "git $($gitArgs -join ' ') failed in ${RepoPath}: $($out -join ' ')"
+                }
             }
         }
     } finally {

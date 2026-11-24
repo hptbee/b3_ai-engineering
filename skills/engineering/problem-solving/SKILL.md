@@ -46,8 +46,8 @@ Near miss: “is this design sound?” with no code change yet → stay in Scope
 
 5. **Review (risk-sensitive)**
    Run `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) first; check plan alignment, callers, tests, and `CONFIRMED` residue:
-   - **Low-risk:** 1 focused independent `b3-reviewer` pass if subagents exist (else self-review noting single-agent limit).
-   - **High-risk** (authz, data/schema, concurrency/state, hot perf, cross-module contracts): add matching `b3-{security,architecture,performance}-reviewer`. Not `/b3-review-loop` or `/b3-ship`.
+   - **Low-risk:** 1 independent `b3-reviewer` pass if subagents exist (else self-review noting `SINGLE_AGENT_LIMIT`).
+   - **High-risk** (authz, schema, concurrency, hot perf, cross-module contracts): add matching `b3-{security,architecture,performance}-reviewer` (`SINGLE_AGENT_LIMIT` caps to `INCOMPLETE`). Not `/b3-review-loop` or `/b3-ship`.
 
 6. **Fix**
    Fix confirmed causes in scope, add regression tests, delete only `CONFIRMED` redundancy (`LIKELY REDUNDANT`/`INTENTIONAL COMPLEXITY` untouched); map each edit to a finding.
