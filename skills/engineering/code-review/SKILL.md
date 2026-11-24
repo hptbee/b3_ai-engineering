@@ -13,14 +13,14 @@ Produce one honest review pass on a defined change. Iterative loops use `review-
 ## When to use / not use
 
 - **Use:** reviewing a PR, diff, or recent edits with separate severity, confidence, and evidence.
-- **Do not use:** implementing features (`problem-solving`), external pattern mining (`research-engineering-patterns`), running a multi-iteration loop without `review-loop/strategy.md`, or specialist deep dives (`b3-security-reviewer`, `b3-architecture-reviewer`, hot-path `b3-performance-reviewer`).
+- **Do not use:** implementing (`problem-solving`), pattern mining (`research-engineering-patterns`), multi-iteration loops without `review-loop/strategy.md`, or specialist deep dives (`b3-{security,architecture,performance}-reviewer`).
 
-Near miss: “write tests” → implementation + verification. “Safe to ship?” → this skill + executed verification.
+Near miss: “write tests” → impl + verification. “Safe to ship?” → this skill + verification.
 
 ## Procedure
 
-1. **Scope (delta-first)** — establish target (`delta_files` + boundary callers first on Iteration 2+); empty/wrong target → `UNKNOWN / INCOMPLETE`. Never read full large diffs, unrelated files, historical logs, or full test logs unnecessarily:
-   - **Local (default):** run `scripts/b3-guard.{ps1,sh} diff-scope` (auto `HEAD`/merge-base; filters noise; `NOISE_ONLY` + green checks = `PASS`) + `mechanical-check` (`safety_hits`, `0 LLM tokens`), plus `symbol-check` on refactors.
+1. **Scope (delta-first)** — establish target (`delta_files` + callers first Iter 2+); empty/wrong target → `UNKNOWN / INCOMPLETE`. Skip unrelated files/historical logs:
+   - **Local (default):** run `scripts/b3-guard.{ps1,sh} diff-scope` (`size_class` + `risk_level` / `recommended_specialists`; `NOISE_ONLY` + green checks = `PASS`; `L`/`XL`/`XXL` adds `review-inventory`) + `mechanical-check`, plus `symbol-check` on refactors.
    - **GitHub PR (`#<id>` / URL):** open [`references/github-pr-review.md`](references/github-pr-review.md) — `gh pr view --json ...` and filter noise before diffs.
    - **Post to PR:** follow [`references/github-pr-review.md`](references/github-pr-review.md) gates + `--body-file` / `gh api .../reviews --input` (`COMMENT` default, `CONFIRMED` only, user-confirmed).
 2. **Understand** — inspect changed contracts/ACs (PR/ticket intent if present) and verification evidence (`b3-guard verify-check` on `.verify` receipts or CI checks; never trust self-reported pass claims) without inventing requirements.

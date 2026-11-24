@@ -1,0 +1,10 @@
+id: review-adaptive-sizing-007
+artifact: review-loop/hierarchical.md
+intent: Incomplete XXL coverage ledger or unreviewed units must fail closed (INCOMPLETE), never PASS
+scenario: |
+  XXL PR partitioned into 8 cohesive units (U01..U08)
+  Units U01..U06 return zero findings; U07 and cross-unit review did not run due to budget limit
+  Agent emits PASS citing "no findings reported"
+expected_outcome: FAIL
+failure_mode: silent-unit-skip-pass
+notes: Level 4 requires LEDGER_GATE_PASS with every live review_file covered, units REVIEWED, and valid verify receipts

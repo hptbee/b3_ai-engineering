@@ -22,7 +22,7 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Assumptions
 ## Risks
 ## Size and split check
-- estimate: <SMALL|MEDIUM|LARGE|VERY_LARGE> (~<files>f, ~<lines>L, <areas> areas)
+- estimate: <XS|S|M|L|XL|XXL> (~<files>f, ~<lines>L, <areas> areas) | risk: <LOW|MEDIUM|HIGH|CRITICAL>
 - warning: <none, or 1-line split note when > ~800L or >= 2 independent areas>
 
 ## Tasks

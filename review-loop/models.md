@@ -14,7 +14,7 @@ Only the **orchestrator** declares `PASS`, `INCOMPLETE`, `STUCK`, or STOP. Revie
 
 ## Cost-Preserving Quality Tiering (`/b3-ship` & `/b3-review-loop`)
 
-When the host supports per-agent or per-subagent model selection, split reasoning vs execution across 4 portable tiers without lowering quality (optimize total verified-task cost, never per-call price alone):
+When the host supports per-agent or per-subagent model selection, split reasoning vs execution across 4 portable tiers based on **risk & complexity** (never size alone; optimize total verified-PR cost, never per-call price alone, and never omit mandatory `CRITICAL`/contract coverage to meet a cost target):
 
 | Tier | Roles / Tasks | Why this tier | Guardrails |
 | --- | --- | --- | --- |
@@ -23,7 +23,7 @@ When the host supports per-agent or per-subagent model selection, split reasonin
 | **Fast execution** | Bounded `inline`/`notes` coding, small surgical `Fixer` edits, routine tests, docs | Fast edits when `files`, `line`, `bug_class`, and contracts are already pinned | Protected by `verify-run`, `mechanical-check`/`symbol-check`, and **Deep** `Reviewer` |
 | **Deterministic (0-token)** | `b3-guard` (`diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`check`, `check-wave`, `check-worktree`, `precommit`), Git, lint, builds | Deterministic scripts establish structural facts faster and with zero hallucination | Never replace deterministic CLI verification with LLM self-report |
 
-**Cost-Aware Escalation:** start bounded coding/fixes on **Fast**, multi-file/complex implementation on **Standard** (when host supports a middle tier), and **escalate one tier up** on repeated `verify-run` failures or when the **2-Tier Circuit Breaker** (`review-loop/strategy.md` §1.4) fires.
+**Cost-Aware Escalation:** start bounded coding/fixes on **Fast**, multi-file/complex implementation on **Standard** (when host supports a middle tier), and **escalate one tier up** on repeated `verify-run` failures or when the **2-Tier Circuit Breaker** (`review-loop/strategy.md` §1.3) fires.
 
 Do not put vendor model IDs in `spec.md`, `strategy.md`, skills, or this file. Configure them in host agent files (e.g., Cursor `agents/*.md` `model:` field — see [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md)).
 

@@ -1,0 +1,9 @@
+id: review-adaptive-sizing-008
+artifact: review-loop/hierarchical.md
+intent: Changing shared contracts invalidates dependent reviewed units in the coverage ledger
+scenario: |
+  Unit U02 (src/orders) marked REVIEWED; afterward src/contracts/order.ts is modified
+  Agent reuses cached U02 REVIEWED status without running review-ledger check or re-reviewing U02
+expected_outcome: FAIL
+failure_mode: stale-cache-after-contract-change
+notes: unit_tree_hash includes contract_files so shared interface edits force LEDGER_STALE invalidation

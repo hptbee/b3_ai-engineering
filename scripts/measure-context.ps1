@@ -112,8 +112,9 @@ $reviewCmdBytes = (Get-FileBytes 'commands/b3-review.md') + $crSkillBytes
 $standaloneRevAllBytes = $reviewCmdBytes + $revTplBytes
 $verifyCmdBytes = (Get-FileBytes 'commands/b3-verify.md') + (Get-FileBytes 'skills/engineering/verification/SKILL.md')
 $rlOpBytes = $rlStrategyBytes + (Get-FileBytes 'commands/b3-review-loop.md') + $revAgentBytes
+$rlHierBytes = $rlOpBytes + (Get-FileBytes 'review-loop/hierarchical.md')
 $rlAllBytes = 0
-foreach ($f in @('spec.md', 'strategy.md', 'sizing.md', 'models.md')) {
+foreach ($f in @('spec.md', 'strategy.md', 'sizing.md', 'models.md', 'hierarchical.md')) {
     $rlAllBytes += Get-FileBytes "review-loop/$f"
 }
 
@@ -129,11 +130,12 @@ Write-Output ("always_on_total   : {0,6} B (~{1,4} tok)  [AGENTS.md={2} B, rules
 Write-Output ("ship_core_load    : {0,6} B (~{1,4} tok)  [ship.md={2} B + commands/b3-ship.md]" -f $shipCoreBytes, (Est-Tokens $shipCoreBytes), $wfShipBytes)
 Write-Output ("ship_refs_load    : {0,6} B (~{1,4} tok)  [ship-templates.md + ship-resume.md]" -f $shipRefsBytes, (Est-Tokens $shipRefsBytes))
 Write-Output ("review_loop_op    : {0,6} B (~{1,4} tok)  [strategy={2} B + cmd + reviewer={3} B]" -f $rlOpBytes, (Est-Tokens $rlOpBytes), $rlStrategyBytes, $revAgentBytes)
+Write-Output ("review_hier_load  : {0,6} B (~{1,4} tok)  [review_loop_op + hierarchical.md (L/XL/XXL on demand)]" -f $rlHierBytes, (Est-Tokens $rlHierBytes))
 Write-Output ("review_delta_load : {0,6} B (~{1,4} tok)  [b3-reviewer.md (self-contained)]" -f $reviewDeltaBytes, (Est-Tokens $reviewDeltaBytes))
 Write-Output ("review_iter_subag : {0,6} B (~{1,4} tok)  [b3-reviewer.md + b3-fixer.md (self-contained loop iter)]" -f $revIterSubagBytes, (Est-Tokens $revIterSubagBytes))
 Write-Output ("standalone_cmds   : plan={0} B, impl={1} B, debug={2} B, review={3} B, verify={4} B" -f $planCmdBytes, $implCmdBytes, $debugCmdBytes, $reviewCmdBytes, $verifyCmdBytes)
 Write-Output ("standalone_rev_all: {0,6} B (~{1,4} tok)  [cmd + code-review/SKILL.md + review-template.md]" -f $standaloneRevAllBytes, (Est-Tokens $standaloneRevAllBytes))
-Write-Output ("review_loop_all   : {0,6} B (~{1,4} tok)  [spec+strategy+sizing+models (reference-only)]" -f $rlAllBytes, (Est-Tokens $rlAllBytes))
+Write-Output ("review_loop_all   : {0,6} B (~{1,4} tok)  [spec+strategy+sizing+models+hierarchical (reference-only)]" -f $rlAllBytes, (Est-Tokens $rlAllBytes))
 Write-Output ("agents_roles_total: {0,6} B (~{1,4} tok)  [{2} runtime subagent roles excl. README.md]" -f $agentRolesBytes, (Est-Tokens $agentRolesBytes), $agentRoleFiles.Count)
 Write-Output ("max_skill_file    : {0,6} B  ({1})" -f $maxSkillBytes, $maxSkillFile)
 Write-Output ("max_frontmatter   : {0,6} B  ({1})" -f $maxFmBytes, $maxFmFile)

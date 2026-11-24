@@ -7,4 +7,4 @@ description: Run the autonomous independent review loop to completion (quality g
 
 **Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and run `{B3_HOME}/review-loop/strategy.md` **to completion** (gate, `STUCK`, or cap; never yield after pass 1).
 
-- **Lean load:** skip `spec.md`, `sizing.md`, and `models.md` unless disambiguating; standalone runs store compact state in `.b3/ship/review-loop/<slug>/` (`verify-run`/`verify-check`). For 1 pass use `/b3-review`.
+- **Lean load:** skip `spec.md`, `sizing.md`, `models.md`, and (for `XS`/`S`/`M`) `hierarchical.md` unless needed; standalone runs store compact state/ledger in `.b3/ship/review-loop/<slug>/` (`verify-run`/`verify-check`, `review-inventory`/`review-ledger`). For 1 pass use `/b3-review`.
