@@ -472,7 +472,7 @@ try {
         $ErrorActionPreference = $prevShMc
         $mcShNorm = ($mcShRaw | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
         $optShOk = ($shSnap.Code -eq 0) -and ($snapShId -match '^[0-9a-f]{40}$') -and
-                   ($shDeltaNone.Code -eq 0) -and ($shDeltaNone.Text -match 'review_files=foo,foo/bar\.ts,src/brand_new\.ts') -and ($shDeltaNone.Text -match 'lines=3\b') -and ($shDeltaNone.Text -match 'delta_files=none') -and
+                   ($shDeltaNone.Code -eq 0) -and ($shDeltaNone.Text -match 'size_class=XS\b') -and ($shDeltaNone.Text -match 'review_files=foo,foo/bar\.ts,src/brand_new\.ts') -and ($shDeltaNone.Text -match 'lines=3\b') -and ($shDeltaNone.Text -match 'delta_files=none') -and
                    ($shFlagInj.Code -eq 1) -and ($shFlagInj.Text -match 'DIFF_SCOPE_FAIL:') -and
                    ($shDirRec.Code -eq 1) -and $noSideEffSh -and
                    ($shNonCkVr.Code -eq 0) -and ($shNonCkVc.Code -eq 0) -and ($shNonCkVc.Text -match 'VERIFY_VALID:') -and
@@ -480,7 +480,7 @@ try {
     }
 
     if ($snapU1 -match '^[0-9a-f]{40}$' -and $gitStatusKeepUntr -and $stashKeepEmpty -and
-        $psDeltaNone.Code -eq 0 -and ($psDeltaNone.Text -match 'review_files=foo,foo/bar\.ts,src/untracked\.ts') -and ($psDeltaNone.Text -match 'lines=3\b') -and ($psDeltaNone.Text -match 'delta_files=none') -and
+        $psDeltaNone.Code -eq 0 -and ($psDeltaNone.Text -match 'size_class=XS\b') -and ($psDeltaNone.Text -match 'review_files=foo,foo/bar\.ts,src/untracked\.ts') -and ($psDeltaNone.Text -match 'lines=3\b') -and ($psDeltaNone.Text -match 'delta_files=none') -and
         $psDeltaEdit.Code -eq 0 -and ($psDeltaEdit.Text -match 'delta_files=src/untracked\.ts') -and
         $psDeltaDelNew.Code -eq 0 -and ($psDeltaDelNew.Text -match 'delta_files=src/brand_new\.ts,src/untracked\.ts') -and
         $psFlagInj.Code -eq 1 -and ($psFlagInj.Text -match 'DIFF_SCOPE_FAIL:') -and
@@ -589,7 +589,13 @@ try {
                         ($csImpl -match 'dispatch-naming\.md') -and ($csImpl -match 'b3-impl-t00N') -and ($csImpl -match 'B3_MODELS_PERSONAL')
     $revOk = ($cmdRev -match 'symbol-check') -and ($skRev -match 'Scope \(delta-first\)') -and ($skRev -match 'never auto-fix or start `/b3-review-loop`') -and ($skRev -match 'skip inside `/b3-review-loop`') -and $revTplOk
     $rlBytes = ([System.Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes((Join-Path $root 'review-loop\strategy.md')))).Replace("`r", '').Length
-    $rlOk = ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and ($strat -match 'dispatch fresh `b3-fixer`') -and ($strat -match '`FAIL` on failed check') -and ($strat -match 'EVIDENCED RISK') -and ($rlBytes -le 5400)
+    $hierPath = Join-Path $root 'review-loop\hierarchical.md'
+    $sizingTxt = Get-Content -LiteralPath (Join-Path $root 'review-loop\sizing.md') -Raw
+    $rlOk = (Test-Path -LiteralPath $hierPath -PathType Leaf) -and
+            ($sizingTxt -match 'XS') -and ($sizingTxt -match 'XXL') -and ($sizingTxt -match 'SMALL -> S') -and
+            ($cmdRl -match '\.b3/ship/review-loop/') -and ($strat -match 'SINGLE_AGENT_LIMIT') -and
+            ($strat -match 'dispatch fresh `b3-fixer`') -and ($strat -match '`FAIL` on failed check') -and
+            ($strat -match 'EVIDENCED RISK') -and ($strat -match 'review-inventory') -and ($strat -match 'review-ledger') -and ($rlBytes -le 5400)
     $verOk = ($cmdVer -match 'verify-run') -and ($skVer -match 'verify-check') -and ($skVer -match 'untrusted provenance')
     $agentsContractOk = $true
     foreach ($ra in @('b3-reviewer.md', 'b3-security-reviewer.md', 'b3-architecture-reviewer.md', 'b3-performance-reviewer.md')) {
