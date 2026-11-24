@@ -380,12 +380,14 @@ try {
         }
     }
 
-    $pluginDry = Join-Path $sandbox 'ag-plugin-dry'
-    & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginDry -B3Home $root -DryRun | Out-Null
-    $dryOk = ($LASTEXITCODE -eq 0) -and (-not (Test-Path -LiteralPath $pluginDry))
+    $pluginDryHome = Join-Path $sandbox 'ag-plugin-dry-home'
+    $pluginDry = Join-Path $pluginDryHome '.gemini\config\plugins\b3-ai-engineering'
+    & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginDry -UserHome $pluginDryHome -B3Home $root -DryRun | Out-Null
+    $dryOk = ($LASTEXITCODE -eq 0) -and (-not (Test-Path -LiteralPath $pluginDry)) -and (-not (Test-Path -LiteralPath (Join-Path $pluginDryHome '.gemini\config\skills.json')))
 
+    $pluginUserHome = Join-Path $sandbox 'ag-plugin-home'
     $pluginOut = Join-Path $sandbox 'ag-plugin-out'
-    & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginOut -B3Home $root | Out-Null
+    & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginOut -UserHome $pluginUserHome -B3Home $root | Out-Null
     if ($LASTEXITCODE -ne 0 -or -not $dryOk) {
         FailCheck 'install-antigravity-plugin' "exit=$LASTEXITCODE dryOk=$dryOk"
     } else {
@@ -441,22 +443,32 @@ try {
             }
         }
 
-        & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginOut -B3Home $root | Out-Null
+        & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $pluginOut -UserHome $pluginUserHome -B3Home $root | Out-Null
         $pluginIdemOk = ($LASTEXITCODE -eq 0)
+        $sjFile = Join-Path $pluginUserHome '.gemini\config\skills.json'
+        $sjOk = $false
+        if (Test-Path -LiteralPath $sjFile -PathType Leaf) {
+            try {
+                $sj = Get-Content -LiteralPath $sjFile -Raw | ConvertFrom-Json
+                $sjPaths = @($sj.entries | ForEach-Object { [string]$_.path })
+                $sjOk = ($sjPaths -contains (($root -replace '\\', '/') + '/skills/engineering')) -and
+                        ($sjPaths -contains (($root -replace '\\', '/') + '/adapters/command-skills'))
+            } catch { $sjOk = $false }
+        }
 
         $nonB3 = Join-Path $sandbox 'non-b3-dir'
         New-Item -ItemType Directory -Path $nonB3 | Out-Null
         Set-Content (Join-Path $nonB3 'keep.txt') 'other'
         $nonB3Err = $null
         try {
-            & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $nonB3 -B3Home $root 2>&1 | Out-Null
+            & powershell -NoProfile -File (Join-Path $root 'adapters\antigravity\install-plugin.ps1') -PluginRoot $nonB3 -UserHome $pluginUserHome -B3Home $root 2>&1 | Out-Null
         } catch { $nonB3Err = $_ }
         $refuseNonB3Ok = ($LASTEXITCODE -ne 0 -or $null -ne $nonB3Err) -and (Test-Path -LiteralPath (Join-Path $nonB3 'keep.txt'))
 
-        if ($pjOk -and $rulesOk -and $pSkillsOk -and $agentsOk -and $pluginIdemOk -and $refuseNonB3Ok) {
+        if ($pjOk -and $rulesOk -and $pSkillsOk -and $agentsOk -and $sjOk -and $pluginIdemOk -and $refuseNonB3Ok) {
             Pass 'install-antigravity-plugin'
         } else {
-            FailCheck 'install-antigravity-plugin' "pj=$pjOk rules=$rulesOk skills=$pSkillsOk($($pSkillDirs.Count)) agents=$agentsOk idem=$pluginIdemOk refuse=$refuseNonB3Ok"
+            FailCheck 'install-antigravity-plugin' "pj=$pjOk rules=$rulesOk skills=$pSkillsOk($($pSkillDirs.Count)) agents=$agentsOk sj=$sjOk idem=$pluginIdemOk refuse=$refuseNonB3Ok"
         }
     }
 

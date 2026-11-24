@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Global Antigravity plugin lifecycle manager for B3 AI Engineering (macOS / Linux / Git Bash).
-# Installs, updates, verifies, or uninstalls the canonical B3 plugin bundle under ~/.gemini/config/plugins/b3-ai-engineering.
+# Installs, updates, verifies, or uninstalls the canonical B3 plugin bundle under ~/.gemini/config/plugins/b3-ai-engineering and B3 skill entries in ~/.gemini/config/skills.json.
 # Usage: ./adapters/antigravity/install-plugin.sh [install|update|verify|uninstall] [--plugin-root PATH] [--b3-home PATH] [--user-home PATH] [--dry-run] [--force]
 set -euo pipefail
 
@@ -158,11 +158,458 @@ check_coexistence() {
   fi
 }
 
+_B3_JSON_RT=""
+detect_json_runtime() {
+  if [[ -n "$_B3_JSON_RT" ]]; then return 0; fi
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import json,os,sys' >/dev/null 2>&1; then
+    _B3_JSON_RT="python3"
+  elif command -v python >/dev/null 2>&1 && python -c 'import json,os,sys' >/dev/null 2>&1; then
+    _B3_JSON_RT="python"
+  elif command -v node >/dev/null 2>&1 && node -e 'process.exit(0)' >/dev/null 2>&1; then
+    _B3_JSON_RT="node"
+  else
+    _B3_JSON_RT="none"
+  fi
+}
+
+norm_skill_json_path() {
+  local p="$1"
+  p="${p#"${p%%[![:space:]]*}"}"
+  p="${p%"${p##*[![:space:]]}"}"
+  p="$(upper_drive "$p")"
+  while [[ "$p" == */ && "$p" != "/" && ! "$p" =~ ^[A-Za-z]:/$ ]]; do
+    p="${p%/}"
+  done
+  printf '%s' "$p"
+}
+
+json_escape_str() {
+  local s="$1" out="" i ch
+  for ((i = 0; i < ${#s}; i++)); do
+    ch="${s:$i:1}"
+    case "$ch" in
+      '\') out="${out}\\\\" ;;
+      '"')  out="${out}\\\"" ;;
+      $'\t') out="${out}\\t" ;;
+      $'\r') out="${out}\\r" ;;
+      $'\n') out="${out}\\n" ;;
+      *) out="${out}${ch}" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+build_desired_skills_json_entries() {
+  DESIRED_SKILLS_JSON_ENTRIES=()
+  local raw_list="" dir p
+  if [[ ${#CORE_SKILL_DIRS[@]} -gt 0 ]]; then
+    raw_list="$(
+      for dir in "${CORE_SKILL_DIRS[@]}"; do
+        p="$(norm_skill_json_path "${dir%/*}")"
+        [[ -n "$p" ]] && printf '%s\n' "$p"
+      done | LC_ALL=C sort -u
+    )"
+    while IFS= read -r p; do
+      [[ -n "$p" ]] && DESIRED_SKILLS_JSON_ENTRIES+=("$p")
+    done <<< "$raw_list"
+  fi
+  if [[ ${#CMD_SKILL_DIRS[@]} -gt 0 ]]; then
+    raw_list="$(
+      for dir in "${CMD_SKILL_DIRS[@]}"; do
+        p="$(norm_skill_json_path "${dir%/*}")"
+        [[ -n "$p" ]] && printf '%s\n' "$p"
+      done | LC_ALL=C sort -u
+    )"
+    while IFS= read -r p; do
+      [[ -n "$p" ]] || continue
+      if [[ ${#DESIRED_SKILLS_JSON_ENTRIES[@]} -eq 0 ]] || ! array_contains "$p" "${DESIRED_SKILLS_JSON_ENTRIES[@]}"; then
+        DESIRED_SKILLS_JSON_ENTRIES+=("$p")
+      fi
+    done <<< "$raw_list"
+  fi
+}
+
+collect_uninstall_b3_prefixes() {
+  UNINSTALL_B3_PREFIXES=()
+  local cand
+  if $M_EXISTS && [[ -n "${M_B3_HOME:-}" ]]; then
+    cand="$(norm_skill_json_path "$M_B3_HOME")"
+    [[ -n "$cand" ]] && UNINSTALL_B3_PREFIXES+=("$cand")
+  fi
+  local rfile="${PLUGIN_ROOT}/rules/AGENTS.md"
+  if [[ -f "$rfile" ]] && ! is_link_entry "$rfile"; then
+    cand="$(sed -n 's/.*Generated from B3_HOME:[[:space:]]*`\([^`]*\)`.*/\1/p' "$rfile" | head -n 1 || true)"
+    cand="$(norm_skill_json_path "$cand")"
+    if [[ -n "$cand" ]] && { [[ ${#UNINSTALL_B3_PREFIXES[@]} -eq 0 ]] || ! array_contains "$cand" "${UNINSTALL_B3_PREFIXES[@]}"; }; then
+      UNINSTALL_B3_PREFIXES+=("$cand")
+    fi
+  fi
+  if command -v readlink >/dev/null 2>&1 && [[ -d "${PLUGIN_ROOT}/skills" ]] && ! is_link_entry "${PLUGIN_ROOT}/skills"; then
+    local sk tgt tgt_parent
+    for sk in "${PLUGIN_ROOT}/skills"/*; do
+      [[ -L "$sk" ]] || continue
+      tgt="$(readlink "$sk" 2>/dev/null || true)"
+      if $IS_WINDOWS && command -v cygpath >/dev/null 2>&1; then
+        tgt="$(cygpath -m "$tgt" 2>/dev/null || printf '%s' "$tgt")"
+      elif [[ -n "$tgt" && "$tgt" != /* && ! "$tgt" =~ ^[A-Za-z]: ]]; then
+        tgt_parent="$(canon_path_allow_missing "$(dirname "$sk")")"
+        tgt="${tgt_parent%/}/${tgt}"
+      fi
+      tgt="$(norm_skill_json_path "$tgt")"
+      if [[ "$tgt" =~ ^(.+)/(skills/[^/]+|adapters/command-skills)/[^/]+$ ]]; then
+        cand="$(norm_skill_json_path "${BASH_REMATCH[1]}")"
+        if [[ -n "$cand" ]] && { [[ ${#UNINSTALL_B3_PREFIXES[@]} -eq 0 ]] || ! array_contains "$cand" "${UNINSTALL_B3_PREFIXES[@]}"; }; then
+          UNINSTALL_B3_PREFIXES+=("$cand")
+        fi
+      fi
+    done
+  fi
+}
+
+skills_json_op() {
+  local mode="$1" sj_path="$2" desired_nl="$3" prefixes_nl="$4"
+  detect_json_runtime
+  local is_win_flag="0" force_flag="0" dry_flag="0"
+  $IS_WINDOWS && is_win_flag="1"
+  $FORCE && force_flag="1"
+  $DRY_RUN && dry_flag="1"
+
+  if [[ "$_B3_JSON_RT" == "python3" || "$_B3_JSON_RT" == "python" ]]; then
+    B3_SJ_MODE="$mode" B3_SJ_PATH="$sj_path" B3_SJ_FORCE="$force_flag" \
+    B3_SJ_DRY_RUN="$dry_flag" B3_SJ_IS_WIN="$is_win_flag" \
+    B3_SJ_DESIRED="$desired_nl" B3_SJ_PREFIXES="$prefixes_nl" \
+    "$_B3_JSON_RT" - <<'PYEOF'
+import json, os, re, sys
+
+mode = os.environ["B3_SJ_MODE"]
+sj_path = os.environ["B3_SJ_PATH"]
+force = os.environ.get("B3_SJ_FORCE") == "1"
+dry_run = os.environ.get("B3_SJ_DRY_RUN") == "1"
+is_win = os.environ.get("B3_SJ_IS_WIN") == "1"
+desired = [ln for ln in os.environ.get("B3_SJ_DESIRED", "").splitlines() if ln]
+prefixes = [ln for ln in os.environ.get("B3_SJ_PREFIXES", "").splitlines() if ln]
+
+def norm_p(val):
+    if not isinstance(val, str):
+        return ""
+    p = val.strip().replace("\\", "/")
+    if is_win and re.match(r"^[a-z]:", p):
+        p = p[0].upper() + p[1:]
+    if len(p) > 1 and not re.match(r"^[A-Za-z]:/$", p):
+        p = p.rstrip("/")
+    return p
+
+def cmp_k(val):
+    n = norm_p(val)
+    return n.lower() if is_win else n
+
+def is_b3(val):
+    ck = cmp_k(val)
+    if not ck:
+        return False
+    for raw_px in prefixes:
+        pk = cmp_k(raw_px)
+        if not pk:
+            continue
+        cmd_p = "/adapters/command-skills" if pk == "/" else pk + "/adapters/command-skills"
+        sk_exact = "/skills" if pk == "/" else pk + "/skills"
+        sk_pref = "/skills/" if pk == "/" else pk + "/skills/"
+        if ck == cmd_p or ck == sk_exact or ck.startswith(sk_pref):
+            return True
+    return False
+
+exists = os.path.isfile(sj_path)
+parsed = None
+parse_err = ""
+if exists:
+    try:
+        with open(sj_path, "r", encoding="utf-8") as f:
+            parsed = json.load(f)
+        if not isinstance(parsed, dict):
+            parse_err = "global skills.json root must be a JSON object"
+        elif "entries" in parsed and not isinstance(parsed["entries"], list):
+            parse_err = 'global skills.json "entries" must be a JSON array'
+    except Exception as e:
+        parse_err = f"invalid JSON in global skills.json: {e}"
+
+if mode == "preflight":
+    if exists and parse_err and not force:
+        sys.stderr.write(f"error: UPDATE_CONFLICT: invalid global skills.json at {sj_path} ({parse_err}) (preserved; backup before --force)\n")
+        sys.exit(1)
+    sys.exit(0)
+
+if mode == "verify":
+    if not exists:
+        print(f"missing global skills.json at {sj_path}")
+        sys.exit(1)
+    if parse_err:
+        print(f"invalid global skills.json at {sj_path} : {parse_err}")
+        sys.exit(1)
+    if "entries" not in parsed:
+        print(f"global skills.json missing entries array at {sj_path}")
+        sys.exit(1)
+    errs = []
+    entries = parsed["entries"]
+    found_keys = set()
+    for it in entries:
+        if isinstance(it, dict) and isinstance(it.get("path"), str):
+            ck = cmp_k(it["path"])
+            if ck:
+                found_keys.add(ck)
+    desired_keys = {cmp_k(d) for d in desired}
+    for d in desired:
+        if cmp_k(d) not in found_keys:
+            errs.append(f"global skills.json missing B3 entry: {d}")
+    for it in entries:
+        if isinstance(it, dict) and isinstance(it.get("path"), str):
+            ck = cmp_k(it["path"])
+            if ck and is_b3(it["path"]) and ck not in desired_keys:
+                errs.append(f"stale B3 entry in global skills.json: {it['path']}")
+    for e in errs:
+        print(e)
+    sys.exit(1 if errs else 0)
+
+if mode == "merge":
+    base = parsed if (exists and not parse_err) else {}
+    out = {}
+    for k, v in base.items():
+        if k != "entries":
+            out[k] = v
+    desired_keys = {cmp_k(d) for d in desired}
+    kept = []
+    for it in base.get("entries", []):
+        p = it.get("path") if isinstance(it, dict) else None
+        if isinstance(p, str):
+            ck = cmp_k(p)
+            if ck and (is_b3(p) or ck in desired_keys):
+                continue
+        kept.append(it)
+    for d in desired:
+        kept.append({"path": norm_p(d)})
+    out["entries"] = kept
+    parent = os.path.dirname(sj_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(sj_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+    sys.exit(0)
+
+if mode == "uninstall":
+    if not exists:
+        print("NONE")
+        sys.exit(0)
+    if parse_err:
+        sys.stderr.write(f"warning: skipping invalid global skills.json: {sj_path} ({parse_err})\n")
+        sys.exit(2)
+    entries = parsed.get("entries", [])
+    kept = []
+    removed_n = 0
+    for it in entries:
+        p = it.get("path") if isinstance(it, dict) else None
+        if isinstance(p, str) and is_b3(p):
+            removed_n += 1
+        else:
+            kept.append(it)
+    if removed_n == 0:
+        print("UNCHANGED")
+        sys.exit(0)
+    other_keys = [k for k in parsed.keys() if k != "entries"]
+    if len(kept) == 0 and len(other_keys) == 0:
+        if not dry_run:
+            os.remove(sj_path)
+        print(f"REMOVE:{removed_n}")
+        sys.exit(0)
+    out = {}
+    for k, v in parsed.items():
+        if k != "entries":
+            out[k] = v
+    out["entries"] = kept
+    if not dry_run:
+        with open(sj_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
+    print(f"UPDATE:{removed_n}")
+    sys.exit(0)
+PYEOF
+    return $?
+  fi
+
+  if [[ "$_B3_JSON_RT" == "node" ]]; then
+    B3_SJ_MODE="$mode" B3_SJ_PATH="$sj_path" B3_SJ_FORCE="$force_flag" \
+    B3_SJ_DRY_RUN="$dry_flag" B3_SJ_IS_WIN="$is_win_flag" \
+    B3_SJ_DESIRED="$desired_nl" B3_SJ_PREFIXES="$prefixes_nl" \
+    node - <<'JSEOF'
+const fs = require("fs");
+const path = require("path");
+const mode = process.env.B3_SJ_MODE;
+const sjPath = process.env.B3_SJ_PATH;
+const force = process.env.B3_SJ_FORCE === "1";
+const dryRun = process.env.B3_SJ_DRY_RUN === "1";
+const isWin = process.env.B3_SJ_IS_WIN === "1";
+const desired = (process.env.B3_SJ_DESIRED || "").split(/\r?\n/).filter(Boolean);
+const prefixes = (process.env.B3_SJ_PREFIXES || "").split(/\r?\n/).filter(Boolean);
+
+function normP(val) {
+  if (typeof val !== "string") return "";
+  let p = val.trim().replace(/\\/g, "/");
+  if (isWin && /^[a-z]:/.test(p)) p = p[0].toUpperCase() + p.slice(1);
+  if (p.length > 1 && !/^[A-Za-z]:\/$/.test(p)) p = p.replace(/\/+$/, "");
+  return p;
+}
+function cmpK(val) {
+  const n = normP(val);
+  return isWin ? n.toLowerCase() : n;
+}
+function isB3(val) {
+  const ck = cmpK(val);
+  if (!ck) return false;
+  for (const rawPx of prefixes) {
+    const pk = cmpK(rawPx);
+    if (!pk) continue;
+    const cmdP = pk === "/" ? "/adapters/command-skills" : `${pk}/adapters/command-skills`;
+    const skExact = pk === "/" ? "/skills" : `${pk}/skills`;
+    const skPref = pk === "/" ? "/skills/" : `${pk}/skills/`;
+    if (ck === cmdP || ck === skExact || ck.startsWith(skPref)) return true;
+  }
+  return false;
+}
+
+const exists = fs.existsSync(sjPath) && fs.statSync(sjPath).isFile();
+let parsed = null;
+let parseErr = "";
+if (exists) {
+  try {
+    parsed = JSON.parse(fs.readFileSync(sjPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      parseErr = "global skills.json root must be a JSON object";
+    } else if ("entries" in parsed && !Array.isArray(parsed.entries)) {
+      parseErr = 'global skills.json "entries" must be a JSON array';
+    }
+  } catch (e) {
+    parseErr = `invalid JSON in global skills.json: ${e.message}`;
+  }
+}
+
+if (mode === "preflight") {
+  if (exists && parseErr && !force) {
+    process.stderr.write(`error: UPDATE_CONFLICT: invalid global skills.json at ${sjPath} (${parseErr}) (preserved; backup before --force)\n`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+if (mode === "verify") {
+  if (!exists) { console.log(`missing global skills.json at ${sjPath}`); process.exit(1); }
+  if (parseErr) { console.log(`invalid global skills.json at ${sjPath} : ${parseErr}`); process.exit(1); }
+  if (!("entries" in parsed)) { console.log(`global skills.json missing entries array at ${sjPath}`); process.exit(1); }
+  const errs = [];
+  const found = new Set();
+  for (const it of parsed.entries) {
+    if (it && typeof it === "object" && typeof it.path === "string") {
+      const ck = cmpK(it.path);
+      if (ck) found.add(ck);
+    }
+  }
+  const desiredKeys = new Set(desired.map(cmpK));
+  for (const d of desired) {
+    if (!found.has(cmpK(d))) errs.push(`global skills.json missing B3 entry: ${d}`);
+  }
+  for (const it of parsed.entries) {
+    if (it && typeof it === "object" && typeof it.path === "string") {
+      const ck = cmpK(it.path);
+      if (ck && isB3(it.path) && !desiredKeys.has(ck)) errs.push(`stale B3 entry in global skills.json: ${it.path}`);
+    }
+  }
+  for (const e of errs) console.log(e);
+  process.exit(errs.length ? 1 : 0);
+}
+if (mode === "merge") {
+  const base = (exists && !parseErr) ? parsed : {};
+  const out = {};
+  for (const k of Object.keys(base)) {
+    if (k !== "entries") out[k] = base[k];
+  }
+  const desiredKeys = new Set(desired.map(cmpK));
+  const kept = [];
+  for (const it of (base.entries || [])) {
+    const p = (it && typeof it === "object") ? it.path : null;
+    if (typeof p === "string") {
+      const ck = cmpK(p);
+      if (ck && (isB3(p) || desiredKeys.has(ck))) continue;
+    }
+    kept.push(it);
+  }
+  for (const d of desired) kept.push({ path: normP(d) });
+  out.entries = kept;
+  const parent = path.dirname(sjPath);
+  if (parent) fs.mkdirSync(parent, { recursive: true });
+  fs.writeFileSync(sjPath, JSON.stringify(out, null, 2) + "\n", "utf8");
+  process.exit(0);
+}
+if (mode === "uninstall") {
+  if (!exists) { console.log("NONE"); process.exit(0); }
+  if (parseErr) {
+    process.stderr.write(`warning: skipping invalid global skills.json: ${sjPath} (${parseErr})\n`);
+    process.exit(2);
+  }
+  const entries = parsed.entries || [];
+  const kept = [];
+  let removedN = 0;
+  for (const it of entries) {
+    const p = (it && typeof it === "object") ? it.path : null;
+    if (typeof p === "string" && isB3(p)) removedN++;
+    else kept.push(it);
+  }
+  if (removedN === 0) { console.log("UNCHANGED"); process.exit(0); }
+  const otherKeys = Object.keys(parsed).filter((k) => k !== "entries");
+  if (kept.length === 0 && otherKeys.length === 0) {
+    if (!dryRun) fs.unlinkSync(sjPath);
+    console.log(`REMOVE:${removedN}`);
+    process.exit(0);
+  }
+  const out = {};
+  for (const k of Object.keys(parsed)) {
+    if (k !== "entries") out[k] = parsed[k];
+  }
+  out.entries = kept;
+  if (!dryRun) fs.writeFileSync(sjPath, JSON.stringify(out, null, 2) + "\n", "utf8");
+  console.log(`UPDATE:${removedN}`);
+  process.exit(0);
+}
+JSEOF
+    return $?
+  fi
+
+  # Minimal pure-Bash fallback when neither python nor node is available
+  if [[ ! -f "$sj_path" ]]; then
+    case "$mode" in
+      preflight) return 0 ;;
+      verify) echo "missing global skills.json at $sj_path"; return 1 ;;
+      uninstall) echo "NONE"; return 0 ;;
+      merge)
+        local json_body="{"$'\n'"  \"entries\": ["$'\n' first=true line esc
+        while IFS= read -r line; do
+          [[ -n "$line" ]] || continue
+          esc="$(json_escape_str "$(norm_skill_json_path "$line")")"
+          if $first; then first=false; else json_body="${json_body},"$'\n'; fi
+          json_body="${json_body}    { \"path\": \"${esc}\" }"
+        done <<< "$desired_nl"
+        json_body="${json_body}"$'\n'"  ]"$'\n'"}"$'\n'
+        write_lf_file "$sj_path" "$json_body"
+        return 0
+        ;;
+    esac
+  fi
+  echo "error: python3, python, or node is required to manage existing skills.json at $sj_path" >&2
+  return 1
+}
+
 if [[ -z "$USER_HOME" ]]; then USER_HOME="$HOME"; fi
 USER_HOME="$(canon_path_allow_missing "$USER_HOME")"
 if [[ -z "$PLUGIN_ROOT" ]]; then PLUGIN_ROOT="${USER_HOME}/.gemini/config/plugins/b3-ai-engineering"; fi
 PLUGIN_ROOT="$(canon_path_allow_missing "$PLUGIN_ROOT")"
 MANIFEST_FILE="${PLUGIN_ROOT}/.b3-plugin-manifest"
+GEMINI_DIR="${USER_HOME}/.gemini"
+GEMINI_CONFIG_DIR="${GEMINI_DIR}/config"
+SKILLS_JSON_PATH="${GEMINI_CONFIG_DIR}/skills.json"
 
 # --- Uninstall action ---
 if [[ "$ACTION" == "uninstall" ]]; then
@@ -186,6 +633,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
     exit 0
   fi
 
+  collect_uninstall_b3_prefixes
   TRACKED_FILES=()
   TRACKED_LINKS=()
   if $M_EXISTS; then
@@ -280,6 +728,31 @@ if [[ "$ACTION" == "uninstall" ]]; then
       if [[ -d "$sd" && ! -L "$sd" ]]; then rmdir "$sd" 2>/dev/null || true; fi
     done
   fi
+  if [[ -e "$SKILLS_JSON_PATH" || -L "$SKILLS_JSON_PATH" ]]; then
+    if is_link_entry "$GEMINI_DIR" || is_link_entry "$GEMINI_CONFIG_DIR" || is_link_entry "$SKILLS_JSON_PATH"; then
+      echo "warning: skipping symlinked global skills.json path: $SKILLS_JSON_PATH" >&2
+      skipped=$((skipped + 1))
+    elif [[ ! -f "$SKILLS_JSON_PATH" ]]; then
+      echo "warning: skipping non-file global skills.json path: $SKILLS_JSON_PATH" >&2
+      skipped=$((skipped + 1))
+    elif [[ ${#UNINSTALL_B3_PREFIXES[@]} -gt 0 ]]; then
+      prefixes_nl="$(printf '%s\n' "${UNINSTALL_B3_PREFIXES[@]}")"
+      set +e
+      sj_un_out="$(skills_json_op "uninstall" "$SKILLS_JSON_PATH" "" "$prefixes_nl")"
+      sj_un_rc=$?
+      set -e
+      if [[ $sj_un_rc -eq 2 || $sj_un_rc -ne 0 ]]; then
+        skipped=$((skipped + 1))
+      elif [[ "$sj_un_out" == REMOVE:* ]]; then
+        if $DRY_RUN; then echo "dry-run: remove $SKILLS_JSON_PATH"; fi
+        removed=$((removed + 1))
+      elif [[ "$sj_un_out" == UPDATE:* ]]; then
+        cnt="${sj_un_out#UPDATE:}"
+        if $DRY_RUN; then echo "dry-run: update $SKILLS_JSON_PATH (remove ${cnt} B3 entries)"; fi
+        removed=$((removed + 1))
+      fi
+    fi
+  fi
   if [[ $skipped -gt 0 ]]; then
     echo "UNINSTALL_CONFLICT: removed=${removed} skipped=${skipped} plugin_root=${PLUGIN_ROOT} (re-run with --force to remove modified managed entries)"
     exit 1
@@ -343,6 +816,9 @@ if [[ -d "$CMD_SKILLS_SRC" ]]; then
   done < <(discover_skills_tsv "$CMD_SKILLS_SRC")
 fi
 [[ ${#CMD_SKILL_NAMES[@]} -ge 1 ]] || { echo "error: B3_HOME has no command skills under: $CMD_SKILLS_SRC" >&2; exit 1; }
+
+build_desired_skills_json_entries
+DESIRED_SKILLS_JSON_NL="$(printf '%s\n' "${DESIRED_SKILLS_JSON_ENTRIES[@]}")"
 
 RULE_FILES=()
 while IFS= read -r rf; do
@@ -408,7 +884,7 @@ PLUGIN_JSON='{
 # --- Verify action ---
 if [[ "$ACTION" == "verify" ]]; then
   ERRORS=()
-  PLUGIN_OK=true; RULES_OK=true; SKILLS_OK=true; COMMANDS_OK=true; AGENTS_OK=true
+  PLUGIN_OK=true; RULES_OK=true; SKILLS_OK=true; COMMANDS_OK=true; AGENTS_OK=true; SKILLS_JSON_OK=true
 
   if [[ ! -d "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
     PLUGIN_OK=false; RULES_OK=false; SKILLS_OK=false; COMMANDS_OK=false; AGENTS_OK=false
@@ -516,11 +992,31 @@ if [[ "$ACTION" == "verify" ]]; then
     fi
   fi
 
+  if is_link_entry "$GEMINI_DIR" || is_link_entry "$GEMINI_CONFIG_DIR" || is_link_entry "$SKILLS_JSON_PATH"; then
+    SKILLS_JSON_OK=false
+    ERRORS+=("global skills.json path uses symlink or junction: $SKILLS_JSON_PATH")
+  elif [[ -e "$SKILLS_JSON_PATH" && ! -f "$SKILLS_JSON_PATH" ]]; then
+    SKILLS_JSON_OK=false
+    ERRORS+=("global skills.json path is not a regular file: $SKILLS_JSON_PATH")
+  else
+    set +e
+    sj_ver_out="$(skills_json_op "verify" "$SKILLS_JSON_PATH" "$DESIRED_SKILLS_JSON_NL" "$B3_HOME")"
+    sj_ver_rc=$?
+    set -e
+    if [[ $sj_ver_rc -ne 0 ]]; then
+      SKILLS_JSON_OK=false
+      while IFS= read -r vline; do
+        [[ -n "$vline" ]] && ERRORS+=("$vline")
+      done <<< "$sj_ver_out"
+    fi
+  fi
+
   $PLUGIN_OK && echo "check.plugin=OK" || echo "check.plugin=FAIL"
   $RULES_OK && echo "check.rules=OK" || echo "check.rules=FAIL"
   $SKILLS_OK && echo "check.skills=OK" || echo "check.skills=FAIL"
   $COMMANDS_OK && echo "check.commands=OK" || echo "check.commands=FAIL"
   $AGENTS_OK && echo "check.agents=OK" || echo "check.agents=FAIL"
+  $SKILLS_JSON_OK && echo "check.skills_json=OK" || echo "check.skills_json=FAIL"
 
   check_coexistence "$USER_HOME" "$PLUGIN_ROOT" "${ALL_SKILL_NAMES[@]}"
 
@@ -541,6 +1037,11 @@ manifest_load "$MANIFEST_FILE"
 if $M_EXISTS && { $M_CORRUPT || [[ "$M_SCHEMA" != "b3-antigravity-plugin-v1" ]]; }; then
   echo "error: invalid B3 manifest at $MANIFEST_FILE" >&2; exit 1
 fi
+
+assert_regular_dir_or_missing "$GEMINI_DIR" ".gemini"
+assert_regular_dir_or_missing "$GEMINI_CONFIG_DIR" ".gemini/config"
+assert_regular_file_or_missing "$SKILLS_JSON_PATH" "global skills.json"
+skills_json_op "preflight" "$SKILLS_JSON_PATH" "$DESIRED_SKILLS_JSON_NL" "$B3_HOME" || exit 1
 
 if [[ -e "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
   if [[ ! -d "$PLUGIN_ROOT" || -L "$PLUGIN_ROOT" ]]; then
@@ -605,6 +1106,7 @@ if $DRY_RUN; then
   echo "dry-run: write ${PLUGIN_ROOT}/rules/AGENTS.md (${RULES_BYTES} bytes)"
   echo "dry-run: link ${#ALL_SKILL_NAMES[@]} skills (${#CORE_SKILL_NAMES[@]} skills + ${#CMD_SKILL_NAMES[@]} command-skills) into ${PLUGIN_ROOT}/skills"
   echo "dry-run: write ${#AGENT_BASES[@]} agents into ${PLUGIN_ROOT}/agents"
+  echo "dry-run: update ${SKILLS_JSON_PATH} (${#DESIRED_SKILLS_JSON_ENTRIES[@]} skill category entries)"
   check_coexistence "$USER_HOME" "$PLUGIN_ROOT" "${ALL_SKILL_NAMES[@]}"
   echo "DRY_RUN_OK: action=${ACTION} plugin_root=${PLUGIN_ROOT}"
   exit 0
@@ -677,6 +1179,15 @@ done
 
 write_lf_file "$MANIFEST_FILE" "$MANIFEST_LINES"
 
+MERGE_PREFIXES_NL="$B3_HOME"
+if $M_EXISTS && [[ -n "${M_B3_HOME:-}" ]]; then
+  m_b3_norm="$(norm_skill_json_path "$M_B3_HOME")"
+  if [[ -n "$m_b3_norm" ]] && [[ "$m_b3_norm" != "$B3_HOME" ]]; then
+    MERGE_PREFIXES_NL="${MERGE_PREFIXES_NL}"$'\n'"${m_b3_norm}"
+  fi
+fi
+skills_json_op "merge" "$SKILLS_JSON_PATH" "$DESIRED_SKILLS_JSON_NL" "$MERGE_PREFIXES_NL"
+
 check_coexistence "$USER_HOME" "$PLUGIN_ROOT" "${ALL_SKILL_NAMES[@]}"
 
 PLUGIN_DIR_NAME="${PLUGIN_ROOT##*/}"
@@ -685,6 +1196,7 @@ echo "${ACTION_UPPER}_OK: skills=${#CORE_SKILL_NAMES[@]} commands=${#CMD_SKILL_N
 echo "installed Antigravity plugin at $PLUGIN_ROOT"
 echo "B3_HOME=$B3_HOME"
 echo "skills=${#ALL_SKILL_NAMES[@]}"
+echo "skills_json=${SKILLS_JSON_PATH} (${#DESIRED_SKILLS_JSON_ENTRIES[@]} entries)"
 echo "agents=${#AGENT_BASES[@]}"
 echo "rules_bytes=$RULES_BYTES"
 echo "manage=customization://$PLUGIN_DIR_NAME"
