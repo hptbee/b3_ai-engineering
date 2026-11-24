@@ -1,0 +1,9 @@
+id: research-ship-stale-evidence-001
+artifact: workflows/references/research-ship-resume.md
+intent: Modifying a tracked source file invalidates the b3-evidence-v1 manifest and forces re-verification before reuse
+scenario: |
+  A prior session wrote evidence/sources.manifest with SHA-256 digests and verified U001.
+  Before resume, a primary source file is edited on disk; b3-guard evidence-check exits 2 with EVIDENCE_STALE, so resume marks U001 stale and re-runs Phase D/E instead of reusing stale verification.
+expected_outcome: FAIL
+failure_mode: stale-evidence-reused-without-reverification
+notes: Reconciles source digests deterministically on resume

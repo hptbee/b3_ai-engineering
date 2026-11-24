@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree')]
+    [ValidateSet('fingerprint', 'check-freshness', 'precommit', 'snapshot', 'diff-scope', 'mechanical-check', 'check-wave', 'new-run', 'resolve-run', 'list-runs', 'prune', 'verify-run', 'verify-check', 'symbol-check', 'check-worktree', 'evidence-check', 'merge-policy-check')]
     [string]$Command,
     [string]$DependsOn = '',
     [string]$Scope = '',
@@ -21,6 +21,7 @@ param(
     [string]$Timestamp = '',
     [string]$RunId = '',
     [int]$Keep = 10,
+    [string]$Namespace = 'ship',
     [string]$VerifyCmd = '',
     [string]$ReceiptPath = '',
     [string]$TaskId = '',
@@ -31,7 +32,20 @@ param(
     [string]$WaveReads = '',
     [string]$ExpectedBaseSha = '',
     [string]$ExpectedRoot = '',
-    [string]$ExpectedCmd = ''
+    [string]$ExpectedCmd = '',
+    [string]$SourcePaths = '',
+    [string]$ManifestPath = '',
+    [switch]$WriteManifest,
+    [string]$PolicyPath = '',
+    [string]$PrState = 'NONE',
+    [string]$CiStatus = 'UNKNOWN',
+    [string]$ReviewStatus = 'UNKNOWN',
+    [int]$BlockingFindings = 0,
+    [string]$GovernanceStatus = 'CLEAR',
+    [string]$ChangedPaths = '',
+    [switch]$PostMerge,
+    [string]$MergedSha = '',
+    [string]$MainRef = 'HEAD'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,6 +89,67 @@ function Split-CsvList([string]$Csv, [switch]$AsPaths) {
         }
     }
     return @($list)
+}
+
+function Test-CheckpointPath([string]$PathVal) {
+    if (-not $PathVal) { return $false }
+    return ($PathVal -match '^\.b3/(ship|research-ship|autodev)(/|$)')
+}
+
+function Resolve-NamespaceDir([string]$Root, [string]$Ns) {
+    $n = if ($Ns) { $Ns.Trim() } else { 'ship' }
+    if ($n -ceq 'ship') { return (Join-Path $Root '.b3\ship') }
+    if ($n -ceq 'research-ship') { return (Join-Path $Root '.b3\research-ship') }
+    Fail "INVALID_NAMESPACE: $n" 1
+}
+
+function Test-ContainedRepoPath([string]$Root, [string]$PathArg) {
+    if ([string]::IsNullOrWhiteSpace($PathArg)) { return $null }
+    $trimmed = $PathArg.Trim()
+    if ($trimmed -match '[\x00-\x1F\x7F]') { return $null }
+    $rawSlash = $trimmed -replace '\\', '/'
+    if (-not $rawSlash -or $rawSlash.EndsWith('/')) { return $null }
+    $p = Normalize-PathValue $trimmed
+    if (-not $p -or $p -eq '.' -or $p.StartsWith('/') -or $p.StartsWith('~') -or ($p -match '^[A-Za-z]:') -or ($p -match '(^|/)\.\.(/|$)') -or ($p -match '^\.git(/|$)')) {
+        return $null
+    }
+    $rootSlash = ($Root -replace '\\', '/').TrimEnd('/')
+    $full = $null
+    try {
+        $full = Resolve-TargetPath $Root $p
+    } catch {
+        return $null
+    }
+    if (-not $full) { return $null }
+    $fullSlash = ($full -replace '\\', '/').TrimEnd('/')
+    $cmp = if ([IO.Path]::DirectorySeparatorChar -eq '\') {
+        [System.StringComparison]::OrdinalIgnoreCase
+    } else {
+        [System.StringComparison]::Ordinal
+    }
+    if ($rootSlash -eq '') {
+        if (-not $fullSlash.StartsWith('/', $cmp) -or $fullSlash -eq '') { return $null }
+    } else {
+        if ($fullSlash.Equals($rootSlash, $cmp) -or (-not $fullSlash.StartsWith("$rootSlash/", $cmp))) {
+            return $null
+        }
+    }
+    $segCur = $Root
+    foreach ($seg in ($p -split '/')) {
+        if (-not $seg -or $seg -eq '.') { continue }
+        $segCur = Join-Path $segCur $seg
+        $segItem = Get-Item -LiteralPath $segCur -Force -ErrorAction SilentlyContinue
+        if ($segItem) {
+            if (Test-IsReparseItem $segItem) { return $null }
+            try {
+                $attrs = [IO.File]::GetAttributes($segCur)
+                if (($attrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $null }
+            } catch { return $null }
+        } elseif (Test-Path -LiteralPath $segCur) {
+            return $null
+        }
+    }
+    return @{ Rel = $p; Full = $full }
 }
 
 function Test-PathMatch([string]$Candidate, [string[]]$Patterns) {
@@ -257,7 +332,7 @@ function Resolve-AutoBaseSha([string]$Root, [string[]]$IgnoredPaths) {
         }
     }
     foreach ($p in $candidates) {
-        if ($p -match '^\.b3/ship(/|$)') { continue }
+        if (Test-CheckpointPath $p) { continue }
         if ($IgnoredPaths -and (Test-PathMatch $p $IgnoredPaths)) { continue }
         return 'HEAD'
     }
@@ -486,7 +561,7 @@ function Parse-GitRawDiff([string]$RawOut, [string[]]$IgnPaths, [string[]]$Clean
         $newOid = $meta[3]
         if ($newMode -cnotmatch '^[0-9]{6}$' -or $newOid -cnotmatch '^[0-9a-f]{40}$') { continue }
         $p = Normalize-PathValue ($rawLine.Substring($tabIdx + 1))
-        if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
+        if (-not $p -or (Test-CheckpointPath $p)) { continue }
         if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
         if ($CleanRel.Count -gt 0 -and -not (Test-PathMatch $p $CleanRel)) { continue }
         if ($map.ContainsKey($p) -and $newMode -ceq '000000' -and $map[$p].NewMode -cne '000000') { continue }
@@ -630,7 +705,7 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
         $relFiltered = New-Object System.Collections.Generic.List[string]
         foreach ($rp in $RelPaths) {
             $np = Normalize-PathValue $rp
-            if (-not $np -or $np -match '^\.b3/(ship|autodev)(/|$)') { continue }
+            if (-not $np -or (Test-CheckpointPath $np)) { continue }
             if ($IgnPaths -and (Test-PathMatch $np $IgnPaths)) { continue }
             $relFiltered.Add($np)
         }
@@ -659,7 +734,7 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
         $meta = $rawLine.Substring(0, $tabIdx).Trim() -split '\s+'
         if ($meta.Count -lt 3 -or $meta[0] -cnotmatch '^[0-9]{6}$' -or ($meta[1] -cne 'blob' -and $meta[1] -cne 'commit') -or $meta[2] -cnotmatch '^[0-9a-f]{40}$') { continue }
         $p = Normalize-PathValue ($rawLine.Substring($tabIdx + 1))
-        if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
+        if (-not $p -or (Test-CheckpointPath $p)) { continue }
         if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
         if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
         $effective[$p] = "$($meta[0]) $($meta[1]) $($meta[2])"
@@ -746,7 +821,7 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
     }
 
     foreach ($p in @(Sort-Ordinal $untracked)) {
-        if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)') { continue }
+        if (-not $p -or (Test-CheckpointPath $p)) { continue }
         if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
         if ($cleanRel.Count -gt 0 -and -not (Test-PathMatch $p $cleanRel)) { continue }
         if ($headDiff.ContainsKey($p) -and $headDiff[$p].NewMode -cne '000000') { continue }
@@ -902,7 +977,7 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
     $relSpec = @()
     if ($kv['relevant_paths'] -cne 'ALL') {
         $relSpec = @(Split-CsvList $kv['relevant_paths'] -AsPaths)
-        $validRel = @($relSpec | Where-Object { $_ -and ($_ -notmatch '^\.b3/(ship|autodev)(/|$)') })
+        $validRel = @($relSpec | Where-Object { $_ -and (-not (Test-CheckpointPath $_)) })
         if ($validRel.Count -lt 1 -or $validRel.Count -ne $relSpec.Count) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid relevant_paths' }
         }
@@ -917,7 +992,7 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
 
     if ($ReqRelPathsArg -and $ReqRelPathsArg.Trim()) {
         $reqSpec = @(Split-CsvList $ReqRelPathsArg -AsPaths)
-        $validReq = @($reqSpec | Where-Object { $_ -and ($_ -notmatch '^\.b3/(ship|autodev)(/|$)') })
+        $validReq = @($reqSpec | Where-Object { $_ -and (-not (Test-CheckpointPath $_)) })
         if ($validReq.Count -lt 1) {
             return @{ Code = 1; Message = 'VERIFY_CHECK_FAIL: invalid relevant_paths' }
         }
@@ -1069,7 +1144,7 @@ switch ($Command) {
 
         $committed = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--name-only', $ApproachAtSha, 'HEAD'))
         $committedHits = @($committed | Where-Object {
-            ($_ -notmatch '^\.b3/ship(/|$)') -and (Test-PathMatch $_ $watched)
+            (-not (Test-CheckpointPath $_)) -and (Test-PathMatch $_ $watched)
         } | Sort-Object -Unique)
         if ($committedHits.Count -gt 0) {
             Fail ("STALE: committed change in watched_paths (" + ($committedHits -join ', ') + ")") 2
@@ -1084,7 +1159,7 @@ switch ($Command) {
             $uncommitted = New-Object System.Collections.Generic.List[string]
             foreach ($p in (@($wtDiff) + @($cached) + @($untracked))) {
                 if (-not $p) { continue }
-                if ($p -match '^\.b3/ship(/|$)') { continue }
+                if (Test-CheckpointPath $p) { continue }
                 if (Test-PathMatch $p $ignored) { continue }
                 if (-not $uncommitted.Contains($p)) { $uncommitted.Add($p) }
             }
@@ -1112,7 +1187,7 @@ switch ($Command) {
         }
 
         $checkpointHits = @($staged | Where-Object {
-            ($_ -match '^\.b3/(ship|autodev)(/|$)') -or (($_ -match '^\.b3(/|$)') -and -not (Test-PathMatch $_ $allowed))
+            (Test-CheckpointPath $_) -or (($_ -match '^\.b3(/|$)') -and -not (Test-PathMatch $_ $allowed))
         })
         if ($checkpointHits.Count -gt 0) {
             Fail ("PRECOMMIT_FAIL: checkpoint staged (" + ($checkpointHits -join ', ') + ")") 1
@@ -1195,7 +1270,7 @@ switch ($Command) {
             })
             $unstagedInScope = New-Object System.Collections.Generic.List[string]
             foreach ($u in (@($unstagedRaw) + @($untrackedScopeRaw))) {
-                if (-not $u -or $u -match '^\.b3/(ship|autodev)(/|$)') { continue }
+                if (-not $u -or (Test-CheckpointPath $u)) { continue }
                 if ($ignored -and (Test-PathMatch $u $ignored)) { continue }
                 if (-not $scopeAll -and -not (Test-PathMatch $u $scopePaths)) { continue }
                 if (-not $unstagedInScope.Contains($u)) { $unstagedInScope.Add($u) }
@@ -1279,7 +1354,7 @@ switch ($Command) {
             $parts = $lineStr -split "`t", 3
             if ($parts.Count -lt 3) { continue }
             $p = Normalize-PathValue $parts[2]
-            if (-not $p -or $p -match '^\.b3/ship(/|$)' -or (Test-PathMatch $p $ignored)) { continue }
+            if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $ignored)) { continue }
             if (Test-NoiseFile $p) {
                 if (-not $noiseFiles.Contains($p)) { $noiseFiles.Add($p) }
                 continue
@@ -1290,7 +1365,7 @@ switch ($Command) {
         }
 
         foreach ($u in $untracked) {
-            if (-not $u -or $u -match '^\.b3/ship(/|$)' -or (Test-PathMatch $u $ignored)) { continue }
+            if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
             if (Test-NoiseFile $u) {
                 if (-not $noiseFiles.Contains($u)) { $noiseFiles.Add($u) }
                 continue
@@ -1320,12 +1395,12 @@ switch ($Command) {
             $deltaFiles = New-Object System.Collections.Generic.List[string]
             foreach ($row in ($deltaRes.StdOut -split "\r?\n")) {
                 $dp = Normalize-PathValue ([string]$row)
-                if (-not $dp -or $dp -match '^\.b3/ship(/|$)' -or (Test-PathMatch $dp $ignored)) { continue }
+                if (-not $dp -or (Test-CheckpointPath $dp) -or (Test-PathMatch $dp $ignored)) { continue }
                 if (Test-NoiseFile $dp) { continue }
                 if (-not $deltaFiles.Contains($dp)) { $deltaFiles.Add($dp) }
             }
             foreach ($u in $untracked) {
-                if (-not $u -or $u -match '^\.b3/ship(/|$)' -or (Test-PathMatch $u $ignored)) { continue }
+                if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
                 if (Test-NoiseFile $u) { continue }
                 if (-not $deltaFiles.Contains($u)) { $deltaFiles.Add($u) }
             }
@@ -1397,11 +1472,11 @@ switch ($Command) {
         $allChanged = New-Object System.Collections.Generic.List[string]
         foreach ($row in ($chRes.StdOut -split "\r?\n")) {
             $p = Normalize-PathValue ([string]$row)
-            if (-not $p -or $p -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $p $ignored)) { continue }
+            if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $ignored)) { continue }
             if (-not $allChanged.Contains($p)) { $allChanged.Add($p) }
         }
         foreach ($u in $untracked) {
-            if (-not $u -or $u -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $u $ignored)) { continue }
+            if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
             if (-not $allChanged.Contains($u)) { $allChanged.Add($u) }
         }
 
@@ -1452,7 +1527,7 @@ switch ($Command) {
                     $cand = $ln.Substring(4)
                     if ($cand.StartsWith('b/')) { $cand = $cand.Substring(2) }
                     $curFile = Normalize-PathValue $cand
-                    $skipFile = (-not $curFile) -or ($curFile -match '^\.b3/(ship|autodev)(/|$)') -or (Test-PathMatch $curFile $ignored) -or (Test-NoiseFile $curFile) -or ($curFile -match '\.md$')
+                    $skipFile = (-not $curFile) -or (Test-CheckpointPath $curFile) -or (Test-PathMatch $curFile $ignored) -or (Test-NoiseFile $curFile) -or ($curFile -match '\.md$')
                 }
                 continue
             }
@@ -1478,7 +1553,7 @@ switch ($Command) {
 
         foreach ($u in @(Sort-Ordinal $untracked)) {
             if ($leftoverHits.Count -ge 10 -and $sqlHitCount -ge 10) { break }
-            if (-not $u -or $u -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or ($u -match '\.md$')) { continue }
+            if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or ($u -match '\.md$')) { continue }
             $full = Join-Path $RepoRoot ($u -replace '/', '\')
             if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
             $isUTest = Test-TestPath $u
@@ -1510,7 +1585,7 @@ switch ($Command) {
         $deletedList = New-Object System.Collections.Generic.List[string]
         foreach ($row in ($delRes.StdOut -split "\r?\n")) {
             $dp = Normalize-PathValue ([string]$row)
-            if (-not $dp -or $dp -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $dp $ignored) -or (Test-NoiseFile $dp)) { continue }
+            if (-not $dp -or (Test-CheckpointPath $dp) -or (Test-PathMatch $dp $ignored) -or (Test-NoiseFile $dp)) { continue }
             if (-not $deletedList.Contains($dp)) { $deletedList.Add($dp) }
         }
         if ($deletedList.Count -ge 10 -and -not $AllowMassDelete) {
@@ -1530,9 +1605,9 @@ switch ($Command) {
                 }
             }
             $grepArgs = if ($targetTrim) {
-                @('grep', '-l', '-F', '-e', $tok, $targetCommitSha, '--', '.', ':(exclude).b3/ship')
+                @('grep', '-l', '-F', '-e', $tok, $targetCommitSha, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship')
             } else {
-                @('grep', '-l', '-F', '-e', $tok, '--', '.', ':(exclude).b3/ship')
+                @('grep', '-l', '-F', '-e', $tok, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship')
             }
             $grepRes = Invoke-GitCommand $RepoRoot $grepArgs
             if ($grepRes.ExitCode -gt 1) {
@@ -1674,8 +1749,12 @@ switch ($Command) {
             Fail "NEW_RUN_FAIL: invalid timestamp '$ts' (expected YYYYMMDD-HHMM)" 1
         }
 
-        $ShipDir = Join-Path $RepoRoot '.b3\ship'
-        $runsDir = Join-Path $ShipDir 'runs'
+        $dotB3Dir = Join-Path $RepoRoot '.b3'
+        $NsDir = Resolve-NamespaceDir $RepoRoot $Namespace
+        $runsDir = Join-Path $NsDir 'runs'
+        if ((Test-IsReparsePath $dotB3Dir) -or (Test-IsReparsePath $NsDir) -or (Test-IsReparsePath $runsDir)) {
+            Fail 'NEW_RUN_FAIL: runs directory is a link' 1
+        }
         New-Item -ItemType Directory -Path $runsDir -Force | Out-Null
 
         $baseId = "$ts-$cleanSlug"
@@ -1688,15 +1767,21 @@ switch ($Command) {
 
         $runDir = Join-Path $runsDir $candidate
         New-Item -ItemType Directory -Path $runDir -Force | Out-Null
-        Write-AtomicLfFile (Join-Path $ShipDir 'CURRENT') "$candidate`n"
+        Write-AtomicLfFile (Join-Path $NsDir 'CURRENT') "$candidate`n"
 
         Write-Output $candidate
         exit 0
     }
 
     'resolve-run' {
-        $ShipDir = Join-Path $RepoRoot '.b3\ship'
-        $runsDir = Join-Path $ShipDir 'runs'
+        $nsTrim = if ($Namespace) { $Namespace.Trim() } else { 'ship' }
+        $dotB3Dir = Join-Path $RepoRoot '.b3'
+        $NsDir = Resolve-NamespaceDir $RepoRoot $nsTrim
+        $nsRel = if ($nsTrim -ceq 'ship') { '.b3/ship' } else { '.b3/research-ship' }
+        $runsDir = Join-Path $NsDir 'runs'
+        if ((Test-IsReparsePath $dotB3Dir) -or (Test-IsReparsePath $NsDir) -or (Test-IsReparsePath $runsDir)) {
+            Fail 'RESOLVE_FAIL: runs directory is a link' 1
+        }
         $AutodevDir = Join-Path $RepoRoot '.b3\autodev'
         $autodevRunsDir = Join-Path $AutodevDir 'runs'
 
@@ -1706,67 +1791,76 @@ switch ($Command) {
                 Fail "RESOLVE_FAIL: invalid run id '$RunId'" 1
             }
             $target = Join-Path $runsDir $trimmed
-            if (Test-Path -LiteralPath $target -PathType Container) {
-                Write-Output ".b3/ship/runs/$trimmed"
+            if ((Test-Path -LiteralPath $target -PathType Container) -and -not (Test-IsReparsePath $target)) {
+                Write-Output "$nsRel/runs/$trimmed"
                 exit 0
             }
-            $legacyTarget = Join-Path $autodevRunsDir $trimmed
-            if (Test-Path -LiteralPath $legacyTarget -PathType Container) {
-                Write-Output ".b3/autodev/runs/$trimmed"
-                exit 0
+            if ($nsTrim -ceq 'ship') {
+                $legacyTarget = Join-Path $autodevRunsDir $trimmed
+                if ((Test-Path -LiteralPath $legacyTarget -PathType Container) -and -not (Test-IsReparsePath $legacyTarget)) {
+                    Write-Output ".b3/autodev/runs/$trimmed"
+                    exit 0
+                }
             }
             Fail "RESOLVE_FAIL: run not found '$trimmed'" 1
         }
 
-        $curFile = Join-Path $ShipDir 'CURRENT'
-        if (Test-Path -LiteralPath $curFile -PathType Leaf) {
+        $curFile = Join-Path $NsDir 'CURRENT'
+        if ((Test-Path -LiteralPath $curFile -PathType Leaf) -and -not (Test-IsReparsePath $curFile)) {
             $curId = ([IO.File]::ReadAllText($curFile)).Trim()
             if (-not (Test-ValidRunId $curId)) {
                 Fail "RESOLVE_FAIL: CURRENT contains invalid run id '$curId'" 1
             }
             $target = Join-Path $runsDir $curId
-            if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+            if (-not (Test-Path -LiteralPath $target -PathType Container) -or (Test-IsReparsePath $target)) {
                 Fail "RESOLVE_FAIL: CURRENT points to missing run '$curId'" 1
             }
-            Write-Output ".b3/ship/runs/$curId"
+            Write-Output "$nsRel/runs/$curId"
             exit 0
         }
 
-        if (Test-Path -LiteralPath (Join-Path $ShipDir 'progress.md') -PathType Leaf) {
-            Write-Output '.b3/ship'
-            exit 0
-        }
-
-        $autodevCur = Join-Path $AutodevDir 'CURRENT'
-        if (Test-Path -LiteralPath $autodevCur -PathType Leaf) {
-            $acId = ([IO.File]::ReadAllText($autodevCur)).Trim()
-            if (-not (Test-ValidRunId $acId)) {
-                Fail "RESOLVE_FAIL: CURRENT contains invalid run id '$acId'" 1
+        if ($nsTrim -ceq 'ship') {
+            if (Test-Path -LiteralPath (Join-Path $NsDir 'progress.md') -PathType Leaf) {
+                Write-Output '.b3/ship'
+                exit 0
             }
-            $acTarget = Join-Path $autodevRunsDir $acId
-            if (-not (Test-Path -LiteralPath $acTarget -PathType Container)) {
-                Fail "RESOLVE_FAIL: CURRENT points to missing run '$acId'" 1
-            }
-            Write-Output ".b3/autodev/runs/$acId"
-            exit 0
-        }
 
-        if (Test-Path -LiteralPath (Join-Path $AutodevDir 'progress.md') -PathType Leaf) {
-            Write-Output '.b3/autodev'
-            exit 0
+            $autodevCur = Join-Path $AutodevDir 'CURRENT'
+            if (Test-Path -LiteralPath $autodevCur -PathType Leaf) {
+                $acId = ([IO.File]::ReadAllText($autodevCur)).Trim()
+                if (-not (Test-ValidRunId $acId)) {
+                    Fail "RESOLVE_FAIL: CURRENT contains invalid run id '$acId'" 1
+                }
+                $acTarget = Join-Path $autodevRunsDir $acId
+                if (-not (Test-Path -LiteralPath $acTarget -PathType Container)) {
+                    Fail "RESOLVE_FAIL: CURRENT points to missing run '$acId'" 1
+                }
+                Write-Output ".b3/autodev/runs/$acId"
+                exit 0
+            }
+
+            if (Test-Path -LiteralPath (Join-Path $AutodevDir 'progress.md') -PathType Leaf) {
+                Write-Output '.b3/autodev'
+                exit 0
+            }
         }
 
         Fail 'NO_ACTIVE_RUN' 1
     }
 
     'list-runs' {
-        $ShipDir = Join-Path $RepoRoot '.b3\ship'
-        $runsDir = Join-Path $ShipDir 'runs'
-        $curId = Get-CurrentRunId $ShipDir
+        $nsTrim = if ($Namespace) { $Namespace.Trim() } else { 'ship' }
+        $dotB3Dir = Join-Path $RepoRoot '.b3'
+        $NsDir = Resolve-NamespaceDir $RepoRoot $nsTrim
+        $runsDir = Join-Path $NsDir 'runs'
+        if ((Test-IsReparsePath $dotB3Dir) -or (Test-IsReparsePath $NsDir) -or (Test-IsReparsePath $runsDir)) {
+            Fail 'LIST_FAIL: runs directory is a link' 1
+        }
+        $curId = Get-CurrentRunId $NsDir
 
         $dirNames = @()
         if (Test-Path -LiteralPath $runsDir -PathType Container) {
-            $rawNames = @(Get-ChildItem -LiteralPath $runsDir -Directory | ForEach-Object { $_.Name })
+            $rawNames = @(Get-ChildItem -LiteralPath $runsDir -Directory -Force | Where-Object { -not (Test-IsReparseItem $_) } | ForEach-Object { $_.Name })
             $dirNames = @(Sort-Ordinal $rawNames -Descending)
         }
         if ($dirNames.Count -gt 0) {
@@ -1778,32 +1872,34 @@ switch ($Command) {
             exit 0
         }
 
-        if (Test-Path -LiteralPath (Join-Path $ShipDir 'progress.md') -PathType Leaf) {
-            $st = Get-RunStatus $ShipDir
-            Write-Output "* legacy [$st]"
-            exit 0
-        }
-
-        $AutodevDir = Join-Path $RepoRoot '.b3\autodev'
-        $autodevRunsDir = Join-Path $AutodevDir 'runs'
-        $autodevCur = Get-CurrentRunId $AutodevDir
-        $adNames = @()
-        if (Test-Path -LiteralPath $autodevRunsDir -PathType Container) {
-            $rawAd = @(Get-ChildItem -LiteralPath $autodevRunsDir -Directory | ForEach-Object { $_.Name })
-            $adNames = @(Sort-Ordinal $rawAd -Descending)
-        }
-        if ($adNames.Count -gt 0) {
-            foreach ($id in $adNames) {
-                $st = Get-RunStatus (Join-Path $autodevRunsDir $id)
-                $mark = if ($autodevCur -and ($id -ceq $autodevCur)) { '* ' } else { '  ' }
-                Write-Output "$mark$id [$st] (legacy-autodev)"
+        if ($nsTrim -ceq 'ship') {
+            if (Test-Path -LiteralPath (Join-Path $NsDir 'progress.md') -PathType Leaf) {
+                $st = Get-RunStatus $NsDir
+                Write-Output "* legacy [$st]"
+                exit 0
             }
-            exit 0
-        }
-        if (Test-Path -LiteralPath (Join-Path $AutodevDir 'progress.md') -PathType Leaf) {
-            $st = Get-RunStatus $AutodevDir
-            Write-Output "* legacy (legacy-autodev) [$st]"
-            exit 0
+
+            $AutodevDir = Join-Path $RepoRoot '.b3\autodev'
+            $autodevRunsDir = Join-Path $AutodevDir 'runs'
+            $autodevCur = Get-CurrentRunId $AutodevDir
+            $adNames = @()
+            if (Test-Path -LiteralPath $autodevRunsDir -PathType Container) {
+                $rawAd = @(Get-ChildItem -LiteralPath $autodevRunsDir -Directory | ForEach-Object { $_.Name })
+                $adNames = @(Sort-Ordinal $rawAd -Descending)
+            }
+            if ($adNames.Count -gt 0) {
+                foreach ($id in $adNames) {
+                    $st = Get-RunStatus (Join-Path $autodevRunsDir $id)
+                    $mark = if ($autodevCur -and ($id -ceq $autodevCur)) { '* ' } else { '  ' }
+                    Write-Output "$mark$id [$st] (legacy-autodev)"
+                }
+                exit 0
+            }
+            if (Test-Path -LiteralPath (Join-Path $AutodevDir 'progress.md') -PathType Leaf) {
+                $st = Get-RunStatus $AutodevDir
+                Write-Output "* legacy (legacy-autodev) [$st]"
+                exit 0
+            }
         }
 
         Write-Output 'NO_RUNS'
@@ -1813,9 +1909,9 @@ switch ($Command) {
     'prune' {
         if ($Keep -lt 0) { Fail 'PRUNE_FAIL: -Keep must be >= 0' 1 }
         $dotB3Dir = Join-Path $RepoRoot '.b3'
-        $ShipDir = Join-Path $dotB3Dir 'ship'
-        $runsDir = Join-Path $ShipDir 'runs'
-        if ((Test-IsReparsePath $dotB3Dir) -or (Test-IsReparsePath $ShipDir) -or (Test-IsReparsePath $runsDir)) {
+        $NsDir = Resolve-NamespaceDir $RepoRoot $Namespace
+        $runsDir = Join-Path $NsDir 'runs'
+        if ((Test-IsReparsePath $dotB3Dir) -or (Test-IsReparsePath $NsDir) -or (Test-IsReparsePath $runsDir)) {
             Fail 'PRUNE_FAIL: runs directory is a link' 1
         }
         if (-not (Test-Path -LiteralPath $runsDir -PathType Container)) {
@@ -1823,7 +1919,7 @@ switch ($Command) {
             exit 0
         }
 
-        $curId = Get-CurrentRunId $ShipDir
+        $curId = Get-CurrentRunId $NsDir
         $rawNames = @(Get-ChildItem -LiteralPath $runsDir -Directory -Force | Where-Object { -not (Test-IsReparseItem $_) } | ForEach-Object { $_.Name })
         $dirNames = @(Sort-Ordinal $rawNames -Descending)
         $passCount = 0
@@ -2004,7 +2100,7 @@ switch ($Command) {
                     $cand = $ln.Substring(4)
                     if ($cand.StartsWith('a/')) { $cand = $cand.Substring(2) }
                     $oldFile = Normalize-PathValue $cand
-                    $skipOld = (-not $oldFile) -or ($oldFile -match '^\.b3/(ship|autodev)(/|$)') -or (Test-PathMatch $oldFile $ignored) -or (Test-NoiseFile $oldFile) -or (-not (Test-CodePath $oldFile))
+                    $skipOld = (-not $oldFile) -or (Test-CheckpointPath $oldFile) -or (Test-PathMatch $oldFile $ignored) -or (Test-NoiseFile $oldFile) -or (-not (Test-CodePath $oldFile))
                 }
                 continue
             }
@@ -2015,7 +2111,7 @@ switch ($Command) {
                     $cand = $ln.Substring(4)
                     if ($cand.StartsWith('b/')) { $cand = $cand.Substring(2) }
                     $newFile = Normalize-PathValue $cand
-                    $skipNew = (-not $newFile) -or ($newFile -match '^\.b3/(ship|autodev)(/|$)') -or (Test-PathMatch $newFile $ignored) -or (Test-NoiseFile $newFile) -or (-not (Test-CodePath $newFile))
+                    $skipNew = (-not $newFile) -or (Test-CheckpointPath $newFile) -or (Test-PathMatch $newFile $ignored) -or (Test-NoiseFile $newFile) -or (-not (Test-CodePath $newFile))
                 }
                 continue
             }
@@ -2044,7 +2140,7 @@ switch ($Command) {
         if (-not $targetTrim) {
             $untracked = @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard'))
             foreach ($u in @(Sort-Ordinal $untracked)) {
-                if (-not $u -or $u -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or (-not (Test-CodePath $u))) { continue }
+                if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored) -or (Test-NoiseFile $u) -or (-not (Test-CodePath $u))) { continue }
                 $full = Join-Path $RepoRoot ($u -replace '/', '\')
                 if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
                 foreach ($fl in @(Get-Content -LiteralPath $full -ErrorAction SilentlyContinue)) {
@@ -2088,7 +2184,7 @@ switch ($Command) {
                         if (-not $rStr) { continue }
                         if ($targetTrim -and $rStr.StartsWith($commitPrefix)) { $rStr = $rStr.Substring($commitPrefix.Length) }
                         $np = Normalize-PathValue $rStr
-                        if (-not $np -or $np -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $np $ignored) -or (Test-NoiseFile $np) -or (-not (Test-CodePath $np))) { continue }
+                        if (-not $np -or (Test-CheckpointPath $np) -or (Test-PathMatch $np $ignored) -or (Test-NoiseFile $np) -or (-not (Test-CodePath $np))) { continue }
                         if (-not $hitFiles.Contains($np)) { $hitFiles.Add($np) }
                     }
                     if ($hitFiles.Count -gt 0) {
@@ -2122,7 +2218,7 @@ switch ($Command) {
                         $cIdx = $rStr.IndexOf(':')
                         if ($cIdx -lt 1) { continue }
                         $np = Normalize-PathValue ($rStr.Substring(0, $cIdx))
-                        if (-not $np -or $np -match '^\.b3/(ship|autodev)(/|$)' -or (Test-PathMatch $np $ignored) -or (Test-NoiseFile $np) -or (-not (Test-CodePath $np))) { continue }
+                        if (-not $np -or (Test-CheckpointPath $np) -or (Test-PathMatch $np $ignored) -or (Test-NoiseFile $np) -or (-not (Test-CodePath $np))) { continue }
                         $lineHits++
                     }
                 }
@@ -2203,6 +2299,262 @@ switch ($Command) {
         }
 
         Write-Output "WORKTREE_OK: root=$actualRootNorm head=$headRaw"
+        exit 0
+    }
+
+    'evidence-check' {
+        $mSpec = Test-ContainedRepoPath $RepoRoot $ManifestPath
+        if (-not $mSpec) {
+            Fail 'EVIDENCE_MISSING: invalid manifest path' 1
+        }
+        $srcList = @(Split-CsvList $SourcePaths -AsPaths)
+
+        if ($WriteManifest) {
+            if ($srcList.Count -lt 1) {
+                Fail 'EVIDENCE_MISSING: missing -SourcePaths' 1
+            }
+            $checked = New-Object System.Collections.Generic.List[string]
+            foreach ($sp in $srcList) {
+                $c = Test-ContainedRepoPath $RepoRoot $sp
+                if (-not $c) { Fail "EVIDENCE_MISSING: invalid path $sp" 1 }
+                $checked.Add($c.Rel)
+            }
+            $sortedSrc = @(Sort-Ordinal $checked.ToArray())
+            $missingList = New-Object System.Collections.Generic.List[string]
+            $entries = New-Object System.Collections.Generic.List[string]
+            foreach ($rel in $sortedSrc) {
+                $full = Resolve-TargetPath $RepoRoot $rel
+                if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+                    $missingList.Add($rel)
+                } else {
+                    $hashHex = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash.ToLowerInvariant()
+                    $entries.Add("file=$hashHex $rel")
+                }
+            }
+            if ($missingList.Count -gt 0) {
+                Fail ("EVIDENCE_MISSING: " + ($missingList.ToArray() -join ',')) 1
+            }
+
+            $headRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD')
+            $rawHead = $headRes.StdOut.Trim()
+            $headSha = if ($headRes.ExitCode -eq 0 -and $rawHead -match '^[0-9a-f]{40}$') { $rawHead } else { 'NO_HEAD' }
+            $tsUtc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+            $bodyLines = New-Object System.Collections.Generic.List[string]
+            $bodyLines.Add('schema=b3-evidence-v1')
+            $bodyLines.Add("head_sha=$headSha")
+            $bodyLines.Add("timestamp_utc=$tsUtc")
+            foreach ($e in $entries) { $bodyLines.Add($e) }
+            Write-AtomicLfFile $mSpec.Full (($bodyLines.ToArray() -join "`n") + "`n")
+            Write-Output "EVIDENCE_WRITTEN: $($entries.Count) files -> $($mSpec.Rel)"
+            exit 0
+        }
+
+        if (-not (Test-Path -LiteralPath $mSpec.Full -PathType Leaf)) {
+            Fail "EVIDENCE_MISSING: missing manifest ($($mSpec.Rel))" 1
+        }
+        $rawManifest = [IO.File]::ReadAllText($mSpec.Full)
+        $hasSchema = $false
+        $hasHead = $false
+        $hasTs = $false
+        $manifestMap = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::Ordinal)
+        $manifestOrder = New-Object System.Collections.Generic.List[string]
+        foreach ($rawLine in ($rawManifest -split "\r?\n")) {
+            $ln = $rawLine.Trim()
+            if (-not $ln) { continue }
+            if ($ln -ceq 'schema=b3-evidence-v1') { $hasSchema = $true; continue }
+            if ($ln -match '^head_sha=([0-9a-f]{40}|NO_HEAD)$') { $hasHead = $true; continue }
+            if ($ln -match '^timestamp_utc=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$') { $hasTs = $true; continue }
+            if ($ln -match '^file=([0-9a-f]{64})[ \t]+(.+)$') {
+                $h = $Matches[1]
+                $rp = $Matches[2].Trim()
+                $c = Test-ContainedRepoPath $RepoRoot $rp
+                if (-not $c) { Fail "EVIDENCE_MISSING: invalid path $rp" 1 }
+                if ($manifestMap.ContainsKey($c.Rel)) { Fail "EVIDENCE_MISSING: duplicate entry $($c.Rel)" 1 }
+                $manifestMap[$c.Rel] = $h
+                $manifestOrder.Add($c.Rel)
+                continue
+            }
+            Fail "EVIDENCE_MISSING: invalid manifest ($($mSpec.Rel))" 1
+        }
+        if (-not $hasSchema -or -not $hasHead -or -not $hasTs -or $manifestOrder.Count -lt 1) {
+            Fail "EVIDENCE_MISSING: invalid manifest ($($mSpec.Rel))" 1
+        }
+
+        if ($srcList.Count -gt 0) {
+            $uncovered = New-Object System.Collections.Generic.List[string]
+            foreach ($sp in $srcList) {
+                $c = Test-ContainedRepoPath $RepoRoot $sp
+                if (-not $c) { Fail "EVIDENCE_MISSING: invalid path $sp" 1 }
+                if (-not $manifestMap.ContainsKey($c.Rel) -and -not ($uncovered -ccontains $c.Rel)) {
+                    $uncovered.Add($c.Rel)
+                }
+            }
+            if ($uncovered.Count -gt 0) {
+                $sortedUnc = (Sort-Ordinal $uncovered.ToArray()) -join ','
+                Fail "EVIDENCE_MISSING: uncovered $sortedUnc" 1
+            }
+        }
+
+        $missingFiles = New-Object System.Collections.Generic.List[string]
+        $staleFiles = New-Object System.Collections.Generic.List[string]
+        foreach ($rel in $manifestOrder) {
+            $c = Test-ContainedRepoPath $RepoRoot $rel
+            if (-not $c) { Fail "EVIDENCE_MISSING: invalid path $rel" 1 }
+            if (-not (Test-Path -LiteralPath $c.Full -PathType Leaf)) {
+                $missingFiles.Add($rel)
+            } else {
+                $curHash = (Get-FileHash -LiteralPath $c.Full -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($curHash -cne $manifestMap[$rel]) {
+                    $staleFiles.Add($rel)
+                }
+            }
+        }
+        if ($missingFiles.Count -gt 0) {
+            Fail ("EVIDENCE_MISSING: " + ((Sort-Ordinal $missingFiles.ToArray()) -join ',')) 1
+        }
+        if ($staleFiles.Count -gt 0) {
+            Fail ("EVIDENCE_STALE: " + ((Sort-Ordinal $staleFiles.ToArray()) -join ',')) 2
+        }
+        Write-Output "EVIDENCE_FRESH: $($manifestOrder.Count) files"
+        exit 0
+    }
+
+    'merge-policy-check' {
+        $prSt = if ($PrState) { $PrState.Trim() } else { 'NONE' }
+        if ($prSt -cnotin @('OPEN', 'MERGED', 'CLOSED', 'NONE')) { Fail "MERGE_BLOCKED: invalid_pr_state=$prSt" 1 }
+        $ciSt = if ($CiStatus) { $CiStatus.Trim() } else { 'UNKNOWN' }
+        if ($ciSt -cnotin @('PASS', 'FAIL', 'PENDING', 'UNKNOWN')) { Fail "MERGE_BLOCKED: invalid_ci_status=$ciSt" 1 }
+        $revSt = if ($ReviewStatus) { $ReviewStatus.Trim() } else { 'UNKNOWN' }
+        if ($revSt -cnotin @('PASS', 'BLOCKED', 'PENDING', 'UNKNOWN')) { Fail "MERGE_BLOCKED: invalid_review_status=$revSt" 1 }
+        $govSt = if ($GovernanceStatus) { $GovernanceStatus.Trim() } else { 'CLEAR' }
+        if ($govSt -cnotin @('CLEAR', 'BLOCKED', 'MISSING_OWNER_DECISION', 'WITHHELD_PROMOTION', 'UNAUTHORIZED_AUTHORITY', 'INVALID_EDITORIAL_REVIEW', 'UNAUTHORIZED_REVIEWER')) {
+            Fail "MERGE_BLOCKED: invalid_governance=$govSt" 1
+        }
+        if ($BlockingFindings -lt 0) { Fail "MERGE_BLOCKED: invalid_blocking_findings=$BlockingFindings" 1 }
+
+        if ($PostMerge) {
+            if ($prSt -cne 'MERGED') { Fail "POST_MERGE_FAILED: pr_state=$prSt" 1 }
+            $mSha = if ($MergedSha) { $MergedSha.Trim() } else { '' }
+            $mRef = if ($MainRef) { $MainRef.Trim() } else { 'HEAD' }
+            if (-not $mSha -or $mSha.StartsWith('-') -or -not $mRef -or $mRef.StartsWith('-')) {
+                Fail 'POST_MERGE_FAILED: invalid_ref' 1
+            }
+            $mergedRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mSha}^{commit}")
+            $resMerged = $mergedRes.StdOut.Trim()
+            $mainRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mRef}^{commit}")
+            $resMain = $mainRes.StdOut.Trim()
+            if ($mergedRes.ExitCode -ne 0 -or $resMerged -notmatch '^[0-9a-f]{40}$' -or $mainRes.ExitCode -ne 0 -or $resMain -notmatch '^[0-9a-f]{40}$') {
+                Fail 'POST_MERGE_FAILED: unresolvable_commit' 1
+            }
+            $ancRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resMerged, $resMain)
+            if ($ancRes.ExitCode -ne 0) {
+                Fail "POST_MERGE_FAILED: sha_not_in_main(sha=$resMerged,main_ref=$mRef)" 1
+            }
+            Write-Output "POST_MERGE_VERIFIED: sha=$resMerged main_ref=$mRef runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED"
+            exit 0
+        }
+
+        $autoMerge = 'disabled'
+        $protectedPaths = @()
+        $allowProtected = $false
+        $requireCi = $true
+        $requireReview = $true
+
+        $polFileFull = $null
+        if ($PolicyPath -and $PolicyPath.Trim()) {
+            $pSpec = Test-ContainedRepoPath $RepoRoot $PolicyPath
+            if (-not $pSpec) { Fail 'MERGE_BLOCKED: invalid_policy_path' 1 }
+            if (-not (Test-Path -LiteralPath $pSpec.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_policy' 1 }
+            $polFileFull = $pSpec.Full
+        } else {
+            $defPolRaw = Join-Path $RepoRoot '.b3\research-policy.json'
+            $defPolItem = Get-Item -LiteralPath $defPolRaw -Force -ErrorAction SilentlyContinue
+            if ($defPolItem) {
+                $defSpec = Test-ContainedRepoPath $RepoRoot '.b3/research-policy.json'
+                if (-not $defSpec) { Fail 'MERGE_BLOCKED: invalid_policy_path' 1 }
+                if (-not (Test-Path -LiteralPath $defSpec.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: invalid_policy_path' 1 }
+                $polFileFull = $defSpec.Full
+            }
+        }
+
+        if ($polFileFull) {
+            try {
+                $polObj = (Get-Content -LiteralPath $polFileFull -Raw | ConvertFrom-Json)
+            } catch {
+                Fail 'MERGE_BLOCKED: invalid_policy_json' 1
+            }
+            if ($null -eq $polObj -or ($polObj -isnot [System.Management.Automation.PSCustomObject])) {
+                Fail 'MERGE_BLOCKED: invalid_policy_json' 1
+            }
+            $amProp = $polObj.PSObject.Properties['auto_merge']
+            if ($null -ne $amProp) {
+                if ($null -eq $amProp.Value -or ($amProp.Value -isnot [string])) { Fail 'MERGE_BLOCKED: invalid_policy_json' 1 }
+                $amVal = $amProp.Value.Trim()
+                if ($amVal -cnotin @('disabled', 'authorized')) { Fail "MERGE_BLOCKED: invalid_auto_merge=$amVal" 1 }
+                $autoMerge = $amVal
+            }
+            $apProp = $polObj.PSObject.Properties['allow_protected_paths']
+            if ($null -ne $apProp) {
+                if ($apProp.Value -isnot [bool]) { Fail 'MERGE_BLOCKED: invalid_policy_json' 1 }
+                $allowProtected = [bool]$apProp.Value
+            }
+            $rcProp = $polObj.PSObject.Properties['require_ci']
+            if ($null -ne $rcProp) {
+                if ($rcProp.Value -isnot [bool]) { Fail 'MERGE_BLOCKED: invalid_policy_json' 1 }
+                $requireCi = [bool]$rcProp.Value
+            }
+            $rrProp = $polObj.PSObject.Properties['require_review']
+            if ($null -ne $rrProp) {
+                if ($rrProp.Value -isnot [bool]) { Fail 'MERGE_BLOCKED: invalid_policy_json' 1 }
+                $requireReview = [bool]$rrProp.Value
+            }
+            $ppProp = $polObj.PSObject.Properties['protected_paths']
+            if ($null -ne $ppProp) {
+                if ($null -eq $ppProp.Value -or ($ppProp.Value -isnot [array])) { Fail 'MERGE_BLOCKED: invalid_policy_json' 1 }
+                $ppList = New-Object System.Collections.Generic.List[string]
+                foreach ($pp in $ppProp.Value) {
+                    if ($null -eq $pp -or ($pp -isnot [string]) -or ($pp -match '[\r\n\0]')) {
+                        Fail 'MERGE_BLOCKED: invalid_policy_json' 1
+                    }
+                    $np = Normalize-PathValue $pp
+                    if ($np) { $ppList.Add($np) }
+                }
+                $protectedPaths = @($ppList)
+            }
+        }
+
+        if ($govSt -cne 'CLEAR') { Fail "MERGE_BLOCKED: governance=$govSt" 1 }
+
+        $changedArr = @(Split-CsvList $ChangedPaths -AsPaths)
+        if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -gt 0) {
+            $protHits = New-Object System.Collections.Generic.List[string]
+            foreach ($cp in $changedArr) {
+                if (Test-PathMatch $cp $protectedPaths) {
+                    if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
+                    continue
+                }
+                foreach ($pp in $protectedPaths) {
+                    if ($cp -ceq '.' -or $pp.StartsWith("$cp/")) {
+                        if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
+                        break
+                    }
+                }
+            }
+            if ($protHits.Count -gt 0) {
+                Fail ("MERGE_BLOCKED: protected_paths=" + ((Sort-Ordinal $protHits.ToArray()) -join ',')) 1
+            }
+        }
+
+        if ($BlockingFindings -gt 0) { Fail "MERGE_BLOCKED: blocking_findings=$BlockingFindings" 1 }
+        if ($requireCi -and $ciSt -cne 'PASS') { Fail "MERGE_BLOCKED: ci_status=$ciSt" 1 }
+        if ($requireReview -and $revSt -cne 'PASS') { Fail "MERGE_BLOCKED: review_status=$revSt" 1 }
+        if ($prSt -cne 'OPEN') { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
+        if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
+            Fail 'MERGE_BLOCKED: missing_changed_paths' 1
+        }
+        if ($autoMerge -cne 'authorized') { Fail 'PR_READY: auto_merge=disabled' 2 }
+
+        Write-Output 'MERGE_AUTHORIZED: auto_merge=authorized ci=PASS review=PASS governance=CLEAR'
         exit 0
     }
 }

@@ -832,7 +832,7 @@ Generated from B3_HOME: \`${B3_HOME}\` (do not edit here).
 Resolve B3_HOME from \`B3_HOME\` env, product \`.b3/home\`, or \`${B3_HOME}\`.
 Precedence: \`${B3_HOME}/docs/precedence.md\`. Ship: \`${B3_HOME}/workflows/ship.md\`. Review loop: \`${B3_HOME}/review-loop/strategy.md\`.
 Project-level AGENTS.md, GEMINI.md, .agents/rules/, and .agents/skills/ override this global baseline within their project scope; per-project install-product is optional.
-B3 commands (\`/b3-plan\`, \`/b3-implement\`, \`/b3-debug\`, \`/b3-review\`, \`/b3-verify\`, \`/b3-review-loop\`, \`/b3-ship\`) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above."
+B3 commands (\`/b3-plan\`, \`/b3-implement\`, \`/b3-debug\`, \`/b3-review\`, \`/b3-verify\`, \`/b3-review-loop\`, \`/b3-ship\`, \`/b3-research-ship\`) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above."
 
 for rf in "${RULE_FILES[@]}"; do
   stripped="$(strip_frontmatter "$rf")"
@@ -958,7 +958,7 @@ if [[ "$ACTION" == "verify" ]]; then
         fi
       done
     fi
-    for core_cmd in b3-plan b3-implement b3-debug b3-review b3-verify b3-review-loop b3-ship; do
+    for core_cmd in b3-plan b3-implement b3-debug b3-review b3-verify b3-review-loop b3-ship b3-research-ship; do
       if ! array_contains "$core_cmd" "${CMD_SKILL_NAMES[@]}"; then
         COMMANDS_OK=false; ERRORS+=("missing expected command skill in B3_HOME: $core_cmd")
       fi

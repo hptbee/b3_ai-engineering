@@ -145,38 +145,50 @@ install_flat_skills() {
 update_b3_gitignore() {
   local gi="${PRODUCT_ROOT}/.gitignore"
   if [[ ! -f "$gi" ]]; then
-    printf '# B3: commit .b3/home; keep ship checkpoints and local model preferences private\n.b3/ship/\n.b3/models.md\n' > "$gi"
+    printf '# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/models.md\n' > "$gi"
     echo "created"
     return
   fi
-  local has_ship=false has_models=false
+  local has_ship=false has_research=false has_models=false
   grep -Eq '^[[:space:]]*\.b3/ship/[[:space:]]*$' "$gi" && has_ship=true
+  grep -Eq '^[[:space:]]*\.b3/research-ship/[[:space:]]*$' "$gi" && has_research=true
   grep -Eq '^[[:space:]]*\.b3/models\.md[[:space:]]*$' "$gi" && has_models=true
-  if $has_ship && $has_models; then
+  if $has_ship && $has_research && $has_models; then
     echo "present"
     return
   fi
+  local missing=()
+  $has_ship || missing+=(".b3/ship/")
+  $has_research || missing+=(".b3/research-ship/")
+  $has_models || missing+=(".b3/models.md")
+
   if grep -Eq '^[[:space:]]*\.b3/[[:space:]]*$' "$gi"; then
     local tmp="${gi}.b3tmp"
-    if $has_models; then
-      LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
-    else
-      LC_ALL=C awk '/^[[:space:]]*\.b3\/[[:space:]]*$/ { print ".b3/ship/"; print ".b3/models.md"; next } { print }' "$gi" > "$tmp" && mv "$tmp" "$gi"
-    fi
+    local add_s=1 add_r=1 add_m=1
+    $has_ship && add_s=0
+    $has_research && add_r=0
+    $has_models && add_m=0
+    LC_ALL=C awk -v add_s="$add_s" -v add_r="$add_r" -v add_m="$add_m" '
+      /^[[:space:]]*\.b3\/[[:space:]]*$/ {
+        if (add_s) print ".b3/ship/"
+        if (add_r) print ".b3/research-ship/"
+        if (add_m) print ".b3/models.md"
+        next
+      }
+      { print }
+    ' "$gi" > "$tmp" && mv "$tmp" "$gi"
     echo "upgraded"
     return
   fi
-  if $has_ship; then
-    printf '\n.b3/models.md\n' >> "$gi"
+  if $has_ship || $has_research || $has_models; then
+    {
+      echo ""
+      printf '%s\n' "${missing[@]}"
+    } >> "$gi"
     echo "upgraded"
     return
   fi
-  if $has_models; then
-    printf '\n.b3/ship/\n' >> "$gi"
-    echo "upgraded"
-    return
-  fi
-  printf '\n# B3: commit .b3/home; keep ship checkpoints and local model preferences private\n.b3/ship/\n.b3/models.md\n' >> "$gi"
+  printf '\n# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/models.md\n' >> "$gi"
   echo "appended"
 }
 
@@ -269,7 +281,7 @@ if $DRY_RUN; then
     if [[ -f "$CLAUDE_MD_DEST" ]]; then echo "dry-run: keep existing $CLAUDE_MD_DEST"
     elif [[ -f "$CLAUDE_MD_TEMPLATE" ]]; then echo "dry-run: write $CLAUDE_MD_DEST from $CLAUDE_MD_TEMPLATE"; fi
   fi
-  echo "dry-run: gitignore .b3/ship/ and .b3/models.md"
+  echo "dry-run: gitignore .b3/ship/, .b3/research-ship/, and .b3/models.md (see update_b3_gitignore)"
   if [[ -d "$COMMANDS_SRC" ]]; then
     for src in "$COMMANDS_SRC"/*.md; do
       [[ -f "$src" ]] || continue

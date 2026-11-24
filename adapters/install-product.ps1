@@ -157,8 +157,9 @@ function Update-B3Gitignore([string]$Root) {
     $gi = Join-Path $Root '.gitignore'
     $block = @"
 
-# B3: commit .b3/home; keep ship checkpoints and local model preferences private
+# B3: commit .b3/home; keep run checkpoints and local model preferences private
 .b3/ship/
+.b3/research-ship/
 .b3/models.md
 "@
     if (-not (Test-Path -LiteralPath $gi)) {
@@ -167,20 +168,23 @@ function Update-B3Gitignore([string]$Root) {
     }
     $text = Get-Content -LiteralPath $gi -Raw
     $hasShip = ($text -match '(?m)^\s*\.b3/ship/\s*$')
+    $hasResearch = ($text -match '(?m)^\s*\.b3/research-ship/\s*$')
     $hasModels = ($text -match '(?m)^\s*\.b3/models\.md\s*$')
-    if ($hasShip -and $hasModels) { return 'present' }
+    if ($hasShip -and $hasResearch -and $hasModels) { return 'present' }
+
+    $missing = @()
+    if (-not $hasShip) { $missing += '.b3/ship/' }
+    if (-not $hasResearch) { $missing += '.b3/research-ship/' }
+    if (-not $hasModels) { $missing += '.b3/models.md' }
+
     if ($text -match '(?m)^\s*\.b3/\s*$') {
-        $replacement = if ($hasModels) { '.b3/ship/' } else { ".b3/ship/`n.b3/models.md" }
+        $replacement = $missing -join "`n"
         $text = [regex]::Replace($text, '(?m)^\s*\.b3/\s*$', $replacement)
         Set-Content -LiteralPath $gi -Value $text -NoNewline
         return 'upgraded'
     }
-    if ($hasShip) {
-        Add-Content -LiteralPath $gi -Value "`n.b3/models.md"
-        return 'upgraded'
-    }
-    if ($hasModels) {
-        Add-Content -LiteralPath $gi -Value "`n.b3/ship/"
+    if ($hasShip -or $hasResearch -or $hasModels) {
+        Add-Content -LiteralPath $gi -Value ("`n" + ($missing -join "`n"))
         return 'upgraded'
     }
     Add-Content -LiteralPath $gi -Value $block
@@ -258,7 +262,7 @@ if ($DryRun) {
         if (Test-Path -LiteralPath $claudeMdDest) { Write-Output "dry-run: keep existing $claudeMdDest" }
         elseif (Test-Path -LiteralPath $claudeMdTemplate) { Write-Output "dry-run: write $claudeMdDest from $claudeMdTemplate" }
     }
-    Write-Output "dry-run: gitignore .b3/ship/ and .b3/models.md (see Update-B3Gitignore)"
+    Write-Output "dry-run: gitignore .b3/ship/, .b3/research-ship/, and .b3/models.md (see Update-B3Gitignore)"
     if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: gitignore .agents/skills" }
     if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills and .claude/agents" }
     if (Test-Path -LiteralPath $b3Commands) {

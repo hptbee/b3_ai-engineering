@@ -1,0 +1,9 @@
+id: research-ship-authorized-merge-post-verify-001
+artifact: workflows/references/research-ship-gates.md
+intent: Authorized auto-merge must verify post-merge main ancestry while keeping runtime_served and deployed NOT_VERIFIED
+scenario: |
+  Product .b3/research-policy.json sets auto_merge=authorized with all gates PASS and changed paths outside protected_paths.
+  merge-policy-check exits 0 (MERGE_AUTHORIZED); after merge, merge-policy-check -PostMerge verifies MergedSha is an ancestor of MainRef and reports runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED.
+expected_outcome: PASS
+failure_mode: unverified-post-merge-or-false-deployed-claim
+notes: Enforces PR_MERGED != RUNTIME_SERVED != DEPLOYED
