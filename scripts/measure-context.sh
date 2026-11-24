@@ -102,7 +102,8 @@ REVIEW_CMD_B=$(($(file_bytes "commands/b3-review.md") + CR_SKILL_B))
 STANDALONE_REV_ALL=$((REVIEW_CMD_B + REV_TPL_B))
 VERIFY_CMD_B=$(($(file_bytes "commands/b3-verify.md") + $(file_bytes "skills/engineering/verification/SKILL.md")))
 RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + REV_AGENT_B))
-RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md")))
+RL_HIER=$((RL_OP + $(file_bytes "review-loop/hierarchical.md")))
+RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md") + $(file_bytes "review-loop/hierarchical.md")))
 
 AGENT_ROLES_B=0
 AGENT_COUNT=0
@@ -120,11 +121,12 @@ printf "always_on_total   : %6d B (~%4d tok)  [AGENTS.md=%d B, rules=%d B, %d sk
 printf "ship_core_load    : %6d B (~%4d tok)  [ship.md=%d B + commands/b3-ship.md]\n" "$SHIP_CORE" "$(est_tok "$SHIP_CORE")" "$WF_SHIP_B"
 printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.md]\n" "$SHIP_REFS" "$(est_tok "$SHIP_REFS")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$REV_AGENT_B"
+printf "review_hier_load  : %6d B (~%4d tok)  [review_loop_op + hierarchical.md (L/XL/XXL on demand)]\n" "$RL_HIER" "$(est_tok "$RL_HIER")"
 printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md (self-contained)]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"
 printf "review_iter_subag : %6d B (~%4d tok)  [b3-reviewer.md + b3-fixer.md (self-contained loop iter)]\n" "$REV_ITER_SUBAG" "$(est_tok "$REV_ITER_SUBAG")"
 printf "standalone_cmds   : plan=%d B, impl=%d B, debug=%d B, review=%d B, verify=%d B\n" "$PLAN_CMD_B" "$IMPL_CMD_B" "$DEBUG_CMD_B" "$REVIEW_CMD_B" "$VERIFY_CMD_B"
 printf "standalone_rev_all: %6d B (~%4d tok)  [cmd + code-review/SKILL.md + review-template.md]\n" "$STANDALONE_REV_ALL" "$(est_tok "$STANDALONE_REV_ALL")"
-printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
+printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models+hierarchical (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
 printf "agents_roles_total: %6d B (~%4d tok)  [%d runtime subagent roles excl. README.md]\n" "$AGENT_ROLES_B" "$(est_tok "$AGENT_ROLES_B")" "$AGENT_COUNT"
 printf "max_skill_file    : %6d B  (%s)\n" "$MAX_SKILL" "$MAX_SKILL_FILE"
 printf "max_frontmatter   : %6d B  (%s)\n" "$MAX_FM" "$MAX_FM_FILE"

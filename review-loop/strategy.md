@@ -2,36 +2,38 @@
 
 **Trigger:** `commands/b3-review-loop.md` or `/b3-ship` `Review`. Loop **Guard -> Review -> Fix -> Verify -> fresh Review** until gate, `STUCK`, or cap (never stop after pass 1).
 
-You are **orchestrator**: never review+fix in one pass, merge findings, and **alone** emit `PASS`|`FAIL`|`STUCK`|`INCOMPLETE`. Self-sufficient runtime — skip [`spec.md`](spec.md), [`sizing.md`](sizing.md), [`models.md`](models.md) unless disambiguating.
+You are **orchestrator**: never review+fix in one pass, merge findings, and **alone** emit `PASS`|`FAIL`|`STUCK`|`INCOMPLETE`|`BLOCKED`. Self-sufficient runtime — load [`hierarchical.md`](hierarchical.md) **only on `L`/`XL`/`XXL`**; skip `spec.md`, `sizing.md`, `models.md` unless disambiguating.
 
-## Roles & dispatch
+## Roles & dispatch (Risk-based, existing `b3-*` roles only)
 
-- **Lean loads:** load [dispatch](../workflows/references/dispatch-naming.md) + optional `.b3/models.md` / `~/.b3/models.md` **once per loop** (host-supported preferences only). Request `b3-*` aliases; cache IDs for resume.
-- **Reviewer:** always fresh (distinct from `impl_agent`). Run `agents/b3-reviewer.md` **self-contained** (skip `code-review/SKILL.md` & `review-template.md`); add parallel `agents/b3-{security,architecture,performance}-reviewer.md` **only** when triggered (perf on hot paths only: `useFrame`/Three.js, large collections/hot serialization, EF/SQL N+1/pagination, cache/concurrency/blocking, latency-critical APIs). **Low-risk fast path:** `SMALL` with zero auth/security/schema/hot-path/architecture triggers -> 1 `b3-reviewer` only (no specialists).
-- **Fixer:** reuse `impl_agent` (or cached `fixer_agent` ID) across rounds until Tier-1 breaker forces fresh `agents/b3-fixer.md` (`verification/SKILL.md` on demand only — skip with explicit `verify_cmd`); standalone (no `impl_agent`) -> dispatch fresh `b3-fixer` with `OPEN` findings + target files + `verify_cmd`. Without subagents: strict hat-change + log `review_independence: SINGLE_AGENT_LIMIT`.
-- **Standalone state (no `/b3-ship` `RUN_DIR`):** compact `.b3/ship/review-loop/<slug>/` (`state.md`: `base_sha`, `prev_sha`, `size_class`, `iter`, `fixer_agent`, `OPEN`/`FIXED`, `closed:`; `logs/`; `evidence/verify.verify`); resume via `state.md` + `diff-scope -PrevSha` without re-reading untouched code.
-- **Parent -> Subagent & caps:** pass `{base_sha}`, `review_files` (+ `delta_files` Iter 2+), `approach/T00N.md` or `state.md`, **active `OPEN`/unverified `FIXED` only**, and `closed:` IDs (no full files/history). Replies: Reviewer <= **25L** (`Verdict` + table + checked/skipped; no code); Fixer <= **20L** (`id (bug_class) -> files -> verify_cmd`; 1L green, <=35L/log on red).
+- **Lean loads:** load [dispatch](../workflows/references/dispatch-naming.md) + optional `.b3/models.md` / `~/.b3/models.md` **once per loop** (host-supported preferences only). Cache host IDs.
+- **Reviewer (`b3-reviewer` + selective specialists):** always fresh & read-only. Run `agents/b3-reviewer.md` self-contained (skip `code-review/SKILL.md` & `review-template.md`). Evaluate `risk_level` separately from size (`XS` auth = `CRITICAL`; `XXL` docs = `LOW`; never infer risk from LOC alone):
+  - `LOW`: 0-tok checks + 1 fresh `b3-reviewer` only (skip specialists).
+  - `MEDIUM`: `b3-reviewer` + triggered specialist only (`b3-{security,architecture,performance}-reviewer`).
+  - `HIGH`: `b3-reviewer` + matching specialists + affected-contract/dependency review.
+  - `CRITICAL`: independent deep review + mandatory matching specialists (no free-form bypass; valid `WAIVER:...` only) + cross-boundary `verify-run` receipt.
+- **Fixer:** reuse `impl_agent` (`fixer_agent` cache) until Tier-1 breaker forces fresh `agents/b3-fixer.md` (`verification/SKILL.md` on demand only); standalone -> dispatch fresh `b3-fixer` with `OPEN` items + target files + `verify_cmd`. Without subagents: strict hat-change + log `review_independence: SINGLE_AGENT_LIMIT`.
+- **State & replies:** standalone runs use `.b3/ship/review-loop/<slug>/` (`state.md`, `ledger.md`, `logs/`, `evidence/verify.verify`); normalize legacy `SMALL|MEDIUM|LARGE|VERY_LARGE` via `review-ledger normalize`. Replies: Reviewer <= **25L** (`Verdict` + table + checked/skipped); Fixer <= **20L** (`id (bug_class) -> files -> verify_cmd`; 1L green, <=35L/log red).
 
-## 0. Target, Guard, size & status
+## 0. Target, Guard, Size × Risk & Status
 
-1. Run `b3-guard.{ps1,sh} diff-scope` (`-BaseSha`, optional `-PrevSha`; never `HEAD~1`) + `mechanical-check` (`-BaseSha`, `-AllowedPaths`, `-Obsoletes`) + `symbol-check` on refactors. Initial empty diff -> `INCOMPLETE`; `CLEAN_AFTER_FIX` (valid snapshot+delta) reviews removed changes and verifies tree before `PASS`. Fix `scope_creep`/`leftovers`/`obsolete_hits` (`exit 2`) before review.
-2. **Sizing (`size_class`):** `NOISE_ONLY` (`files=0` + valid checks = `PASS`); `CLEAN_AFTER_FIX` -> §1 on `delta_files`; `SMALL` (<=8f, <=300L, 1 area) / `MEDIUM` (<=20f, <=800L, <=2 areas) -> §1 (max **5** iter); `LARGE` (>MEDIUM or >=3 areas) / `VERY_LARGE` (>=50f or >=2000L) -> §2.
-3. **Statuses (`R001`... monotonic):** `OPEN` = blocking `CONFIRMED` (`CRITICAL`/`HIGH`/`MEDIUM`, incl. `CONFIRMED REDUNDANCY` and hot-path `EVIDENCED RISK`); `FIXED` = edited, unverified (`VERIFIED`/`CLOSED`); `REJECTED` = `FALSE_POSITIVE` (+ reason); `ACCEPTED` = out-of-scope / `INTENTIONAL COMPLEXITY` (+ reason); `SPECULATIVE` = unproven / `LOW`-confidence / `LIKELY REDUNDANT` / `UNKNOWN` (non-blocking).
+1. Run `b3-guard.{ps1,sh} diff-scope` (`-BaseSha`, optional `-PrevSha`; never `HEAD~1`) + `mechanical-check` (`-BaseSha`, `-AllowedPaths`, `-Obsoletes`) + `symbol-check` on refactors. Initial empty diff -> `INCOMPLETE`; `CLEAN_AFTER_FIX` -> §1 on `delta_files`. Fix `exit 2` hits first.
+2. **Sizing & Routing:** `NOISE_ONLY` (`files=0` + valid checks + generated provenance ok = `PASS`); smallest T-shirt tier satisfying BOTH limits (`XS` `<=3f,<=100L`; `S` `<=8f,<=300L`; `M` `<=20f,<=800L`) -> **§1** (max **5** iter); (`L` `<50f,<2000L`; `XL` `<=100f,<=5000L`; `XXL` larger, dynamic units) -> **§2** (`hierarchical.md`).
+3. **Statuses (`R001`...):** `OPEN` = blocking `CONFIRMED` (`CRITICAL|HIGH|MEDIUM`, incl. `CONFIRMED REDUNDANCY` and hot-path `EVIDENCED RISK`); `FIXED` = edited, unverified (`VERIFIED`/`CLOSED`); `REJECTED` = `FALSE_POSITIVE` (+ reason); `ACCEPTED` = `INTENTIONAL COMPLEXITY` / out-of-scope (+ reason); `SPECULATIVE` = unproven/`LOW`-conf/`LIKELY REDUNDANT` (non-blocking).
 
-## 1. SMALL / MEDIUM — full-PR loop (max 5 iterations)
+## 1. XS / S / M — full-PR loop (max 5 iterations)
 
-1. **Reviewer:** fresh review (Iter 2+: inspect `delta_files` + affected callers/contracts first without re-reading untouched code, plus **fix-cycle residue**; never narrow to "did we fix R001?"). `closed:` IDs block reopening without new evidence.
-2. **Orchestrator:** merge & classify per §0.3.
-3. **Gate:** check `b3-guard verify-check` first — if `OPEN` blockers = **0** AND `VERIFY_VALID` on current tree, emit `PASS` directly (`FAIL` on failed check; `UNKNOWN / INCOMPLETE` on missing/stale receipt or tool failure, never `PASS`).
-4. **2-Tier Circuit Breaker:** (a) finding survives **2 rounds** -> rewrite brief/fresh `b3-fixer`; (b) same **bug class** recurs **2 consecutive rounds** -> return to `Scope`/design. Stop `STUCK`/`INCOMPLETE` on nonconvergence, oscillation, no-op or cap (`FAIL` with blockers).
-5. **Fixer + Verify:** **before** Fixer, `prev_sha` (`b3-guard snapshot`). Fix `OPEN` `CONFIRMED` items via bug-class sweep in scope, run `verify-run`, loop to §0.1 (`-PrevSha` `{prev_sha}`) + fresh Reviewer.
+1. **Reviewer:** fresh pass (Iter 2+: `delta_files` + callers + residue; never "did we fix R001?"; respect `closed:`).
+2. **Gate:** `b3-guard verify-check` first — if `OPEN` blockers = **0** AND `VERIFY_VALID` on current tree (and required risk evidence present), emit `PASS` (`FAIL` on failed check; `UNKNOWN / INCOMPLETE` on missing/stale/corrupt receipt or tool error).
+3. **2-Tier Breaker:** (a) finding survives **2 rounds** -> rewrite brief/fresh `b3-fixer`; (b) same **bug class** recurs **2 rounds** -> return to `Scope`/design. Stop `STUCK`/`INCOMPLETE` on flat/rising blockers, oscillation, no-op, or cap (`FAIL` if `CONFIRMED` blockers remain).
+4. **Fixer + Verify:** **before** Fixer, `prev_sha` (`b3-guard snapshot`; fails closed on secrets/dirty submodules). Fix `OPEN` items via bug-class sweep, run `verify-run`, loop to §0.1 (`-PrevSha`) + fresh Reviewer.
 
-## 2. LARGE / VERY_LARGE — unit loops then cross-cut
+## 2. L / XL / XXL — hierarchical L0–L4 (`hierarchical.md`)
 
-1. Partition into <= **4** cohesive contract units (with tests; never 1-file crumbs). Inseparable -> recommend PR split and run §1 or `INCOMPLETE`.
-2. Per unit (max **3** iter): pass unit files + interfaces + active unit findings only. Any unit `STUCK` blocks `PASS`.
-3. **Cross-cutting** (max **2** iter): boundary contracts, data flow, shared types, transactions, error propagation, cross-unit duplication only. Total reviewer passes <= **12** (else `STUCK`/`INCOMPLETE`).
+1. Run `b3-guard review-inventory` (L0) + `review-ledger init` (L0, `-MaxConcurrency <=4`, bounded default `-MaxPasses` `12` L/XL or `24` XXL unless overridden >0); recommend PR split if independently mergeable; never silently skip units.
+2. **L1–L3:** L1 contracts (`b3-architecture-reviewer`); L2 cohesive module+test unit loops (`<=4` concurrent, max **3** iter/unit, per-unit risk/mandatory specialists); L3 cross-unit integration (max **2** iter).
+3. **L4 Gate:** require `review-ledger check` = `LEDGER_GATE_PASS`; moved `target_ref`, stale contract/risk/receipt, uncovered files, unwaived `CRITICAL` specialist, or exhausted budget -> `INCOMPLETE`/`BLOCKED`.
 
 ## 3. Stop & report
 
-Compact report: `size_class`, units, iter blocker counts, active/closed findings, verify cmds/exit codes (+ receipt), `review_independence` (`SINGLE_AGENT_LIMIT` if no isolation), outcome (`PASS`|`FAIL`|`STUCK`|`INCOMPLETE`).
+Compact report: `size_class` + `risk_level`, units/ledger, iter blocker counts, active/closed findings, verify cmds/receipts, skipped specialists rationale, `review_independence` (`SINGLE_AGENT_LIMIT` if unisolated), outcome (`PASS|FAIL|STUCK|INCOMPLETE|BLOCKED`).

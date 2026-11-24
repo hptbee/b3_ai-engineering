@@ -2,7 +2,7 @@ id: ship-inline-tiered-review-001
 artifact: workflows/ship.md
 intent: Small inline task without high-risk surfaces runs 1 independent reviewer pass and skips multi-iteration loop unless a confirmed blocker is found
 scenario: |
-  T002 is depth: inline editing a single constant and README line with SMALL diff and no auth/contract/schema/hot-path surface
+  T002 is depth: inline editing a single constant and README line with XS diff and LOW risk (no auth/contract/schema/hot-path surface)
   Agent runs 1 independent reviewer pass which reports zero confirmed blocking findings
   Agent skips multi-iteration review-loop for T002, commits T002, and saves full review-loop for cumulative Final verification
 expected_outcome: PASS

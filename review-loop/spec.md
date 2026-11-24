@@ -31,7 +31,7 @@ The **performance** dimension is always in the general review (light). An extra 
 
 The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. This is not aesthetic cleanup or line-count reduction; only CONFIRMED redundancy becomes a fix requirement. Later loop passes pay special attention to residue introduced by earlier fix passes.
 
-Adaptive path: SMALL/MEDIUM = this loop on the full PR. LARGE/VERY_LARGE = logical review **units**, then a **cross-cutting** review. [`sizing.md`](sizing.md).
+Adaptive path: `XS`/`S`/`M` = this loop on the full PR. `L`/`XL`/`XXL` = logical review **units** (dynamic units, bounded concurrency `<=4`, and coverage ledger on `XXL`), then a **cross-cutting** review (`sizing.md`, [`hierarchical.md`](hierarchical.md)). Size governs partitioning; **Risk** (`LOW|MEDIUM|HIGH|CRITICAL`, never inferred from LOC alone) governs specialist dispatch and verification depth.
 
 ## Outcomes
 
@@ -182,11 +182,11 @@ Detect and refuse a fake green:
 
 Any of these → stop, escalate, or mark **INCOMPLETE** — not success.
 
-### Iteration limit
+### Iteration & resource limits
 
-Default **`MAX_ITERATIONS = 5`** for a full-PR (SMALL/MEDIUM) scope. LARGE unit loops use **3** per unit, **2** for cross-cutting, and a **12** cap on total reviewer passes (`review-loop/strategy.md`).
+Default **`MAX_ITERATIONS = 5`** for a full-PR (`XS`/`S`/`M`) scope. `L`/`XL` unit loops use **3** per unit, **2** for cross-cutting, and a **12** cap on total reviewer passes; `XXL` uses dynamic cohesive units (`<= 4` concurrent) with bounded per-unit iterations (**3**), configurable `max_passes`, and a mandatory fail-closed coverage ledger (`review-loop/strategy.md`, [`hierarchical.md`](hierarchical.md)). Resource/cost budgets are stopping/escalation controls — never permission to skip required units, risk checks, or verification.
 
-When the maximum is reached:
+When a budget or iteration maximum is reached:
 
 ```text
 INCOMPLETE
@@ -206,7 +206,7 @@ When consolidating, drop stale items, merge duplicates, and carry evidence and `
 
 ## Quality gate
 
-A scope passes when **critical = 0**, **high = 0**, **medium = 0**, and required build/tests are **PASS**. LOW/NIT may remain and must be listed. Missing tool evidence → `UNKNOWN / INCOMPLETE`, never PASS.
+A scope passes when **critical = 0**, **high = 0**, **medium = 0**, all required units & cross-unit checks (plus coverage ledger on `L`/`XL`/`XXL`) are complete without stale contracts/receipts, and required build/tests are **PASS**. LOW/NIT may remain and must be listed. Missing tool/coverage evidence → `UNKNOWN / INCOMPLETE` or `BLOCKED`, never PASS.
 
 Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/VERIFIED statuses: [`strategy.md`](strategy.md) §0.3.
 

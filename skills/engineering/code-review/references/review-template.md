@@ -22,7 +22,7 @@ When posting to a GitHub PR after user confirmation, include **only `CONFIRMED` 
 ## Review Summary
 
 - **Verdict:** `PASS` | `CHANGES_NEEDED` | `UNKNOWN / INCOMPLETE`
-- **Target / Scope:** `<local diff/branch or PR #id>` (`<size_class>`, base `<base_sha>`, reviewed `<N>` files; excluded noise `<list or none>`)
+- **Target / Scope:** `<local diff/branch or PR #id>` (`<XS|S|M|L|XL|XXL>`, risk `<LOW|MEDIUM|HIGH|CRITICAL>`, base `<base_sha>`, reviewed `<N>` files; excluded noise `<list or none>`)
 - **Severity Breakdown (CONFIRMED):** `CRITICAL: 0 | HIGH: 0 | MEDIUM: 0 | LOW: 0`
 - **Notes:** <1–2 sentences summarizing key risk, overall health, or blocker>
 

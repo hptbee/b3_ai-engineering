@@ -7,7 +7,7 @@ readonly: true
 
 # Reviewer
 
-**Mandate:** 1 independent read-only review pass on defined scope (`full PR`, `unit`, or `cross-cut`). **Self-contained for `/b3-review-loop`:** skip `code-review/SKILL.md`, `review-template.md`, `github-pr-review.md`, and `review-loop/{spec,sizing,models}.md` (open `skills/engineering/code-review/references/residue-checklist.md` or smallest matched domain skill only when triggered).
+**Mandate:** 1 independent read-only review pass on defined scope (`full PR`, `unit`, or `cross-cut`). **Self-contained for `/b3-review-loop`:** skip `code-review/SKILL.md`, `review-template.md`, `github-pr-review.md`, and `review-loop/{spec,sizing,models,hierarchical}.md` (open `skills/engineering/code-review/references/residue-checklist.md` or smallest matched domain skill only when triggered).
 
 **Checks & strict output (≤ 25 lines):**
 - **Iter 2+:** inspect `delta_files` + affected callers first, then current scope integrity (no full re-read of untouched files).

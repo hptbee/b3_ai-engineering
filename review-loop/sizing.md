@@ -1,38 +1,42 @@
-# Adaptive PR sizing
+# Adaptive PR sizing & Risk classification
 
-Classify **before** the first review. Defaults are for typical application PRs (the product repo under review), not this skills repository’s file counts. Override if the product repo documents different thresholds.
+Classify **both Size and Risk before** the first review. Size governs **partitioning & context**. Risk governs **review depth, specialists & verification**. Never infer risk from LOC alone.
 
-Measure:
+## T-shirt size classes
 
-- Changed files (`git diff --name-only`)
-- Approx added+removed lines
-- Logical areas (features, projects, services, UI vs API vs data)
-- Architectural boundaries crossed (e.g. API contract + DB + client)
-- Whether it is one feature or several
+Measure changed `review_files` (`files`) and added + deleted lines (`lines`, excluding `noise_files` & `.b3/ship/`). Pick the **smallest** tier satisfying **both** limits (larger dimension wins; no overlaps/gaps):
 
-## Classes
+| Size | Changed Files | Changed LOC | Workflow |
+| --- | ---: | ---: | --- |
+| **XS** | `<= 3` | `<= 100` | Lean full-diff loop ([`strategy.md`](strategy.md) §1) |
+| **S** | `<= 8` | `<= 300` | Standard full-diff loop (`strategy.md` §1) |
+| **M** | `<= 20` | `<= 800` | Full-PR risk-aware loop (`strategy.md` §1) |
+| **L** | `< 50` | `< 2,000` | Cohesive unit loops + cross-unit ([`hierarchical.md`](hierarchical.md)) |
+| **XL** | `<= 100` | `<= 5,000` | Up to 4 units + deeper contracts (`hierarchical.md`) |
+| **XXL** | Everything larger | Unlimited | Dynamic hierarchical L0–L4, up to 4 concurrent (`hierarchical.md`) |
 
-| Class | Typical signals (any strong match) |
-| --- | --- |
-| **SMALL** | ≤ 8 files **and** ≤ 300 lines **and** one logical area |
-| **MEDIUM** | ≤ 20 files **and** ≤ 800 lines **and** ≤ 2 areas; still one feature |
-| **LARGE** | > MEDIUM, **or** 3+ logical areas, **or** multiple services/modules with distinct contracts |
-| **VERY_LARGE** | ≳ 50 files **or** ≳ 2000 lines **or** many services **or** cannot name units without splitting a tightly coupled ball |
+Special deterministic states: `NOISE_ONLY` (`0` review files, non-empty noise), `EMPTY_DIFF` (exit `2`, no target -> `UNKNOWN / INCOMPLETE`), `CLEAN_AFTER_FIX` (delta present after prior snapshot -> §1 verification before `PASS`).
+Legacy state migration (`review-ledger normalize`): `SMALL -> S`, `MEDIUM -> M`, `LARGE -> L`, `VERY_LARGE -> XL`.
 
-When in doubt between SMALL and MEDIUM, use **MEDIUM** (still full-PR loop). When in doubt between MEDIUM and LARGE, prefer **LARGE** only if units would be independently understandable.
+## Decoupled Risk classification (`LOW | MEDIUM | HIGH | CRITICAL`)
 
-## Workflow mapping
+Run `scripts/b3-guard.{ps1,sh} diff-scope` (or `review-inventory`) for deterministic signals, supplemented by reviewer judgment with recorded evidence (never silently downgrade uncertain risk):
 
-| Class | Loop |
-| --- | --- |
-| SMALL, MEDIUM | Full-PR loop ([`strategy.md`](strategy.md) §1) |
-| LARGE, VERY_LARGE | Partition → unit loops → cross-cutting ([`strategy.md`](strategy.md) §2) |
+- **CRITICAL:** auth/authn/authz/security/secrets/trust boundaries (directory or filename paths and content signals), security-sensitive filesystem or Git ops, destructive DB migrations (`DROP`/`TRUNCATE`), or exploit primitives.
+- **HIGH:** DB schema/migrations/transactions, public APIs/shared contracts, concurrency/caching/async state, latency-critical/rendering/query hot paths, or wide multi-module blast radius (`>= 4` modules + contracts).
+- **MEDIUM:** multi-file/medium behavioral code, generated code requiring provenance check, or 3+ module changes without higher triggers.
+- **LOW:** docs-only (any size, e.g., 25k LOC `docs/*.md`), test-only, lockfiles, or isolated trivial code (`<= 1` file, `<= 100` LOC) with zero risk signals.
 
-## Partition rules
+## Size × Risk Dispatch Matrix (existing `b3-*` roles only)
 
-- Unit = one **logical change** (feature slice, bounded context, contract+handlers+tests).
-- Include that unit’s tests with the unit.
-- **Bad:** one class / one method / one test file as a unit.
-- **If too coupled to partition:** say so; do not invent directories-as-units; recommend splitting the PR.
+| Risk | `XS` / `S` | `M` | `L` / `XL` / `XXL` |
+| --- | --- | --- | --- |
+| **LOW** | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | Inventory -> cohesive units (`b3-reviewer` only; record skip rationale) -> Ledger Gate |
+| **MEDIUM** | Fresh `b3-reviewer` + triggered specialist only | Full-PR + triggered specialist only + checks | Cohesive units (`<=4` conc) + triggered specialist per unit + L3 cross-unit + Ledger Gate |
+| **HIGH** | Fresh `b3-reviewer` + matching specialist(s) + contract check | Deep contract review + specialists + `verify-run` | L0 Inventory -> L1 Contracts (`b3-architecture-reviewer`) -> L2 Units + specialists + receipts -> L3 Cross-unit -> L4 Ledger Gate |
+| **CRITICAL** | **No downgrade:** Deep review + mandatory `b3-security-reviewer`/specialists (or `WAIVER:...`) + fail-closed `verify-run` | Full deep + mandatory specialists (or `WAIVER:...`) + fail-closed `verify-run` | L0–L4 fail-closed pipeline + mandatory `CRITICAL` specialists (or auditable `WAIVER:...`) + bounded ledger & verification |
 
-Cross-cutting review is **not** a unit; it runs after units that are not abandoned.
+## Partitioning rules (`L` / `XL` / `XXL`)
+
+- Unit = one **logical module/feature slice** (handlers + domain + matching tests); never split by arbitrary LOC (`300L` chunks) or create 1-class/1-test-file crumbs.
+- Recommend PR split when multi-feature units are independently mergeable (`split_recommended=true`); if un-splittable, execute hierarchical review without silently skipping any unit.
