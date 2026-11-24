@@ -8,8 +8,8 @@
 | --- | --- |
 | `AGENTS.md` | Native workspace rule (auto-loaded from repo root) |
 | `rules/*.md` | Referenced via `AGENTS.md` in-repo, or bundled into plugin `rules/AGENTS.md` (plain Markdown, no frontmatter, `< 24 KB`, with global `B3_HOME` and project-precedence header) |
-| `skills/` | Committed `.agents/skills.json` (in this repo), flattened `.agents/skills/<name>` (`install-product -HostName antigravity`), or global plugin `skills/<name>` links |
-| `commands/` + `adapters/command-skills/` | Exposed as command skills (`b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`, `b3-ship`) inside plugin `skills/` or `.agents/` |
+| `skills/` | Committed `.agents/skills.json` (in this repo), flattened `.agents/skills/<name>` (`install-product -HostName antigravity`), or global `~/.gemini/config/skills.json` category entries + plugin `skills/<name>` links |
+| `commands/` + `adapters/command-skills/` | Exposed as command skills (`b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`, `b3-ship`) inside `~/.gemini/config/skills.json`, plugin `skills/`, or `.agents/` |
 | `agents/*.md` | Rendered into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, least-privilege `tools:`, zero hardcoded models), or dynamically delegated via `define_subagent` / `invoke_subagent` |
 
 ## Capability classification
@@ -19,7 +19,7 @@
 | Root `AGENTS.md` / `GEMINI.md` | Durable project map and precedence | SUPPORTED |
 | `.agents/skills.json` (`entries`) | One-level discovery over categorized `skills/*` and `adapters/command-skills` in this repo | SUPPORTED |
 | `.agents/skills/<name>/SKILL.md` | Optional flattened per-product skill discovery | SUPPORTED |
-| Global plugin (`~/.gemini/config/plugins/b3-ai-engineering/`) | Machine-wide bundle of rules, 1-level skill links, command skills, and isolated subagents (`plugin.json`, `rules/AGENTS.md`, `skills/`, `agents/`, `.b3-plugin-manifest`) | SUPPORTED |
+| Global plugin (`~/.gemini/config/plugins/b3-ai-engineering/`) + global `~/.gemini/config/skills.json` | Machine-wide bundle (`plugin.json`, `rules/AGENTS.md`, `skills/`, `agents/`, `.b3-plugin-manifest`) plus `skills.json` real-directory entries for Antigravity's 1-level scanner across workspaces | SUPPORTED |
 | Subagents (`agents/<name>.md` or dynamic `define_subagent`) | Review-loop isolation (`b3-reviewer`, `b3-fixer`, specialists) | SUPPORTED BY ANTIGRAVITY; B3 runtime isolation `UNKNOWN / INCOMPLETE` |
 | Hooks (`hooks.json`), MCP (`mcp_config.json`) | Not required to preserve B3 meaning | SUPPORTED BUT UNNECESSARY FOR B3 |
 | Live Antigravity runtime discovery across projects | End-to-end activation evidence in Antigravity IDE/CLI | `UNKNOWN / INCOMPLETE` |
@@ -35,7 +35,7 @@ Canonical `agents/*.md` frontmatter maps to Antigravity subagent frontmatter (`s
 
 ## 1. Global installation (recommended, one-time per machine)
 
-Generates and manages `~/.gemini/config/plugins/b3-ai-engineering/` from one canonical `B3_HOME` without copying framework prose or modifying unrelated projects. Works across all local repositories without running `install-product`.
+Generates and manages `~/.gemini/config/plugins/b3-ai-engineering/` and registers B3's real skill category directories plus `adapters/command-skills` in `~/.gemini/config/skills.json` from one canonical `B3_HOME` without copying framework prose or modifying unrelated projects. Works across all local repositories without running `install-product` (custom `entries`, `inherits`, and extra keys in `skills.json` are preserved on install, update, and uninstall).
 
 ### One-command CLI (`install`, `verify`, `update`, `uninstall`)
 
@@ -71,7 +71,7 @@ Use either the unified host dispatcher or the standalone plugin manager:
 - Normal `install`/`update` checks SHA-256 values recorded in `.b3-plugin-manifest` **before writing**. Modified generated files cause `UPDATE_CONFLICT` and are preserved. Back up your edits before using `-Force` / `--force` to deliberately replace same-named generated files or skill directories.
 - Untracked symlinks and custom agents are never pruned; an untracked symlink colliding with a desired B3 skill name must be moved manually, even with `-Force`.
 - Custom target/path flags (for sandboxes or non-default homes): `-PluginRoot` / `--plugin-root`, `-B3Home` / `--b3-home`, and `-UserHome` / `--user-home` (or `-AntigravityPluginRoot` / `-PluginRoot` and `-CursorHome` via `adapters/install-global.ps1`, `--plugin-root` and `--cursor-home` via `adapters/install-global.sh`).
-- `verify` checks each capability surface independently (`check.plugin`, `check.rules`, `check.skills`, `check.commands`, `check.agents`), hashes `plugin.json`, `rules/AGENTS.md`, and `agents/*.md` against canonical `B3_HOME` to detect drift, validates Windows NTFS junctions (and POSIX symlinks where supported), and scans for duplicate roots (`COEXISTENCE_WARNING:`).
+- `verify` checks each capability surface independently (`check.plugin`, `check.rules`, `check.skills`, `check.commands`, `check.agents`, `check.skills_json`), hashes `plugin.json`, `rules/AGENTS.md`, and `agents/*.md` against canonical `B3_HOME` to detect drift, validates `~/.gemini/config/skills.json` B3 entries plus Windows NTFS junctions / POSIX symlinks, and scans for duplicate roots (`COEXISTENCE_WARNING:`).
 
 ### Arbitrary-project usage examples
 
@@ -119,7 +119,7 @@ No `.agents/skills` junction is needed (and **do not** add `.agents/skills` alon
 ## 5. Runtime smoke-test checklist (2 unrelated Antigravity projects)
 
 Run this manual verification in two local repositories (`repo-a`, `repo-b`) that have **never** run `install-product`:
-1. Confirm `.\adapters\install-global.ps1 verify -HostName antigravity` (or `./adapters/install-global.sh verify --host antigravity`) exits `0` with `check.{plugin,rules,skills,commands,agents}=OK` and zero `COEXISTENCE_WARNING:` lines.
+1. Confirm `.\adapters\install-global.ps1 verify -HostName antigravity` (or `./adapters/install-global.sh verify --host antigravity`) exits `0` with `check.{plugin,rules,skills,commands,agents,skills_json}=OK` and zero `COEXISTENCE_WARNING:` lines.
 2. Open `[B3 AI Engineering](customization://b3-ai-engineering)` in Antigravity Customizations UI and verify the global plugin appears enabled with bundled rules, skills, and subagents.
 3. **Skills discovery:** In `repo-a` and `repo-b`, ask a verification or debugging question and confirm matching B3 skills activate without local `.agents/skills` in the repo.
 4. **Commands & workflows:** Trigger `/b3-plan` and `/b3-review` in both repos; confirm `B3_HOME` resolves via the global path in plugin `rules/AGENTS.md` without writing `.b3/home` or copying `skills/`.
