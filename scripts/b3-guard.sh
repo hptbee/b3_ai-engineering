@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic helper checks for /b3-ship and /b3-review-loop (not an orchestrator or runner).
-# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree | review-inventory | review-ledger | evidence-check | merge-policy-check
+# Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree | review-inventory | review-ledger | evidence-check | merge-policy-check | context-cache
 set -euo pipefail
 
 _CLEANUP_FILES=()
@@ -97,7 +97,7 @@ git_err_detail() {
 
 CMD="${1:-}"
 if [[ -z "$CMD" ]]; then
-  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree|evidence-check|merge-policy-check [options]" >&2
+  echo "usage: $0 fingerprint|check-freshness|precommit|snapshot|diff-scope|mechanical-check|check-wave|new-run|resolve-run|list-runs|prune|verify-run|verify-check|symbol-check|check-worktree|review-inventory|review-ledger|evidence-check|merge-policy-check|context-cache [options]" >&2
   exit 1
 fi
 shift
@@ -113,7 +113,9 @@ norm_path() {
   p="${p//\\//}"
   p="${p#"${p%%[![:space:]]*}"}"
   p="${p%"${p##*[![:space:]]}"}"
-  p="${p#./}"
+  while [[ "$p" == ./* ]]; do
+    p="${p#./}"
+  done
   while [[ "$p" == */ && "$p" != "/" ]]; do
     p="${p%/}"
   done
@@ -552,19 +554,36 @@ check_contained_repo_path() {
   local LC_ALL=C
   local root="$1"
   local raw="$2"
+  [[ -n "$raw" ]] || return 1
+  if [[ "$raw" =~ [[:cntrl:]] ]]; then return 1; fi
+  if [[ "$raw" == *" " ]]; then return 1; fi
   local trimmed canon_root
   trimmed="$(trim_str "$raw")"
   [[ -n "$trimmed" ]] || return 1
-  if [[ "$trimmed" =~ [[:cntrl:]] ]]; then return 1; fi
+  if [[ "$trimmed" == *:* ]]; then return 1; fi
   local raw_slash="${trimmed//\\//}"
   if [[ "$raw_slash" == */ ]]; then return 1; fi
   local p
   p="$(norm_path "$trimmed")"
   local re_dotdot='(^|/)\.\.(/|$)'
-  if [[ -z "$p" || "$p" == "." || "$p" == /* || "$p" == ~* || "$p" =~ ^[A-Za-z]: || "$p" =~ $re_dotdot ]]; then
+  if [[ -z "$p" || "$p" == "." || "$p" == /* || "$p" == ~* || "$p" == *:* || "$p" =~ $re_dotdot ]]; then
     return 1
   fi
-  local p_low re_git='^\.git(/|$)'
+  local check_rem="$p" check_seg
+  while true; do
+    if [[ "$check_rem" == */* ]]; then
+      check_seg="${check_rem%%/*}"
+      check_rem="${check_rem#*/}"
+    else
+      check_seg="$check_rem"
+      check_rem=""
+    fi
+    if [[ -z "$check_seg" || "$check_seg" == *. || "$check_seg" == *" " ]]; then
+      return 1
+    fi
+    [[ -n "$check_rem" ]] || break
+  done
+  local p_low re_git='(^|/)\.git(/|$)'
   p_low="$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
   if [[ "$p_low" =~ $re_git ]]; then
     return 1
@@ -1057,10 +1076,29 @@ remove_dir_tree_safely() {
 write_atomic_lf_file() {
   local dest="$1"
   local content="$2"
+  if [[ -d "$dest" || -L "$dest" ]]; then
+    echo "WRITE_ERROR: refusing to write over directory or link: $dest"
+    exit 1
+  fi
   local parent tmp
   parent="$(dirname "$dest")"
   mkdir -p "$parent"
-  tmp="${dest}.tmp.$$.${RANDOM}"
+  if ! tmp="$(mktemp "${parent}/.b3-tmp.XXXXXX" 2>/dev/null)"; then
+    local try=0 cand=""
+    tmp=""
+    while [[ $try -lt 16 ]]; do
+      cand="${parent}/.b3-tmp.$$.${RANDOM}.${try}"
+      if ( set -C; : > "$cand" ) 2>/dev/null; then
+        tmp="$cand"
+        break
+      fi
+      try=$((try + 1))
+    done
+    if [[ -z "$tmp" ]]; then
+      echo "WRITE_ERROR: failed to create temp file in $parent"
+      exit 1
+    fi
+  fi
   _CLEANUP_FILES+=("$tmp")
   printf '%s' "$content" | LC_ALL=C tr -d '\r' > "$tmp"
   mv -f "$tmp" "$dest"
@@ -3264,6 +3302,349 @@ init_pass_chain() {
 step_pass_chain() {
   local root="$1" prev="$2" seq="$3" scope_id="$4" kind="$5" delta="$6" ref_sha="$7"
   hash_git_text "$root" "b3-pass-v1|step|${prev}|${seq}|${scope_id}|${kind}|${delta}|${ref_sha}"$'\n' "LEDGER_FAIL"
+}
+
+has_control_chars() {
+  local LC_ALL=C
+  local s="$1"
+  [[ -n "$s" && "$s" =~ [[:cntrl:]] ]]
+}
+
+join_csv() {
+  local IFS=','
+  printf '%s' "$*"
+}
+
+is_valid_context_scope_id() {
+  local LC_ALL=C
+  local s="$1"
+  [[ -n "$s" && ${#s} -ge 1 && ${#s} -le 80 ]] || return 1
+  [[ "$s" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+  if [[ "$s" == "." || "$s" == /* || "$s" == */ || "$s" == *"//"* ]]; then
+    return 1
+  fi
+  local re_dotdot='(^|/)\.\.(/|$)' re_dot='(^|/)\.(/|$)'
+  if [[ "$s" =~ $re_dotdot || "$s" =~ $re_dot ]]; then
+    return 1
+  fi
+  return 0
+}
+
+_CP_REL=""
+_CP_FULL=""
+check_checkpoint_file_path() {
+  local LC_ALL=C
+  local root="$1" raw="$2"
+  _CP_REL=""
+  _CP_FULL=""
+  [[ -n "$raw" ]] || return 2
+  if [[ "$raw" =~ [[:cntrl:]] ]]; then return 2; fi
+  if [[ "$raw" == *" " ]]; then return 2; fi
+  local trimmed
+  trimmed="$(trim_str "$raw")"
+  [[ -n "$trimmed" ]] || return 2
+  if [[ "$trimmed" == *:* ]]; then return 2; fi
+  local raw_slash="${trimmed//\\//}"
+  if [[ -z "$raw_slash" || "$raw_slash" == */ ]]; then return 2; fi
+  local p
+  p="$(norm_path "$trimmed")"
+  local re_dotdot='(^|/)\.\.(/|$)' re_dot='(^|/)\.(/|$)' re_cp='^\.b3/(ship|research-ship)/.+$'
+  if [[ -z "$p" || "$p" == "." || "$p" == /* || "$p" == ~* || "$p" == *:* || "$p" == *"//"* || "$p" =~ $re_dotdot || "$p" =~ $re_dot ]]; then
+    return 2
+  fi
+  local check_rem="$p" check_seg
+  while true; do
+    if [[ "$check_rem" == */* ]]; then
+      check_seg="${check_rem%%/*}"
+      check_rem="${check_rem#*/}"
+    else
+      check_seg="$check_rem"
+      check_rem=""
+    fi
+    if [[ -z "$check_seg" || "$check_seg" == *. || "$check_seg" == *" " ]]; then
+      return 2
+    fi
+    [[ -n "$check_rem" ]] || break
+  done
+  if [[ ! "$p" =~ $re_cp ]]; then
+    return 2
+  fi
+  if is_secret_path "$p"; then
+    return 2
+  fi
+  if ! check_contained_repo_path "$root" "$p"; then
+    _CP_REL="$p"
+    return 3
+  fi
+  if [[ -d "$_CONTAINED_FULL" || -L "$_CONTAINED_FULL" ]]; then
+    _CP_REL="$_CONTAINED_REL"
+    _CP_FULL="$_CONTAINED_FULL"
+    return 3
+  fi
+  _CP_REL="$_CONTAINED_REL"
+  _CP_FULL="$_CONTAINED_FULL"
+  return 0
+}
+
+_CTX_PATHS=()
+_CTX_BAD_TOKEN=""
+_IGN_PATHS=()
+split_strict_paths() {
+  local LC_ALL=C
+  local root="$1" csv="$2" allow_empty="${3:-true}" block_b3_and_secrets="${4:-true}"
+  _CTX_PATHS=()
+  _CTX_BAD_TOKEN=""
+  if [[ -z "$csv" ]]; then
+    if [[ "$allow_empty" == "true" ]]; then return 0; fi
+    _CTX_BAD_TOKEN="<empty>"
+    return 1
+  fi
+  if [[ "$csv" =~ [[:cntrl:]] ]]; then
+    _CTX_BAD_TOKEN="$csv"
+    return 1
+  fi
+  local cleaned
+  cleaned="$(trim_str "$csv")"
+  if [[ "$allow_empty" == "true" && ( -z "$cleaned" || "$csv" == "none" || "$csv" == "[]" ) ]]; then
+    return 0
+  fi
+  if [[ -z "$cleaned" ]]; then
+    _CTX_BAD_TOKEN="<empty>"
+    return 1
+  fi
+  local had_noglob=false
+  [[ "$-" == *f* ]] && had_noglob=true
+  set -f
+  local -a raw_parts=()
+  IFS=',' read -r -a raw_parts <<< "$csv" || true
+  if ! $had_noglob; then set +f; fi
+  if [[ "$csv" == *, ]]; then
+    raw_parts+=("")
+  fi
+
+  local -a collected=()
+  local raw_p tok rel rel_low
+  local re_dot='(^|/)\.(/|$)' re_git_any='(^|/)\.git(/|$)' re_b3_root='^\.b3(/|$)'
+  for raw_p in "${raw_parts[@]}"; do
+    tok="${raw_p#"${raw_p%%[! ]*}"}"
+    if [[ -z "$tok" ]]; then
+      _CTX_BAD_TOKEN="<empty>"
+      return 1
+    fi
+    if [[ "$tok" == "none" || "$tok" == -* || "$tok" == *:* || "$tok" == *'*'* || "$tok" == *'?'* || "$tok" == *'['* || "$tok" == *']'* ]]; then
+      _CTX_BAD_TOKEN="$tok"
+      return 1
+    fi
+    if ! check_contained_repo_path "$root" "$tok"; then
+      _CTX_BAD_TOKEN="$tok"
+      return 1
+    fi
+    rel="$_CONTAINED_REL"
+    rel_low="$(printf '%s' "$rel" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ -z "$rel" || "$rel" == "." || "$rel" == -* || "$rel" == *"//"* || "$rel" =~ $re_dot || "$rel_low" =~ $re_git_any ]]; then
+      _CTX_BAD_TOKEN="$tok"
+      return 1
+    fi
+    if [[ "$block_b3_and_secrets" == "true" ]]; then
+      if [[ "$rel_low" =~ $re_b3_root ]] || is_secret_path "$rel"; then
+        _CTX_BAD_TOKEN="$tok"
+        return 1
+      fi
+    fi
+    collected+=("$rel")
+  done
+  if [[ ${#collected[@]} -eq 0 ]]; then
+    if [[ "$allow_empty" == "true" ]]; then return 0; fi
+    _CTX_BAD_TOKEN="<empty>"
+    return 1
+  fi
+  local sorted_item
+  while IFS= read -r sorted_item; do
+    [[ -n "$sorted_item" ]] && _CTX_PATHS+=("$sorted_item")
+  done < <(printf '%s\n' "${collected[@]}" | LC_ALL=C sort -u)
+  return 0
+}
+
+ignore_overlaps_paths() {
+  [[ ${#_IGN_PATHS[@]} -gt 0 && $# -gt 0 ]] || return 1
+  local p ign
+  for p in "$@"; do
+    [[ -n "$p" ]] || continue
+    for ign in "${_IGN_PATHS[@]}"; do
+      [[ -n "$ign" ]] || continue
+      if [[ "$p" == "$ign" || "$p" == "$ign/"* || "$ign" == "$p/"* ]]; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
+validate_strict_utf8_file() {
+  local f="$1"
+  od -An -v -tx1 "$f" | LC_ALL=C awk '
+    BEGIN {
+      for (i = 0; i < 16; i++) {
+        h = substr("0123456789abcdef", i + 1, 1)
+        hx[h] = i
+        hx[toupper(h)] = i
+      }
+      need = 0; lo = 128; hi = 191; bad = 0
+    }
+    {
+      for (i = 1; i <= NF; i++) {
+        s = $i
+        if (length(s) != 2) { bad = 1; exit 1 }
+        c1 = substr(s, 1, 1); c2 = substr(s, 2, 1)
+        if (!(c1 in hx) || !(c2 in hx)) { bad = 1; exit 1 }
+        b = hx[c1] * 16 + hx[c2]
+        if (need > 0) {
+          if (b < lo || b > hi) { bad = 1; exit 1 }
+          need--
+          lo = 128; hi = 191
+        } else if (b <= 127) {
+          continue
+        } else if (b >= 194 && b <= 223) {
+          need = 1; lo = 128; hi = 191
+        } else if (b == 224) {
+          need = 2; lo = 160; hi = 191
+        } else if ((b >= 225 && b <= 236) || b == 238 || b == 239) {
+          need = 2; lo = 128; hi = 191
+        } else if (b == 237) {
+          need = 2; lo = 128; hi = 159
+        } else if (b == 240) {
+          need = 3; lo = 144; hi = 191
+        } else if (b >= 241 && b <= 243) {
+          need = 3; lo = 128; hi = 191
+        } else if (b == 244) {
+          need = 3; lo = 128; hi = 143
+        } else {
+          bad = 1; exit 1
+        }
+      }
+    }
+    END {
+      if (bad || need != 0) exit 1
+      exit 0
+    }
+  '
+}
+
+_COMMIT_SHA=""
+resolve_strict_commit_sha() {
+  local LC_ALL=C
+  local root="$1" rev="$2"
+  _COMMIT_SHA=""
+  local r
+  r="$(trim_str "$rev")"
+  [[ -n "$r" ]] || return 1
+  if [[ "$r" == -* || "$r" =~ [[:space:]] ]]; then return 1; fi
+  if ! run_git_cmd "$root" rev-parse --verify --quiet "${r}^{commit}"; then
+    return 1
+  fi
+  local sha
+  sha="$(trim_str "$_GIT_STDOUT")"
+  if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+    return 1
+  fi
+  _COMMIT_SHA="$sha"
+  return 0
+}
+
+check_graph_index_fresh() {
+  local root="$1" graph_sha="$2" live_head="$3"
+  shift 3
+  if [[ "$graph_sha" != "$live_head" ]]; then
+    return 1
+  fi
+  if [[ $# -gt 0 ]]; then
+    local w_out c_out u_out line p
+    if ! run_git_cmd "$root" diff --no-renames --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
+      echo "CONTEXT_ERROR: git diff failed"
+      exit 1
+    fi
+    w_out="$_GIT_STDOUT"
+    if ! run_git_cmd "$root" diff --no-renames --cached --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
+      echo "CONTEXT_ERROR: git diff --cached failed"
+      exit 1
+    fi
+    c_out="$_GIT_STDOUT"
+    if ! run_git_cmd "$root" ls-files --others --exclude-standard -- "$@"; then
+      echo "CONTEXT_ERROR: git ls-files failed"
+      exit 1
+    fi
+    u_out="$_GIT_STDOUT"
+    while IFS= read -r line; do
+      p="$(norm_path "$line")"
+      [[ -n "$p" ]] || continue
+      is_checkpoint_dir "$p" && continue
+      if [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p" "${_IGN_PATHS[@]}"; then continue; fi
+      return 1
+    done < <(printf '%s\n%s\n%s\n' "$w_out" "$c_out" "$u_out")
+    return 0
+  fi
+
+  local st_tmp err_tmp rc=0
+  st_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-st-z.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-st-z.$$.${RANDOM}.tmp")"
+  err_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-st-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-st-err.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$st_tmp" "$err_tmp")
+  if git -C "$root" -c core.quotepath=false status --porcelain --untracked-files=all --ignore-submodules=none -z >"$st_tmp" 2>"$err_tmp"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  rm -f "$err_tmp"
+  if [[ $rc -ne 0 ]]; then
+    rm -f "$st_tmp"
+    echo "CONTEXT_ERROR: git status failed"
+    exit 1
+  fi
+  local rec orig_rec xy p1 p2 p1_ign p2_ign fresh_rc=0
+  while IFS= read -r -d '' rec; do
+    [[ -n "$rec" ]] || continue
+    if [[ ${#rec} -lt 4 ]]; then
+      fresh_rc=1
+      break
+    fi
+    xy="${rec:0:2}"
+    p1="${rec:3}"
+    while [[ "$p1" == */ && "$p1" != "/" ]]; do p1="${p1%/}"; done
+    if [[ -z "$p1" ]]; then
+      fresh_rc=1
+      break
+    fi
+    p1_ign=false
+    if is_checkpoint_dir "$p1" || { [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p1" "${_IGN_PATHS[@]}"; }; then
+      p1_ign=true
+    fi
+    if [[ "$xy" == *R* || "$xy" == *C* ]]; then
+      if ! IFS= read -r -d '' orig_rec; then
+        fresh_rc=1
+        break
+      fi
+      p2="$orig_rec"
+      while [[ "$p2" == */ && "$p2" != "/" ]]; do p2="${p2%/}"; done
+      if [[ -z "$p2" ]]; then
+        fresh_rc=1
+        break
+      fi
+      p2_ign=false
+      if is_checkpoint_dir "$p2" || { [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p2" "${_IGN_PATHS[@]}"; }; then
+        p2_ign=true
+      fi
+      if ! $p1_ign || ! $p2_ign; then
+        fresh_rc=1
+        break
+      fi
+    else
+      if ! $p1_ign; then
+        fresh_rc=1
+        break
+      fi
+    fi
+  done < "$st_tmp"
+  rm -f "$st_tmp"
+  return $fresh_rc
 }
 
 case "$CMD" in
@@ -6371,6 +6752,536 @@ ${el}"
     fi
 
     echo "MERGE_AUTHORIZED: auto_merge=authorized ci=PASS review=PASS governance=CLEAR"
+    exit 0
+    ;;
+
+  context-cache)
+    export LC_ALL=C
+    REPO_ROOT="."
+    ACTION=""
+    CACHE_PATH=""
+    SCOPE_ID=""
+    ANCHOR_PATHS=""
+    SCOPE_PATHS=""
+    GRAPH_INDEX_SHA=""
+    SUMMARY_REF=""
+    IGNORE_DIRTY_PATHS=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --repo-root) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; REPO_ROOT="$2"; shift 2 ;;
+        --action) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; ACTION="$2"; shift 2 ;;
+        --cache-path) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; CACHE_PATH="$2"; shift 2 ;;
+        --scope-id) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; SCOPE_ID="$2"; shift 2 ;;
+        --anchor-paths) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; ANCHOR_PATHS="$2"; shift 2 ;;
+        --scope-paths) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; SCOPE_PATHS="$2"; shift 2 ;;
+        --graph-index-sha) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; GRAPH_INDEX_SHA="$2"; shift 2 ;;
+        --summary-ref) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; SUMMARY_REF="$2"; shift 2 ;;
+        --ignore-dirty-paths) [[ $# -ge 2 ]] || { echo "CONTEXT_ERROR: missing value for $1"; exit 1; }; IGNORE_DIRTY_PATHS="$2"; shift 2 ;;
+        *) echo "CONTEXT_ERROR: unknown option $1"; exit 1 ;;
+      esac
+    done
+
+    for raw_arg in "$ACTION" "$CACHE_PATH" "$SCOPE_ID" "$ANCHOR_PATHS" "$SCOPE_PATHS" "$GRAPH_INDEX_SHA" "$SUMMARY_REF" "$IGNORE_DIRTY_PATHS"; do
+      if has_control_chars "$raw_arg"; then
+        echo "CONTEXT_ERROR: control characters not allowed"
+        exit 1
+      fi
+    done
+
+    ACT="$(trim_str "$ACTION")"
+    if [[ "$ACT" != "record" && "$ACT" != "check" ]]; then
+      echo "CONTEXT_ERROR: invalid action"
+      exit 1
+    fi
+
+    if CANON_R="$(canon_repo_root "$REPO_ROOT")"; then
+      REPO_ROOT="$CANON_R"
+    fi
+
+    MID_OP="$(check_git_mid_operation "$REPO_ROOT")"
+    if [[ -n "$MID_OP" ]]; then
+      echo "CONTEXT_ERROR: mid-operation git state"
+      exit 1
+    fi
+
+    if ! resolve_strict_commit_sha "$REPO_ROOT" "HEAD"; then
+      echo "CONTEXT_ERROR: invalid HEAD"
+      exit 1
+    fi
+    LIVE_HEAD_SHA="$_COMMIT_SHA"
+
+    CP_RC=0
+    check_checkpoint_file_path "$REPO_ROOT" "$CACHE_PATH" || CP_RC=$?
+    CACHE_REL="$_CP_REL"
+    CACHE_FULL="$_CP_FULL"
+
+    if [[ "$ACT" == "record" ]]; then
+      if [[ $CP_RC -ne 0 ]]; then
+        echo "CONTEXT_ERROR: invalid cache_path"
+        exit 1
+      fi
+      SCOPE_VAL="$(trim_str "$SCOPE_ID")"
+      if ! is_valid_context_scope_id "$SCOPE_VAL"; then
+        echo "CONTEXT_ERROR: invalid scope_id"
+        exit 1
+      fi
+
+      if ! split_strict_paths "$REPO_ROOT" "$ANCHOR_PATHS" true true; then
+        echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
+        exit 1
+      fi
+      ANC_ARR=()
+      if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+        ANC_ARR=("${_CTX_PATHS[@]}")
+      fi
+
+      if ! split_strict_paths "$REPO_ROOT" "$SCOPE_PATHS" true true; then
+        echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
+        exit 1
+      fi
+      REC_SCOPE_ARR=()
+      if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+        REC_SCOPE_ARR=("${_CTX_PATHS[@]}")
+      fi
+
+      _IGN_PATHS=()
+      if ! split_strict_paths "$REPO_ROOT" "$IGNORE_DIRTY_PATHS" true false; then
+        echo "CONTEXT_ERROR: invalid ignore path"
+        exit 1
+      fi
+      if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+        _IGN_PATHS=("${_CTX_PATHS[@]}")
+      fi
+      if [[ ${#ANC_ARR[@]} -gt 0 ]] && ignore_overlaps_paths "${ANC_ARR[@]}"; then
+        echo "CONTEXT_ERROR: invalid ignore path"
+        exit 1
+      fi
+      if [[ ${#REC_SCOPE_ARR[@]} -gt 0 ]] && ignore_overlaps_paths "${REC_SCOPE_ARR[@]}"; then
+        echo "CONTEXT_ERROR: invalid ignore path"
+        exit 1
+      fi
+
+      GRAPH_TRIM="$(trim_str "$GRAPH_INDEX_SHA")"
+      GRAPH_VAL="none"
+      if [[ -n "$GRAPH_TRIM" && "$GRAPH_TRIM" != "none" ]]; then
+        if ! resolve_strict_commit_sha "$REPO_ROOT" "$GRAPH_TRIM"; then
+          echo "CONTEXT_ERROR: invalid graph_index_sha"
+          exit 1
+        fi
+        GRAPH_VAL="$_COMMIT_SHA"
+      fi
+
+      SUM_TRIM="$(trim_str "$SUMMARY_REF")"
+      SUM_REF_VAL="none"
+      SUM_SHA_VAL="none"
+      if [[ -n "$SUM_TRIM" && "$SUM_TRIM" != "none" ]]; then
+        SUM_RC=0
+        check_checkpoint_file_path "$REPO_ROOT" "$SUM_TRIM" || SUM_RC=$?
+        if [[ $SUM_RC -ne 0 ]]; then
+          echo "CONTEXT_ERROR: invalid summary_ref"
+          exit 1
+        fi
+        SUM_REL="$_CP_REL"
+        SUM_FULL="$_CP_FULL"
+        if [[ ! -f "$SUM_FULL" || -L "$SUM_FULL" ]]; then
+          echo "CONTEXT_ERROR: missing summary_ref"
+          exit 1
+        fi
+        SUM_SHA_VAL="$(compute_file_sha256 "$SUM_FULL")" || { echo "CONTEXT_ERROR: sha256 computation failed"; exit 1; }
+        if [[ ! "$SUM_SHA_VAL" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "CONTEXT_ERROR: sha256 computation failed"
+          exit 1
+        fi
+        SUM_REF_VAL="$SUM_REL"
+      fi
+
+      ANCHOR_PATHS_VAL="none"
+      ANCHOR_HASH_VAL="none"
+      IGN_CSV=""
+      if [[ ${#_IGN_PATHS[@]} -gt 0 ]]; then
+        IGN_CSV="$(join_csv "${_IGN_PATHS[@]}")"
+      fi
+      if [[ ${#ANC_ARR[@]} -gt 0 ]]; then
+        ANCHOR_PATHS_VAL="$(join_csv "${ANC_ARR[@]}")"
+        if ! FP_OUT="$(compute_tree_fingerprint "$REPO_ROOT" "$ANCHOR_PATHS_VAL" "$IGN_CSV")"; then
+          echo "$FP_OUT"
+          exit 1
+        fi
+        { IFS= read -r _fp_h; IFS= read -r ANCHOR_HASH_VAL; IFS= read -r _fp_p; } <<< "$FP_OUT"
+      fi
+
+      TS_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      BODY_STR="schema=b3-context-v1
+scope_id=${SCOPE_VAL}
+head_sha=${LIVE_HEAD_SHA}
+anchor_paths=${ANCHOR_PATHS_VAL}
+anchor_hash=${ANCHOR_HASH_VAL}
+graph_index_sha=${GRAPH_VAL}
+summary_ref=${SUM_REF_VAL}
+summary_sha256=${SUM_SHA_VAL}
+timestamp_utc=${TS_UTC}
+"
+      write_atomic_lf_file "$CACHE_FULL" "$BODY_STR"
+      printf 'CONTEXT_RECORDED: %s scope=%s head=%s anchor_hash=%s graph_index_sha=%s\n' "$CACHE_REL" "$SCOPE_VAL" "$LIVE_HEAD_SHA" "$ANCHOR_HASH_VAL" "$GRAPH_VAL"
+      exit 0
+    fi
+
+    if [[ $CP_RC -eq 2 ]]; then
+      echo "CONTEXT_ERROR: invalid cache_path"
+      exit 1
+    fi
+    if [[ $CP_RC -eq 3 ]]; then
+      echo "CONTEXT_CORRUPT: invalid cache_path"
+      exit 1
+    fi
+
+    CALLER_SCOPE="$(trim_str "$SCOPE_ID")"
+    if [[ -n "$CALLER_SCOPE" ]] && ! is_valid_context_scope_id "$CALLER_SCOPE"; then
+      echo "CONTEXT_ERROR: invalid scope_id"
+      exit 1
+    fi
+
+    HAS_CALLER_ANCHOR=false
+    CALLER_ANCHOR_ARR=()
+    CALLER_ANCHOR_CSV="none"
+    ANC_RAW_TRIM="$(trim_str "$ANCHOR_PATHS")"
+    if [[ -n "$ANC_RAW_TRIM" ]]; then
+      HAS_CALLER_ANCHOR=true
+      if ! split_strict_paths "$REPO_ROOT" "$ANCHOR_PATHS" true true; then
+        echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
+        exit 1
+      fi
+      if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+        CALLER_ANCHOR_ARR=("${_CTX_PATHS[@]}")
+        CALLER_ANCHOR_CSV="$(join_csv "${CALLER_ANCHOR_ARR[@]}")"
+      fi
+    fi
+
+    if ! split_strict_paths "$REPO_ROOT" "$SCOPE_PATHS" true true; then
+      echo "CONTEXT_ERROR: invalid path ${_CTX_BAD_TOKEN}"
+      exit 1
+    fi
+    SCOPE_ARR=()
+    if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+      SCOPE_ARR=("${_CTX_PATHS[@]}")
+    fi
+
+    _IGN_PATHS=()
+    if ! split_strict_paths "$REPO_ROOT" "$IGNORE_DIRTY_PATHS" true false; then
+      echo "CONTEXT_ERROR: invalid ignore path"
+      exit 1
+    fi
+    if [[ ${#_CTX_PATHS[@]} -gt 0 ]]; then
+      _IGN_PATHS=("${_CTX_PATHS[@]}")
+    fi
+    IGN_CSV=""
+    if [[ ${#_IGN_PATHS[@]} -gt 0 ]]; then
+      IGN_CSV="$(join_csv "${_IGN_PATHS[@]}")"
+    fi
+
+    HAS_CALLER_GRAPH=false
+    CALLER_GRAPH_VAL="none"
+    CALLER_GRAPH_TRIM="$(trim_str "$GRAPH_INDEX_SHA")"
+    if [[ -n "$CALLER_GRAPH_TRIM" ]]; then
+      HAS_CALLER_GRAPH=true
+      if [[ "$CALLER_GRAPH_TRIM" == "none" ]]; then
+        CALLER_GRAPH_VAL="none"
+      else
+        if ! resolve_strict_commit_sha "$REPO_ROOT" "$CALLER_GRAPH_TRIM"; then
+          echo "CONTEXT_ERROR: invalid graph_index_sha"
+          exit 1
+        fi
+        CALLER_GRAPH_VAL="$_COMMIT_SHA"
+      fi
+    fi
+
+    HAS_CALLER_SUMMARY=false
+    CALLER_SUMMARY_VAL="none"
+    SUM_RAW_TRIM="$(trim_str "$SUMMARY_REF")"
+    if [[ -n "$SUM_RAW_TRIM" ]]; then
+      HAS_CALLER_SUMMARY=true
+      if [[ "$SUM_RAW_TRIM" == "none" ]]; then
+        CALLER_SUMMARY_VAL="none"
+      else
+        CSUM_RC=0
+        check_checkpoint_file_path "$REPO_ROOT" "$SUM_RAW_TRIM" || CSUM_RC=$?
+        if [[ $CSUM_RC -ne 0 ]]; then
+          echo "CONTEXT_ERROR: invalid summary_ref"
+          exit 1
+        fi
+        CALLER_SUMMARY_VAL="$_CP_REL"
+      fi
+    fi
+
+    if $HAS_CALLER_ANCHOR && [[ ${#CALLER_ANCHOR_ARR[@]} -gt 0 ]] && ignore_overlaps_paths "${CALLER_ANCHOR_ARR[@]}"; then
+      echo "CONTEXT_ERROR: invalid ignore path"
+      exit 1
+    fi
+    if [[ ${#SCOPE_ARR[@]} -gt 0 ]] && ignore_overlaps_paths "${SCOPE_ARR[@]}"; then
+      echo "CONTEXT_ERROR: invalid ignore path"
+      exit 1
+    fi
+
+    if [[ ! -f "$CACHE_FULL" ]]; then
+      echo "CONTEXT_MISSING: ${CACHE_REL}"
+      exit 1
+    fi
+    if [[ -L "$CACHE_FULL" ]]; then
+      echo "CONTEXT_CORRUPT: invalid cache_path"
+      exit 1
+    fi
+
+    if ! validate_strict_utf8_file "$CACHE_FULL"; then
+      echo "CONTEXT_CORRUPT: invalid utf8 encoding"
+      exit 1
+    fi
+
+    CTRL_CNT="$(LC_ALL=C tr -cd '\000-\011\013-\037\177' < "$CACHE_FULL" | wc -c | tr -d '[:space:]')"
+    if [[ "${CTRL_CNT:-0}" -gt 0 ]]; then
+      echo "CONTEXT_CORRUPT: control character or CRLF in cache"
+      exit 1
+    fi
+
+    SEEN_KEYS=$'\n'
+    REC_SCHEMA=""
+    REC_SCOPE_ID=""
+    REC_HEAD_SHA=""
+    REC_ANCHOR_PATHS=""
+    REC_ANCHOR_HASH=""
+    REC_GRAPH_INDEX_SHA=""
+    REC_SUMMARY_REF=""
+    REC_SUMMARY_SHA256=""
+    REC_TIMESTAMP_UTC=""
+
+    while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+      if [[ "$raw_line" != *=* ]]; then
+        echo "CONTEXT_CORRUPT: malformed line"
+        exit 1
+      fi
+      k="${raw_line%%=*}"
+      v="${raw_line#*=}"
+      if [[ -z "$k" ]]; then
+        echo "CONTEXT_CORRUPT: malformed line"
+        exit 1
+      fi
+      case "$k" in
+        schema|scope_id|head_sha|anchor_paths|anchor_hash|graph_index_sha|summary_ref|summary_sha256|timestamp_utc) ;;
+        *) echo "CONTEXT_CORRUPT: unknown field '${k}'"; exit 1 ;;
+      esac
+      if [[ "$SEEN_KEYS" == *$'\n'"${k}"$'\n'* ]]; then
+        echo "CONTEXT_CORRUPT: duplicate field '${k}'"
+        exit 1
+      fi
+      if [[ -z "$v" ]]; then
+        echo "CONTEXT_CORRUPT: empty field '${k}'"
+        exit 1
+      fi
+      SEEN_KEYS="${SEEN_KEYS}${k}"$'\n'
+      case "$k" in
+        schema) REC_SCHEMA="$v" ;;
+        scope_id) REC_SCOPE_ID="$v" ;;
+        head_sha) REC_HEAD_SHA="$v" ;;
+        anchor_paths) REC_ANCHOR_PATHS="$v" ;;
+        anchor_hash) REC_ANCHOR_HASH="$v" ;;
+        graph_index_sha) REC_GRAPH_INDEX_SHA="$v" ;;
+        summary_ref) REC_SUMMARY_REF="$v" ;;
+        summary_sha256) REC_SUMMARY_SHA256="$v" ;;
+        timestamp_utc) REC_TIMESTAMP_UTC="$v" ;;
+      esac
+    done < "$CACHE_FULL"
+
+    for req_key in schema scope_id head_sha anchor_paths anchor_hash graph_index_sha summary_ref summary_sha256 timestamp_utc; do
+      if [[ "$SEEN_KEYS" != *$'\n'"${req_key}"$'\n'* ]]; then
+        echo "CONTEXT_CORRUPT: missing field '${req_key}'"
+        exit 1
+      fi
+    done
+
+    if [[ "$REC_SCHEMA" != "b3-context-v1" ]]; then
+      echo "CONTEXT_CORRUPT: invalid schema"
+      exit 1
+    fi
+    if ! is_valid_context_scope_id "$REC_SCOPE_ID"; then
+      echo "CONTEXT_CORRUPT: invalid scope_id"
+      exit 1
+    fi
+    if [[ ! "$REC_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "CONTEXT_CORRUPT: invalid head_sha"
+      exit 1
+    fi
+
+    REC_ANCHOR_ARR=()
+    REC_ANCHOR_CSV="none"
+    if [[ "$REC_ANCHOR_PATHS" == "none" ]]; then
+      if [[ "$REC_ANCHOR_HASH" != "none" ]]; then
+        echo "CONTEXT_CORRUPT: invalid anchor_hash"
+        exit 1
+      fi
+    else
+      if [[ ! "$REC_ANCHOR_HASH" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "CONTEXT_CORRUPT: invalid anchor_hash"
+        exit 1
+      fi
+      if ! split_strict_paths "$REPO_ROOT" "$REC_ANCHOR_PATHS" false true || [[ ${#_CTX_PATHS[@]} -lt 1 ]]; then
+        echo "CONTEXT_CORRUPT: invalid anchor_paths"
+        exit 1
+      fi
+      REC_ANCHOR_ARR=("${_CTX_PATHS[@]}")
+      REC_ANCHOR_CSV="$(join_csv "${REC_ANCHOR_ARR[@]}")"
+    fi
+
+    if [[ "$REC_GRAPH_INDEX_SHA" != "none" && ! "$REC_GRAPH_INDEX_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "CONTEXT_CORRUPT: invalid graph_index_sha"
+      exit 1
+    fi
+
+    REC_SUM_FULL=""
+    if [[ "$REC_SUMMARY_REF" == "none" ]]; then
+      if [[ "$REC_SUMMARY_SHA256" != "none" ]]; then
+        echo "CONTEXT_CORRUPT: invalid summary_sha256"
+        exit 1
+      fi
+    else
+      if [[ ! "$REC_SUMMARY_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "CONTEXT_CORRUPT: invalid summary_sha256"
+        exit 1
+      fi
+      REC_SUM_RC=0
+      check_checkpoint_file_path "$REPO_ROOT" "$REC_SUMMARY_REF" || REC_SUM_RC=$?
+      if [[ $REC_SUM_RC -ne 0 ]]; then
+        echo "CONTEXT_CORRUPT: missing or invalid summary_ref"
+        exit 1
+      fi
+      REC_SUM_FULL="$_CP_FULL"
+    fi
+
+    if [[ ! "$REC_TIMESTAMP_UTC" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+      echo "CONTEXT_CORRUPT: invalid timestamp_utc"
+      exit 1
+    fi
+
+    if [[ -n "$CALLER_SCOPE" && "$CALLER_SCOPE" != "$REC_SCOPE_ID" ]]; then
+      echo "CONTEXT_MISMATCH: scope_id expected=${CALLER_SCOPE} got=${REC_SCOPE_ID}"
+      exit 1
+    fi
+
+    if $HAS_CALLER_SUMMARY && [[ "$CALLER_SUMMARY_VAL" != "$REC_SUMMARY_REF" ]]; then
+      echo "CONTEXT_MISMATCH: summary_ref expected=${CALLER_SUMMARY_VAL} got=${REC_SUMMARY_REF}"
+      exit 1
+    fi
+
+    if [[ ${#REC_ANCHOR_ARR[@]} -gt 0 ]] && ignore_overlaps_paths "${REC_ANCHOR_ARR[@]}"; then
+      echo "CONTEXT_ERROR: invalid ignore path"
+      exit 1
+    fi
+
+    REASONS=()
+
+    if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$REC_HEAD_SHA" "$LIVE_HEAD_SHA"; then
+      REASONS+=("head_diverged")
+    fi
+
+    if $HAS_CALLER_ANCHOR && [[ "$CALLER_ANCHOR_CSV" != "$REC_ANCHOR_CSV" ]]; then
+      REASONS+=("anchor_scope_changed")
+    fi
+
+    if [[ ${#REC_ANCHOR_ARR[@]} -gt 0 ]]; then
+      if ! FP_OUT="$(compute_tree_fingerprint "$REPO_ROOT" "$REC_ANCHOR_CSV" "$IGN_CSV")"; then
+        echo "$FP_OUT"
+        exit 1
+      fi
+      { IFS= read -r _fp_h; IFS= read -r LIVE_ANCHOR_HASH; IFS= read -r _fp_p; } <<< "$FP_OUT"
+      if [[ "$LIVE_ANCHOR_HASH" != "$REC_ANCHOR_HASH" ]]; then
+        REASONS+=("anchor_changed")
+      fi
+    fi
+
+    if [[ "$REC_SUMMARY_REF" != "none" ]]; then
+      if [[ -z "$REC_SUM_FULL" || ! -f "$REC_SUM_FULL" || -L "$REC_SUM_FULL" ]]; then
+        echo "CONTEXT_CORRUPT: missing or invalid summary_ref"
+        exit 1
+      fi
+      LIVE_SUM_SHA="$(compute_file_sha256 "$REC_SUM_FULL")" || { echo "CONTEXT_ERROR: sha256 computation failed"; exit 1; }
+      if [[ "$LIVE_SUM_SHA" != "$REC_SUMMARY_SHA256" ]]; then
+        REASONS+=("summary_changed")
+      fi
+    fi
+
+    GRAPH_INDEX_STATUS="NOT_RECORDED"
+    if [[ "$REC_GRAPH_INDEX_SHA" != "none" ]] || { $HAS_CALLER_GRAPH && [[ "$CALLER_GRAPH_VAL" != "none" ]]; }; then
+      PROBE_PATHS=()
+      if [[ ${#SCOPE_ARR[@]} -gt 0 ]]; then
+        PROBE_RAW=()
+        if [[ ${#REC_ANCHOR_ARR[@]} -gt 0 ]]; then
+          for rp in "${REC_ANCHOR_ARR[@]}"; do PROBE_RAW+=("$rp"); done
+        fi
+        if $HAS_CALLER_ANCHOR && [[ ${#CALLER_ANCHOR_ARR[@]} -gt 0 ]]; then
+          for cp in "${CALLER_ANCHOR_ARR[@]}"; do PROBE_RAW+=("$cp"); done
+        fi
+        for sp in "${SCOPE_ARR[@]}"; do PROBE_RAW+=("$sp"); done
+        while IFS= read -r pp; do
+          [[ -n "$pp" ]] && PROBE_PATHS+=("$pp")
+        done < <(printf '%s\n' "${PROBE_RAW[@]}" | LC_ALL=C sort -u)
+      fi
+      if [[ "$REC_GRAPH_INDEX_SHA" != "none" ]]; then
+        GRAPH_MISMATCH=false
+        if $HAS_CALLER_GRAPH && [[ "$CALLER_GRAPH_VAL" != "$REC_GRAPH_INDEX_SHA" ]]; then
+          GRAPH_MISMATCH=true
+        fi
+        REC_GRAPH_FRESH=false
+        if [[ ${#PROBE_PATHS[@]} -gt 0 ]]; then
+          if check_graph_index_fresh "$REPO_ROOT" "$REC_GRAPH_INDEX_SHA" "$LIVE_HEAD_SHA" "${PROBE_PATHS[@]}"; then
+            REC_GRAPH_FRESH=true
+          fi
+        else
+          if check_graph_index_fresh "$REPO_ROOT" "$REC_GRAPH_INDEX_SHA" "$LIVE_HEAD_SHA"; then
+            REC_GRAPH_FRESH=true
+          fi
+        fi
+        if $GRAPH_MISMATCH; then
+          REASONS+=("graph_index_mismatch")
+        fi
+        if ! $REC_GRAPH_FRESH; then
+          REASONS+=("graph_index_stale")
+        fi
+        if $GRAPH_MISMATCH || ! $REC_GRAPH_FRESH; then
+          GRAPH_INDEX_STATUS="STALE"
+        else
+          GRAPH_INDEX_STATUS="FRESH"
+        fi
+      else
+        GRAPH_INDEX_STATUS="STALE"
+        REASONS+=("graph_index_mismatch")
+        CALLER_GRAPH_FRESH=false
+        if [[ ${#PROBE_PATHS[@]} -gt 0 ]]; then
+          if check_graph_index_fresh "$REPO_ROOT" "$CALLER_GRAPH_VAL" "$LIVE_HEAD_SHA" "${PROBE_PATHS[@]}"; then
+            CALLER_GRAPH_FRESH=true
+          fi
+        else
+          if check_graph_index_fresh "$REPO_ROOT" "$CALLER_GRAPH_VAL" "$LIVE_HEAD_SHA"; then
+            CALLER_GRAPH_FRESH=true
+          fi
+        fi
+        if ! $CALLER_GRAPH_FRESH; then
+          REASONS+=("graph_index_stale")
+        fi
+      fi
+    fi
+
+    ANCHOR_STATUS="FRESH"
+    if [[ ${#REASONS[@]} -gt 0 ]]; then
+      for r in "${REASONS[@]}"; do
+        if [[ "$r" == "head_diverged" || "$r" == "anchor_scope_changed" || "$r" == "anchor_changed" ]]; then
+          ANCHOR_STATUS="STALE"
+          break
+        fi
+      done
+      REASON_CSV="$(join_csv "${REASONS[@]}")"
+      printf 'CONTEXT_STALE: scope=%s reasons=%s anchor_status=%s graph_index=%s live_lsp_eligible=true\n' "$REC_SCOPE_ID" "$REASON_CSV" "$ANCHOR_STATUS" "$GRAPH_INDEX_STATUS"
+      exit 2
+    fi
+
+    printf 'CONTEXT_FRESH: scope=%s head=%s anchor_status=FRESH graph_index=%s live_lsp_eligible=true\n' "$REC_SCOPE_ID" "$LIVE_HEAD_SHA" "$GRAPH_INDEX_STATUS"
     exit 0
     ;;
 

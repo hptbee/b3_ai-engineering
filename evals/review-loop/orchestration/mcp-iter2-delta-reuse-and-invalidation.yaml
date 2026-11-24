@@ -1,0 +1,10 @@
+id: review-loop-mcp-iter2-delta-reuse-001
+artifact: workflows/references/context-routing.md
+intent: Review Loop Iteration 2+ reuses valid immutable anchor cache with diff-scope delta_files, invalidates on anchor/contract/graph drift, and keeps live-LSP eligible
+scenario: |
+  Iteration 1 records b3-guard context-cache on immutable read_only_deps and contract_files with summary_ref.
+  Fixer edits only a mutable handler file; Iteration 2 runs context-cache check (CONTEXT_FRESH) and diff-scope -PrevSha (delta_files), reusing anchor summaries and skipping full repo reload or repeated graph scans.
+  When a shared contract changes or HEAD/working-tree drifts past graph_index_sha, context-cache check returns CONTEXT_STALE (graph_index=STALE, live_lsp_eligible=true); the orchestrator invalidates stale graph assumptions while still allowing live-workspace LSP serena or native reads.
+expected_outcome: PASS
+failure_mode: full-repo-reload-on-iter2-or-trusts-stale-graph-index
+notes: Covers delta-first reuse, anchor/summary/HEAD invalidation, and commit-indexed graph vs live-workspace LSP distinction

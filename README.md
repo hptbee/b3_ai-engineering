@@ -28,7 +28,7 @@ b3-ai-engineering/
 └── docs/                     Architecture, standards, contracts
 ```
 
-Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md), [`docs/model-preferences.md`](docs/model-preferences.md). Universal map: [`AGENTS.md`](AGENTS.md).
+Catalogs: [`skills/README.md`](skills/README.md), [`docs/architecture.md`](docs/architecture.md), [`docs/model-preferences.md`](docs/model-preferences.md), [`docs/context-routing.md`](docs/context-routing.md). Universal map: [`AGENTS.md`](AGENTS.md).
 
 ## Why it exists
 
@@ -214,11 +214,11 @@ One invocation runs `Preflight → Plan → [Scope → Build → Verify → Revi
 
 ## Context budget & validation
 
-Static always-on, `/b3-ship`, `/b3-review-loop`, `review_delta_load`, and standalone command (`standalone_cmds`) byte/token budgets are tracked identically across shells by [`scripts/measure-context.ps1`](scripts/measure-context.ps1) / [`scripts/measure-context.sh`](scripts/measure-context.sh) (`-Strict` / `--strict`). Behavioral (`validate-ship-behavior.ps1`, `validate-standalone-commands.ps1`), isolated product smoke (`smoke-ship-product.ps1`), and eval schema (`validate-evals.sh`) checks are cataloged in [`scripts/README.md`](scripts/README.md).
+Static always-on, `/b3-ship`, `/b3-review-loop`, `review_delta_load`, `context_routing`, and standalone command (`standalone_cmds`) byte/token budgets are tracked identically across shells by [`scripts/measure-context.ps1`](scripts/measure-context.ps1) / [`scripts/measure-context.sh`](scripts/measure-context.sh) (`-Strict` / `--strict`). Optional on-demand MCP-aware context routing (`0 B` always-on) is defined in [`workflows/references/context-routing.md`](workflows/references/context-routing.md) and documented in [`docs/context-routing.md`](docs/context-routing.md). Behavioral (`validate-ship-behavior.ps1`, `validate-standalone-commands.ps1`, `validate-context-routing.ps1`), isolated product smoke (`smoke-ship-product.ps1`), and eval schema (`validate-evals.sh`) checks are cataloged in [`scripts/README.md`](scripts/README.md).
 
 ## Evaluation
 
-262 YAML schema/activation fixtures live under `evals/` (including `evals/commands/` and `evals/workflows/ship/`), validated with [`scripts/validate-evals.sh`](scripts/validate-evals.sh); automated LLM scoring runner remains deferred. Behavioral CLI suites run via `scripts/validate-standalone-commands.ps1`, `scripts/validate-ship-behavior.ps1`, and `scripts/smoke-ship-product.ps1`. Layout: [`docs/evaluation.md`](docs/evaluation.md).
+283 YAML schema/activation fixtures live under `evals/` (including `evals/commands/` and `evals/workflows/ship/`), validated with [`scripts/validate-evals.sh`](scripts/validate-evals.sh); automated LLM scoring runner remains deferred. Behavioral CLI suites run via `scripts/validate-standalone-commands.ps1`, `scripts/validate-ship-behavior.ps1`, `scripts/validate-context-routing.ps1`, and `scripts/smoke-ship-product.ps1`. Layout: [`docs/evaluation.md`](docs/evaluation.md).
 
 ## Personal profile
 
