@@ -14,6 +14,7 @@ Schemas for [`../research-ship.md`](../research-ship.md). Active `{RUN_DIR}` = `
 - run_base_sha: <SHA>
 - pr_number: <num or none>
 - merge_status: <NONE|PR_READY|MERGE_BLOCKED|MERGED_VERIFIED>
+- last_wave: <none or dispatch=PARALLEL|SEQUENTIAL ...>
 - run_status: running
 - updated: <ISO-8601>
 

@@ -4,7 +4,7 @@ On-demand gates for [`../research-ship.md`](../research-ship.md) Phases E, H, I,
 
 ## 1. Independent Source Verification (Phase E)
 
-Dispatch a fresh read-only verification subagent (distinct from researcher; reuse `b3-reviewer` rules + compact `<= 25L` output). Pass only `claim_id` list, `evidence-index.md`, and `sources.manifest` paths — never dump full source books.
+Dispatch a fresh read-only verification subagent (distinct from researcher; reuse `b3-reviewer` rules + compact `<= 25L` output). Independent Phase E units with disjoint verdict outputs and read-only `evidence-index.md` + `sources.manifest` paths may run concurrently (`dispatch-naming.md`, `check-wave -Partition`, `MaxConcurrency<=4`; single-writer ledger/progress). Pass only `claim_id` list, `evidence-index.md`, and `sources.manifest` paths — never dump full source books.
 - Verify: exact primary/secondary citation, preserved polarity/conditions, explicit `UNRESOLVED` for school conflicts, no invented operands, and `evidence-check` `exit 0`.
 - Reply cap `<= 25L`: `Verdict` (`VERIFIED` | `DISPUTED` | `INCOMPLETE`), table `claim_id | status | issue | source_ref`, checked/skipped dimensions.
 - **No subagent isolation (`SINGLE_AGENT_LIMIT`):** unisolated hat-change self-review cannot emit `PASS`/`VERIFIED`/`MERGE_AUTHORIZED` on `HIGH`/`CRITICAL` scopes (cap to `INCOMPLETE`, requiring independent/human review) and unconditionally blocks `auto_merge`.

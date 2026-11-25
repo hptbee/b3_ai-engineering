@@ -40,7 +40,7 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Plan changes
 ```
 
-**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 verifiable commit/task; put hotspots (manifests, index, migrations, contracts) in task 1; scope change → bump `version` + log in `Plan changes` (never weaken ACs/requirements without user → `BLOCKED`).
+**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 commit/task; hotspots (manifests, index, migrations, contracts) in T001; scope change → bump `version` + log in `Plan changes` (never weaken ACs → `BLOCKED`).
 
 ## 2. Progress & inline approach (`{RUN_DIR}/progress.md`)
 
@@ -58,6 +58,7 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 - current_task: T001
 - current_task_base_sha: <SHA>
 - pre_fix_object: <SHA or none>
+- last_wave: <none or dispatch=PARALLEL|SEQUENTIAL ...>
 - run_status: running
 - updated: <ISO-8601>
 
@@ -115,5 +116,5 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Architecture
 ```
 
-**Risk-Adaptive (`detailed`):** fill ONLY when triggers apply (`n/a` else): `failure_matrix` (crash/retry/idempotency/timeout/partial-fail/race/timezone/auth), `write_paths:` (`>=2` stores+invalidation), `io_budget:` (query/render loops).
-**Context Packet:** stable prefix (role+immutable task/contract for prompt cache) + volatile suffix (`delta_files`, active findings, verify receipt); never paste full files/logs.
+**Risk-Adaptive (`detailed`):** fill ONLY when triggered (`n/a` else): `failure_matrix`, `write_paths:` (`>=2` stores+invalidation), `io_budget:` (loops).
+**Context Packet:** stable prefix (role+task/contract) + volatile suffix (`delta_files`, findings, verify receipt); never dump files/logs.

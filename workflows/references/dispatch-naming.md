@@ -14,3 +14,18 @@ This is an on-demand contract for B3 orchestrators, **not** a global rule. Read 
 - Precedence: explicit user selection > `<project>/.b3/models.md` > `~/.b3/models.md` > native `auto`.
 - Dispatch `b3-impl-<task-id>` even for single-task builds when the host supports subagents so a custom `implementation` model applies independently of `main` rather than falling back inline.
 - Apply a preferred model **only** when the active host supports selecting a model on dispatch; otherwise inherit the native/parent model. Never block work on missing or malformed preference files, never edit IDE settings or committed `agents/*.md` (`model: inherit`), and never claim a model switch occurred without evidence.
+
+## Automatic wave scheduling
+
+- **Default evaluation:** On every ready queue (`pending`, `depends_on` done), evaluate parallel vs. sequential dispatch automatically — never require the user to ask for parallel agents.
+- **Deterministic pre-dispatch gate:** Run `b3-guard.{ps1,sh} check-wave -Partition -WaveSpecs <TaskId=paths;...> [-WaveReads <TaskId=paths;...>] [-MaxConcurrency 1..4] [-ExpectedBaseSha <sha>]` (Bash: `--partition --wave-specs --wave-reads --max-concurrency --expected-base-sha`; default `-MaxConcurrency` `3`, cap `4` for large independent batches):
+  - `WAVE_OK` → dispatch wave 1 in parallel (`PARALLEL`).
+  - `WAVE_PARTITIONED` → dispatch disjoint wave 1 in parallel first; defer conflicting/capped tasks to subsequent waves after integration.
+  - `WAVE_SEQUENTIAL` / `WAVE_CONFLICT` → degrade to sequential (`SEQUENTIAL`).
+  - `WAVE_BASE_MISMATCH` (stale base SHA, dirty overlap, or mid-git op) → fail closed (`BLOCKED` or re-scope).
+- **Economic overhead threshold:** Use `SEQUENTIAL` when `<=1` ready task (`single_ready_task`), trivial single-file/tiny overhead (`trivial_overhead`), or unpartitioned dependency chains (`dependency_chain`).
+- **Host isolation fallback (Cursor, Claude Code, Codex, Antigravity):** If the host lacks parallel isolated subagents or worktree isolation (`check-worktree`) for write scopes, degrade cleanly to `SEQUENTIAL` (`no_host_isolation` / `sequential_host_fallback`) — never report `PARALLEL` when execution was sequential. Read-only research/review units may still run in parallel when the host supports concurrent subagent calls and outputs remain disjoint.
+- **Partial failure & single-writer serialization:** When a parallel wave partially fails, preserve valid verified outputs and isolate/recover only failing units (never `git reset` valid work). Serialize shared state (`progress.md`, `findings.md`, shared ledgers/manifests, authority pins, `review-ledger`) and sequential commits (`b3-guard precommit`) through the single parent writer. Run post-integration `b3-guard verify-run` and cross-unit review (`review-loop/strategy.md`) after parallel code waves.
+- **Wave status format (`last_wave:` / report):**
+  - `dispatch=PARALLEL agents=<N> reason=<disjoint_writes|partitioned_wave|independent_research_units>`
+  - `dispatch=SEQUENTIAL reason=<single_ready_task|trivial_overhead|dependency_chain|shared_write_conflict|read_write_conflict|dirty_worktree|no_host_isolation|sequential_host_fallback|bounded_concurrency>`

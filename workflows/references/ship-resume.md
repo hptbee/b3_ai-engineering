@@ -4,14 +4,14 @@ Reconcile [`../ship.md`](../ship.md) checkpoints against Git before acting (prog
 
 ## 1. Load checkpoint & verify Git identity
 
-1. Resolve `{RUN_DIR}` via `b3-guard.{ps1,sh} resolve-run` (`<run_id>`, `.b3/ship/CURRENT`, `.b3/ship/progress.md`, or `.b3/autodev/` fallback); write `<run_id>` to `.b3/ship/CURRENT` on `.b3/ship/runs/` runs; never scan sibling dirs.
-2. Read `{RUN_DIR}/master-plan.md`, `progress.md`, active (`OPEN`/unverified `FIXED`) `findings.md` items, and `approach/T00N.md` **only** for `in_progress`/next ready `pending` tasks — never `completed` `approach/*.md`.
+1. Resolve `{RUN_DIR}` via `b3-guard.{ps1,sh} resolve-run` (`<run_id>`, `.b3/ship/CURRENT`, `.b3/ship/progress.md`, or `.b3/autodev/`); write `<run_id>` to `.b3/ship/CURRENT` on `runs/` runs; never scan sibling dirs.
+2. Read `master-plan.md`, `progress.md`, active (`OPEN`/unverified `FIXED`) `findings.md`, and `approach/T00N.md` **only** for `in_progress`/next ready `pending` tasks (skip `completed`).
 3. Verify `B3_HOME`, `PRODUCT_ROOT`, `plan_id`, `branch`: mismatch → `BLOCKED`.
 
 ## 2. Verify completed & in-progress tasks
 
-1. Task is `completed` **only** when its recorded SHA is a valid `commit`, descends into `HEAD` (`git merge-base --is-ancestor <sha> HEAD`), is unique here, descends from `task_base`/`run_base_sha`, and satisfies ACs (reuse `verify-check` across forward ancestry when mode/type/content/gitlinks stay unchanged, else re-run checks; pre-upgrade `b3-verify-v1` receipts return `VERIFY_STALE` and auto-migrate on re-verification).
-2. For `in_progress` uncommitted edits: keep valid work (never `git reset`/duplicate); run `verify-check` on `{RUN_DIR}/evidence/T00N.verify` or re-verify.
+1. Task is `completed` **only** when its SHA is a valid `commit`, descends into `HEAD` (`git merge-base --is-ancestor <sha> HEAD`), is unique, descends from `task_base`/`run_base_sha`, and satisfies ACs (reuse `verify-check` when tree/mode/type/gitlinks match; legacy `b3-verify-v1` returns `VERIFY_STALE` and auto-migrates).
+2. For `in_progress` edits (including partial waves): verify each task's diff/receipt independently — keep valid work (never `git reset`/duplicate), run `verify-check` on `evidence/T00N.verify`, re-run `Scope`/`Build` only for failing/stale tasks, and reconcile `last_wave:`.
 
 ## 3. Approach freshness
 
@@ -35,4 +35,4 @@ git ls-files --others --exclude-standard
 
 ## 4. Continue ready work
 
-Resume the lowest-id ready `in_progress` task (else ready `pending`; keep `blocked` blocked) and continue straight into `Build` without waiting for another command.
+Re-evaluate ready tasks (`pending`/`in_progress`, `depends_on` done) via `check-wave -Partition` (or resume lowest-id ready task sequentially if isolated/unparallelizable; keep `blocked` blocked) and continue straight into `Build` without waiting for another command.
