@@ -1,9 +1,6 @@
 ---
 name: react-hooks
-description: >
-  Use for React hooks: useEffect, effect deps, derived state vs copied
-  props, stale closures, async in UI. Not for tree state placement
-  (react-components), perf catalogs, or R3F useFrame.
+description: "Use for React hooks: useEffect, effect deps, derived state vs copied props, stale closures, async in UI. Not for tree state placement (react-components), perf catalogs, or R3F useFrame."
 ---
 
 # React hooks

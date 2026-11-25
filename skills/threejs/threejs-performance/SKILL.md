@@ -1,9 +1,6 @@
 ---
 name: threejs-performance
-description: >
-  Use when Three.js rendering is slow: draw calls, instancing, LOD,
-  culling, textures, lights/shadows, loop work, heavy asset parse. Not
-  for React re-renders, dispose-only leaks, or unmeasured instancing.
+description: "Use when Three.js rendering is slow: draw calls, instancing, LOD, culling, textures, lights/shadows, loop work, heavy asset parse. Not for React re-renders, dispose-only leaks, or unmeasured instancing."
 ---
 
 # Three.js GPU performance

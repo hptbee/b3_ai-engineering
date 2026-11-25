@@ -1,0 +1,5 @@
+id: rule-engineering-principles-violate-001
+artifact: rules/engineering-principles.md
+intent: Mixing host-specific CLI flags, personal taste, and multi-stage workflow orchestration inside rules/ violates layer separation
+input: "Added Cursor-only .mdc activation flags, personal formatting preferences, and a 10-step release workflow procedure directly into rules/verification.md."
+expected_outcome: violate

@@ -1,10 +1,6 @@
 ---
 name: threejs-resources
-description: >
-  Use when creating or tearing down Three.js objects: geometries,
-  materials, textures, render targets, loaders, GLTF, animation mixers,
-  renderer dispose. Do not use for React DOM performance or R3F hook
-  integration details.
+description: "Use when creating or tearing down Three.js objects: geometries, materials, textures, render targets, loaders, GLTF, animation mixers, renderer dispose. Do not use for React DOM performance or R3F hook integration details."
 ---
 
 # Three.js resources

@@ -1,9 +1,6 @@
 ---
 name: problem-solving
-description: >
-  Use for end-to-end product changes (understand -> plan -> implement ->
-  verify) when no narrower skill fits. Not for debugging, plan-only,
-  refactoring, code review, testing-strategy, verification, or research.
+description: Use for end-to-end product changes (understand -> plan -> implement -> verify) when no narrower skill fits. Not for debugging, plan-only, refactoring, code review, testing-strategy, verification, or research.
 ---
 
 # Problem solving

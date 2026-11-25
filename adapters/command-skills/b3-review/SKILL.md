@@ -1,9 +1,6 @@
 ---
 name: b3-review
-description: >
-  One evidence-based code-review pass on the current change. Use when the
-  user says review this diff, $b3-review, or /b3-review. Not the full independent
-  review loop ($b3-review-loop).
+description: Explicit command wrapper ($b3-review, /b3-review, b3-review) for one evidence-based review pass via code-review skill. Not for iterative $b3-review-loop.
 ---
 
 # b3-review

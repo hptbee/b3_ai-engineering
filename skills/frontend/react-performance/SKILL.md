@@ -1,9 +1,6 @@
 ---
 name: react-performance
-description: >
-  Use when React/Next UI is slow: waterfalls, bundle size, re-renders,
-  large lists, expensive renders, client/server fetching. Not for initial
-  component design, Three.js GPU, a11y, or unmeasured memoization.
+description: "Use when React/Next UI is slow: waterfalls, bundle size, re-renders, large lists, expensive renders, client/server fetching. Not for initial component design, Three.js GPU, a11y, or unmeasured memoization."
 ---
 
 # React performance

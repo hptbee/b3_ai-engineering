@@ -1,10 +1,6 @@
 ---
 name: refactoring
-description: >
-  Use when changing structure without intended behavior change: extract,
-  rename, split modules, reduce duplication. Do not use for features,
-  bugfixes that must change behavior, or performance work that changes
-  timing contracts.
+description: "Use when changing structure without intended behavior change: extract, rename, split modules, reduce duplication. Do not use for features, bugfixes that must change behavior, or performance work that changes timing contracts."
 ---
 
 # Refactoring

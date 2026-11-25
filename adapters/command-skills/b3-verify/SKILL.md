@@ -1,9 +1,6 @@
 ---
 name: b3-verify
-description: >
-  Treat a named claim as a verification problem. Run evidence. Label PASS,
-  FAIL, or INCOMPLETE. Use when the user says verify, $b3-verify, or /b3-verify.
-  Do not use for design-only discussion.
+description: Explicit command wrapper ($b3-verify, /b3-verify, b3-verify) to run executed evidence for a named claim via verification skill (PASS, FAIL, or INCOMPLETE).
 ---
 
 # b3-verify

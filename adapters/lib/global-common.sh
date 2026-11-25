@@ -43,8 +43,10 @@ upper_drive() {
 }
 
 canon_existing_dir() {
+  [[ -n "${1:-}" ]] || return 1
   local d="$1" res
-  res="$(cd "$d" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+  [[ -n "${d//[[:space:]]/}" ]] || return 1
+  res="$(cd -- "$d" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
   if [[ "$res" != "/" && ! "$res" =~ ^[A-Za-z]:$ && ! "$res" =~ ^[A-Za-z]:/$ ]]; then
     res="${res%/}"
   fi
@@ -599,7 +601,7 @@ init_personal_models_file() {
     printf 'dry-run:%s\n' "$dest"
     return 0
   fi
-  if mkdir -p "$(dirname "$dest")" && (umask 077; set -C; cat "$template_md" > "$dest"); then
+  if (mkdir -p "$(dirname "$dest")" && umask 077 && set -C && cat "$template_md" > "$dest") 2>/dev/null; then
     printf 'created:%s\n' "$dest"
     return 0
   fi

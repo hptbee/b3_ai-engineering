@@ -32,7 +32,12 @@ if [[ -z "$TARGET" ]]; then
   exit 1
 fi
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [[ -f "${SCRIPT_DIR}/lib/global-common.sh" ]]; then
+  # shellcheck source=lib/global-common.sh
+  source "${SCRIPT_DIR}/lib/global-common.sh"
+fi
 SKILLS_SRC="${ROOT}/skills"
 COMMANDS_SRC="${ROOT}/commands"
 AGENTS_SRC="${ROOT}/agents"
@@ -399,18 +404,25 @@ case "$TARGET" in
 esac
 
 if ! $DRY_RUN && ! $VERIFY_ONLY && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
-  TEMPLATE_MD="${ROOT}/config/models.example.md"
-  if [[ -f "$TEMPLATE_MD" ]]; then
+  if declare -F init_personal_models_file >/dev/null 2>&1; then
+    MODEL_PREF_STATUS="$(init_personal_models_file "$ROOT" "" "false" "true")"
+    case "$MODEL_PREF_STATUS" in
+      kept:*) echo "model_preferences=${MODEL_PREF_STATUS#kept:} (kept existing)" ;;
+      created:*) echo "model_preferences=${MODEL_PREF_STATUS#created:} (created from example)" ;;
+      error:*) echo "model_preferences=${MODEL_PREF_STATUS}" ;;
+    esac
+  elif [[ -f "${ROOT}/config/models.example.md" ]]; then
     TRIM_PERS="${B3_MODELS_PERSONAL:-}"
     TRIM_PERS="${TRIM_PERS#"${TRIM_PERS%%[![:space:]]*}"}"
     TRIM_PERS="${TRIM_PERS%"${TRIM_PERS##*[![:space:]]}"}"
     DEST_PREFS="${TRIM_PERS:-${HOME}/.b3/models.md}"
     if [[ -e "$DEST_PREFS" || -L "$DEST_PREFS" ]]; then
       echo "model_preferences=${DEST_PREFS} (kept existing)"
-    else
-      mkdir -p "$(dirname "$DEST_PREFS")"
-      cp "$TEMPLATE_MD" "$DEST_PREFS"
+    elif (mkdir -p "$(dirname "$DEST_PREFS")" && cp "${ROOT}/config/models.example.md" "$DEST_PREFS") 2>/dev/null; then
       echo "model_preferences=${DEST_PREFS} (created from example)"
+    else
+      echo "MODEL_PREFERENCES_WARNING: optional initialization failed at $DEST_PREFS" >&2
+      echo "model_preferences=error:${DEST_PREFS}"
     fi
   fi
 fi

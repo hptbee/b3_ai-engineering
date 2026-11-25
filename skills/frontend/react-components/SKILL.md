@@ -1,9 +1,6 @@
 ---
 name: react-components
-description: >
-  Use for React UI architecture: component hierarchy, state ownership,
-  props vs state, composition, forms, avoiding giant components. Not for
-  Next.js routing, React perf, a11y-only review, or Three.js/R3F.
+description: "Use for React UI architecture: component hierarchy, state ownership, props vs state, composition, forms, avoiding giant components. Not for Next.js routing, React perf, a11y-only review, or Three.js/R3F."
 ---
 
 # React components

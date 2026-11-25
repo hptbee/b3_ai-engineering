@@ -1,9 +1,6 @@
 ---
 name: planning
-description: >
-  Use when writing a multi-step implementation plan before coding: files,
-  risks, verification, task order. Not for trivial one-file fixes,
-  executing plans (problem-solving), or external repo research.
+description: "Use when writing a multi-step implementation plan before coding: files, risks, verification, task order. Not for trivial one-file fixes, executing plans (problem-solving), or external repo research."
 ---
 
 # Planning
