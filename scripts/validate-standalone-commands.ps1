@@ -10,18 +10,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $guardShPosix = (To-PosixPath $root) + '/scripts/b3-guard.sh'
 
 function Init-TestRepo([string]$DirPath) {
-    New-Item -ItemType Directory -Path $DirPath | Out-Null
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        Push-Location $DirPath
-        & git init -q
-        & git config user.email 'standalone-test@example.com'
-        & git config user.name 'Standalone Test'
-    } finally {
-        Pop-Location -ErrorAction SilentlyContinue
-        $ErrorActionPreference = $prev
-    }
+    Init-B3TestRepo -RepoPath $DirPath -DefaultBranch 'main' -UserEmail 'standalone-test@example.com' -UserName 'Standalone Test'
 }
 
 $sandbox = Join-Path $env:TEMP ('b3-standalone-test-' + [guid]::NewGuid().ToString('N'))

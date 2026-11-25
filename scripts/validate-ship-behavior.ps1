@@ -7,6 +7,15 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 
+function Invoke-GuardRaw {
+    $argList = [string[]]@($args | ForEach-Object { [string]$_ })
+    $res = Invoke-PsGuard -GuardArgs $argList
+    $global:LASTEXITCODE = $res.Code
+    foreach ($ln in @($res.Lines)) {
+        Write-Output ([string]$ln)
+    }
+}
+
 $sandbox = Join-Path $env:TEMP ("b3-ship-behavior-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
 $prevModelsPersonal = $env:B3_MODELS_PERSONAL
@@ -187,9 +196,10 @@ try {
     $wfMainPath = Join-Path $root 'workflows\ship.md'
     $wfResPath = Join-Path $root 'workflows\references\ship-resume.md'
     $wfTplPath = Join-Path $root 'workflows\references\ship-templates.md'
+    $wfDispPath = Join-Path $root 'workflows\references\dispatch-naming.md'
     $wfMain = Get-Content $wfMainPath -Raw
     $wfMainLines = @(Get-Content $wfMainPath).Count
-    $wfCorpus = @($wfMain, (Get-Content $wfResPath -Raw), (Get-Content $wfTplPath -Raw)) -join "`n"
+    $wfCorpus = @($wfMain, (Get-Content $wfResPath -Raw), (Get-Content $wfTplPath -Raw), (Get-Content $wfDispPath -Raw)) -join "`n"
     $needles = @(
         'run_base_sha',
         'task_base',
@@ -220,7 +230,7 @@ try {
     $missing = @($needles | Where-Object { $wfCorpus -notlike "*$_*" })
     $prTplExists = Test-Path -LiteralPath (Join-Path $root 'workflows\references\pr-template.md') -PathType Leaf
     $agentsRaw = Get-Content (Join-Path $root 'AGENTS.md') -Raw
-    $linksOk = ($wfMain -match 'references/ship-resume\.md') -and ($wfMain -match 'references/ship-templates\.md') -and ($wfMain -match 'references/pr-template\.md') -and ($agentsRaw -match 'workflows/references/pr-template\.md') -and $prTplExists
+    $linksOk = ($wfMain -match 'references/ship-resume\.md') -and ($wfMain -match 'references/ship-templates\.md') -and ($wfMain -match 'references/dispatch-naming\.md') -and ($wfMain -match 'references/pr-template\.md') -and ($agentsRaw -match 'workflows/references/pr-template\.md') -and $prTplExists
     $spawnEveryOk = ($wfMain -notmatch 'on `>=2` ready') -and ($wfMain -match 'for \*\*every\*\* ready task')
     $reqReceiptOk = ($wfMain -notmatch 'when receipt exists') -and ($wfMain -match 'precommit -RequireVerifyReceipt')
     $sizeOk = ($wfMainLines -le 300)
@@ -328,12 +338,13 @@ try {
         $agSkillDirs = @(Get-ChildItem -LiteralPath $agSkillsDir -Directory -Force -ErrorAction SilentlyContinue | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') })
         $agShipOk = Test-Path (Join-Path $agSkillsDir 'b3-ship\SKILL.md')
         $agPlanningOk = Test-Path (Join-Path $agSkillsDir 'planning\SKILL.md')
+        $agNoCursorCmd = -not (Test-Path (Join-Path $agProduct '.cursor\commands'))
         & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $agProduct -B3Home $root -HostName antigravity | Out-Null
         $agIdemOk = ($LASTEXITCODE -eq 0)
-        if (($agHomePath -eq $root) -and $agAgentsMd -and $agGiOk -and (-not $agIsTreeLink) -and ($agSkillDirs.Count -ge 30) -and $agShipOk -and $agPlanningOk -and $agIdemOk) {
+        if (($agHomePath -eq $root) -and $agAgentsMd -and $agGiOk -and (-not $agIsTreeLink) -and ($agSkillDirs.Count -ge 30) -and $agShipOk -and $agPlanningOk -and $agNoCursorCmd -and $agIdemOk) {
             Pass 'install-product-antigravity'
         } else {
-            FailCheck 'install-product-antigravity' "home=$($agHomePath -eq $root) agentsMd=$agAgentsMd gi=$agGiOk treeLink=$agIsTreeLink skills=$($agSkillDirs.Count) ship=$agShipOk planning=$agPlanningOk idem=$agIdemOk"
+            FailCheck 'install-product-antigravity' "home=$($agHomePath -eq $root) agentsMd=$agAgentsMd gi=$agGiOk treeLink=$agIsTreeLink skills=$($agSkillDirs.Count) ship=$agShipOk planning=$agPlanningOk noCur=$agNoCursorCmd idem=$agIdemOk"
         }
     }
 
@@ -367,13 +378,68 @@ try {
         $clShipItem = Get-Item -LiteralPath (Join-Path $clSkillsDir 'b3-ship') -Force -ErrorAction SilentlyContinue
         $clShipIsLink = $clShipItem -and ($clShipItem.LinkType -in @('Junction', 'SymbolicLink') -or (($clShipItem.Attributes.ToString()) -match 'ReparsePoint'))
         $clShipOk = $clShipIsLink -and (Test-Path (Join-Path $clSkillsDir 'b3-ship\SKILL.md'))
+        $clNoCursorCmd = -not (Test-Path (Join-Path $clProduct '.cursor\commands'))
         & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $clProduct -B3Home $root -HostName claude | Out-Null
         $clIdemOk = ($LASTEXITCODE -eq 0)
-        if (($clHomePath -eq $root) -and $clMdOk -and $clAgentsMd -and $clGiOk -and (-not $clIsTreeLink) -and ($clSkillDirs.Count -ge 30) -and $clAgentsOk -and $clShipOk -and $clIdemOk) {
+        if (($clHomePath -eq $root) -and $clMdOk -and $clAgentsMd -and $clGiOk -and (-not $clIsTreeLink) -and ($clSkillDirs.Count -ge 30) -and $clAgentsOk -and $clShipOk -and $clNoCursorCmd -and $clIdemOk) {
             Pass 'install-product-claude'
         } else {
-            FailCheck 'install-product-claude' "home=$($clHomePath -eq $root) claudeMd=$clMdOk agentsMd=$clAgentsMd gi=$clGiOk treeLink=$clIsTreeLink skills=$($clSkillDirs.Count) agents=$clAgentsOk ship=$clShipOk idem=$clIdemOk"
+            FailCheck 'install-product-claude' "home=$($clHomePath -eq $root) claudeMd=$clMdOk agentsMd=$clAgentsMd gi=$clGiOk treeLink=$clIsTreeLink skills=$($clSkillDirs.Count) agents=$clAgentsOk ship=$clShipOk noCur=$clNoCursorCmd idem=$clIdemOk"
         }
+    }
+
+    # --- CF-13: install-product host isolation (no .cursor/commands on non-Cursor), empty .b3/home fail-closed, and -Force/--force pointer refresh (PS + Bash) ---
+    $cf13Errs = New-Object System.Collections.Generic.List[string]
+    $cf13PsProd = Join-Path $sandbox 'cf13-codex-ps'
+    $cf13ShProd = Join-Path $sandbox 'cf13-codex-sh'
+    $cf13StaleHome = Join-Path $sandbox 'cf13-stale-home'
+    $utf8NoBomCf13 = New-Object System.Text.UTF8Encoding($false)
+    Init-B3TestRepo -RepoPath $cf13PsProd -InitialCommit
+    New-Item -ItemType Directory -Path $cf13StaleHome -Force | Out-Null
+    $ipPsPath = Join-Path $root 'adapters\install-product.ps1'
+    $ipShPosix = To-PosixPath (Join-Path $root 'adapters\install-product.sh')
+    $rootPosix = To-PosixPath $root
+
+    $cf13R1 = Invoke-PsScript $ipPsPath @('-ProductRoot', $cf13PsProd, '-B3Home', $root, '-HostName', 'codex')
+    if ($cf13R1.Code -ne 0 -or (Test-Path -LiteralPath (Join-Path $cf13PsProd '.cursor\commands')) -or (-not (Test-Path -LiteralPath (Join-Path $cf13PsProd '.agents\skills\b3-ship\SKILL.md')))) {
+        $cf13Errs.Add("PS codex install failed or leaked .cursor/commands: code=$($cf13R1.Code)")
+    }
+    [IO.File]::WriteAllText((Join-Path $cf13PsProd '.b3\home'), "   `n", $utf8NoBomCf13)
+    $cf13EmptyPs = Invoke-PsScript $ipPsPath @('-ProductRoot', $cf13PsProd, '-B3Home', $root, '-HostName', 'codex')
+    if ($cf13EmptyPs.Code -eq 0 -or ($cf13EmptyPs.Text -notmatch 'refusing to overwrite empty or invalid')) {
+        $cf13Errs.Add("PS empty .b3/home expected fail-closed, got code=$($cf13EmptyPs.Code) out=$($cf13EmptyPs.Text)")
+    }
+    [IO.File]::WriteAllText((Join-Path $cf13PsProd '.b3\home'), "$cf13StaleHome`n", $utf8NoBomCf13)
+    $cf13StalePs = Invoke-PsScript $ipPsPath @('-ProductRoot', $cf13PsProd, '-B3Home', $root, '-HostName', 'codex')
+    $cf13ForcePs = Invoke-PsScript $ipPsPath @('-ProductRoot', $cf13PsProd, '-B3Home', $root, '-HostName', 'codex', '-Force')
+    $cf13RefreshedPs = (Get-Content -LiteralPath (Join-Path $cf13PsProd '.b3\home') -Raw).Trim()
+    if ($cf13StalePs.Code -eq 0 -or $cf13ForcePs.Code -ne 0 -or ($cf13RefreshedPs -ne $root) -or (Test-Path -LiteralPath (Join-Path $cf13PsProd '.cursor\commands'))) {
+        $cf13Errs.Add("PS -Force refresh failed: stale=$($cf13StalePs.Code) force=$($cf13ForcePs.Code) home=$cf13RefreshedPs")
+    }
+    if ($script:HasBash) {
+        Init-B3TestRepo -RepoPath $cf13ShProd -InitialCommit
+        $cf13ShPosix = To-PosixPath $cf13ShProd
+        $cf13R1Sh = Invoke-ShCmd "'$ipShPosix' --product-root '$cf13ShPosix' --b3-home '$rootPosix' --host codex"
+        if ($cf13R1Sh.Code -ne 0 -or (Test-Path -LiteralPath (Join-Path $cf13ShProd '.cursor\commands')) -or (-not (Test-Path -LiteralPath (Join-Path $cf13ShProd '.agents\skills\b3-ship\SKILL.md')))) {
+            $cf13Errs.Add("SH codex install failed or leaked .cursor/commands: code=$($cf13R1Sh.Code) out=$($cf13R1Sh.Text)")
+        }
+        [IO.File]::WriteAllText((Join-Path $cf13ShProd '.b3\home'), "   `n", $utf8NoBomCf13)
+        $cf13EmptySh = Invoke-ShCmd "'$ipShPosix' --product-root '$cf13ShPosix' --b3-home '$rootPosix' --host codex"
+        if ($cf13EmptySh.Code -eq 0 -or ($cf13EmptySh.Text -notmatch 'refusing to overwrite empty or invalid')) {
+            $cf13Errs.Add("SH empty .b3/home expected fail-closed, got code=$($cf13EmptySh.Code) out=$($cf13EmptySh.Text)")
+        }
+        [IO.File]::WriteAllText((Join-Path $cf13ShProd '.b3\home'), "$(To-PosixPath $cf13StaleHome)`n", $utf8NoBomCf13)
+        $cf13StaleSh = Invoke-ShCmd "'$ipShPosix' --product-root '$cf13ShPosix' --b3-home '$rootPosix' --host codex"
+        $cf13ForceSh = Invoke-ShCmd "'$ipShPosix' --product-root '$cf13ShPosix' --b3-home '$rootPosix' --host codex --force"
+        $cf13RefreshedSh = ((Get-Content -LiteralPath (Join-Path $cf13ShProd '.b3\home') -Raw).Trim() -replace '\\', '/')
+        if ($cf13StaleSh.Code -eq 0 -or $cf13ForceSh.Code -ne 0 -or ($cf13RefreshedSh -ine $rootPosix) -or (Test-Path -LiteralPath (Join-Path $cf13ShProd '.cursor\commands'))) {
+            $cf13Errs.Add("SH --force refresh failed: stale=$($cf13StaleSh.Code) force=$($cf13ForceSh.Code) home=$cf13RefreshedSh")
+        }
+    }
+    if ($cf13Errs.Count -eq 0) {
+        Pass 'install-product-host-isolation-and-refresh'
+    } else {
+        FailCheck 'install-product-host-isolation-and-refresh' ($cf13Errs -join '; ')
     }
 
     $pluginDryHome = Join-Path $sandbox 'ag-plugin-dry-home'
@@ -470,8 +536,8 @@ try {
 
     # --- b3-guard.ps1 checks ---
     $guardScript = Join-Path $root 'scripts\b3-guard.ps1'
-    $fpSorted = (& powershell -NoProfile -File $guardScript fingerprint -DependsOn 'T002, T001, T001' -Scope '  src/api  ' -Criteria 'AC1: ok; AC2: valid').Trim()
-    $fpEmpty = (& powershell -NoProfile -File $guardScript fingerprint -Scope 'README.md' -Criteria 'AC1: documented').Trim()
+    $fpSorted = (Invoke-GuardRaw fingerprint -DependsOn 'T002, T001, T001' -Scope '  src/api  ' -Criteria 'AC1: ok; AC2: valid').Trim()
+    $fpEmpty = (Invoke-GuardRaw fingerprint -Scope 'README.md' -Criteria 'AC1: documented').Trim()
     if ($fpSorted -eq 'depends_on=T001,T002|scope=src/api|acceptance_criteria=AC1: ok; AC2: valid' -and $fpEmpty -eq 'depends_on=[]|scope=README.md|acceptance_criteria=AC1: documented') {
         Pass 'guard-fingerprint'
     } else {
@@ -495,17 +561,17 @@ try {
     # Fresh when unrelated + owned files change uncommitted; ignore dirty path respected
     Set-Content docs\note.md 'unrelated dirty'
     Set-Content src\owned.js 'exports.a = 2'
-    $f1 = (& powershell -NoProfile -File $guardScript check-freshness -RepoRoot $guardRepo -ApproachAtSha $gBase -TaskBaseSha $gBase -WatchedPaths 'src/owned.js,src/contract.ts' -OwnedFiles 'src/owned.js' -IgnoreDirtyPaths 'docs/note.md')
+    $f1 = (Invoke-GuardRaw check-freshness -RepoRoot $guardRepo -ApproachAtSha $gBase -TaskBaseSha $gBase -WatchedPaths 'src/owned.js,src/contract.ts' -OwnedFiles 'src/owned.js' -IgnoreDirtyPaths 'docs/note.md')
     $f1Exit = $LASTEXITCODE
     # Stale when read_only_deps changes uncommitted
     Set-Content src\contract.ts 'export type C = { id: number }'
-    $f2 = (& powershell -NoProfile -File $guardScript check-freshness -RepoRoot $guardRepo -ApproachAtSha $gBase -TaskBaseSha $gBase -WatchedPaths 'src/owned.js,src/contract.ts' -OwnedFiles 'src/owned.js' -IgnoreDirtyPaths 'docs/note.md')
+    $f2 = (Invoke-GuardRaw check-freshness -RepoRoot $guardRepo -ApproachAtSha $gBase -TaskBaseSha $gBase -WatchedPaths 'src/owned.js,src/contract.ts' -OwnedFiles 'src/owned.js' -IgnoreDirtyPaths 'docs/note.md')
     $f2Exit = $LASTEXITCODE
     git checkout -- src/contract.ts
     # Stale when committed change hits watched_paths
     git add src/owned.js
     git commit -qm 'move owned'
-    $f3 = (& powershell -NoProfile -File $guardScript check-freshness -RepoRoot $guardRepo -ApproachAtSha $gBase -TaskBaseSha $gBase -WatchedPaths 'src/owned.js,src/contract.ts' -OwnedFiles 'src/owned.js')
+    $f3 = (Invoke-GuardRaw check-freshness -RepoRoot $guardRepo -ApproachAtSha $gBase -TaskBaseSha $gBase -WatchedPaths 'src/owned.js,src/contract.ts' -OwnedFiles 'src/owned.js')
     $f3Exit = $LASTEXITCODE
     Pop-Location
     if ($f1Exit -eq 0 -and $f1 -eq 'FRESH' -and $f2Exit -eq 2 -and $f2 -match '^STALE: uncommitted' -and $f3Exit -eq 2 -and $f3 -match '^STALE: committed') {
@@ -517,36 +583,36 @@ try {
     Push-Location $guardRepo
     git checkout -- docs/note.md
     # precommit: nothing staged -> fail
-    $pc1 = (& powershell -NoProfile -File $guardScript precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
+    $pc1 = (Invoke-GuardRaw precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
     $pc1Exit = $LASTEXITCODE
     # precommit: checkpoint staged -> fail
     New-Item -ItemType Directory -Path '.b3\ship' -Force | Out-Null
     Set-Content '.b3\ship\progress.md' 'cp'
     git add -f '.b3\ship\progress.md'
-    $pc2 = (& powershell -NoProfile -File $guardScript precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
+    $pc2 = (Invoke-GuardRaw precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
     $pc2Exit = $LASTEXITCODE
     git reset -q HEAD '.b3\ship\progress.md'
     # precommit: undeclared staged -> fail
     Set-Content docs\note.md 'extra'
     git add docs\note.md
-    $pc3 = (& powershell -NoProfile -File $guardScript precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
+    $pc3 = (Invoke-GuardRaw precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
     $pc3Exit = $LASTEXITCODE
     git reset -q HEAD docs\note.md
     git checkout -- docs/note.md
     # precommit: allowed staged -> pass
     Set-Content src\owned.js 'exports.a = 3'
     git add src\owned.js
-    $pc4 = (& powershell -NoProfile -File $guardScript precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
+    $pc4 = (Invoke-GuardRaw precommit -RepoRoot $guardRepo -AllowedPaths 'src/owned.js')
     $pc4Exit = $LASTEXITCODE
     git reset -q HEAD src\owned.js
     # snapshot: dirty tracked -> commit sha != HEAD, clean stash list, work preserved
     $gHeadNow = (git rev-parse HEAD).Trim()
-    $snapDirty = (& powershell -NoProfile -File $guardScript snapshot -RepoRoot $guardRepo).Trim()
+    $snapDirty = (Invoke-GuardRaw snapshot -RepoRoot $guardRepo).Trim()
     $snapDirtyExit = $LASTEXITCODE
     $stashEmpty = -not (git stash list)
     $workKept = (Get-Content src\owned.js -Raw) -match 'exports\.a = 3'
     git checkout -- src/owned.js
-    $snapClean = (& powershell -NoProfile -File $guardScript snapshot -RepoRoot $guardRepo).Trim()
+    $snapClean = (Invoke-GuardRaw snapshot -RepoRoot $guardRepo).Trim()
     $snapCleanExit = $LASTEXITCODE
     Pop-Location
 
@@ -564,10 +630,10 @@ try {
     # --- guard-diff-scope, run-scoped checkpoints & context-budget-strict ---
     Push-Location $guardRepo
     $dsHead = (git rev-parse HEAD).Trim()
-    $dsEmpty = (& $guardScript diff-scope -RepoRoot $guardRepo -BaseSha $dsHead) -join "`n"
+    $dsEmpty = (Invoke-GuardRaw diff-scope -RepoRoot $guardRepo -BaseSha $dsHead) -join "`n"
     $dsEmptyExit = $LASTEXITCODE
     Set-Content package-lock.json '{"lockfileVersion":3}'
-    $dsNoise = (& $guardScript diff-scope -RepoRoot $guardRepo -BaseSha $dsHead) -join "`n"
+    $dsNoise = (Invoke-GuardRaw diff-scope -RepoRoot $guardRepo -BaseSha $dsHead) -join "`n"
     $dsNoiseExit = $LASTEXITCODE
     git mv src/owned.js src/renamed.js
     git add package-lock.json
@@ -575,7 +641,7 @@ try {
     $dsPrev = (git rev-parse HEAD).Trim()
     Set-Content src\extra.js 'exports.b = 5'
     Set-Content docs\note.md 'ignored dirty'
-    $dsOut = (& $guardScript diff-scope -RepoRoot $guardRepo -BaseSha $dsHead -PrevSha $dsPrev -IgnoreDirtyPaths 'docs/note.md') -join "`n"
+    $dsOut = (Invoke-GuardRaw diff-scope -RepoRoot $guardRepo -BaseSha $dsHead -PrevSha $dsPrev -IgnoreDirtyPaths 'docs/note.md') -join "`n"
     $dsExit = $LASTEXITCODE
     Pop-Location
 
@@ -592,7 +658,7 @@ try {
     Set-Content feat.js 'exports.feat = 2'
     git add feat.js
     git commit -qm 'feature commit'
-    $dsAuto = (& $guardScript diff-scope -RepoRoot $autoRepo) -join "`n"
+    $dsAuto = (Invoke-GuardRaw diff-scope -RepoRoot $autoRepo) -join "`n"
     $dsAutoExit = $LASTEXITCODE
     Pop-Location
 
@@ -610,21 +676,21 @@ try {
 
     $runRepo = Join-Path $sandbox 'run-scoped-repo'
     New-Item -ItemType Directory -Path $runRepo | Out-Null
-    $r1 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
+    $r1 = (Invoke-GuardRaw new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
     $r1Exit = $LASTEXITCODE
-    $r2 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
+    $r2 = (Invoke-GuardRaw new-run -RepoRoot $runRepo -Slug 'Add Billing / Webhook!' -Timestamp '20261122-0010').Trim()
     $r2Exit = $LASTEXITCODE
     $curContent = (Get-Content -LiteralPath (Join-Path $runRepo '.b3\ship\CURRENT') -Raw).Trim()
-    $resActive = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $runRepo).Trim()
+    $resActive = (Invoke-GuardRaw resolve-run -RepoRoot $runRepo).Trim()
     $resActiveExit = $LASTEXITCODE
-    $resExplicit = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $runRepo -RunId $r1).Trim()
+    $resExplicit = (Invoke-GuardRaw resolve-run -RepoRoot $runRepo -RunId $r1).Trim()
     $resExplicitExit = $LASTEXITCODE
-    $listOut = ((& powershell -NoProfile -File $guardScript list-runs -RepoRoot $runRepo) -join "`n")
+    $listOut = ((Invoke-GuardRaw list-runs -RepoRoot $runRepo) -join "`n")
 
     $legacyRepo = Join-Path $sandbox 'legacy-repo'
     New-Item -ItemType Directory -Path (Join-Path $legacyRepo '.b3\ship') | Out-Null
     Set-Content (Join-Path $legacyRepo '.b3\ship\progress.md') "- run_status: running`n"
-    $resLegacy = (& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $legacyRepo).Trim()
+    $resLegacy = (Invoke-GuardRaw resolve-run -RepoRoot $legacyRepo).Trim()
     $resLegacyExit = $LASTEXITCODE
 
     if ($r1Exit -eq 0 -and $r1 -eq '20261122-0010-add-billing-webhook' -and
@@ -641,17 +707,17 @@ try {
 
     $pruneRepo = Join-Path $sandbox 'prune-repo'
     New-Item -ItemType Directory -Path $pruneRepo | Out-Null
-    $p1 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'old-pass-1' -Timestamp '20261122-0001').Trim()
-    $p2 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'old-pass-2' -Timestamp '20261122-0002').Trim()
-    $p3 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'active-running' -Timestamp '20261122-0003').Trim()
-    $p4 = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $pruneRepo -Slug 'latest-pass' -Timestamp '20261122-0004').Trim()
+    $p1 = (Invoke-GuardRaw new-run -RepoRoot $pruneRepo -Slug 'old-pass-1' -Timestamp '20261122-0001').Trim()
+    $p2 = (Invoke-GuardRaw new-run -RepoRoot $pruneRepo -Slug 'old-pass-2' -Timestamp '20261122-0002').Trim()
+    $p3 = (Invoke-GuardRaw new-run -RepoRoot $pruneRepo -Slug 'active-running' -Timestamp '20261122-0003').Trim()
+    $p4 = (Invoke-GuardRaw new-run -RepoRoot $pruneRepo -Slug 'latest-pass' -Timestamp '20261122-0004').Trim()
     Set-Content (Join-Path $pruneRepo ".b3\ship\runs\$p1\progress.md") "- run_status: PASS`n"
     Set-Content (Join-Path $pruneRepo ".b3\ship\runs\$p2\progress.md") "- run_status: PASS`n"
     Set-Content (Join-Path $pruneRepo ".b3\ship\runs\$p3\progress.md") "- run_status: running`n"
     Set-Content (Join-Path $pruneRepo ".b3\ship\runs\$p4\progress.md") "- run_status: PASS`n"
     Set-Content (Join-Path $pruneRepo '.b3\ship\CURRENT') "$p1`n"
 
-    $pruneOut = ((& powershell -NoProfile -File $guardScript prune -RepoRoot $pruneRepo -Keep 1) -join "`n")
+    $pruneOut = ((Invoke-GuardRaw prune -RepoRoot $pruneRepo -Keep 1) -join "`n")
     $pruneExit = $LASTEXITCODE
     $p1Kept = Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\ship\runs\$p1")
     $p2Removed = -not (Test-Path -LiteralPath (Join-Path $pruneRepo ".b3\ship\runs\$p2"))
@@ -675,13 +741,13 @@ try {
     Set-Content (Join-Path $prDecoyRuns 'keep3.txt') 'keep3'
 
     $prPsRepo = Join-Path $prLinkRoot 'repo-ps'
-    $pNest = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prPsRepo -Slug 'nested-pass' -Timestamp '20261122-0001').Trim()
-    $pCurPs = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prPsRepo -Slug 'current-active' -Timestamp '20261122-0003').Trim()
+    $pNest = (Invoke-GuardRaw new-run -RepoRoot $prPsRepo -Slug 'nested-pass' -Timestamp '20261122-0001').Trim()
+    $pCurPs = (Invoke-GuardRaw new-run -RepoRoot $prPsRepo -Slug 'current-active' -Timestamp '20261122-0003').Trim()
     Set-Content (Join-Path $prPsRepo ".b3\ship\runs\$pNest\progress.md") "- run_status: PASS`n"
     Set-Content (Join-Path $prPsRepo ".b3\ship\runs\$pCurPs\progress.md") "- run_status: running`n"
     New-Item -ItemType Junction -Path (Join-Path $prPsRepo ".b3\ship\runs\$pNest\nested-junc") -Target $prDecoyNested | Out-Null
     New-Item -ItemType Junction -Path (Join-Path $prPsRepo ".b3\ship\runs\20261122-0002-top-junc") -Target $prDecoyTop | Out-Null
-    $prPsOut = ((& powershell -NoProfile -File $guardScript prune -RepoRoot $prPsRepo -Keep 0) -join "`n")
+    $prPsOut = ((Invoke-GuardRaw prune -RepoRoot $prPsRepo -Keep 0) -join "`n")
     $prPsExit = $LASTEXITCODE
 
     $prLinkRepoPs = Join-Path $prLinkRoot 'repo-runs-link-ps'
@@ -689,7 +755,7 @@ try {
     New-Item -ItemType Junction -Path (Join-Path $prLinkRepoPs '.b3\ship\runs') -Target $prDecoyRuns | Out-Null
     $prevEapPr = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $prLinkFailPs = ((& powershell -NoProfile -File $guardScript prune -RepoRoot $prLinkRepoPs -Keep 0 2>&1) -join "`n")
+    $prLinkFailPs = ((Invoke-GuardRaw prune -RepoRoot $prLinkRepoPs -Keep 0 2>&1) -join "`n")
     $prLinkFailPsExit = $LASTEXITCODE
     $ErrorActionPreference = $prevEapPr
 
@@ -697,8 +763,8 @@ try {
     if ($script:HasBash) {
         $guardShPosixPr = (To-PosixPath $root) + '/scripts/b3-guard.sh'
         $prShRepo = Join-Path $prLinkRoot 'repo-sh'
-        $pNestSh = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prShRepo -Slug 'nested-pass-sh' -Timestamp '20261122-0001').Trim()
-        $pCurSh = (& powershell -NoProfile -File $guardScript new-run -RepoRoot $prShRepo -Slug 'current-active-sh' -Timestamp '20261122-0003').Trim()
+        $pNestSh = (Invoke-GuardRaw new-run -RepoRoot $prShRepo -Slug 'nested-pass-sh' -Timestamp '20261122-0001').Trim()
+        $pCurSh = (Invoke-GuardRaw new-run -RepoRoot $prShRepo -Slug 'current-active-sh' -Timestamp '20261122-0003').Trim()
         Set-Content (Join-Path $prShRepo ".b3\ship\runs\$pNestSh\progress.md") "- run_status: PASS`n"
         Set-Content (Join-Path $prShRepo ".b3\ship\runs\$pCurSh\progress.md") "- run_status: running`n"
         New-Item -ItemType Junction -Path (Join-Path $prShRepo ".b3\ship\runs\$pNestSh\nested-junc") -Target $prDecoyNested | Out-Null
@@ -739,6 +805,7 @@ try {
         foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $root $dirRel) -Recurse -File | Where-Object { $_.Extension -in @('.ps1', '.sh') })) {
             foreach ($hit in @(Select-String -LiteralPath $f.FullName -Pattern 'cmd\.exe|cmd\s+/c|\bmklink\b' -ErrorAction SilentlyContinue)) {
                 if ($hit.Line -match '^\s*#' -or $hit.Line -match 'Select-String' -or $hit.Line -match 'no-cmd-exe') { continue }
+                if ($f.Name -eq 'b3-github-verify.ps1' -and $hit.Line -match '\$env:ComSpec') { continue }
                 $cmdHits += "$($f.Name):$($hit.LineNumber)"
             }
         }
@@ -760,14 +827,14 @@ try {
     git commit -qm 'init'
     $mBase = (git rev-parse HEAD).Trim()
     Set-Content src\a.ts "export const a = 2;`nexport function oldFn() { return 2; }"
-    $mClean = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $mechRepo -BaseSha $mBase -AllowedPaths 'src/a.ts' -Obsoletes 'absentSym') -join "`n")
+    $mClean = ((Invoke-GuardRaw mechanical-check -RepoRoot $mechRepo -BaseSha $mBase -AllowedPaths 'src/a.ts' -Obsoletes 'absentSym') -join "`n")
     $mCleanExit = $LASTEXITCODE
     $mkDbg = 'de' + 'bugger'
     $mkTs = '@ts-' + 'ignore'
     $mkOnly = '.on' + 'ly('
     Set-Content src\a.ts "export const a = 2;`n${mkDbg};`n// ${mkTs}"
     Set-Content src\unowned.ts "test${mkOnly}'x', () => {});"
-    $mBad = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $mechRepo -BaseSha $mBase -AllowedPaths 'src/a.ts' -Obsoletes 'src/dead.ts,oldFn') -join "`n")
+    $mBad = ((Invoke-GuardRaw mechanical-check -RepoRoot $mechRepo -BaseSha $mBase -AllowedPaths 'src/a.ts' -Obsoletes 'src/dead.ts,oldFn') -join "`n")
     $mBadExit = $LASTEXITCODE
     Pop-Location
     if ($mCleanExit -eq 0 -and $mClean -match 'MECHANICAL_OK' -and
@@ -806,13 +873,13 @@ try {
     Set-Content src\wt-untracked.ts "test${mkOnly}'wt', () => {});"
 
     # Branch literally named 'src' collides with directory 'src/' unless resolved to SHA + '--'
-    $trDsOut = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $trRepo -TargetRef 'src') -join "`n")
+    $trDsOut = ((Invoke-GuardRaw diff-scope -RepoRoot $trRepo -TargetRef 'src') -join "`n")
     $trDsExit = $LASTEXITCODE
-    $trMcOut = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $trRepo -TargetRef 'src' -AllowedPaths 'src/app.ts,src/pr-only.ts' -Obsoletes 'src/legacy.ts,legacyFn,newFn') -join "`n")
+    $trMcOut = ((Invoke-GuardRaw mechanical-check -RepoRoot $trRepo -TargetRef 'src' -AllowedPaths 'src/app.ts,src/pr-only.ts' -Obsoletes 'src/legacy.ts,legacyFn,newFn') -join "`n")
     $trMcExit = $LASTEXITCODE
-    $trBadOut = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $trRepo -TargetRef 'nonexistent-ref-xyz') -join "`n")
+    $trBadOut = ((Invoke-GuardRaw diff-scope -RepoRoot $trRepo -TargetRef 'nonexistent-ref-xyz') -join "`n")
     $trBadExit = $LASTEXITCODE
-    $trDashOut = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $trRepo -TargetRef '--bad-flag') -join "`n")
+    $trDashOut = ((Invoke-GuardRaw diff-scope -RepoRoot $trRepo -TargetRef '--bad-flag') -join "`n")
     $trDashExit = $LASTEXITCODE
 
     $trShOk = $true
@@ -839,9 +906,9 @@ try {
         FailCheck 'guard-target-ref' "ds=(${trDsExit}:$trDsOut) mc=(${trMcExit}:$trMcOut) bad=(${trBadExit}:$trBadOut) dash=(${trDashExit}:$trDashOut) shOk=$trShOk"
     }
 
-    $wOk = ((& powershell -NoProfile -File $guardScript check-wave -WaveSpecs 'T002=src/api/a.ts,./src/api/a.ts;T003=src/ui/b.tsx') -join "`n")
+    $wOk = ((Invoke-GuardRaw check-wave -WaveSpecs 'T002=src/api/a.ts,./src/api/a.ts;T003=src/ui/b.tsx') -join "`n")
     $wOkExit = $LASTEXITCODE
-    $wBad = ((& powershell -NoProfile -File $guardScript check-wave -WaveSpecs 'T002=src/api,.;T003=src/api/orders.ts') -join "`n")
+    $wBad = ((Invoke-GuardRaw check-wave -WaveSpecs 'T002=src/api,.;T003=src/api/orders.ts') -join "`n")
     $wBadExit = $LASTEXITCODE
     if ($wOkExit -eq 0 -and $wOk -match 'WAVE_OK: disjoint \(2 tasks, 2 paths\)' -and
         $wBadExit -eq 2 -and $wBad -match 'WAVE_CONFLICT:' -and $wBad -match 'src/api<->src/api/orders\.ts' -and $wBad -match '\.<->src/api/orders\.ts') {
@@ -864,20 +931,20 @@ try {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $bigPath = Join-Path $sbRepo 'src\big.ts'
     [IO.File]::WriteAllText($bigPath, ("export const x = 1;`n" * 1999), $utf8NoBom)
-    $sb1999 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb1999 = ((Invoke-GuardRaw diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
     $sb1999Exit = $LASTEXITCODE
     [IO.File]::WriteAllText($bigPath, ("export const x = 1;`n" * 2000), $utf8NoBom)
-    $sb2000 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb2000 = ((Invoke-GuardRaw diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
     $sb2000Exit = $LASTEXITCODE
     Remove-Item -LiteralPath $bigPath -Force
 
     1..49 | ForEach-Object {
         [IO.File]::WriteAllText((Join-Path $sbRepo "src\f$_.ts"), "export const v$_ = $_;`n", $utf8NoBom)
     }
-    $sb49 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb49 = ((Invoke-GuardRaw diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
     $sb49Exit = $LASTEXITCODE
     [IO.File]::WriteAllText((Join-Path $sbRepo 'src\f50.ts'), "export const v50 = 50;`n", $utf8NoBom)
-    $sb50 = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
+    $sb50 = ((Invoke-GuardRaw diff-scope -RepoRoot $sbRepo -BaseSha HEAD) -join "`n")
     $sb50Exit = $LASTEXITCODE
 
     $sbShOk = $true
@@ -924,73 +991,73 @@ try {
     git add .; git commit -qm 'init'
     Set-Content src\a.ts 'export const a = 2;'
     $rec = '.b3/ship/runs/r1/evidence/T001.verify'
-    $vrPass = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-ok' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
+    $vrPass = ((Invoke-GuardRaw verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-ok' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
     $vrPassExit = $LASTEXITCODE
-    $vcValid = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcValid = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
     $vcValidExit = $LASTEXITCODE
     # Scoped RelevantPaths ignores unrelated edit
     Set-Content src\other.ts 'export const o = 2;'
-    $vcUnrel = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcUnrel = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
     $vcUnrelExit = $LASTEXITCODE
     # Staging verified file passes precommit -RequireVerifyReceipt
     git add src\a.ts
-    $pcVrOk = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcVrOk = ((Invoke-GuardRaw precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
     $pcVrOkExit = $LASTEXITCODE
     # Partial staging (index != WT while receipt matches WT) fails precommit
     Set-Content src\a.ts 'export const a = 3;'
-    $vrPass2 = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-2' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
+    $vrPass2 = ((Invoke-GuardRaw verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-2' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
     $vrPass2Exit = $LASTEXITCODE
-    $pcPartial = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcPartial = ((Invoke-GuardRaw precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
     $pcPartialExit = $LASTEXITCODE
     # Sync index: old partial-stage receipt must now be VERIFY_STALE (H-03), then re-verify synced state before testing out-of-scope rejection
     git add src\a.ts
-    $vcPartialStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcPartialStale = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
     $vcPartialStaleExit = $LASTEXITCODE
-    $vrPassSynced = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-synced' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
+    $vrPassSynced = ((Invoke-GuardRaw verify-run -RepoRoot $vrRepo -VerifyCmd 'echo green-synced' -ReceiptPath $rec -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
     $vrPassSyncedExit = $LASTEXITCODE
     Set-Content src\extra.ts 'export const e = 2;'
     git add src\extra.ts
-    $pcOutScope = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts,src/extra.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcOutScope = ((Invoke-GuardRaw precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts,src/extra.ts' -RequireVerifyReceipt $rec) -join "`n")
     $pcOutScopeExit = $LASTEXITCODE
     git reset -q HEAD src\extra.ts
     git checkout -- src\extra.ts
     # Editing relevant file invalidates receipt -> VERIFY_STALE (exit 2) + blocks precommit
     Set-Content src\a.ts 'export const a = 4;'
-    $vcStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
+    $vcStale = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath $rec) -join "`n")
     $vcStaleExit = $LASTEXITCODE
     git add src\a.ts
-    $pcVrStale = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
+    $pcVrStale = ((Invoke-GuardRaw precommit -RepoRoot $vrRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rec) -join "`n")
     $pcVrStaleExit = $LASTEXITCODE
     # Failing verify command writes FAIL receipt + log
     $recFail = '.b3/ship/runs/r1/evidence/T002.verify'
-    $vrFail = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'Write-Output "bad-check"; exit 3' -ReceiptPath $recFail -TaskId T002) -join "`n")
+    $vrFail = ((Invoke-GuardRaw verify-run -RepoRoot $vrRepo -VerifyCmd 'Write-Output "bad-check"; exit 3' -ReceiptPath $recFail -TaskId T002) -join "`n")
     $vrFailExit = $LASTEXITCODE
-    $vcFail = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $recFail) -join "`n")
+    $vcFail = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath $recFail) -join "`n")
     $vcFailExit = $LASTEXITCODE
     $failLogExists = Test-Path -LiteralPath (Join-Path $vrRepo "$recFail.log") -PathType Leaf
     # >64KB failing output (no SIGPIPE 141, exit strictly 1, full log, capped output), trailing # comment, root '.' path match, and git rm --cached partial mismatch
     $recBig = '.b3/ship/runs/r1/evidence/big.verify'
-    $vrBig = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd '1..1500 | ForEach-Object { 10001..10010 -join 9 }; exit 2' -ReceiptPath $recBig) -join "`n")
+    $vrBig = ((Invoke-GuardRaw verify-run -RepoRoot $vrRepo -VerifyCmd '1..1500 | ForEach-Object { 10001..10010 -join 9 }; exit 2' -ReceiptPath $recBig) -join "`n")
     $vrBigExit = $LASTEXITCODE
-    $vrComment = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $vrRepo -VerifyCmd 'echo ok # trailing' -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify' -RelevantPaths '.') -join "`n")
+    $vrComment = ((Invoke-GuardRaw verify-run -RepoRoot $vrRepo -VerifyCmd 'echo ok # trailing' -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify' -RelevantPaths '.') -join "`n")
     $vrCommentExit = $LASTEXITCODE
-    $vcDotOk = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
+    $vcDotOk = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
     $vcDotOkExit = $LASTEXITCODE
     Set-Content src\other.ts 'export const o = 99;'
-    $vcDotStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
+    $vcDotStale = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
     $vcDotStaleExit = $LASTEXITCODE
-    $pcDotOk = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths '.') -join "`n")
+    $pcDotOk = ((Invoke-GuardRaw precommit -RepoRoot $vrRepo -AllowedPaths '.') -join "`n")
     $pcDotOkExit = $LASTEXITCODE
     git rm -q --cached src\extra.ts
-    $pcRmCached = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $vrRepo -AllowedPaths '.' -RequireVerifyReceipt '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
+    $pcRmCached = ((Invoke-GuardRaw precommit -RepoRoot $vrRepo -AllowedPaths '.' -RequireVerifyReceipt '.b3/ship/runs/r1/evidence/cmt.verify') -join "`n")
     $pcRmCachedExit = $LASTEXITCODE
     git add src\extra.ts
     # Corrupt & missing receipt
     $recCorrupt = Join-Path $vrRepo '.b3\ship\runs\r1\evidence\bad.verify'
     Set-Content $recCorrupt "schema=b3-verify-v1`nstatus=PASS"
-    $vcCorrupt = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/bad.verify') -join "`n")
+    $vcCorrupt = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/bad.verify') -join "`n")
     $vcCorruptExit = $LASTEXITCODE
-    $vcMissing = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/none.verify') -join "`n")
+    $vcMissing = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath '.b3/ship/runs/r1/evidence/none.verify') -join "`n")
     $vcMissingExit = $LASTEXITCODE
 
     $vrShOk = $true
@@ -1001,7 +1068,7 @@ try {
         $shPass = (& $script:GitBash -c "'$guardShPosix' verify-run --repo-root '$vrRepoPosix' --verify-cmd 'echo sh-ok # sh-comment' --receipt-path '$shRec' --task-id T003 --relevant-paths 'src/a.ts'") -join "`n"
         $shPassExit = $LASTEXITCODE
         # Cross-shell verification: .ps1 verify-check validates .sh receipt and produces identical tree hash
-        $psOfSh = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $vrRepo -ReceiptPath $shRec) -join "`n")
+        $psOfSh = ((Invoke-GuardRaw verify-check -RepoRoot $vrRepo -ReceiptPath $shRec) -join "`n")
         $psOfShExit = $LASTEXITCODE
         $shPcOk = (& $script:GitBash -c "'$guardShPosix' precommit --repo-root '$vrRepoPosix' --allowed-paths 'src/a.ts' --require-verify-receipt '$shRec'") -join "`n"
         $shPcOkExit = $LASTEXITCODE
@@ -1068,21 +1135,21 @@ try {
         $ErrorActionPreference = $prevErrEap
     }
     $errRecPs = '.b3/ship/runs/r1/evidence/err-ps.verify'
-    $errVr = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $errRepo -VerifyCmd 'echo stderr-ok' -ReceiptPath $errRecPs -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
+    $errVr = ((Invoke-GuardRaw verify-run -RepoRoot $errRepo -VerifyCmd 'echo stderr-ok' -ReceiptPath $errRecPs -TaskId T001 -RelevantPaths 'src/a.ts') -join "`n")
     $errVrExit = $LASTEXITCODE
     $errRecTxt = [IO.File]::ReadAllText((Join-Path $errRepo $errRecPs))
     $errHashOk = ($errRecTxt -match '(?m)^head_sha=[0-9a-f]{40}\r?$') -and ($errRecTxt -match '(?m)^tree_hash=[0-9a-f]{40}\r?$') -and ($errRecTxt -notmatch 'warning:')
-    $errVc = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $errRepo -ReceiptPath $errRecPs) -join "`n")
+    $errVc = ((Invoke-GuardRaw verify-check -RepoRoot $errRepo -ReceiptPath $errRecPs) -join "`n")
     $errVcExit = $LASTEXITCODE
     $prevErrEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try { git add src\a.ts 2>&1 | Out-Null } finally { $ErrorActionPreference = $prevErrEap }
-    $errPc = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $errRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $errRecPs) -join "`n")
+    $errPc = ((Invoke-GuardRaw precommit -RepoRoot $errRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $errRecPs) -join "`n")
     $errPcExit = $LASTEXITCODE
-    $errDs = ((& powershell -NoProfile -File $guardScript diff-scope -RepoRoot $errRepo) -join "`n")
+    $errDs = ((Invoke-GuardRaw diff-scope -RepoRoot $errRepo) -join "`n")
     $errDsExit = $LASTEXITCODE
-    $errMech = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $errRepo -AllowedPaths 'src/a.ts') -join "`n")
+    $errMech = ((Invoke-GuardRaw mechanical-check -RepoRoot $errRepo -AllowedPaths 'src/a.ts') -join "`n")
     $errMechExit = $LASTEXITCODE
-    $errSym = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $errRepo) -join "`n")
+    $errSym = ((Invoke-GuardRaw symbol-check -RepoRoot $errRepo) -join "`n")
     $errSymExit = $LASTEXITCODE
     $errShOk = $true
     if ($script:HasBash) {
@@ -1093,7 +1160,7 @@ try {
         try {
             $shErrVr = (& $script:GitBash -c "'$guardShPosix' verify-run --repo-root '$errRepoP' --verify-cmd 'echo stderr-ok' --receipt-path '$shErrRec' --task-id T001 --relevant-paths 'src/a.ts' 2>&1" | ForEach-Object { "$_" }) -join "`n"
             $shErrVrExit = $LASTEXITCODE
-            $psOfShErr = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $errRepo -ReceiptPath $shErrRec 2>&1) | ForEach-Object { "$_" }) -join "`n"
+            $psOfShErr = ((Invoke-GuardRaw verify-check -RepoRoot $errRepo -ReceiptPath $shErrRec 2>&1) | ForEach-Object { "$_" }) -join "`n"
             $psOfShErrExit = $LASTEXITCODE
             $shOfPsErr = (& $script:GitBash -c "'$guardShPosix' verify-check --repo-root '$errRepoP' --receipt-path '$errRecPs' 2>&1" | ForEach-Object { "$_" }) -join "`n"
             $shOfPsErrExit = $LASTEXITCODE
@@ -1142,33 +1209,33 @@ try {
     $rT1 = '.b3/ship/runs/r1/evidence/T001.verify'
     $rT2 = '.b3/ship/runs/r1/evidence/T002.verify'
     $rAll = '.b3/ship/runs/r1/evidence/ALL.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $lcRepo -VerifyCmd 'echo t1' -ReceiptPath $rT1 -TaskId T001 -RelevantPaths 'src/a.ts'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $lcRepo -VerifyCmd 'echo t1' -ReceiptPath $rT1 -TaskId T001 -RelevantPaths 'src/a.ts'
     $lcV1 = $LASTEXITCODE
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $lcRepo -VerifyCmd 'echo t2' -ReceiptPath $rT2 -TaskId T002 -RelevantPaths 'src/b.ts'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $lcRepo -VerifyCmd 'echo t2' -ReceiptPath $rT2 -TaskId T002 -RelevantPaths 'src/b.ts'
     $lcV2 = $LASTEXITCODE
     # Commit T001 while T002 remains dirty unstaged
     git add src\a.ts
-    $lcPc1 = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $lcRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rT1) -join "`n")
+    $lcPc1 = ((Invoke-GuardRaw precommit -RepoRoot $lcRepo -AllowedPaths 'src/a.ts' -RequireVerifyReceipt $rT1) -join "`n")
     $lcPc1Exit = $LASTEXITCODE
     git commit -qm 'T001'
     # After H0 -> H1 commit, T002.verify MUST still be valid and commit cleanly without re-verifying T002
-    $lcVc2AfterH1 = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $lcRepo -ReceiptPath $rT2) -join "`n")
+    $lcVc2AfterH1 = ((Invoke-GuardRaw verify-check -RepoRoot $lcRepo -ReceiptPath $rT2) -join "`n")
     $lcVc2Exit = $LASTEXITCODE
     git add src\b.ts
-    $lcPc2 = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $lcRepo -AllowedPaths 'src/b.ts' -RequireVerifyReceipt $rT2) -join "`n")
+    $lcPc2 = ((Invoke-GuardRaw precommit -RepoRoot $lcRepo -AllowedPaths 'src/b.ts' -RequireVerifyReceipt $rT2) -join "`n")
     $lcPc2Exit = $LASTEXITCODE
     git commit -qm 'T002'
     # Finalize/Resume: full-repo receipt before final T003 commit stays valid after T003 commits; T001 receipt stays valid across commits
     Set-Content src\c.ts 'export const c = 2;'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $lcRepo -VerifyCmd 'echo all' -ReceiptPath $rAll -TaskId FINAL
+    $null = Invoke-GuardRaw verify-run -RepoRoot $lcRepo -VerifyCmd 'echo all' -ReceiptPath $rAll -TaskId FINAL
     $lcVAll = $LASTEXITCODE
     git add src\c.ts
-    $lcPcAll = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $lcRepo -AllowedPaths 'src/c.ts' -RequireVerifyReceipt $rAll) -join "`n")
+    $lcPcAll = ((Invoke-GuardRaw precommit -RepoRoot $lcRepo -AllowedPaths 'src/c.ts' -RequireVerifyReceipt $rAll) -join "`n")
     $lcPcAllExit = $LASTEXITCODE
     git commit -qm 'T003'
-    $lcResT1 = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $lcRepo -ReceiptPath $rT1) -join "`n")
+    $lcResT1 = ((Invoke-GuardRaw verify-check -RepoRoot $lcRepo -ReceiptPath $rT1) -join "`n")
     $lcResT1Exit = $LASTEXITCODE
-    $lcFinAll = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $lcRepo -ReceiptPath $rAll) -join "`n")
+    $lcFinAll = ((Invoke-GuardRaw verify-check -RepoRoot $lcRepo -ReceiptPath $rAll) -join "`n")
     $lcFinAllExit = $LASTEXITCODE
     $shFinAllOk = $true
     if ($script:HasBash) {
@@ -1179,14 +1246,14 @@ try {
     }
     # Subsequent edit invalidates T001 receipt -> VERIFY_STALE (exit 2)
     Set-Content src\a.ts 'export const a = 3;'
-    $lcEditStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $lcRepo -ReceiptPath $rT1) -join "`n")
+    $lcEditStale = ((Invoke-GuardRaw verify-check -RepoRoot $lcRepo -ReceiptPath $rT1) -join "`n")
     $lcEditStaleExit = $LASTEXITCODE
     git add src\a.ts; git commit -qm 'T004'
     # History rewrite (amend) after receipt invalidates ancestry -> VERIFY_STALE (exit 2) even when content identical
     $rAmend = '.b3/ship/runs/r1/evidence/amend.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $lcRepo -VerifyCmd 'echo ok' -ReceiptPath $rAmend -TaskId AMEND -RelevantPaths 'src/a.ts'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $lcRepo -VerifyCmd 'echo ok' -ReceiptPath $rAmend -TaskId AMEND -RelevantPaths 'src/a.ts'
     git commit --amend -q -m 'T004-amended'
-    $lcAmendStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $lcRepo -ReceiptPath $rAmend) -join "`n")
+    $lcAmendStale = ((Invoke-GuardRaw verify-check -RepoRoot $lcRepo -ReceiptPath $rAmend) -join "`n")
     $lcAmendStaleExit = $LASTEXITCODE
 
     $lcShOk = $shFinAllOk
@@ -1213,22 +1280,22 @@ try {
         $uFull = Join-Path $lcRepo ($uRel -replace '/', '\')
         [IO.File]::WriteAllText($uFull, "export const cafe = 1;`n", (New-Object System.Text.UTF8Encoding($false)))
         $rUtf = '.b3/ship/runs/r1/evidence/utf8.verify'
-        $psU1 = ((& powershell -NoProfile -File $guardScript verify-run -RepoRoot $lcRepo -VerifyCmd 'echo u1' -ReceiptPath $rUtf -TaskId U1) -join "`n")
+        $psU1 = ((Invoke-GuardRaw verify-run -RepoRoot $lcRepo -VerifyCmd 'echo u1' -ReceiptPath $rUtf -TaskId U1) -join "`n")
         $psU1Exit = $LASTEXITCODE
         $shU1 = (& $script:GitBash -c "'$guardShPosix' verify-check --repo-root '$lcRepoP' --receipt-path '$rUtf'") -join "`n"
         $shU1Exit = $LASTEXITCODE
         [IO.File]::WriteAllText($uFull, "export const cafe = 2;`n", (New-Object System.Text.UTF8Encoding($false)))
-        $psUStale = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $lcRepo -ReceiptPath $rUtf) -join "`n")
+        $psUStale = ((Invoke-GuardRaw verify-check -RepoRoot $lcRepo -ReceiptPath $rUtf) -join "`n")
         $psUStaleExit = $LASTEXITCODE
         $shUStale = (& $script:GitBash -c "'$guardShPosix' verify-check --repo-root '$lcRepoP' --receipt-path '$rUtf'") -join "`n"
         $shUStaleExit = $LASTEXITCODE
         $rUtf2 = '.b3/ship/runs/r1/evidence/utf8-2.verify'
         $shU2 = (& $script:GitBash -c "'$guardShPosix' verify-run --repo-root '$lcRepoP' --verify-cmd 'echo u2' --receipt-path '$rUtf2' --task-id U2") -join "`n"
         $shU2Exit = $LASTEXITCODE
-        $psU2 = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $lcRepo -ReceiptPath $rUtf2) -join "`n")
+        $psU2 = ((Invoke-GuardRaw verify-check -RepoRoot $lcRepo -ReceiptPath $rUtf2) -join "`n")
         $psU2Exit = $LASTEXITCODE
         git add src
-        $psUPc = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $lcRepo -AllowedPaths 'src' -RequireVerifyReceipt $rUtf2) -join "`n")
+        $psUPc = ((Invoke-GuardRaw precommit -RepoRoot $lcRepo -AllowedPaths 'src' -RequireVerifyReceipt $rUtf2) -join "`n")
         $psUPcExit = $LASTEXITCODE
         $shUPc = (& $script:GitBash -c "'$guardShPosix' precommit --repo-root '$lcRepoP' --allowed-paths 'src' --require-verify-receipt '$rUtf2'") -join "`n"
         $shUPcExit = $LASTEXITCODE
@@ -1276,30 +1343,30 @@ try {
     $rPart = '.b3/ship/runs/r1/evidence/part.verify'
     $rPartAll = '.b3/ship/runs/r1/evidence/part-all.verify'
     $rPartAllIgn = '.b3/ship/runs/r1/evidence/part-all-ign.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $psRepo -VerifyCmd 'echo scoped' -ReceiptPath $rPart -TaskId T001 -RelevantPaths 'src/a.ts,src/c.ts,src/del.ts'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $psRepo -VerifyCmd 'echo all' -ReceiptPath $rPartAll -TaskId ALL
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $psRepo -VerifyCmd 'echo all-ign' -ReceiptPath $rPartAllIgn -TaskId ALL_IGN -IgnoreDirtyPaths 'src/b.ts'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $psRepo -VerifyCmd 'echo scoped' -ReceiptPath $rPart -TaskId T001 -RelevantPaths 'src/a.ts,src/c.ts,src/del.ts'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $psRepo -VerifyCmd 'echo all' -ReceiptPath $rPartAll -TaskId ALL
+    $null = Invoke-GuardRaw verify-run -RepoRoot $psRepo -VerifyCmd 'echo all-ign' -ReceiptPath $rPartAllIgn -TaskId ALL_IGN -IgnoreDirtyPaths 'src/b.ts'
     # Partial stage 1: only src/a.ts staged (src/c.ts untracked, src/del.ts unstaged deletion) -> MUST block
     git add src\a.ts
-    $pBlk1 = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPart) -join "`n")
+    $pBlk1 = ((Invoke-GuardRaw precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPart) -join "`n")
     $pBlk1Exit = $LASTEXITCODE
     # Partial stage 2: stage src/c.ts too (src/del.ts still unstaged deletion) -> MUST block
     git add src\c.ts
-    $pBlk2 = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPart) -join "`n")
+    $pBlk2 = ((Invoke-GuardRaw precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPart) -join "`n")
     $pBlk2Exit = $LASTEXITCODE
     # Full stage of receipt scope while src/b.ts remains dirty outside scope -> PRECOMMIT_OK; ALL receipt blocks dirty src/b.ts, and passing IgnoreDirtyPaths only works if verify-run used the same IgnoreDirtyPaths
     git add -u src\del.ts
-    $pOkScoped = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPart) -join "`n")
+    $pOkScoped = ((Invoke-GuardRaw precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPart) -join "`n")
     $pOkScopedExit = $LASTEXITCODE
-    $pBlkAll = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAll) -join "`n")
+    $pBlkAll = ((Invoke-GuardRaw precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAll) -join "`n")
     $pBlkAllExit = $LASTEXITCODE
-    $pBlkIgnMismatch = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAll -IgnoreDirtyPaths 'src/b.ts') -join "`n")
+    $pBlkIgnMismatch = ((Invoke-GuardRaw precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAll -IgnoreDirtyPaths 'src/b.ts') -join "`n")
     $pBlkIgnMismatchExit = $LASTEXITCODE
-    $pOkAllIgn = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAllIgn -IgnoreDirtyPaths 'src/b.ts') -join "`n")
+    $pOkAllIgn = ((Invoke-GuardRaw precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAllIgn -IgnoreDirtyPaths 'src/b.ts') -join "`n")
     $pOkAllIgnExit = $LASTEXITCODE
     # R002 guard: staging an ignored path MUST block even if AllowedPaths covers it
     git add src\b.ts
-    $pBlkStgIgn = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/b.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAllIgn -IgnoreDirtyPaths 'src/b.ts') -join "`n")
+    $pBlkStgIgn = ((Invoke-GuardRaw precommit -RepoRoot $psRepo -AllowedPaths 'src/a.ts,src/b.ts,src/c.ts,src/del.ts' -RequireVerifyReceipt $rPartAllIgn -IgnoreDirtyPaths 'src/b.ts') -join "`n")
     $pBlkStgIgnExit = $LASTEXITCODE
     git reset -q HEAD src\b.ts
 
@@ -1369,16 +1436,16 @@ try {
 
     # 1. Executable bit (chmod +x) + forward ancestry + index-vs-WT mode divergence
     $rChmod = '.b3/ship/runs/r1/evidence/chmod.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo m0' -ReceiptPath $rChmod -TaskId CHM -RelevantPaths 'scripts/run.sh'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo m0' -ReceiptPath $rChmod -TaskId CHM -RelevantPaths 'scripts/run.sh'
     $cmShInitOk = $true
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rChmod'"
         $cmShInitOk = ($LASTEXITCODE -eq 0)
     }
     git update-index --chmod=+x scripts/run.sh
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rChmod
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rChmod
     $cmStalePs = $LASTEXITCODE
-    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'scripts/run.sh' -RequireVerifyReceipt $rChmod
+    $null = Invoke-GuardRaw precommit -RepoRoot $mtRepo -AllowedPaths 'scripts/run.sh' -RequireVerifyReceipt $rChmod
     $cmPcBlkPs = $LASTEXITCODE
     $cmStaleSh = 2; $cmPcBlkSh = 1
     if ($hasShMt) {
@@ -1387,12 +1454,12 @@ try {
         $null = & $script:GitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'scripts/run.sh' --require-verify-receipt '$rChmod'"
         $cmPcBlkSh = $LASTEXITCODE
     }
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo m1-ps' -ReceiptPath $rChmod -TaskId CHM -RelevantPaths 'scripts/run.sh'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo m1-ps' -ReceiptPath $rChmod -TaskId CHM -RelevantPaths 'scripts/run.sh'
     $cmRun1PsEx = $LASTEXITCODE
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-run --repo-root '$mtRepoP' --verify-cmd 'echo m1' --receipt-path '$rChmod' --task-id CHM --relevant-paths 'scripts/run.sh'"
     }
-    $cmPcOkPs = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'scripts/run.sh' -RequireVerifyReceipt $rChmod) -join "`n")
+    $cmPcOkPs = ((Invoke-GuardRaw precommit -RepoRoot $mtRepo -AllowedPaths 'scripts/run.sh' -RequireVerifyReceipt $rChmod) -join "`n")
     $cmPcOkPsEx = $LASTEXITCODE
     $cmPcOkSh = 'PRECOMMIT_OK'; $cmPcOkShEx = 0
     if ($hasShMt) {
@@ -1400,7 +1467,7 @@ try {
         $cmPcOkShEx = $LASTEXITCODE
     }
     git commit -qm 'chmod-x'
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rChmod
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rChmod
     $cmAfterPs = $LASTEXITCODE
     $cmAfterSh = 0
     if ($hasShMt) {
@@ -1412,9 +1479,9 @@ try {
     git config core.filemode true
     git update-index --chmod=-x scripts/run.sh
     git commit -qm 'chmod-644'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo idxm' -ReceiptPath $rIdxMode -TaskId IDXM -RelevantPaths 'scripts/run.sh'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo idxm' -ReceiptPath $rIdxMode -TaskId IDXM -RelevantPaths 'scripts/run.sh'
     git update-index --chmod=+x scripts/run.sh
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rIdxMode
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rIdxMode
     $cmIdxStalePs = $LASTEXITCODE
     $cmIdxStaleSh = 2
     if ($hasShMt) {
@@ -1424,7 +1491,7 @@ try {
     git reset -q HEAD scripts/run.sh
     [IO.File]::WriteAllText((Join-Path $mtRepo 'scripts\untr.sh'), "#!/bin/sh`necho u`n", $utf8NoBomMt)
     $rUntrFm = '.b3/ship/runs/r1/evidence/untr-fm.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo ufm' -ReceiptPath $rUntrFm -TaskId UFM
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo ufm' -ReceiptPath $rUntrFm -TaskId UFM
     $untrFmShOk = $true
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rUntrFm'"
@@ -1444,8 +1511,8 @@ try {
     $lnkSha = (git hash-object -w -- lnk).Trim()
     git update-index --add --cacheinfo "120000,$lnkSha,lnk"
     $rSym = '.b3/ship/runs/r1/evidence/sym.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s0' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
-    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s0' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
+    $null = Invoke-GuardRaw precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
     $symPc1Ps = $LASTEXITCODE
     $symPc1Sh = 0
     if ($hasShMt) {
@@ -1453,7 +1520,7 @@ try {
         $symPc1Sh = $LASTEXITCODE
     }
     git commit -qm 'add-lnk'
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
     $symAfter1Ps = $LASTEXITCODE
     $symAfter1Sh = 0
     if ($hasShMt) {
@@ -1464,9 +1531,9 @@ try {
     git update-index --force-remove lnk
     [IO.File]::WriteAllText((Join-Path $mtRepo 'lnk'), 'scripts/run.sh', $utf8NoBomMt)
     git add lnk
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
     $symTypeStalePs = $LASTEXITCODE
-    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
+    $null = Invoke-GuardRaw precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
     $symTypeBlkPs = $LASTEXITCODE
     $symTypeStaleSh = 2; $symTypeBlkSh = 1
     if ($hasShMt) {
@@ -1475,8 +1542,8 @@ try {
         $null = & $script:GitBash -c "'$guardShMt' precommit --repo-root '$mtRepoP' --allowed-paths 'lnk' --require-verify-receipt '$rSym'"
         $symTypeBlkSh = $LASTEXITCODE
     }
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s1' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
-    $null = & powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s1' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
+    $null = Invoke-GuardRaw precommit -RepoRoot $mtRepo -AllowedPaths 'lnk' -RequireVerifyReceipt $rSym
     $symPc2Ps = $LASTEXITCODE
     $symPc2Sh = 0
     if ($hasShMt) {
@@ -1484,7 +1551,7 @@ try {
         $symPc2Sh = $LASTEXITCODE
     }
     git commit -qm 'lnk-to-file'
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
     $symAfter2Ps = $LASTEXITCODE
     $symAfter2Sh = 0
     if ($hasShMt) {
@@ -1495,12 +1562,12 @@ try {
     git update-index --force-remove lnk
     git update-index --add --cacheinfo "120000,$lnkSha,lnk"
     git commit -qm 'file-to-lnk'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s2-ps' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo s2-ps' -ReceiptPath $rSym -TaskId SYM -RelevantPaths 'lnk'
     $symRun2PsEx = $LASTEXITCODE
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-run --repo-root '$mtRepoP' --verify-cmd 'echo s2' --receipt-path '$rSym' --task-id SYM --relevant-paths 'lnk'"
     }
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
     $symBackValidPs = $LASTEXITCODE
     $symBackValidSh = 0
     if ($hasShMt) {
@@ -1508,7 +1575,7 @@ try {
         $symBackValidSh = $LASTEXITCODE
     }
     [IO.File]::WriteAllText((Join-Path $mtRepo 'lnk'), 'other.txt', $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSym
     $symTargetStalePs = $LASTEXITCODE
     $symTargetStaleSh = 2
     if ($hasShMt) {
@@ -1534,8 +1601,8 @@ try {
     }
     $rSubAll = '.b3/ship/runs/r1/evidence/sub-all.verify'
     $rSubSc = '.b3/ship/runs/r1/evidence/sub-scoped.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-all' -ReceiptPath $rSubAll -TaskId SUBA
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-sc' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-all' -ReceiptPath $rSubAll -TaskId SUBA
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-sc' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     $subInitShOk = $true
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubAll'"
@@ -1546,9 +1613,9 @@ try {
     # Move submodule pointer unstaged -> both ALL & scoped must become VERIFY_STALE
     $prevSubEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try { git -C deps/sub checkout -q $sub2 2>&1 | Out-Null } finally { $ErrorActionPreference = $prevSubEap }
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubAll
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubAll
     $subMvAllPs = $LASTEXITCODE
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subMvScPs = $LASTEXITCODE
     $subMvAllSh = 2; $subMvScSh = 2
     if ($hasShMt) {
@@ -1561,14 +1628,14 @@ try {
     [IO.File]::WriteAllText((Join-Path $mtRepo 'other.txt'), "other-with-sub`n", $utf8NoBomMt)
     git add other.txt
     $rSubPair = '.b3/ship/runs/r1/evidence/sub-pair.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-pair' -ReceiptPath $rSubPair -TaskId SUBP -RelevantPaths 'deps/sub,other.txt'
-    $subUnstPc = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'deps/sub,other.txt' -RequireVerifyReceipt $rSubPair) -join "`n")
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-pair' -ReceiptPath $rSubPair -TaskId SUBP -RelevantPaths 'deps/sub,other.txt'
+    $subUnstPc = ((Invoke-GuardRaw precommit -RepoRoot $mtRepo -AllowedPaths 'deps/sub,other.txt' -RequireVerifyReceipt $rSubPair) -join "`n")
     $subUnstPcEx = $LASTEXITCODE
     git reset -q HEAD other.txt
     [IO.File]::WriteAllText((Join-Path $mtRepo 'other.txt'), "other`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-mv' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-mv' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     git add deps/sub
-    $subStgPcPs = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $mtRepo -AllowedPaths 'deps/sub' -RequireVerifyReceipt $rSubSc) -join "`n")
+    $subStgPcPs = ((Invoke-GuardRaw precommit -RepoRoot $mtRepo -AllowedPaths 'deps/sub' -RequireVerifyReceipt $rSubSc) -join "`n")
     $subStgPcPsEx = $LASTEXITCODE
     $subStgPcSh = 'PRECOMMIT_OK'; $subStgPcShEx = 0
     if ($hasShMt) {
@@ -1576,7 +1643,7 @@ try {
         $subStgPcShEx = $LASTEXITCODE
     }
     git commit -qm 'bump-sub2'
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subCommitValidPs = $LASTEXITCODE
     $subCommitValidSh = 0
     if ($hasShMt) {
@@ -1585,21 +1652,21 @@ try {
     }
     # Dirty files inside submodule -> VERIFY_STALE, re-verify dirty, edit dirty -> VERIFY_STALE again
     [IO.File]::WriteAllText((Join-Path $mtRepo 'deps\sub\s.txt'), "dirty-1`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subDirty1Ps = $LASTEXITCODE
     $subDirty1Sh = 2
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
         $subDirty1Sh = $LASTEXITCODE
     }
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-dirty1' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-dirty1' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     $subDirtyShParity = $true
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
         $subDirtyShParity = ($LASTEXITCODE -eq 0)
     }
     [IO.File]::WriteAllText((Join-Path $mtRepo 'deps\sub\s.txt'), "dirty-2`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subDirty2Ps = $LASTEXITCODE
     $subDirty2Sh = 2
     if ($hasShMt) {
@@ -1609,20 +1676,20 @@ try {
     # Clean submodule, verify untracked file inside sub (R005), nested dirty repo (R002), uninitialized submodule, and forward ancestry
     $prevSubEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try { git -C deps/sub checkout -q -- s.txt 2>&1 | Out-Null } finally { $ErrorActionPreference = $prevSubEap }
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-clean' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-clean' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     # Untracked file inside submodule -> VERIFY_STALE, re-verify, edit untracked file -> VERIFY_STALE
     $subUntrFile = Join-Path $mtRepo 'deps\sub\sub-untr.txt'
     [IO.File]::WriteAllText($subUntrFile, "u-sub-1`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subUntr1Ps = $LASTEXITCODE
     $subUntr1Sh = 2
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
         $subUntr1Sh = $LASTEXITCODE
     }
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-untr1' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-untr1' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     [IO.File]::WriteAllText($subUntrFile, "u-sub-2`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subUntr2Ps = $LASTEXITCODE
     $subUntr2Sh = 2
     if ($hasShMt) {
@@ -1639,14 +1706,14 @@ try {
     git add i.txt; git commit -qm 'inner-1'
     [IO.File]::WriteAllText((Join-Path $nestedRepo 'i.txt'), "in-dirty-1`n", $utf8NoBomMt)
     Pop-Location
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-nested' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-nested' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     $subNestParSh = $true
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubSc'"
         $subNestParSh = ($LASTEXITCODE -eq 0)
     }
     [IO.File]::WriteAllText((Join-Path $nestedRepo 'i.txt'), "in-dirty-2`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subNestEditPs = $LASTEXITCODE
     $subNestEditSh = 2
     if ($hasShMt) {
@@ -1654,9 +1721,9 @@ try {
         $subNestEditSh = $LASTEXITCODE
     }
     [IO.File]::WriteAllText((Join-Path $nestedRepo 'untr-in.txt'), "u1`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-nested-untr' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-nested-untr' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     [IO.File]::WriteAllText((Join-Path $nestedRepo 'untr-in.txt'), "u2`n", $utf8NoBomMt)
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subNestUntrPs = $LASTEXITCODE
     $subNestUntrSh = 2
     if ($hasShMt) {
@@ -1669,14 +1736,14 @@ try {
     git update-index --add --cacheinfo "160000,$sub1,deps/uninit"
     git commit -qm 'add-uninit-sub'
     $rSubUninit = '.b3/ship/runs/r1/evidence/sub-uninit.verify'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-uninit' -ReceiptPath $rSubUninit -TaskId SUBU -RelevantPaths 'deps/uninit'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-uninit' -ReceiptPath $rSubUninit -TaskId SUBU -RelevantPaths 'deps/uninit'
     $subUninitSh = $true
     if ($hasShMt) {
         $null = & $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rSubUninit'"
         $subUninitSh = ($LASTEXITCODE -eq 0)
     }
     git update-index --cacheinfo "160000,$sub2,deps/uninit"
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubUninit
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubUninit
     $subUninitBumpPs = $LASTEXITCODE
     $subUninitBumpSh = 2
     if ($hasShMt) {
@@ -1684,10 +1751,10 @@ try {
         $subUninitBumpSh = $LASTEXITCODE
     }
     git commit -qm 'bump-uninit-sub'
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-clean' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo sub-clean' -ReceiptPath $rSubSc -TaskId SUBS -RelevantPaths 'deps/sub'
     [IO.File]::WriteAllText((Join-Path $mtRepo 'unrelated.txt'), "unrelated-1`n", $utf8NoBomMt)
     git add unrelated.txt; git commit -qm 'unrelated-commit'
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rSubSc
     $subFwdPs = $LASTEXITCODE
     $subFwdSh = 0
     if ($hasShMt) {
@@ -1699,14 +1766,14 @@ try {
     $relName = 'mode-type-sub-repo'
     $rRel = '.b3/ship/runs/r1/evidence/rel-root.verify'
     $relOk = $true
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $relName -VerifyCmd 'echo rel' -ReceiptPath $rRel -TaskId REL -RelevantPaths 'deps/sub'
+    $null = Invoke-GuardRaw verify-run -RepoRoot $relName -VerifyCmd 'echo rel' -ReceiptPath $rRel -TaskId REL -RelevantPaths 'deps/sub'
     $relPsEx = $LASTEXITCODE
     if ($hasShMt) {
         $null = & $script:GitBash -c "cd '$($sandbox -replace '\\', '/')' && '$guardShMt' verify-check --repo-root '$relName' --receipt-path '$rRel'"
         $relShVcEx = $LASTEXITCODE
         $null = & $script:GitBash -c "cd '$($sandbox -replace '\\', '/')' && '$guardShMt' verify-run --repo-root '$relName' --verify-cmd 'echo rel-sh' --receipt-path '$rRel' --task-id REL --relevant-paths 'deps/sub'"
         $relShVrEx = $LASTEXITCODE
-        $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $relName -ReceiptPath $rRel
+        $null = Invoke-GuardRaw verify-check -RepoRoot $relName -ReceiptPath $rRel
         $relPsAfterSh = $LASTEXITCODE
         $relOk = ($relPsEx -eq 0) -and ($relShVcEx -eq 0) -and ($relShVrEx -eq 0) -and ($relPsAfterSh -eq 0)
     } else {
@@ -1759,16 +1826,16 @@ try {
         'timestamp_utc=2026-01-01T00:00:00Z'
     ) -join "`n"
     [IO.File]::WriteAllText((Join-Path $mtRepo $rLegacy), "$legacyBody`n", $utf8NoBomMt)
-    $legCheckPs = ((& powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rLegacy) -join "`n")
+    $legCheckPs = ((Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rLegacy) -join "`n")
     $legCheckPsEx = $LASTEXITCODE
     $legCheckSh = 'VERIFY_STALE:'; $legCheckShEx = 2
     if ($hasShMt) {
         $legCheckSh = (& $script:GitBash -c "'$guardShMt' verify-check --repo-root '$mtRepoP' --receipt-path '$rLegacy'") -join "`n"
         $legCheckShEx = $LASTEXITCODE
     }
-    $null = & powershell -NoProfile -File $guardScript verify-run -RepoRoot $mtRepo -VerifyCmd 'echo migrated' -ReceiptPath $rLegacy -TaskId LEG
+    $null = Invoke-GuardRaw verify-run -RepoRoot $mtRepo -VerifyCmd 'echo migrated' -ReceiptPath $rLegacy -TaskId LEG
     $legMigRunEx = $LASTEXITCODE
-    $null = & powershell -NoProfile -File $guardScript verify-check -RepoRoot $mtRepo -ReceiptPath $rLegacy
+    $null = Invoke-GuardRaw verify-check -RepoRoot $mtRepo -ReceiptPath $rLegacy
     $legMigPsEx = $LASTEXITCODE
     $legMigShEx = 0
     if ($hasShMt) {
@@ -1801,23 +1868,23 @@ try {
     $mkDropSql = 'DROP ' + 'TABLE users;'
     Set-Content migrations\001.sql $mkDropSql
     Set-Content tests\db.test.ts "const sql = `"$mkDropSql`";"
-    $stOut = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $stRepo -BaseSha $stBase) -join "`n")
+    $stOut = ((Invoke-GuardRaw mechanical-check -RepoRoot $stRepo -BaseSha $stBase) -join "`n")
     $stExit = $LASTEXITCODE
-    $stAllowMd = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $stRepo -BaseSha $stBase -AllowMassDelete) -join "`n")
+    $stAllowMd = ((Invoke-GuardRaw mechanical-check -RepoRoot $stRepo -BaseSha $stBase -AllowMassDelete) -join "`n")
     $stAllowMdExit = $LASTEXITCODE
     # precommit blocks dir-prefix allow for secret, allows exact secret match, and blocks mid-merge
     git reset -q
     git add config\.env
-    $pcSecDir = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
+    $pcSecDir = ((Invoke-GuardRaw precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
     $pcSecDirExit = $LASTEXITCODE
-    $pcSecExact = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config/.env') -join "`n")
+    $pcSecExact = ((Invoke-GuardRaw precommit -RepoRoot $stRepo -AllowedPaths 'config/.env') -join "`n")
     $pcSecExactExit = $LASTEXITCODE
     git reset -q
     git add config\.env.example
-    $pcExOk = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
+    $pcExOk = ((Invoke-GuardRaw precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
     $pcExOkExit = $LASTEXITCODE
     Set-Content .git\MERGE_HEAD $stBase
-    $pcMerge = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
+    $pcMerge = ((Invoke-GuardRaw precommit -RepoRoot $stRepo -AllowedPaths 'config') -join "`n")
     $pcMergeExit = $LASTEXITCODE
     Remove-Item .git\MERGE_HEAD -Force
 
@@ -1867,7 +1934,7 @@ try {
     git add .; git commit -qm 'init'
     $syBase = (git rev-parse HEAD).Trim()
     Set-Content src\lib.ts "export function keepFn() { return 2; }`nfunction internalDead() { return 3; }`nexport function publicApi() { return 4; }"
-    $syBad = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $syRepo -BaseSha $syBase) -join "`n")
+    $syBad = ((Invoke-GuardRaw symbol-check -RepoRoot $syRepo -BaseSha $syBase) -join "`n")
     $syBadExit = $LASTEXITCODE
     $syShOk = $true
     if ($script:HasBash) {
@@ -1880,7 +1947,7 @@ try {
     # Clean caller + remove internalDead, keep unreferenced export function publicApi -> SYMBOL_OK
     Set-Content src\caller.ts "export const res = 1;"
     Set-Content src\lib.ts "export function keepFn() { return 2; }`nexport function publicApi() { return 4; }"
-    $syClean = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $syRepo -BaseSha $syBase) -join "`n")
+    $syClean = ((Invoke-GuardRaw symbol-check -RepoRoot $syRepo -BaseSha $syBase) -join "`n")
     $syCleanExit = $LASTEXITCODE
     if ($script:HasBash) {
         $shSyClean = (& $script:GitBash -c "'$guardShPosix' symbol-check --repo-root '$syRepoPosix' --base-sha '$syBase'") -join "`n"
@@ -1914,20 +1981,20 @@ try {
     Set-Content r.txt 'other'; git add .; git commit -qm 'other'
     Pop-Location
 
-    $cwRw = ((& powershell -NoProfile -File $guardScript check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -WaveReads 'T1=src/b.ts;T2=none' -ExpectedBaseSha $wtHead) -join "`n")
+    $cwRw = ((Invoke-GuardRaw check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -WaveReads 'T1=src/b.ts;T2=none' -ExpectedBaseSha $wtHead) -join "`n")
     $cwRwExit = $LASTEXITCODE
-    $cwBaseBad = ((& powershell -NoProfile -File $guardScript check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -ExpectedBaseSha ('0' * 40)) -join "`n")
+    $cwBaseBad = ((Invoke-GuardRaw check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -ExpectedBaseSha ('0' * 40)) -join "`n")
     $cwBaseBadExit = $LASTEXITCODE
-    $cwDisjoint = ((& powershell -NoProfile -File $guardScript check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -WaveReads 'T1=src/c.ts;T2=src/d.ts' -ExpectedBaseSha $wtHead) -join "`n")
+    $cwDisjoint = ((Invoke-GuardRaw check-wave -RepoRoot $wtMain -WaveSpecs 'T1=src/a.ts;T2=src/b.ts' -WaveReads 'T1=src/c.ts;T2=src/d.ts' -ExpectedBaseSha $wtHead) -join "`n")
     $cwDisjointExit = $LASTEXITCODE
-    $wtOk = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtLinked -ExpectedRoot $wtMain -ExpectedBaseSha $wtHead) -join "`n")
+    $wtOk = ((Invoke-GuardRaw check-worktree -RepoRoot $wtLinked -ExpectedRoot $wtMain -ExpectedBaseSha $wtHead) -join "`n")
     $wtOkExit = $LASTEXITCODE
-    $wtWrongRoot = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtOther -ExpectedRoot $wtMain) -join "`n")
+    $wtWrongRoot = ((Invoke-GuardRaw check-worktree -RepoRoot $wtOther -ExpectedRoot $wtMain) -join "`n")
     $wtWrongRootExit = $LASTEXITCODE
-    $wtWrongBase = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtMain -ExpectedBaseSha ('0' * 40)) -join "`n")
+    $wtWrongBase = ((Invoke-GuardRaw check-worktree -RepoRoot $wtMain -ExpectedBaseSha ('0' * 40)) -join "`n")
     $wtWrongBaseExit = $LASTEXITCODE
     Set-Content (Join-Path $wtMain '.git\MERGE_HEAD') $wtHead
-    $wtMidOp = ((& powershell -NoProfile -File $guardScript check-worktree -RepoRoot $wtMain) -join "`n")
+    $wtMidOp = ((Invoke-GuardRaw check-worktree -RepoRoot $wtMain) -join "`n")
     $wtMidOpExit = $LASTEXITCODE
     Remove-Item (Join-Path $wtMain '.git\MERGE_HEAD') -Force
 
@@ -1976,13 +2043,13 @@ try {
     Set-Content app.ts 'export const x = 1;'
     git add app.ts; git commit -qm 'init'
     git add -f .b3\autodev\progress.md
-    $adPc = ((& powershell -NoProfile -File $guardScript precommit -RepoRoot $adRepo2 -AllowedPaths 'app.ts') -join "`n")
+    $adPc = ((Invoke-GuardRaw precommit -RepoRoot $adRepo2 -AllowedPaths 'app.ts') -join "`n")
     $adPcExit = $LASTEXITCODE
     Pop-Location
-    $adRes1 = ((& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $adRepo1) -join "`n").Trim()
+    $adRes1 = ((Invoke-GuardRaw resolve-run -RepoRoot $adRepo1) -join "`n").Trim()
     $adRes1Exit = $LASTEXITCODE
-    $adList1 = ((& powershell -NoProfile -File $guardScript list-runs -RepoRoot $adRepo1) -join "`n")
-    $adRes2 = ((& powershell -NoProfile -File $guardScript resolve-run -RepoRoot $adRepo2) -join "`n").Trim()
+    $adList1 = ((Invoke-GuardRaw list-runs -RepoRoot $adRepo1) -join "`n")
+    $adRes2 = ((Invoke-GuardRaw resolve-run -RepoRoot $adRepo2) -join "`n").Trim()
     $adRes2Exit = $LASTEXITCODE
     $adShOk = $true
     if ($script:HasBash) {
@@ -2083,22 +2150,22 @@ try {
 
     # 1. check-freshness with parent WatchedPaths='src' and OwnedFiles='src/a.ts'
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\a.ts'), "// owned edit`nexport function movedFn() { return 1; }`n", (New-Object System.Text.UTF8Encoding($false)))
-    $cfOwnedOk = ((& powershell -NoProfile -File $guardScript check-freshness -RepoRoot $rlEdgeRepo -ApproachAtSha $edgeBase -TaskBaseSha $edgeBase -WatchedPaths 'src' -OwnedFiles 'src/a.ts') -join "`n")
+    $cfOwnedOk = ((Invoke-GuardRaw check-freshness -RepoRoot $rlEdgeRepo -ApproachAtSha $edgeBase -TaskBaseSha $edgeBase -WatchedPaths 'src' -OwnedFiles 'src/a.ts') -join "`n")
     $cfOwnedOkExit = $LASTEXITCODE
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\b.ts'), "export const b = 2;`n", (New-Object System.Text.UTF8Encoding($false)))
-    $cfUnownedStale = ((& powershell -NoProfile -File $guardScript check-freshness -RepoRoot $rlEdgeRepo -ApproachAtSha $edgeBase -TaskBaseSha $edgeBase -WatchedPaths 'src' -OwnedFiles 'src/a.ts') -join "`n")
+    $cfUnownedStale = ((Invoke-GuardRaw check-freshness -RepoRoot $rlEdgeRepo -ApproachAtSha $edgeBase -TaskBaseSha $edgeBase -WatchedPaths 'src' -OwnedFiles 'src/a.ts') -join "`n")
     $cfUnownedStaleExit = $LASTEXITCODE
     git checkout -- src/a.ts src/b.ts
 
     # 2. mechanical-check: delete tracked .env (no secret_path false positive) + unstaged move of 10 files (no mass_delete false positive)
     git rm -q secret/.env
     1..10 | ForEach-Object { Move-Item -LiteralPath (Join-Path $rlEdgeRepo "m$_.ts") -Destination (Join-Path $rlEdgeRepo "moved\m$_.ts") }
-    $mechCleanMove = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
+    $mechCleanMove = ((Invoke-GuardRaw mechanical-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
     $mechCleanMoveExit = $LASTEXITCODE
 
     # 3. mechanical-check: Obsoletes detects token in untracked file
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\new_obs.ts'), "const legacy = 'OLD_TOK_XYZ';`n", (New-Object System.Text.UTF8Encoding($false)))
-    $mechObsUntr = ((& powershell -NoProfile -File $guardScript mechanical-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase -Obsoletes 'OLD_TOK_XYZ') -join "`n")
+    $mechObsUntr = ((Invoke-GuardRaw mechanical-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase -Obsoletes 'OLD_TOK_XYZ') -join "`n")
     $mechObsUntrExit = $LASTEXITCODE
     Remove-Item -LiteralPath (Join-Path $rlEdgeRepo 'src\new_obs.ts') -Force
 
@@ -2106,11 +2173,11 @@ try {
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\a.ts'), "export const aOnly = 0;`n", (New-Object System.Text.UTF8Encoding($false)))
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\b.ts'), "export const b = 1;`nexport function movedFn() { return 1; }`n", (New-Object System.Text.UTF8Encoding($false)))
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\caller.ts'), "import { movedFn } from './b';`nimport { droppedFn } from './lib';`nexport const z = movedFn() + droppedFn();`n", (New-Object System.Text.UTF8Encoding($false)))
-    $symMoveOk = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
+    $symMoveOk = ((Invoke-GuardRaw symbol-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
     $symMoveOkExit = $LASTEXITCODE
 
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\lib.ts'), "function droppedFn() { return 2; }`n", (New-Object System.Text.UTF8Encoding($false)))
-    $symDropExp = ((& powershell -NoProfile -File $guardScript symbol-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
+    $symDropExp = ((Invoke-GuardRaw symbol-check -RepoRoot $rlEdgeRepo -BaseSha $edgeBase) -join "`n")
     $symDropExpExit = $LASTEXITCODE
 
     $rlEdgeShOk = $true
@@ -2168,9 +2235,9 @@ try {
 
     $igGuardSh = ((Join-Path $root 'scripts\b3-guard.sh') -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
     $igRepoPosix = ($igRepo -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
-    $igSnapPs = (& powershell -NoProfile -File (Join-Path $root 'scripts\b3-guard.ps1') snapshot -RepoRoot $igRepo 2>&1 | Out-String).Trim()
+    $igSnapPs = (Invoke-GuardRaw snapshot -RepoRoot $igRepo 2>&1 | Out-String).Trim()
     $igSnapPsExit = $LASTEXITCODE
-    $igMcPs = (& powershell -NoProfile -File (Join-Path $root 'scripts\b3-guard.ps1') mechanical-check -RepoRoot $igRepo -BaseSha HEAD -AllowedPaths 'src/app.js,src/extra.js' 2>&1 | Out-String).Trim()
+    $igMcPs = (Invoke-GuardRaw mechanical-check -RepoRoot $igRepo -BaseSha HEAD -AllowedPaths 'src/app.js,src/extra.js' 2>&1 | Out-String).Trim()
     $igMcPsExit = $LASTEXITCODE
     $igShOk = $true
     if ($script:HasBash) {
@@ -2201,18 +2268,26 @@ try {
     & git -C $advRepo add src/a.ts src/util.js | Out-Null
     & git -C $advRepo commit -qm 'add adv files' | Out-Null
 
-    # C-01: Bash (and PS) precommit --allowed-paths '*,.*' with staged .env + src/a.ts MUST fail closed (never PRECOMMIT_OK)
+    # C-01: Bash (and PS) precommit --allowed-paths '*,.*' (glob) and '.' (root prefix) with staged .env + src/a.ts MUST fail closed (never PRECOMMIT_OK)
     [IO.File]::WriteAllText((Join-Path $advRepo '.env'), "SECRET=1`n", $utf8NoBomAdv)
     [IO.File]::WriteAllText((Join-Path $advRepo 'src\a.ts'), "export const a = 2;`n", $utf8NoBomAdv)
     & git -C $advRepo add .env src/a.ts | Out-Null
-    $c01Ps = Invoke-PsGuard @('precommit', '-RepoRoot', $advRepo, '-AllowedPaths', '*,.*')
-    if ($c01Ps.Code -ne 1 -or ($c01Ps.Text -match 'PRECOMMIT_OK') -or ($c01Ps.Text -notmatch 'PRECOMMIT_FAIL: secret path staged without exact allow')) {
-        $advErrs.Add("C-01 PS expected secret fail-closed, got code=$($c01Ps.Code) out=$($c01Ps.Text)")
+    $c01GlobPs = Invoke-PsGuard @('precommit', '-RepoRoot', $advRepo, '-AllowedPaths', '*,.*')
+    $c01DotPs = Invoke-PsGuard @('precommit', '-RepoRoot', $advRepo, '-AllowedPaths', '.')
+    if ($c01GlobPs.Code -ne 1 -or ($c01GlobPs.Text -match 'PRECOMMIT_OK') -or ($c01GlobPs.Text -notmatch "PRECOMMIT_FAIL: invalid glob in path '\*'")) {
+        $advErrs.Add("C-01 glob PS expected fail-closed, got code=$($c01GlobPs.Code) out=$($c01GlobPs.Text)")
+    }
+    if ($c01DotPs.Code -ne 1 -or ($c01DotPs.Text -match 'PRECOMMIT_OK') -or ($c01DotPs.Text -notmatch 'PRECOMMIT_FAIL: secret path staged without exact allow')) {
+        $advErrs.Add("C-01 dot PS expected secret fail-closed, got code=$($c01DotPs.Code) out=$($c01DotPs.Text)")
     }
     if ($script:HasBash) {
-        $c01Sh = Invoke-ShGuard @('precommit', '--repo-root', $advRepoPosix, '--allowed-paths', '*,.*')
-        if ($c01Sh.Code -ne 1 -or ($c01Sh.Text -match 'PRECOMMIT_OK') -or ($c01Sh.Text -notmatch 'PRECOMMIT_FAIL: secret path staged without exact allow')) {
-            $advErrs.Add("C-01 SH expected secret fail-closed, got code=$($c01Sh.Code) out=$($c01Sh.Text)")
+        $c01GlobSh = Invoke-ShGuard @('precommit', '--repo-root', $advRepoPosix, '--allowed-paths', '*,.*')
+        $c01DotSh = Invoke-ShGuard @('precommit', '--repo-root', $advRepoPosix, '--allowed-paths', '.')
+        if ($c01GlobSh.Code -ne 1 -or ($c01GlobSh.Text -match 'PRECOMMIT_OK') -or ($c01GlobSh.Text -notmatch "PRECOMMIT_FAIL: invalid glob in path '\*'")) {
+            $advErrs.Add("C-01 glob SH expected fail-closed, got code=$($c01GlobSh.Code) out=$($c01GlobSh.Text)")
+        }
+        if ($c01DotSh.Code -ne 1 -or ($c01DotSh.Text -match 'PRECOMMIT_OK') -or ($c01DotSh.Text -notmatch 'PRECOMMIT_FAIL: secret path staged without exact allow')) {
+            $advErrs.Add("C-01 dot SH expected secret fail-closed, got code=$($c01DotSh.Code) out=$($c01DotSh.Text)")
         }
     }
     & git -C $advRepo reset -q HEAD -- .env src/a.ts | Out-Null
@@ -2313,10 +2388,99 @@ try {
         $advErrs.Add('C-05 rules/verification.md missing untrusted-data boundary hard rule')
     }
 
+    # CF-04: Bash + PS intra-repo NTFS junction rejection (fail-closed exit 1)
+    $advHeadSha = (& git -C $advRepo rev-parse HEAD).Trim()
+    New-Item -ItemType Directory -Path (Join-Path $advRepo 'docs') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $advRepo 'docs\target.ts'), "export const jt = 1;`n", $utf8NoBomAdv)
+    & git -C $advRepo add docs/target.ts | Out-Null
+    & git -C $advRepo commit -qm 'add cf04 target' | Out-Null
+    $cf04Base = (& git -C $advRepo rev-parse HEAD).Trim()
+    $cf04Junc = Join-Path $advRepo 'src\junc_docs'
+    New-Item -ItemType Junction -Path $cf04Junc -Target (Join-Path $advRepo 'docs') | Out-Null
+    try {
+        [IO.File]::WriteAllText((Join-Path $cf04Junc 'target.ts'), "export const jt = 2;`n", $utf8NoBomAdv)
+        $cf04Sha = (Get-FileHash -LiteralPath (Join-Path $advRepo 'docs\target.ts') -Algorithm SHA256).Hash.ToLowerInvariant()
+        foreach ($cf04Case in @(
+            @{ Name = 'mc-wavespecs'; Ps = @('mechanical-check', '-RepoRoot', $advRepo, '-BaseSha', $cf04Base, '-WaveSpecs', 'T1=src/junc_docs/target.ts'); Sh = @('mechanical-check', '--repo-root', $advRepoPosix, '--base-sha', $cf04Base, '--wave-specs', 'T1=src/junc_docs/target.ts'); Pat = "MECHANICAL_FAIL: unsafe symlink or junction alias in path 'src/junc_docs/target\.ts'" },
+            @{ Name = 'mc-protected'; Ps = @('mechanical-check', '-RepoRoot', $advRepo, '-BaseSha', $cf04Base, '-ProtectedPaths', 'src/junc_docs/target.ts'); Sh = @('mechanical-check', '--repo-root', $advRepoPosix, '--base-sha', $cf04Base, '--protected-paths', 'src/junc_docs/target.ts'); Pat = "MECHANICAL_FAIL: unsafe symlink or junction alias in path 'src/junc_docs/target\.ts'" },
+            @{ Name = 'mc-dirtydigests'; Ps = @('mechanical-check', '-RepoRoot', $advRepo, '-BaseSha', $cf04Base, '-DirtyDigests', "src/junc_docs/target.ts=$cf04Sha"); Sh = @('mechanical-check', '--repo-root', $advRepoPosix, '--base-sha', $cf04Base, '--dirty-digests', "src/junc_docs/target.ts=$cf04Sha"); Pat = "MECHANICAL_FAIL: unsafe symlink or junction alias in path 'src/junc_docs/target\.ts'" },
+            @{ Name = 'vr-receipt'; Ps = @('verify-run', '-RepoRoot', $advRepo, '-VerifyCmd', 'echo j', '-ReceiptPath', 'src/junc_docs/r.verify'); Sh = @('verify-run', '--repo-root', $advRepoPosix, '--verify-cmd', 'echo j', '--receipt-path', 'src/junc_docs/r.verify'); Pat = 'VERIFY_RUN_FAIL: invalid receipt_path' }
+        )) {
+            $jPs = Invoke-PsGuard $cf04Case.Ps
+            if ($jPs.Code -ne 1 -or ($jPs.Text -notmatch $cf04Case.Pat)) {
+                $advErrs.Add("CF-04 $($cf04Case.Name) PS expected exit 1, got code=$($jPs.Code) out=$($jPs.Text)")
+            }
+            if ($script:HasBash) {
+                $jSh = Invoke-ShGuard $cf04Case.Sh
+                if ($jSh.Code -ne 1 -or ($jSh.Text -notmatch $cf04Case.Pat)) {
+                    $advErrs.Add("CF-04 $($cf04Case.Name) SH expected exit 1, got code=$($jSh.Code) out=$($jSh.Text)")
+                }
+            }
+        }
+    } finally {
+        if (Test-Path -LiteralPath $cf04Junc) { [System.IO.Directory]::Delete($cf04Junc, $false) }
+        & git -C $advRepo checkout -- docs/target.ts | Out-Null
+    }
+
+    # CF-05: check-freshness flag injection (-s) rejected fail-closed (exit 1) in PS and Bash
+    foreach ($cf05Case in @(
+        @{ Name = 'approach-sha-dash-s'; Ps = @('check-freshness', '-RepoRoot', $advRepo, '-ApproachAtSha', '-s', '-TaskBaseSha', $cf04Base, '-WatchedPaths', 'src/a.ts'); Sh = @('check-freshness', '--repo-root', $advRepoPosix, '--approach-at-sha', '-s', '--task-base-sha', $cf04Base, '--watched-paths', 'src/a.ts') },
+        @{ Name = 'task-base-dash-s'; Ps = @('check-freshness', '-RepoRoot', $advRepo, '-ApproachAtSha', $cf04Base, '-TaskBaseSha', '-s', '-WatchedPaths', 'src/a.ts'); Sh = @('check-freshness', '--repo-root', $advRepoPosix, '--approach-at-sha', $cf04Base, '--task-base-sha', '-s', '--watched-paths', 'src/a.ts') }
+    )) {
+        $fPs = Invoke-PsGuard $cf05Case.Ps
+        if ($fPs.Code -ne 1 -or ($fPs.Text -notmatch '^FRESHNESS_FAIL: invalid')) {
+            $advErrs.Add("CF-05 $($cf05Case.Name) PS expected FRESHNESS_FAIL: invalid exit 1, got code=$($fPs.Code) out=$($fPs.Text)")
+        }
+        if ($script:HasBash) {
+            $fSh = Invoke-ShGuard $cf05Case.Sh
+            if ($fSh.Code -ne 1 -or ($fSh.Text -notmatch '^FRESHNESS_FAIL: invalid')) {
+                $advErrs.Add("CF-05 $($cf05Case.Name) SH expected FRESHNESS_FAIL: invalid exit 1, got code=$($fSh.Code) out=$($fSh.Text)")
+            }
+        }
+    }
+
     if ($advErrs.Count -eq 0) {
         Pass 'guard-adversarial-regressions'
     } else {
         FailCheck 'guard-adversarial-regressions' ($advErrs -join '; ')
+    }
+
+    # --- CF-17: real out-of-process CLI smoke (powershell -File $guardScript + B3_TEST_OUT_OF_PROC_PS=1 Invoke-PsGuard) ---
+    $oopErrs = New-Object System.Collections.Generic.List[string]
+    $oopPrevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $oopFpOut = ((& powershell -NoProfile -ExecutionPolicy Bypass -File $guardScript fingerprint -DependsOn 'T002,T001' -Scope 'src/a.ts' -Criteria 'AC1: ok' 2>&1) | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
+        $oopFpCode = $LASTEXITCODE
+        $oopDsOut = ((& powershell -NoProfile -ExecutionPolicy Bypass -File $guardScript diff-scope -RepoRoot $advRepo -BaseSha $cf04Base 2>&1) | ForEach-Object { ([string]$_).TrimEnd("`r") }) -join "`n"
+        $oopDsCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $oopPrevEap
+    }
+    if ($oopFpCode -ne 0 -or $oopFpOut -cne 'depends_on=T001,T002|scope=src/a.ts|acceptance_criteria=AC1: ok') {
+        $oopErrs.Add("direct -File fingerprint code=$oopFpCode out=$oopFpOut")
+    }
+    if ($oopDsCode -ne 2 -or $oopDsOut -notmatch '(?m)^EMPTY_DIFF$') {
+        $oopErrs.Add("direct -File diff-scope EMPTY_DIFF code=$oopDsCode out=$oopDsOut")
+    }
+    $prevOopEnv = $env:B3_TEST_OUT_OF_PROC_PS
+    try {
+        $env:B3_TEST_OUT_OF_PROC_PS = '1'
+        $oopCfOk = Invoke-PsGuard @('check-freshness', '-RepoRoot', $advRepo, '-ApproachAtSha', $cf04Base, '-TaskBaseSha', $cf04Base, '-WatchedPaths', 'src/a.ts')
+        $oopCfBad = Invoke-PsGuard @('check-freshness', '-RepoRoot', $advRepo, '-ApproachAtSha:-s', '-TaskBaseSha', $cf04Base, '-WatchedPaths', 'src/a.ts')
+    } finally {
+        if ($null -eq $prevOopEnv) { Remove-Item Env:B3_TEST_OUT_OF_PROC_PS -ErrorAction SilentlyContinue } else { $env:B3_TEST_OUT_OF_PROC_PS = $prevOopEnv }
+    }
+    if ($oopCfOk.Code -ne 0 -or $oopCfOk.Text -cne 'FRESH') {
+        $oopErrs.Add("B3_TEST_OUT_OF_PROC_PS check-freshness FRESH code=$($oopCfOk.Code) out=$($oopCfOk.Text)")
+    }
+    if ($oopCfBad.Code -ne 1 -or $oopCfBad.Text -notmatch '^FRESHNESS_FAIL: invalid') {
+        $oopErrs.Add("B3_TEST_OUT_OF_PROC_PS check-freshness -s code=$($oopCfBad.Code) out=$($oopCfBad.Text)")
+    }
+    if ($oopErrs.Count -eq 0) {
+        Pass 'guard-out-of-proc-cli-smoke'
+    } else {
+        FailCheck 'guard-out-of-proc-cli-smoke' ($oopErrs -join '; ')
     }
 
     # --- guard-wave-partition-orchestration (Scenarios 1-5, 14: partition, RW, base/protected/dirty, PS+Bash parity) ---
@@ -2494,7 +2658,7 @@ try {
     $aiRepoPosix = To-PosixPath $aiRepo
     $utf8NoBomAi = New-Object System.Text.UTF8Encoding($false)
     Init-B3TestRepo -RepoPath $aiRepo -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'ai-base'
-    New-Item -ItemType Directory -Path (Join-Path $aiRepo 'api'), (Join-Path $aiRepo 'ui'), (Join-Path $aiRepo 'src\shared'), (Join-Path $aiRepo 'src\api'), (Join-Path $aiRepo 'docs\authority') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $aiRepo 'api'), (Join-Path $aiRepo 'ui'), (Join-Path $aiRepo 'src\shared'), (Join-Path $aiRepo 'src\api'), (Join-Path $aiRepo 'docs\authority'), (Join-Path $aiRepo 'config') -Force | Out-Null
     [IO.File]::WriteAllText((Join-Path $aiRepo 'api\a.ts'), "export const a = 1;`n", $utf8NoBomAi)
     [IO.File]::WriteAllText((Join-Path $aiRepo 'ui\b.tsx'), "export const B = () => null;`n", $utf8NoBomAi)
     [IO.File]::WriteAllText((Join-Path $aiRepo 'src\c.ts'), "export const c = 1;`n", $utf8NoBomAi)
@@ -2504,6 +2668,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $aiRepo 'src\shared\types.ts'), "export type Id = string;`n", $utf8NoBomAi)
     [IO.File]::WriteAllText((Join-Path $aiRepo 'docs\scratch.md'), "# scratch`n", $utf8NoBomAi)
     [IO.File]::WriteAllText((Join-Path $aiRepo 'docs\authority\pin.md'), "pin: v1`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'config\lock.json'), "{`"v`":1}`n", $utf8NoBomAi)
     & git -C $aiRepo add . | Out-Null
     & git -C $aiRepo commit -qm 'seed adaptive isolation files' | Out-Null
     $aiHead = (& git -C $aiRepo rev-parse HEAD).Trim()
@@ -2752,7 +2917,8 @@ try {
         0 @('(?m)^dirty_scope=user_only$', '(?m)^blocked_tasks=R1$', '(?m)^conflicts=dirty:api/a\.ts\(USER_DIRTY->R1\)$', '(?m)^wave\|1\|SEQUENTIAL\|agents=1\|tasks=R2\|reason=single_ready_task$', 'WAVE_SEQUENTIAL: waves=1 max_parallel=1 reason=dirty_scope_partial_split') -RequireExactTextParity
     & git -C $aiRepo checkout -- api/a.ts | Out-Null
 
-    # 1d3. F01: Per-worker ownership vs combined wave diff (mechanical-check -WaveSpecs / -WorkerChanges)
+    # 1d3. F01: Per-worker ownership vs combined wave diff (mechanical-check -WaveSpecs / -WorkerChanges / -WorkerRoots / -ProtectedPaths / -DirtyDigests)
+    $aiBaseSha = (& git -C $aiRepo rev-parse HEAD).Trim()
     [IO.File]::WriteAllText((Join-Path $aiRepo 'docs\scratch.md'), $userScratchContent, $utf8NoBomAi)
     [IO.File]::WriteAllText((Join-Path $aiRepo 'api\a.ts'), "export const a = 20;`n", $utf8NoBomAi)
     [IO.File]::WriteAllText((Join-Path $aiRepo 'ui\b.tsx'), "export const B = () => 'w2';`n", $utf8NoBomAi)
@@ -2761,31 +2927,90 @@ try {
         @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx') `
         0 @('(?m)^scope_creep=none$', '(?m)^ownership_verification=UNVERIFIED_COMBINED_ONLY$', '(?m)^ownership_violations=unverified$', '(?m)^MECHANICAL_OK$') -RequireExactTextParity
     & $checkAiParity 'ai-mech-cross-worker-swap' `
-        @('mechanical-check', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=ui/b.tsx;T2=api/a.ts') `
-        @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=ui/b.tsx;T2=api/a.ts') `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=ui/b.tsx;T2=api/a.ts') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=ui/b.tsx;T2=api/a.ts') `
         2 @('(?m)^scope_creep=none$', '(?m)^ownership_verification=VIOLATION$', '(?m)^ownership_violations=api/a\.ts\(T2->T1\),ui/b\.tsx\(T1->T2\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
     & $checkAiParity 'ai-mech-per-worker-ok' `
-        @('mechanical-check', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx;T3=none', '-WorkerChanges', 'T1=api/a.ts;T2=ui/b.tsx;T3=none') `
-        @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx;T3=none', '--worker-changes', 'T1=api/a.ts;T2=ui/b.tsx;T3=none') `
-        0 @('(?m)^scope_creep=none$', '(?m)^ownership_verification=VERIFIED_PER_WORKER$', '(?m)^ownership_violations=none$', '(?m)^MECHANICAL_OK$') -RequireExactTextParity
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx;T3=none', '-WorkerChanges', 'T1=api/a.ts;T2=ui/b.tsx;T3=none') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx;T3=none', '--worker-changes', 'T1=api/a.ts;T2=ui/b.tsx;T3=none') `
+        0 @('(?m)^scope_creep=none$', '(?m)^ownership_verification=CALLER_ATTRIBUTED$', '(?m)^ownership_violations=none$', '(?m)^MECHANICAL_OK$') -RequireExactTextParity
     & $checkAiParity 'ai-mech-user-dirty-touch' `
-        @('mechanical-check', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts,docs/scratch.md;T2=ui/b.tsx') `
-        @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts,docs/scratch.md;T2=ui/b.tsx') `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts,docs/scratch.md;T2=ui/b.tsx') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts,docs/scratch.md;T2=ui/b.tsx') `
         2 @('(?m)^ownership_verification=VIOLATION$', '(?m)^ownership_violations=docs/scratch\.md\(T1->user_dirty\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
     & $checkAiParity 'ai-mech-unowned-claim' `
-        @('mechanical-check', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts,src/c.ts;T2=ui/b.tsx') `
-        @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts,src/c.ts;T2=ui/b.tsx') `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts,src/c.ts;T2=ui/b.tsx') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts,src/c.ts;T2=ui/b.tsx') `
         2 @('(?m)^ownership_verification=VIOLATION$', '(?m)^ownership_violations=src/c\.ts\(T1->unowned\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
     & $checkAiParity 'ai-mech-unknown-task-id' `
-        @('mechanical-check', '-RepoRoot', $aiRepo, '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T9=api/a.ts') `
-        @('mechanical-check', '--repo-root', $aiRepoPosix, '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T9=api/a.ts') `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T9=api/a.ts') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T9=api/a.ts') `
         1 @("MECHANICAL_FAIL: unknown task id 'T9' in WorkerChanges") -RequireExactTextParity
     [IO.File]::WriteAllText((Join-Path $aiRepo 'src\c.ts'), "export const c = 77;`n", $utf8NoBomAi)
     & $checkAiParity 'ai-mech-unattributed-change' `
-        @('mechanical-check', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts,ui/b.tsx,src/c.ts', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts;T2=ui/b.tsx') `
-        @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx,src/c.ts', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts;T2=ui/b.tsx') `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx,src/c.ts', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts;T2=ui/b.tsx') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx,src/c.ts', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts;T2=ui/b.tsx') `
         2 @('(?m)^scope_creep=none$', '(?m)^ownership_verification=VIOLATION$', '(?m)^ownership_violations=src/c\.ts\(unattributed\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
-    & git -C $aiRepo checkout -- api/a.ts ui/b.tsx src/c.ts docs/scratch.md | Out-Null
+    & git -C $aiRepo checkout -- src/c.ts ui/b.tsx | Out-Null
+
+    # PARTIAL_ATTRIBUTION (exit 2): omitting T2 from -WorkerChanges when T1=api/a.ts;T2=ui/b.tsx
+    & $checkAiParity 'ai-mech-partial-attribution' `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts') `
+        2 @('(?m)^scope_creep=none$', '(?m)^ownership_verification=PARTIAL_ATTRIBUTION$', '(?m)^ownership_violations=T2\(missing_worker\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
+
+    # VERIFIED_PER_WORKER via -WorkerRoots (two real linked worktrees integrated into target repo + content_mismatch VIOLATION)
+    $aiWtDir = Join-Path $sandbox 'ai-worker-roots'
+    $aiWt1 = Join-Path $aiWtDir 'wt1'
+    $aiWt2 = Join-Path $aiWtDir 'wt2'
+    $aiWt1Posix = To-PosixPath $aiWt1
+    $aiWt2Posix = To-PosixPath $aiWt2
+    New-Item -ItemType Directory -Path $aiWtDir -Force | Out-Null
+    & git -C $aiRepo worktree add -q -b ai-wr-b1 $aiWt1 $aiBaseSha 2>$null
+    & git -C $aiRepo worktree add -q -b ai-wr-b2 $aiWt2 $aiBaseSha 2>$null
+    try {
+        [IO.File]::WriteAllText((Join-Path $aiWt1 'api\a.ts'), "export const a = 20;`n", $utf8NoBomAi)
+        [IO.File]::WriteAllText((Join-Path $aiWt2 'ui\b.tsx'), "export const B = () => 'w2';`n", $utf8NoBomAi)
+        [IO.File]::WriteAllText((Join-Path $aiRepo 'ui\b.tsx'), "export const B = () => 'w2';`n", $utf8NoBomAi)
+        & $checkAiParity 'ai-mech-worker-roots-verified' `
+            @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerRoots', "T1=$aiWt1;T2=$aiWt2") `
+            @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-roots', "T1=$aiWt1Posix;T2=$aiWt2Posix") `
+            0 @('(?m)^scope_creep=none$', '(?m)^ownership_verification=VERIFIED_PER_WORKER$', '(?m)^ownership_violations=none$', '(?m)^MECHANICAL_OK$') -RequireExactTextParity
+        [IO.File]::WriteAllText((Join-Path $aiWt1 'api\a.ts'), "export const a = 999;`n", $utf8NoBomAi)
+        & $checkAiParity 'ai-mech-worker-roots-mismatch' `
+            @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerRoots', "T1=$aiWt1;T2=$aiWt2") `
+            @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-roots', "T1=$aiWt1Posix;T2=$aiWt2Posix") `
+            2 @('(?m)^ownership_verification=VIOLATION$', '(?m)^ownership_violations=api/a\.ts\(T1->content_mismatch\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
+    } finally {
+        & git -C $aiRepo worktree remove -f $aiWt1 2>$null | Out-Null
+        & git -C $aiRepo worktree remove -f $aiWt2 2>$null | Out-Null
+    }
+
+    # CF-03: -ProtectedPaths violation & -DirtyDigests tamper (clean pass vs working-tree tamper vs git add staged tamper)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'config\lock.json'), "{`"v`":2}`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-mech-protected-paths-violation' `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx,config/lock.json', '-IgnoreDirtyPaths', 'docs/scratch.md', '-ProtectedPaths', '.b3/ship,config/lock.json') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx,config/lock.json', '--ignore-dirty-paths', 'docs/scratch.md', '--protected-paths', '.b3/ship,config/lock.json') `
+        2 @('(?m)^protected_violations=config/lock\.json$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
+    & git -C $aiRepo checkout -- config/lock.json | Out-Null
+
+    $origScratchSha = (Get-FileHash -LiteralPath (Join-Path $aiRepo 'docs\scratch.md') -Algorithm SHA256).Hash.ToLowerInvariant()
+    & $checkAiParity 'ai-mech-dirty-digests-untouched-ok' `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-DirtyDigests', "docs/scratch.md=$origScratchSha", '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts;T2=ui/b.tsx') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--dirty-digests', "docs/scratch.md=$origScratchSha", '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts;T2=ui/b.tsx') `
+        0 @('(?m)^dirty_tamper=none$', '(?m)^ownership_verification=CALLER_ATTRIBUTED$', '(?m)^ownership_violations=none$', '(?m)^MECHANICAL_OK$') -RequireExactTextParity
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'docs\scratch.md'), "# tampered-wt`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-mech-dirty-digests-wt-tamper' `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-DirtyDigests', "docs/scratch.md=$origScratchSha", '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts;T2=ui/b.tsx') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--dirty-digests', "docs/scratch.md=$origScratchSha", '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts;T2=ui/b.tsx') `
+        2 @('(?m)^dirty_tamper=docs/scratch\.md$', '(?m)^ownership_verification=VIOLATION$', '(?m)^ownership_violations=docs/scratch\.md\(dirty_tamper\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
+    & git -C $aiRepo add docs/scratch.md | Out-Null
+    & $checkAiParity 'ai-mech-dirty-digests-staged-tamper' `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-BaseSha', $aiBaseSha, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-DirtyDigests', "docs/scratch.md=$origScratchSha", '-WaveSpecs', 'T1=api/a.ts;T2=ui/b.tsx', '-WorkerChanges', 'T1=api/a.ts;T2=ui/b.tsx') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--base-sha', $aiBaseSha, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--dirty-digests', "docs/scratch.md=$origScratchSha", '--wave-specs', 'T1=api/a.ts;T2=ui/b.tsx', '--worker-changes', 'T1=api/a.ts;T2=ui/b.tsx') `
+        2 @('(?m)^dirty_tamper=docs/scratch\.md$', '(?m)^ownership_verification=VIOLATION$', '(?m)^ownership_violations=docs/scratch\.md\(dirty_tamper\)$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
+    & git -C $aiRepo reset -q HEAD -- docs/scratch.md | Out-Null
+    & git -C $aiRepo checkout -- api/a.ts ui/b.tsx docs/scratch.md | Out-Null
 
     # 1e. R001: check-worktree identity & -PeerRoots (ISOLATED_WRITES)
     $wt2Parent = Join-Path $sandbox 'wt2-parent'
@@ -2915,13 +3140,22 @@ try {
     $shipResText = Get-Content -LiteralPath (Join-Path $root 'workflows\references\ship-resume.md') -Raw
     $strategyText = Get-Content -LiteralPath (Join-Path $root 'review-loop\strategy.md') -Raw
 
-    # Scenarios 6, 7 & 13: Sequential fallback, no-false-PARALLEL, adaptive isolation modes, honesty notes, and 4-host adapter contract
-    foreach ($tok in @('single_ready_task', 'trivial_overhead', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'Cursor', 'Claude Code', 'Codex', 'Antigravity', 'check-wave -Partition', 'last_wave:', 'SHARED_READ_ONLY', 'SHARED_DISJOINT_WRITES', 'ISOLATED_WRITES', 'SEQUENTIAL', 'Declared path ownership != OS filesystem isolation', '`WORKTREE_OK` verifies worktree identity, not full isolation', 'malformed_wave_output', 'unsafe_shared_side_effects', 'workers **never** stage, commit', 'UNVERIFIED_COMBINED_ONLY', '-WorkerChanges', '-RequireIsolated', 'empty write scopes', 'TaskId=none')) {
+    # Scenarios 6, 7 & 13: Sequential fallback, no-false-PARALLEL, adaptive isolation modes, honesty notes, and 4-host adapter contract (ship.md links dispatch-naming.md; detailed wave/isolation/ownership tokens checked on combined corpus)
+    $shipWaveCorpus = $shipText + "`n" + $dispatchText
+    if ($shipText -notmatch 'references/dispatch-naming\.md') {
+        $crErrs.Add('workflows/ship.md missing explicit link to references/dispatch-naming.md')
+    }
+    foreach ($tok in @('single_ready_task', 'trivial_overhead', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'Cursor', 'Claude Code', 'Codex', 'Antigravity', 'check-wave -Partition', 'last_wave:', 'SHARED_READ_ONLY', 'SHARED_DISJOINT_WRITES', 'ISOLATED_WRITES', 'SEQUENTIAL', 'Declared path ownership != OS filesystem isolation', '`WORKTREE_OK` verifies worktree identity, not full isolation', 'malformed_wave_output', 'unsafe_shared_side_effects', 'workers **never** stage, commit', 'UNVERIFIED_COMBINED_ONLY', 'CALLER_ATTRIBUTED', 'VERIFIED_PER_WORKER', 'PARTIAL_ATTRIBUTION', 'missing_worker', '-WorkerChanges', '-WorkerRoots', '-ProtectedPaths', '-DirtyDigests', 'dirty_tamper', '-RequireIsolated', 'empty write scopes', 'TaskId=none')) {
         if (-not $dispatchText.Contains($tok)) {
             $crErrs.Add("dispatch-naming.md missing '$tok'")
         }
     }
-    foreach ($tok in @('check-wave -Partition', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'last_wave:', 'single-writer', 'post-integration', 'Cursor', 'Claude', 'Codex', 'Antigravity', 'SHARED_READ_ONLY', 'SHARED_DISJOINT_WRITES', 'ISOLATED_WRITES', 'SEQUENTIAL', 'ownership != OS isolation', '`WORKTREE_OK` = identity only', 'malformed_wave_output', 'UNVERIFIED_COMBINED_ONLY', '-WorkerChanges', '-RequireIsolated', 'TaskId=none')) {
+    foreach ($tok in @('check-wave -Partition', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'last_wave:', 'single-writer', 'post-integration', 'Cursor', 'Claude', 'Codex', 'Antigravity', 'SHARED_READ_ONLY', 'SHARED_DISJOINT_WRITES', 'ISOLATED_WRITES', 'SEQUENTIAL', 'malformed_wave_output', 'UNVERIFIED_COMBINED_ONLY', 'CALLER_ATTRIBUTED', 'VERIFIED_PER_WORKER', 'PARTIAL_ATTRIBUTION', '-WorkerChanges', '-WorkerRoots', '-ProtectedPaths', '-DirtyDigests', '-RequireIsolated', 'TaskId=none')) {
+        if (-not $shipWaveCorpus.Contains($tok)) {
+            $crErrs.Add("ship+dispatch corpus missing '$tok'")
+        }
+    }
+    foreach ($tok in @('check-wave -Partition', 'last_wave:', 'single-writer', 'post-integration', 'SHARED_READ_ONLY', 'SHARED_DISJOINT_WRITES', 'ISOLATED_WRITES', 'SEQUENTIAL', 'UNVERIFIED_COMBINED_ONLY', '-WorkerChanges', '-WorkerRoots', '-ProtectedPaths', '-DirtyDigests', '-RequireIsolated')) {
         if (-not $shipText.Contains($tok)) {
             $crErrs.Add("workflows/ship.md missing '$tok'")
         }

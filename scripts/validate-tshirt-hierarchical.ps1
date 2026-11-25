@@ -11,15 +11,7 @@ $guardShPosix = (To-PosixPath $root) + '/scripts/b3-guard.sh'
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Init-Repo([string]$DirPath) {
-    New-Item -ItemType Directory -Path $DirPath | Out-Null
-    Push-Location $DirPath
-    & git init -q
-    & git config user.email 'tshirt-test@example.com'
-    & git config user.name 'TShirt Test'
-    [IO.File]::WriteAllText((Join-Path $DirPath 'README.md'), "base`n", $utf8NoBom)
-    & git add README.md
-    & git commit -qm 'init'
-    Pop-Location
+    Init-B3TestRepo -RepoPath $DirPath -DefaultBranch 'main' -UserEmail 'tshirt-test@example.com' -UserName 'TShirt Test' -InitialCommit
 }
 
 function Check-BothParity([string]$RepoDir, [string]$BaseSha, [string]$ExpectedSize, [ref]$Details) {
@@ -1065,6 +1057,133 @@ try {
             ($psMigRi.Code -eq 0) -and ($shMigRi.Code -eq 0) -and ($migPsTxt -match '(?m)^review_independence=UNKNOWN$') -and ($migShTxt -match '(?m)^review_independence=UNKNOWN$')
     if ($ok18) { Pass 'h08-review-independence-enforcement' } else {
         FailCheck 'h08-review-independence-enforcement' "salH=$($psSalHigh.Text) unkH=$($psUnkHigh.Text) salC=$($psSalCrit.Text) upg=$($psUpgFail.Text) clr=$($psClrFail.Text) noRi=$($psNoRi.Text)"
+    }
+
+    # --- 19. cf06-git-diff-noprefix-mnemonicprefix-paths (PS + Bash) ---
+    $r19 = Join-Path $sandbox 'cf06-diff-prefix-repo'
+    $r19Posix = To-PosixPath $r19
+    Init-Repo $r19
+    & git -C $r19 config diff.noprefix true
+    & git -C $r19 config diff.mnemonicPrefix true
+    New-Item -ItemType Directory -Path (Join-Path $r19 'a'), (Join-Path $r19 'src\render') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r19 'a\x.ts'), "export const x = 0;`n", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $r19 'src\render\loop.ts'), "export const tick = () => 0;`n", $utf8NoBom)
+    & git -C $r19 add .; & git -C $r19 commit -qm 'base19'
+    $base19 = (& git -C $r19 rev-parse HEAD).Trim()
+    [IO.File]::WriteAllText((Join-Path $r19 'a\x.ts'), "export function verifyToken(t: string) { return jwt.verify(t, 'k'); }`n", $utf8NoBom)
+    & git -C $r19 add a/x.ts; & git -C $r19 commit -qm 'edit short-prefix path'
+    [IO.File]::WriteAllText((Join-Path $r19 'src\render\loop.ts'), "export const tick = () => requestAnimationFrame(() => {});`n", $utf8NoBom)
+    $ps19Ds = Invoke-PsGuard @('diff-scope', '-RepoRoot', $r19, '-BaseSha', $base19)
+    $sh19Ds = if ($script:HasBash) { Invoke-ShGuard @('diff-scope', '--repo-root', $r19Posix, '--base-sha', $base19) } else { $ps19Ds }
+    $ps19Inv = Invoke-PsGuard @('review-inventory', '-RepoRoot', $r19, '-BaseSha', $base19)
+    $sh19Inv = if ($script:HasBash) { Invoke-ShGuard @('review-inventory', '--repo-root', $r19Posix, '--base-sha', $base19) } else { $ps19Inv }
+    $ok19 = ($ps19Ds.Code -eq 0) -and ($sh19Ds.Code -eq 0) -and ($sh19Ds.Text -ceq $ps19Ds.Text) -and
+            ($ps19Ds.Text -match '(?m)^review_files=a/x\.ts,src/render/loop\.ts$') -and
+            ($ps19Ds.Text -match '(?m)^risk_level=CRITICAL$') -and
+            ($ps19Ds.Text -match '(?m)^risk_signals=auth_security,perf_hot_path$') -and
+            ($ps19Inv.Code -eq 0) -and ($sh19Inv.Code -eq 0) -and ($sh19Inv.Text -ceq $ps19Inv.Text) -and
+            ($ps19Inv.Text -match '(?m)^unit\|U01\|a\|1\|2\|CRITICAL\|b3-security-reviewer\|auth_security\|a/x\.ts$') -and
+            ($ps19Inv.Text -match '(?m)^unit\|U02\|src/render\|1\|2\|HIGH\|b3-performance-reviewer\|perf_hot_path\|src/render/loop\.ts$')
+    if ($ok19) { Pass 'cf06-git-diff-noprefix-mnemonicprefix-paths' } else {
+        FailCheck 'cf06-git-diff-noprefix-mnemonicprefix-paths' "ds=(ps=$($ps19Ds.Text)|sh=$($sh19Ds.Text)) inv=(ps=$($ps19Inv.Text)|sh=$($sh19Inv.Text))"
+    }
+
+    # --- 20. cf08-ledger-init-overwrite-guard-and-rationale-confirmed (PS + Bash) ---
+    $r20 = Join-Path $sandbox 'cf08-ledger-guard-repo'
+    $r20Posix = To-PosixPath $r20
+    Init-Repo $r20
+    $base20 = (& git -C $r20 rev-parse HEAD).Trim()
+    New-Item -ItemType Directory -Path (Join-Path $r20 'docs'), (Join-Path $r20 'src\contracts') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r20 'docs\guide.md'), "Guide line`n", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $r20 'src\contracts\dto.ts'), "export interface DtoV2 { id: string; note?: string; }`n", $utf8NoBom)
+    & git -C $r20 add .; & git -C $r20 commit -qm 'cf08-diff'
+    [void](Invoke-PsGuard @('verify-run', '-RepoRoot', $r20, '-VerifyCmd', 'echo cf08-ok', '-ReceiptPath', '.b3/ship/cf08.verify', '-RelevantPaths', 'src/contracts/dto.ts'))
+    $lp20 = '.b3/ship/cf08.md'
+    $ps20Init1 = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'init', '-LedgerPath', $lp20, '-BaseSha', $base20, '-ReviewIndependence', 'INDEPENDENT')
+    $ps20PendingReinit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'init', '-LedgerPath', $lp20, '-BaseSha', $base20, '-ReviewIndependence', 'INDEPENDENT')
+    $led20Txt = [IO.File]::ReadAllText((Join-Path $r20 '.b3\ship\cf08.md'))
+    $u20Map = @{}
+    foreach ($ln in ($led20Txt -split "`n")) {
+        if ($ln -match '^\|\s*(U\d+)\s*\|') {
+            $cols = @($ln.Split('|') | ForEach-Object { $_.Trim() })
+            if ($cols.Count -ge 13) { $u20Map[$cols[12]] = $cols[1] }
+        }
+    }
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'update', '-LedgerPath', $lp20, '-UnitId', $u20Map['docs/guide.md'], '-Status', 'REVIEWED'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'update', '-LedgerPath', $lp20, '-UnitId', $u20Map['src/contracts/dto.ts'], '-Status', 'REVIEWED', '-ReceiptPath', '.b3/ship/cf08.verify', '-Rationale', 'CONFIRMED inline that additive DTO field preserves wire compatibility'))
+    # Refuses (exit 1) to overwrite active ledger with recorded non-PENDING unit results unless -Force / --force
+    $ps20Refuse = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'init', '-LedgerPath', $lp20, '-BaseSha', $base20, '-ReviewIndependence', 'INDEPENDENT')
+    $sh20Refuse = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r20Posix, '--action', 'init', '--ledger-path', $lp20, '--base-sha', $base20, '--review-independence', 'INDEPENDENT') } else { $ps20Refuse }
+    # CONFIRMED inside prose -Rationale must NOT count as unresolved/confirmed finding
+    $ps20RatOk = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'check', '-LedgerPath', $lp20)
+    $sh20RatOk = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r20Posix, '--action', 'check', '--ledger-path', $lp20) } else { $ps20RatOk }
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'update', '-LedgerPath', $lp20, '-UnitId', $u20Map['docs/guide.md'], '-Findings', 'R001:CONFIRMED'))
+    $ps20FindBlk = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'check', '-LedgerPath', $lp20)
+    $sh20FindBlk = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r20Posix, '--action', 'check', '--ledger-path', $lp20) } else { $ps20FindBlk }
+    $ps20Force = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r20, '-Action', 'init', '-Force', '-LedgerPath', $lp20, '-BaseSha', $base20, '-ReviewIndependence', 'INDEPENDENT')
+    if ($script:HasBash) {
+        [void](Invoke-ShGuard @('review-ledger', '--repo-root', $r20Posix, '--action', 'update', '--ledger-path', $lp20, '--unit-id', $u20Map['docs/guide.md'], '--status', 'REVIEWED'))
+        $sh20Force = Invoke-ShGuard @('review-ledger', '--repo-root', $r20Posix, '--action', 'init', '--force', '--ledger-path', $lp20, '--base-sha', $base20, '--review-independence', 'INDEPENDENT')
+    } else {
+        $sh20Force = $ps20Force
+    }
+    $ok20 = ($ps20Init1.Code -eq 0) -and ($ps20PendingReinit.Code -eq 0) -and
+            ($ps20Refuse.Code -eq 1) -and ($sh20Refuse.Code -eq 1) -and ($sh20Refuse.Text -ceq $ps20Refuse.Text) -and
+            ($ps20Refuse.Text -match "^LEDGER_FAIL: cannot reset active ledger '\.b3/ship/cf08\.md' on same base_sha without --force$") -and
+            ($ps20RatOk.Code -eq 0) -and ($sh20RatOk.Code -eq 0) -and ($sh20RatOk.Text -ceq $ps20RatOk.Text) -and ($ps20RatOk.Text -match '^LEDGER_GATE_PASS:') -and
+            ($ps20FindBlk.Code -eq 2) -and ($sh20FindBlk.Code -eq 2) -and ($sh20FindBlk.Text -ceq $ps20FindBlk.Text) -and ($ps20FindBlk.Text -match '^LEDGER_INCOMPLETE: unresolved findings') -and
+            ($ps20Force.Code -eq 0) -and ($sh20Force.Code -eq 0) -and ($ps20Force.Text -match '^LEDGER_INIT:') -and ($sh20Force.Text -match '^LEDGER_INIT:')
+    if ($ok20) { Pass 'cf08-ledger-init-overwrite-guard-and-rationale-confirmed' } else {
+        FailCheck 'cf08-ledger-init-overwrite-guard-and-rationale-confirmed' "ref=(ps=$($ps20Refuse.Text)|sh=$($sh20Refuse.Text)) ratOk=$($ps20RatOk.Text) findBlk=$($ps20FindBlk.Text) force=$($ps20Force.Code)/$($sh20Force.Code)"
+    }
+
+    # --- 21. cf15-json-parse-cosignal-and-xxl-scaled-max-passes (PS + Bash) ---
+    $r21 = Join-Path $sandbox 'cf15-serde-xxl-repo'
+    $r21Posix = To-PosixPath $r21
+    Init-Repo $r21
+    $base21 = (& git -C $r21 rev-parse HEAD).Trim()
+    # (a) Plain JSON.parse(raw) without boundary/hot co-signal stays LOW (out of HIGH escalation)
+    New-Item -ItemType Directory -Path (Join-Path $r21 'src\util') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r21 'src\util\cfg.ts'), "export const loadCfg = (raw: string) => JSON.parse(raw);`n", $utf8NoBom)
+    $ps21Plain = Invoke-PsGuard @('review-inventory', '-RepoRoot', $r21, '-BaseSha', $base21)
+    $sh21Plain = if ($script:HasBash) { Invoke-ShGuard @('review-inventory', '--repo-root', $r21Posix, '--base-sha', $base21) } else { $ps21Plain }
+    Remove-Item -LiteralPath (Join-Path $r21 'src') -Recurse -Force
+    # (b) JSON.parse(req.body) on API/endpoint boundary escalates HIGH, and hot-batch JSON.parse escalates HIGH
+    New-Item -ItemType Directory -Path (Join-Path $r21 'src\api') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r21 'src\api\ingest.ts'), "export const ingest = (req: { body: string }) => JSON.parse(req.body);`n", $utf8NoBom)
+    $ps21ReqBody = Invoke-PsGuard @('review-inventory', '-RepoRoot', $r21, '-BaseSha', $base21)
+    $sh21ReqBody = if ($script:HasBash) { Invoke-ShGuard @('review-inventory', '--repo-root', $r21Posix, '--base-sha', $base21) } else { $ps21ReqBody }
+    Remove-Item -LiteralPath (Join-Path $r21 'src') -Recurse -Force
+    New-Item -ItemType Directory -Path (Join-Path $r21 'src\util') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $r21 'src\util\batch.ts'), "export const parseBatch = (chunks: string[]) => chunks.map((raw) => JSON.parse(raw));`n", $utf8NoBom)
+    $ps21HotBatch = Invoke-PsGuard @('review-inventory', '-RepoRoot', $r21, '-BaseSha', $base21)
+    $sh21HotBatch = if ($script:HasBash) { Invoke-ShGuard @('review-inventory', '--repo-root', $r21Posix, '--base-sha', $base21) } else { $ps21HotBatch }
+    Remove-Item -LiteralPath (Join-Path $r21 'src') -Recurse -Force
+    # (c) XXL max_passes scaling: max(24, ceil(2.5*units)+2) -> 8 units => 24; 11 units => 30
+    1..8 | ForEach-Object {
+        $sd = Join-Path $r21 ('docs\s{0:D2}' -f $_)
+        New-Item -ItemType Directory -Path $sd -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $sd 'part.md'), ("Doc line`n" * 700), $utf8NoBom)
+    }
+    $ps21U8 = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r21, '-Action', 'init', '-LedgerPath', '.b3/ship/xxl-u8-ps.md', '-BaseSha', $base21)
+    $sh21U8 = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r21Posix, '--action', 'init', '--ledger-path', '.b3/ship/xxl-u8-sh.md', '--base-sha', $base21) } else { $ps21U8 }
+    9..11 | ForEach-Object {
+        $sd = Join-Path $r21 ('docs\s{0:D2}' -f $_)
+        New-Item -ItemType Directory -Path $sd -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $sd 'part.md'), ("Doc line`n" * 700), $utf8NoBom)
+    }
+    $ps21U11 = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r21, '-Action', 'init', '-LedgerPath', '.b3/ship/xxl-u11-ps.md', '-BaseSha', $base21)
+    $sh21U11 = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r21Posix, '--action', 'init', '--ledger-path', '.b3/ship/xxl-u11-sh.md', '--base-sha', $base21) } else { $ps21U11 }
+    $ok21 = ($ps21Plain.Code -eq 0) -and ($sh21Plain.Code -eq 0) -and ($sh21Plain.Text -ceq $ps21Plain.Text) -and
+            ($ps21Plain.Text -match '(?m)^risk_level=LOW$') -and ($ps21Plain.Text -match '(?m)^risk_signals=none$') -and ($ps21Plain.Text -match '(?m)^recommended_specialists=none$') -and
+            ($ps21ReqBody.Code -eq 0) -and ($sh21ReqBody.Code -eq 0) -and ($sh21ReqBody.Text -ceq $ps21ReqBody.Text) -and
+            ($ps21ReqBody.Text -match '(?m)^risk_level=HIGH$') -and ($ps21ReqBody.Text -match '(?m)^risk_signals=public_api_contract$') -and
+            ($ps21HotBatch.Code -eq 0) -and ($sh21HotBatch.Code -eq 0) -and ($sh21HotBatch.Text -ceq $ps21HotBatch.Text) -and
+            ($ps21HotBatch.Text -match '(?m)^risk_level=HIGH$') -and ($ps21HotBatch.Text -match '(?m)^risk_signals=perf_hot_path$') -and
+            ($ps21U8.Code -eq 0) -and ($sh21U8.Code -eq 0) -and ($ps21U8.Text -match 'size=XXL risk=LOW units=8 max_passes=24 ') -and ($sh21U8.Text -match 'size=XXL risk=LOW units=8 max_passes=24 ') -and
+            ($ps21U11.Code -eq 0) -and ($sh21U11.Code -eq 0) -and ($ps21U11.Text -match 'size=XXL risk=LOW units=11 max_passes=30 ') -and ($sh21U11.Text -match 'size=XXL risk=LOW units=11 max_passes=30 ')
+    if ($ok21) { Pass 'cf15-json-parse-cosignal-and-xxl-scaled-max-passes' } else {
+        FailCheck 'cf15-json-parse-cosignal-and-xxl-scaled-max-passes' "plain=$($ps21Plain.Text) req=$($ps21ReqBody.Text) hot=$($ps21HotBatch.Text) u8=$($ps21U8.Text) u11=$($ps21U11.Text)"
     }
 }
 finally {
