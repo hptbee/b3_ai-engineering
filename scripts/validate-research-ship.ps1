@@ -756,6 +756,73 @@ try {
     } else {
         FailCheck 'research-ship-context-budget-strict' "exit=$LASTEXITCODE out=$ctxOut"
     }
+
+    # --- 6. research-wave-partition-and-blocked-isolation (PS + Bash) ---
+    $rWave = Join-Path $sandbox 'rs-wave-repo'
+    $rWavePosix = To-PosixPath $rWave
+    Init-B3TestRepo -RepoPath $rWave -DefaultBranch 'main' -UserEmail 'research-test@example.com' -UserName 'Research Test' -InitialCommit
+    Push-Location $rWave
+    $waveBase = (& git rev-parse HEAD).Trim()
+    Pop-Location
+
+    $wDisjointPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rWave, '-ExpectedBaseSha', $waveBase, '-Partition', '-WaveSpecs', 'U001=research/u1.md;U002=research/u2.md', '-WaveReads', 'U001=evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest')
+    $wPartWritePs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rWave, '-ExpectedBaseSha', $waveBase, '-Partition', '-WaveSpecs', 'U001=research/u1.md;U002=research/u2.md;U003=research/u1.md,research/ledger.md', '-WaveReads', 'U001=evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest;U003=evidence-index.md,sources.manifest')
+    $wPartRwPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rWave, '-ExpectedBaseSha', $waveBase, '-Partition', '-WaveSpecs', 'U001=research/u1.md;U002=research/u2.md;U003=research/u3.md', '-WaveReads', 'U001=evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest;U003=research/u1.md,evidence-index.md')
+    $wProtPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rWave, '-ExpectedBaseSha', $waveBase, '-Partition', '-WaveSpecs', 'U001=.b3/research-ship;U002=research/u2.md')
+    $wLedgerPartPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rWave, '-ExpectedBaseSha', $waveBase, '-Partition', '-WaveSpecs', 'U001=evidence-index.md;U002=evidence-index.md')
+    $wLedgerRawPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rWave, '-ExpectedBaseSha', $waveBase, '-WaveSpecs', 'U001=evidence-index.md;U002=evidence-index.md')
+
+    $rsWavePsOk = ($wDisjointPs.Code -eq 0 -and
+                   ($wDisjointPs.Text -match '(?m)^WAVE_OK: disjoint \(2 tasks, 2 paths\)$') -and
+                   ($wDisjointPs.Text -match '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=U001,U002\|reason=independent_ready_tasks$')) -and
+                  ($wPartWritePs.Code -eq 0 -and
+                   ($wPartWritePs.Text -match '(?m)^WAVE_PARTITIONED: waves=2 max_parallel=2 reason=conflicting_wave_split$') -and
+                   ($wPartWritePs.Text -match '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=U001,U002\|reason=independent_ready_tasks$') -and
+                   ($wPartWritePs.Text -match '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=U003\|reason=shared_write_conflict$')) -and
+                  ($wPartRwPs.Code -eq 0 -and
+                   ($wPartRwPs.Text -match '(?m)^conflicts=rw:research/u1\.md\(U001->U003\)$') -and
+                   ($wPartRwPs.Text -match '(?m)^WAVE_PARTITIONED: waves=2 max_parallel=2 reason=conflicting_wave_split$') -and
+                   ($wPartRwPs.Text -match '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=U001,U002\|reason=independent_ready_tasks$') -and
+                   ($wPartRwPs.Text -match '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=U003\|reason=shared_write_conflict$')) -and
+                  ($wProtPs.Code -eq 1 -and ($wProtPs.Text -match "WAVE_FAIL: protected path '\.b3/research-ship' cannot be worker-owned")) -and
+                  ($wLedgerPartPs.Code -eq 2 -and
+                   ($wLedgerPartPs.Text -match '(?m)^WAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=shared_write_conflict$') -and
+                   ($wLedgerPartPs.Text -match '(?m)^wave\|1\|SEQUENTIAL\|agents=1\|tasks=U001\|reason=shared_write_conflict$') -and
+                   ($wLedgerPartPs.Text -match '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=U002\|reason=shared_write_conflict$')) -and
+                  ($wLedgerRawPs.Code -eq 2 -and ($wLedgerRawPs.Text -match 'WAVE_CONFLICT: evidence-index\.md\(U001,U002\)'))
+
+    $rsWaveShOk = $true
+    if ($script:HasBash) {
+        $wDisjointSh = Invoke-ShGuard @('check-wave', '--repo-root', $rWavePosix, '--expected-base-sha', $waveBase, '--partition', '--wave-specs', 'U001=research/u1.md;U002=research/u2.md', '--wave-reads', 'U001=evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest')
+        $wPartWriteSh = Invoke-ShGuard @('check-wave', '--repo-root', $rWavePosix, '--expected-base-sha', $waveBase, '--partition', '--wave-specs', 'U001=research/u1.md;U002=research/u2.md;U003=research/u1.md,research/ledger.md', '--wave-reads', 'U001=evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest;U003=evidence-index.md,sources.manifest')
+        $wPartRwSh = Invoke-ShGuard @('check-wave', '--repo-root', $rWavePosix, '--expected-base-sha', $waveBase, '--partition', '--wave-specs', 'U001=research/u1.md;U002=research/u2.md;U003=research/u3.md', '--wave-reads', 'U001=evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest;U003=research/u1.md,evidence-index.md')
+        $wProtSh = Invoke-ShGuard @('check-wave', '--repo-root', $rWavePosix, '--expected-base-sha', $waveBase, '--partition', '--wave-specs', 'U001=.b3/research-ship;U002=research/u2.md')
+        $wLedgerPartSh = Invoke-ShGuard @('check-wave', '--repo-root', $rWavePosix, '--expected-base-sha', $waveBase, '--partition', '--wave-specs', 'U001=evidence-index.md;U002=evidence-index.md')
+        $wLedgerRawSh = Invoke-ShGuard @('check-wave', '--repo-root', $rWavePosix, '--expected-base-sha', $waveBase, '--wave-specs', 'U001=evidence-index.md;U002=evidence-index.md')
+
+        $rsWaveShOk = ($wDisjointSh.Code -eq $wDisjointPs.Code -and $wDisjointSh.Text -ceq $wDisjointPs.Text) -and
+                      ($wPartWriteSh.Code -eq $wPartWritePs.Code -and $wPartWriteSh.Text -ceq $wPartWritePs.Text) -and
+                      ($wPartRwSh.Code -eq $wPartRwPs.Code -and $wPartRwSh.Text -ceq $wPartRwPs.Text) -and
+                      ($wProtSh.Code -eq $wProtPs.Code -and $wProtSh.Text -ceq $wProtPs.Text) -and
+                      ($wLedgerPartSh.Code -eq $wLedgerPartPs.Code -and $wLedgerPartSh.Text -ceq $wLedgerPartPs.Text) -and
+                      ($wLedgerRawSh.Code -eq $wLedgerRawPs.Code -and $wLedgerRawSh.Text -ceq $wLedgerRawPs.Text)
+    }
+
+    $tmplText = Get-Content -LiteralPath (Join-Path $root 'workflows\references\research-ship-templates.md') -Raw
+    $rsWaveDocsOk = ($wfText -match 'check-wave -Partition') -and
+                    ($wfText -match 'continue independent eligible units') -and
+                    ($wfText -match 'last_wave:') -and
+                    ($wfText -match '(?i)single-writer') -and
+                    ($tmplText -match 'last_wave:') -and
+                    ($tmplText -match '(?i)single-writer') -and
+                    ($gatesText -match 'check-wave -Partition') -and
+                    ($gatesText -match '(?i)single-writer')
+
+    if ($rsWavePsOk -and $rsWaveShOk -and $rsWaveDocsOk) {
+        Pass 'research-wave-partition-and-blocked-isolation'
+    } else {
+        FailCheck 'research-wave-partition-and-blocked-isolation' "ps=$rsWavePsOk sh=$rsWaveShOk docs=$rsWaveDocsOk"
+    }
 }
 finally {
     if ($null -eq $prevModelsPersonal) { Remove-Item Env:B3_MODELS_PERSONAL -ErrorAction SilentlyContinue } else { $env:B3_MODELS_PERSONAL = $prevModelsPersonal }

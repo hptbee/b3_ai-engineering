@@ -1,0 +1,10 @@
+id: ship-parallel-wave-auto-001
+artifact: workflows/ship.md
+intent: Automatic wave scheduling must run check-wave -Partition on every ready queue, dispatch disjoint waves in parallel, split/serialize conflicts and RW edges, isolate partial failures, and fall back sequentially without false PARALLEL claims
+scenario: |
+  Ready queue has T001 (src/api/a.ts), T002 (src/ui/b.tsx), and T003 (src/api/a.ts) with T004 reading src/api/a.ts
+  Parent automatically evaluates b3-guard check-wave -Partition with -WaveReads and -ExpectedBaseSha before dispatch
+  Disjoint wave 1 (T001, T002) runs in parallel while conflicting T003/T004 defer to subsequent waves; if host lacks worktree isolation, Parent degrades to SEQUENTIAL and records last_wave accurately
+expected_outcome: PASS
+failure_mode: missed-auto-parallel-wave-or-false-parallel-or-unisolated-failure
+notes: Never require user opt-in; enforce single-writer progress.md and sequential precommit; run post-integration verify-run and cross-unit review

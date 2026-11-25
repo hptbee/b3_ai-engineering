@@ -1,0 +1,9 @@
+id: research-ship-parallel-wave-001
+artifact: workflows/research-ship.md
+intent: Independent research units reading shared evidence manifests partition into concurrent waves while conflicting or blocked units isolate cleanly
+scenario: |
+  Disjoint research units U001 and U002 write separate unit outputs while sharing read-only evidence-index.md and sources.manifest via -WaveReads.
+  b3-guard check-wave -Partition emits WAVE_OK for wave 1 in PARALLEL; when U003 conflicts on a shared write or read-write path, it partitions U001 and U002 into wave 1 and serializes U003 into wave 2, while protected paths fail closed.
+expected_outcome: PASS
+failure_mode: serial-bottleneck-or-unisolated-blocked-unit
+notes: Verifies automatic wave partitioning, blocked unit isolation, last_wave checkpointing, and single-writer ledger serialization

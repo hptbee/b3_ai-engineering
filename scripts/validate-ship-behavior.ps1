@@ -2319,6 +2319,295 @@ try {
         FailCheck 'guard-adversarial-regressions' ($advErrs -join '; ')
     }
 
+    # --- guard-wave-partition-orchestration (Scenarios 1-5, 14: partition, RW, base/protected/dirty, PS+Bash parity) ---
+    $pwErrs = New-Object System.Collections.Generic.List[string]
+    $pwRepo = Join-Path $sandbox 'wave-orch-repo'
+    $pwRepoPosix = To-PosixPath $pwRepo
+    $utf8NoBomPw = New-Object System.Text.UTF8Encoding($false)
+    Init-B3TestRepo -RepoPath $pwRepo -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'pw-base'
+    New-Item -ItemType Directory -Path (Join-Path $pwRepo 'api'), (Join-Path $pwRepo 'ui'), (Join-Path $pwRepo 'src\shared') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'api\a.ts'), "export const a = 1;`n", $utf8NoBomPw)
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'api\b.ts'), "export const b = 1;`n", $utf8NoBomPw)
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'ui\b.tsx'), "export const B = () => null;`n", $utf8NoBomPw)
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'src\shared\types.ts'), "export type Id = string;`n", $utf8NoBomPw)
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'src\b.ts'), "export const sb = 1;`n", $utf8NoBomPw)
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'src\c.ts'), "export const sc = 1;`n", $utf8NoBomPw)
+    & git -C $pwRepo add . | Out-Null
+    & git -C $pwRepo commit -qm 'seed wave files' | Out-Null
+    $pwBaseOld = (& git -C $pwRepo rev-parse HEAD).Trim()
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'README.md'), "pw-base-2`n", $utf8NoBomPw)
+    & git -C $pwRepo add README.md | Out-Null
+    & git -C $pwRepo commit -qm 'advance head' | Out-Null
+    $pwBaseNow = (& git -C $pwRepo rev-parse HEAD).Trim()
+
+    $checkWaveParity = {
+        param(
+            [string]$CaseName,
+            [string[]]$PsArgs,
+            [string[]]$ShArgs,
+            [int]$ExpectedExit,
+            [string[]]$Patterns,
+            [switch]$RequireExactTextParity
+        )
+        $psRes = Invoke-PsGuard $PsArgs
+        if ($psRes.Code -ne $ExpectedExit) {
+            $pwErrs.Add("$CaseName PS exit=$($psRes.Code) expected=$ExpectedExit out=$($psRes.Text)")
+            return
+        }
+        foreach ($pat in $Patterns) {
+            if ($psRes.Text -notmatch $pat) {
+                $pwErrs.Add("$CaseName PS missing /$pat/ in: $($psRes.Text)")
+            }
+        }
+        if ($script:HasBash) {
+            $shRes = Invoke-ShGuard $ShArgs
+            if ($shRes.Code -ne $ExpectedExit) {
+                $pwErrs.Add("$CaseName SH exit=$($shRes.Code) expected=$ExpectedExit out=$($shRes.Text)")
+                return
+            }
+            foreach ($pat in $Patterns) {
+                if ($shRes.Text -notmatch $pat) {
+                    $pwErrs.Add("$CaseName SH missing /$pat/ in: $($shRes.Text)")
+                }
+            }
+            if ($RequireExactTextParity -and ($psRes.Text -cne $shRes.Text)) {
+                $pwErrs.Add("$CaseName PS/SH stdout mismatch:`nPS=$($psRes.Text)`nSH=$($shRes.Text)")
+            }
+        }
+    }
+
+    # Scenario 1: Disjoint multi-task wave -> WAVE_OK, wave|1|PARALLEL|agents=2
+    & $checkWaveParity 's1-disjoint-wave' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx', '-ExpectedBaseSha', $pwBaseNow) `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx', '--expected-base-sha', $pwBaseNow) `
+        0 @('(?m)^wave_count=1$', '(?m)^max_parallel=2$', '(?m)^conflicts=none$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T001,T002\|reason=independent_ready_tasks$', 'WAVE_OK: disjoint \(2 tasks, 2 paths\)') -RequireExactTextParity
+
+    # Scenario 2: Bounded concurrency (MaxConcurrency=1) & single_ready_task
+    & $checkWaveParity 's2-bounded-concurrency-1' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-MaxConcurrency', '1', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--max-concurrency', '1', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx') `
+        0 @('(?m)^wave_count=2$', '(?m)^max_concurrency=1$', '(?m)^max_parallel=1$', '(?m)^wave\|1\|SEQUENTIAL\|agents=1\|tasks=T001\|reason=bounded_concurrency$', '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=T002\|reason=bounded_concurrency$', 'WAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=bounded_concurrency') -RequireExactTextParity
+    & $checkWaveParity 's2-single-ready-task' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts') `
+        0 @('(?m)^wave_count=1$', '(?m)^max_parallel=1$', '(?m)^wave\|1\|SEQUENTIAL\|agents=1\|tasks=T001\|reason=single_ready_task$', 'WAVE_OK: disjoint \(1 tasks, 1 paths\)') -RequireExactTextParity
+
+    # Scenario 3: Conflicting writes partitioned cleanly + all-conflicting degrades to WAVE_SEQUENTIAL (exit 2)
+    & $checkWaveParity 's3-conflicting-writes-split' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts;T002=api/b.ts;T003=api/a.ts') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts;T002=api/b.ts;T003=api/a.ts') `
+        0 @('(?m)^wave_count=2$', '(?m)^max_parallel=2$', '(?m)^conflicts=api/a\.ts\(T001,T003\)$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T001,T002\|reason=independent_ready_tasks$', '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=T003\|reason=shared_write_conflict$', 'WAVE_PARTITIONED: waves=2 max_parallel=2 reason=conflicting_wave_split') -RequireExactTextParity
+    & $checkWaveParity 's3-all-conflict-sequential' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts;T002=api/a.ts') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts;T002=api/a.ts') `
+        2 @('(?m)^wave_count=2$', '(?m)^max_parallel=1$', '(?m)^wave\|1\|SEQUENTIAL\|agents=1\|tasks=T001\|reason=shared_write_conflict$', 'WAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=shared_write_conflict') -RequireExactTextParity
+
+    # Scenario 4: Shared-contract RW conflict (equal + prefix) partitions cleanly
+    & $checkWaveParity 's4-rw-equal-partition' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T001=src/shared.ts;T002=src/b.ts;T003=src/c.ts', '-WaveReads', 'T002=src/shared.ts;T003=src/d.ts') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T001=src/shared.ts;T002=src/b.ts;T003=src/c.ts', '--wave-reads', 'T002=src/shared.ts;T003=src/d.ts') `
+        0 @('(?m)^conflicts=rw:src/shared\.ts\(T001->T002\)$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T001,T003\|reason=independent_ready_tasks$', '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=T002\|reason=shared_write_conflict$', 'WAVE_PARTITIONED: waves=2 max_parallel=2') -RequireExactTextParity
+    & $checkWaveParity 's4-rw-prefix-partition' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T001=src/shared/types.ts;T002=src/b.ts;T003=src/c.ts', '-WaveReads', 'T002=src/shared;T003=src/d.ts') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T001=src/shared/types.ts;T002=src/b.ts;T003=src/c.ts', '--wave-reads', 'T002=src/shared;T003=src/d.ts') `
+        0 @('(?m)^conflicts=rw:src/shared/types\.ts<->src/shared\(T001->T002\)$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T001,T003\|reason=independent_ready_tasks$', '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=T002\|reason=shared_write_conflict$') -RequireExactTextParity
+
+    # Scenario 5: Stale base SHA (exit 2), protected paths (exit 1), and dirty working tree overlap blocking freshness/precommit
+    & $checkWaveParity 's5-stale-base-sha' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx', '-ExpectedBaseSha', $pwBaseOld) `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx', '--expected-base-sha', $pwBaseOld) `
+        2 @("WAVE_BASE_MISMATCH: expected=$pwBaseOld actual=$pwBaseNow") -RequireExactTextParity
+    foreach ($protPath in @('.b3', '.b3/ship', '.git')) {
+        & $checkWaveParity "s5-protected-$protPath" `
+            @('check-wave', '-RepoRoot', $pwRepo, '-WaveSpecs', "T001=$protPath;T002=ui/b.tsx") `
+            @('check-wave', '--repo-root', $pwRepoPosix, '--wave-specs', "T001=$protPath;T002=ui/b.tsx") `
+            1 @('WAVE_FAIL: protected path .* cannot be worker-owned') -RequireExactTextParity
+    }
+    [IO.File]::WriteAllText((Join-Path $pwRepo 'src\shared\types.ts'), "export type Id = number;`n", $utf8NoBomPw)
+    $s5CfPs = Invoke-PsGuard @('check-freshness', '-RepoRoot', $pwRepo, '-ApproachAtSha', $pwBaseNow, '-TaskBaseSha', $pwBaseNow, '-WatchedPaths', 'api/a.ts,src/shared/types.ts', '-OwnedFiles', 'api/a.ts')
+    if ($s5CfPs.Code -ne 2 -or ($s5CfPs.Text -notmatch '^STALE: uncommitted.*src/shared/types\.ts')) {
+        $pwErrs.Add("s5-dirty-freshness PS expected exit 2 STALE, got code=$($s5CfPs.Code) out=$($s5CfPs.Text)")
+    }
+    if ($script:HasBash) {
+        $s5CfSh = Invoke-ShGuard @('check-freshness', '--repo-root', $pwRepoPosix, '--approach-at-sha', $pwBaseNow, '--task-base-sha', $pwBaseNow, '--watched-paths', 'api/a.ts,src/shared/types.ts', '--owned-files', 'api/a.ts')
+        if ($s5CfSh.Code -ne 2 -or ($s5CfSh.Text -notmatch '^STALE: uncommitted.*src/shared/types\.ts')) {
+            $pwErrs.Add("s5-dirty-freshness SH expected exit 2 STALE, got code=$($s5CfSh.Code) out=$($s5CfSh.Text)")
+        }
+    }
+    & git -C $pwRepo add src/shared/types.ts | Out-Null
+    $s5PcPs = Invoke-PsGuard @('precommit', '-RepoRoot', $pwRepo, '-AllowedPaths', 'api/a.ts')
+    if ($s5PcPs.Code -ne 1 -or ($s5PcPs.Text -notmatch 'undeclared staged')) {
+        $pwErrs.Add("s5-dirty-precommit PS expected undeclared staged exit 1, got code=$($s5PcPs.Code) out=$($s5PcPs.Text)")
+    }
+    & git -C $pwRepo reset -q HEAD src/shared/types.ts | Out-Null
+    & git -C $pwRepo checkout -- src/shared/types.ts | Out-Null
+
+    # Scenario 14: PS + Bash parity edge cases (multiline, None/NONE literal preservation, invalid task IDs, case-insensitive overlap, MaxConcurrency=2)
+    $nlBetweenSpecs = "T1=api/a.ts;`nT2=api/b.ts"
+    $nlBetweenReads = "T1=src/c.ts;`nT2=none"
+    $nlInPathSpec = "T1=api/`na.ts;T2=api/b.ts"
+    $nlInPathRead = "T1=src/`nc.ts;T2=none"
+    & $checkWaveParity 's14-multiline-between-entries' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-WaveSpecs', $nlBetweenSpecs, '-WaveReads', $nlBetweenReads) `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--wave-specs', $nlBetweenSpecs, '--wave-reads', $nlBetweenReads) `
+        0 @('WAVE_OK: disjoint \(2 tasks, 2 paths\)') -RequireExactTextParity
+    & $checkWaveParity 's14-multiline-in-path-specs' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-WaveSpecs', $nlInPathSpec) `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--wave-specs', $nlInPathSpec) `
+        1 @('WAVE_FAIL: invalid path') -RequireExactTextParity
+    & $checkWaveParity 's14-multiline-in-path-reads' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-WaveSpecs', 'T1=api/a.ts;T2=api/b.ts', '-WaveReads', $nlInPathRead) `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--wave-specs', 'T1=api/a.ts;T2=api/b.ts', '--wave-reads', $nlInPathRead) `
+        1 @('WAVE_FAIL: invalid path') -RequireExactTextParity
+    & $checkWaveParity 's14-none-literal-vs-empty' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T1=None;T2=api/b.ts', '-WaveReads', 'T2=none') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T1=None;T2=api/b.ts', '--wave-reads', 'T2=none') `
+        0 @('WAVE_OK: disjoint \(2 tasks, 2 paths\)') -RequireExactTextParity
+    & $checkWaveParity 's14-none-upper-literal-rw-conflict' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-WaveSpecs', 'T1=None;T2=api/b.ts', '-WaveReads', 'T2=NONE') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--wave-specs', 'T1=None;T2=api/b.ts', '--wave-reads', 'T2=NONE') `
+        2 @('conflicts=rw:None\(T1->T2\)', 'WAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=shared_write_conflict') -RequireExactTextParity
+    foreach ($badTid in @('T1,T2=api/a.ts', 'T1|T2=api/a.ts')) {
+        & $checkWaveParity "s14-bad-tid-$badTid" `
+            @('check-wave', '-RepoRoot', $pwRepo, '-WaveSpecs', $badTid) `
+            @('check-wave', '--repo-root', $pwRepoPosix, '--wave-specs', $badTid) `
+            1 @('WAVE_FAIL: invalid task id') -RequireExactTextParity
+    }
+    & $checkWaveParity 's14-case-insensitive-overlap' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-WaveSpecs', 'T1=Api/A.ts;T2=api/a.ts') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--wave-specs', 'T1=Api/A.ts;T2=api/a.ts') `
+        2 @('WAVE_CONFLICT: Api/A\.ts\(T1,T2\)') -RequireExactTextParity
+    & $checkWaveParity 's14-max-concurrency-2-split' `
+        @('check-wave', '-RepoRoot', $pwRepo, '-Partition', '-MaxConcurrency', '2', '-WaveSpecs', 'T1=api/a.ts;T2=api/b.ts;T3=ui/b.tsx') `
+        @('check-wave', '--repo-root', $pwRepoPosix, '--partition', '--max-concurrency', '2', '--wave-specs', 'T1=api/a.ts;T2=api/b.ts;T3=ui/b.tsx') `
+        0 @('(?m)^wave_count=2$', '(?m)^max_concurrency=2$', '(?m)^max_parallel=2$', '(?m)^conflicts=none$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T1,T2\|reason=independent_ready_tasks$', '(?m)^wave\|2\|SEQUENTIAL\|agents=1\|tasks=T3\|reason=bounded_concurrency$', 'WAVE_PARTITIONED: waves=2 max_parallel=2 reason=bounded_concurrency_split') -RequireExactTextParity
+
+    if ($pwErrs.Count -eq 0) {
+        Pass 'guard-wave-partition-orchestration'
+    } else {
+        FailCheck 'guard-wave-partition-orchestration' ($pwErrs -join '; ')
+    }
+
+    # --- ship-parallel-wave-contracts-and-recovery (Scenarios 6-9, 11-13) ---
+    $crErrs = New-Object System.Collections.Generic.List[string]
+    $dispatchText = Get-Content -LiteralPath (Join-Path $root 'workflows\references\dispatch-naming.md') -Raw
+    $shipText = Get-Content -LiteralPath (Join-Path $root 'workflows\ship.md') -Raw
+    $shipTplText = Get-Content -LiteralPath (Join-Path $root 'workflows\references\ship-templates.md') -Raw
+    $shipResText = Get-Content -LiteralPath (Join-Path $root 'workflows\references\ship-resume.md') -Raw
+    $strategyText = Get-Content -LiteralPath (Join-Path $root 'review-loop\strategy.md') -Raw
+
+    # Scenarios 6, 7 & 13: Sequential fallback, no-false-PARALLEL, and 4-host adapter contract
+    foreach ($tok in @('single_ready_task', 'trivial_overhead', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'Cursor', 'Claude Code', 'Codex', 'Antigravity', 'check-wave -Partition', 'last_wave:')) {
+        if (-not $dispatchText.Contains($tok)) {
+            $crErrs.Add("dispatch-naming.md missing '$tok'")
+        }
+    }
+    foreach ($tok in @('check-wave -Partition', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'last_wave:', 'single-writer', 'post-integration', 'Cursor', 'Claude', 'Codex', 'Antigravity')) {
+        if (-not $shipText.Contains($tok)) {
+            $crErrs.Add("workflows/ship.md missing '$tok'")
+        }
+    }
+    # Scenarios 8 & 9 contract: last_wave in templates + partial wave resume in ship-resume.md
+    if ($shipTplText -notmatch '(?m)^- last_wave:') {
+        $crErrs.Add('ship-templates.md missing "- last_wave:" field')
+    }
+    foreach ($tok in @('partial waves', 'never `git reset`', 'reconcile `last_wave:`', 'check-wave -Partition')) {
+        if (-not $shipResText.Contains($tok)) {
+            $crErrs.Add("ship-resume.md missing '$tok'")
+        }
+    }
+    # Scenario 11 contract: HIGH/CRITICAL review independence in review-loop/strategy.md
+    foreach ($tok in @('SINGLE_AGENT_LIMIT', 'HIGH', 'CRITICAL', 'auto_merge', 'PASS', 'INCOMPLETE', 'verify-run')) {
+        if (-not $strategyText.Contains($tok)) {
+            $crErrs.Add("review-loop/strategy.md missing '$tok'")
+        }
+    }
+    if ($strategyText -notmatch 'SINGLE_AGENT_LIMIT.*PASS.*HIGH.*CRITICAL') {
+        $crErrs.Add('review-loop/strategy.md missing SINGLE_AGENT_LIMIT block on PASS for HIGH/CRITICAL')
+    }
+
+    # Scenarios 8, 9 & 12 behavioral: Partial-wave failure isolation, resolve-run + last_wave resume, and post-integration verify-run on combined tree
+    $recRepo = Join-Path $sandbox 'wave-recovery-repo'
+    $recRepoPosix = To-PosixPath $recRepo
+    $utf8NoBomRec = New-Object System.Text.UTF8Encoding($false)
+    Init-B3TestRepo -RepoPath $recRepo -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'rec-base'
+    New-Item -ItemType Directory -Path (Join-Path $recRepo 'src') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $recRepo 'src\t1.ts'), "export const t1 = 1;`n", $utf8NoBomRec)
+    [IO.File]::WriteAllText((Join-Path $recRepo 'src\t2.ts'), "export const t2 = 1;`n", $utf8NoBomRec)
+    & git -C $recRepo add . | Out-Null
+    & git -C $recRepo commit -qm 'seed recovery files' | Out-Null
+    $recBaseSha = (& git -C $recRepo rev-parse HEAD).Trim()
+
+    $recRunRes = Invoke-PsGuard @('new-run', '-RepoRoot', $recRepo, '-Slug', 'wave-recover', '-Timestamp', '20261125-1000')
+    $recRunId = $recRunRes.Text.Trim()
+    if ($recRunRes.Code -ne 0 -or -not $recRunId) {
+        $crErrs.Add("new-run failed: code=$($recRunRes.Code) out=$($recRunRes.Text)")
+    } else {
+        $recProg = Join-Path $recRepo ".b3\ship\runs\$recRunId\progress.md"
+        [IO.File]::WriteAllText($recProg, "- run_id: $recRunId`n- last_wave: dispatch=PARALLEL agents=2 reason=disjoint_writes`n- run_status: running`n", $utf8NoBomRec)
+        $resPs = Invoke-PsGuard @('resolve-run', '-RepoRoot', $recRepo)
+        if ($resPs.Code -ne 0 -or $resPs.Text.Trim() -ne ".b3/ship/runs/$recRunId") {
+            $crErrs.Add("resolve-run PS mismatch: code=$($resPs.Code) out=$($resPs.Text)")
+        }
+        if ($script:HasBash) {
+            $resSh = Invoke-ShGuard @('resolve-run', '--repo-root', $recRepoPosix)
+            if ($resSh.Code -ne 0 -or $resSh.Text.Trim() -ne ".b3/ship/runs/$recRunId") {
+                $crErrs.Add("resolve-run SH mismatch: code=$($resSh.Code) out=$($resSh.Text)")
+            }
+        }
+        if (((Get-Content -LiteralPath $recProg -Raw) -notmatch 'last_wave: dispatch=PARALLEL agents=2')) {
+            $crErrs.Add('progress.md failed to preserve last_wave:')
+        }
+
+        # T001 succeeds & commits while T002 fails verify-run; T001 commit & receipt stay intact
+        [IO.File]::WriteAllText((Join-Path $recRepo 'src\t1.ts'), "export const t1 = 2;`n", $utf8NoBomRec)
+        $recR1 = ".b3/ship/runs/$recRunId/evidence/T001.verify"
+        $v1 = Invoke-PsGuard @('verify-run', '-RepoRoot', $recRepo, '-VerifyCmd', 'echo t1-ok', '-ReceiptPath', $recR1, '-TaskId', 'T001', '-RelevantPaths', 'src/t1.ts')
+        & git -C $recRepo add src/t1.ts | Out-Null
+        $pc1 = Invoke-PsGuard @('precommit', '-RepoRoot', $recRepo, '-AllowedPaths', 'src/t1.ts', '-RequireVerifyReceipt', $recR1)
+        & git -C $recRepo commit -qm 'T001 complete' | Out-Null
+        $t1Sha = (& git -C $recRepo rev-parse HEAD).Trim()
+
+        [IO.File]::WriteAllText((Join-Path $recRepo 'src\t2.ts'), "export const t2 = -1;`n", $utf8NoBomRec)
+        $recR2 = ".b3/ship/runs/$recRunId/evidence/T002.verify"
+        $v2Fail = Invoke-PsGuard @('verify-run', '-RepoRoot', $recRepo, '-VerifyCmd', 'Write-Output "t2-fail"; exit 2', '-ReceiptPath', $recR2, '-TaskId', 'T002', '-RelevantPaths', 'src/t2.ts')
+        $pc2Blocked = Invoke-PsGuard @('precommit', '-RepoRoot', $recRepo, '-AllowedPaths', 'src/t2.ts', '-RequireVerifyReceipt', $recR2)
+        if ($v1.Code -ne 0 -or $pc1.Code -ne 0 -or $v2Fail.Code -ne 1 -or ($v2Fail.Text -notmatch 'VERIFY_FAIL:') -or $pc2Blocked.Code -eq 0) {
+            $crErrs.Add("partial-wave failure isolation failed: v1=$($v1.Code) pc1=$($pc1.Code) v2=$($v2Fail.Code) pc2Blk=$($pc2Blocked.Code)")
+        }
+
+        # Isolate/fix only T002, verify T001 still descends & receipt valid, commit T002, then run post-integration verify-run on combined tree (Scenario 12)
+        [IO.File]::WriteAllText((Join-Path $recRepo 'src\t2.ts'), "export const t2 = 2;`n", $utf8NoBomRec)
+        $v2Ok = Invoke-PsGuard @('verify-run', '-RepoRoot', $recRepo, '-VerifyCmd', 'echo t2-ok', '-ReceiptPath', $recR2, '-TaskId', 'T002', '-RelevantPaths', 'src/t2.ts')
+        & git -C $recRepo add src/t2.ts | Out-Null
+        $pc2Ok = Invoke-PsGuard @('precommit', '-RepoRoot', $recRepo, '-AllowedPaths', 'src/t2.ts', '-RequireVerifyReceipt', $recR2)
+        & git -C $recRepo commit -qm 'T002 complete' | Out-Null
+        & git -C $recRepo merge-base --is-ancestor $t1Sha HEAD | Out-Null
+        $t1Anc = $LASTEXITCODE
+        & git -C $recRepo merge-base --is-ancestor $recBaseSha $t1Sha | Out-Null
+        $baseAnc = $LASTEXITCODE
+        $vc1Post = Invoke-PsGuard @('verify-check', '-RepoRoot', $recRepo, '-ReceiptPath', $recR1)
+        $recInt = ".b3/ship/runs/$recRunId/evidence/INTEGRATION.verify"
+        $vIntPs = Invoke-PsGuard @('verify-run', '-RepoRoot', $recRepo, '-VerifyCmd', 'echo combined-green', '-ReceiptPath', $recInt, '-TaskId', 'WAVE1_INT')
+        $vcIntPs = Invoke-PsGuard @('verify-check', '-RepoRoot', $recRepo, '-ReceiptPath', $recInt)
+        if ($v2Ok.Code -ne 0 -or $pc2Ok.Code -ne 0 -or $t1Anc -ne 0 -or $baseAnc -ne 0 -or $vc1Post.Code -ne 0 -or $vIntPs.Code -ne 0 -or ($vIntPs.Text -notmatch 'VERIFY_PASS:') -or $vcIntPs.Code -ne 0) {
+            $crErrs.Add("post-integration failed: v2Ok=$($v2Ok.Code) pc2Ok=$($pc2Ok.Code) t1Anc=$t1Anc baseAnc=$baseAnc vc1=$($vc1Post.Code) vInt=$($vIntPs.Code) vcInt=$($vcIntPs.Code)")
+        }
+        if ($script:HasBash) {
+            $vcIntSh = Invoke-ShGuard @('verify-check', '--repo-root', $recRepoPosix, '--receipt-path', $recInt)
+            $vc1Sh = Invoke-ShGuard @('verify-check', '--repo-root', $recRepoPosix, '--receipt-path', $recR1)
+            if ($vcIntSh.Code -ne 0 -or ($vcIntSh.Text -notmatch 'VERIFY_VALID:') -or $vc1Sh.Code -ne 0) {
+                $crErrs.Add("post-integration SH verify-check failed: int=$($vcIntSh.Code) t1=$($vc1Sh.Code)")
+            }
+        }
+    }
+
+    if ($crErrs.Count -eq 0) {
+        Pass 'ship-parallel-wave-contracts-and-recovery'
+    } else {
+        FailCheck 'ship-parallel-wave-contracts-and-recovery' ($crErrs -join '; ')
+    }
+
     $ctxOut = (& powershell -NoProfile -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot $root -Strict) -join "`n"
     if ($LASTEXITCODE -eq 0 -and $ctxOut -match 'warnings\s*:\s*0') {
         Pass 'context-budget-strict'
