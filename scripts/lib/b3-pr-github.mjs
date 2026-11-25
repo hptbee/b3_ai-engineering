@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const EXIT_OK = 0;
@@ -12,7 +14,7 @@ const MAX_FILE_BYTES = 262144;
 const MAX_BODY_CHARS = 65536;
 const DEFAULT_MAX_PAGES = 20;
 const MAX_ALLOWED_PAGES = 100;
-const LOCK_STALE_MS = 120000;
+const SCRIPT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const UNTRUSTED_START = 'BEGIN_UNTRUSTED_PR_DATA';
 const UNTRUSTED_END = 'END_UNTRUSTED_PR_DATA';
@@ -32,8 +34,12 @@ const ALLOWED_EVENTS = new Set(['COMMENT', 'APPROVE', 'REQUEST_CHANGES']);
 const ALLOWED_MODES = new Set(['summary', 'inline', 'both']);
 const ALLOWED_TARGET_KINDS = new Set(['review_thread', 'general_comment']);
 const ALLOWED_BASES = new Set(['CONFIRMED_FIXED', 'ALREADY_FIXED', 'DUPLICATE_FIXED']);
+const EVENT_TO_REVIEW_STATE = { COMMENT: 'COMMENTED', APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED' };
+const RESOLVED_STATUSES = new Set([
+  'PR_REPLY_OK', 'PR_RESOLVE_OK', 'PR_COMMENT_OK', 'PR_IDEMPOTENT_SKIP',
+  'PR_ALREADY_RESOLVED', 'RECONCILED_CONFIRMED', 'RECONCILED_ABSENT', 'RECONCILED_STALE'
+]);
 
-// Structured fail-closed exit (R002: guarantees full stdout flush on pipes/redirects).
 class B3Exit extends Error {
   constructor(payload, code) {
     super(payload.status || 'EXIT');
@@ -42,416 +48,317 @@ class B3Exit extends Error {
   }
 }
 
-function emit(payload, code) {
-  throw new B3Exit(payload, code);
-}
-
-function fail(status, message, code = EXIT_ERROR, extra = {}) {
-  emit({ status, error: message, ...extra }, code);
-}
-
-function hasControlChars(str) {
-  return /[\x00-\x1F\x7F]/.test(str);
-}
-
-function sha256Hex(str) {
-  return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
-}
-
-function normalizeText(str) {
-  return String(str || '').replace(/\r\n/g, '\n').trim();
-}
-
-function stripMarkers(str) {
-  return normalizeText(String(str || '').replace(MARKER_SCAN_RE, ''));
-}
+const emit = (payload, code) => { throw new B3Exit(payload, code); };
+const fail = (status, message, code = EXIT_ERROR, extra = {}) => emit({ status, error: message, ...extra }, code);
+const hasControlChars = (str) => /[\x00-\x1F\x7F]/.test(str);
+const sha256Hex = (str) => crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+const normalizeText = (str) => String(str || '').replace(/\r\n/g, '\n').trim();
+const stripMarkers = (str) => normalizeText(String(str || '').replace(MARKER_SCAN_RE, ''));
 
 function sanitizeUntrustedText(val) {
-  let s = val === null || val === undefined ? '' : String(val);
-  s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-  s = s.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '');
-  s = s.replace(/[\u{E0000}-\u{E007F}]/gu, '');
-  s = s.replace(/BEGIN_UNTRUSTED_PR_DATA/gi, 'BEGIN-UNTRUSTED-PR-DATA-ESCAPED');
-  s = s.replace(/END_UNTRUSTED_PR_DATA/gi, 'END-UNTRUSTED-PR-DATA-ESCAPED');
-  return s;
+  return String(val ?? '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+    .replace(/[\u{E0000}-\u{E007F}]/gu, '')
+    .replace(/BEGIN_UNTRUSTED_PR_DATA/gi, 'BEGIN-UNTRUSTED-PR-DATA-ESCAPED')
+    .replace(/END_UNTRUSTED_PR_DATA/gi, 'END-UNTRUSTED-PR-DATA-ESCAPED');
 }
-
-function frameUntrustedText(val) {
-  return `${UNTRUSTED_START}\n${sanitizeUntrustedText(val)}\n${UNTRUSTED_END}`;
-}
+const frameUntrustedText = (val) => `${UNTRUSTED_START}\n${sanitizeUntrustedText(val)}\n${UNTRUSTED_END}`;
 
 function parseArgs(argv) {
-  if (argv.length === 0) {
-    fail('PR_INVALID_ARGS', 'Missing subcommand (expected: fetch, reply, resolve, comment)', EXIT_ERROR);
-  }
+  if (!argv.length) fail('PR_INVALID_ARGS', 'Missing subcommand (expected: fetch, reply, resolve, comment, reconcile)');
   const cmd = argv[0];
-  const flags = {};
-  const booleanFlags = new Set([
-    'include-resolved',
-    'include-bodies',
-    'authorize-write',
-    'authorize-resolve',
-    'draft'
-  ]);
-  const valueFlags = new Set([
-    'repo',
-    'pr',
-    'max-pages',
-    'expected-head',
-    'target-kind',
-    'target-id',
-    'body-file',
-    'idempotency-key',
-    'state-file',
-    'thread-id',
-    'fix-commit',
-    'evidence-file',
-    'mode',
-    'event',
-    'summary-file',
-    'inline-json',
-    'authorize-review-event'
-  ]);
+  const booleanFlags = new Set(['include-resolved', 'include-bodies', 'authorize-write', 'authorize-resolve', 'draft']);
   const allowedByCmd = {
-    fetch: new Set(['repo', 'pr', 'include-resolved', 'include-bodies', 'thread-id', 'max-pages', 'state-file']),
-    reply: new Set(['repo', 'pr', 'expected-head', 'target-kind', 'target-id', 'body-file', 'idempotency-key', 'authorize-write', 'draft', 'state-file', 'max-pages']),
-    resolve: new Set(['repo', 'pr', 'expected-head', 'thread-id', 'fix-commit', 'evidence-file', 'authorize-resolve', 'draft', 'state-file', 'max-pages']),
-    comment: new Set(['repo', 'pr', 'expected-head', 'mode', 'event', 'summary-file', 'inline-json', 'idempotency-key', 'authorize-write', 'authorize-review-event', 'draft', 'state-file', 'max-pages'])
+    fetch: new Set(['repo', 'pr', 'include-resolved', 'include-bodies', 'thread-id', 'max-pages']),
+    reconcile: new Set(['repo', 'pr', 'repo-root', 'max-pages']),
+    reply: new Set(['repo', 'pr', 'repo-root', 'expected-head', 'target-kind', 'target-id', 'body-file', 'idempotency-key', 'authorize-write', 'draft', 'max-pages']),
+    resolve: new Set(['repo', 'pr', 'repo-root', 'expected-head', 'thread-id', 'fix-commit', 'evidence-file', 'authorize-resolve', 'draft', 'max-pages']),
+    comment: new Set(['repo', 'pr', 'repo-root', 'expected-head', 'mode', 'event', 'summary-file', 'inline-json', 'idempotency-key', 'authorize-write', 'authorize-review-event', 'draft', 'max-pages'])
   };
-  const cmdAllowed = allowedByCmd[cmd];
-  if (!cmdAllowed) {
-    fail('PR_INVALID_ARGS', `Unknown subcommand: ${cmd} (expected: fetch, reply, resolve, comment)`, EXIT_ERROR);
-  }
+  const allowed = allowedByCmd[cmd];
+  if (!allowed) fail('PR_INVALID_ARGS', `Unknown subcommand: ${cmd} (expected: fetch, reply, resolve, comment, reconcile)`);
+  const flags = {};
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (!arg.startsWith('--')) {
-      fail('PR_INVALID_ARGS', `Unexpected positional argument: ${arg}`, EXIT_ERROR);
-    }
+    if (!arg.startsWith('--')) fail('PR_INVALID_ARGS', `Unexpected positional argument: ${arg}`);
     const name = arg.slice(2);
-    if (!name || !cmdAllowed.has(name)) {
-      fail('PR_INVALID_ARGS', `Flag --${name} is not allowed for subcommand ${cmd}`, EXIT_ERROR);
-    }
+    if (!name || !allowed.has(name)) fail('PR_INVALID_ARGS', `Flag --${name} is not allowed for subcommand ${cmd}`);
     if (booleanFlags.has(name)) {
       flags[name] = true;
-    } else if (valueFlags.has(name)) {
-      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) {
-        fail('PR_INVALID_ARGS', `Missing value for --${name}`, EXIT_ERROR);
-      }
-      flags[name] = argv[i + 1];
-      i += 1;
+    } else {
+      if (i + 1 >= argv.length || argv[i + 1].startsWith('--')) fail('PR_INVALID_ARGS', `Missing value for --${name}`);
+      flags[name] = argv[++i];
     }
   }
   return { cmd, flags };
 }
 
 function validateRepo(repo) {
-  if (!repo || hasControlChars(repo) || !REPO_RE.test(repo) || repo.includes('..')) {
-    fail('PR_INVALID_ARGS', 'Invalid --repo (expected owner/repo)', EXIT_ERROR);
-  }
+  if (!repo || hasControlChars(repo) || !REPO_RE.test(repo) || repo.includes('..')) fail('PR_INVALID_ARGS', 'Invalid --repo (expected owner/repo)');
   const [owner, name] = repo.split('/');
-  if (!owner || !name || owner === '.' || name === '.') {
-    fail('PR_INVALID_ARGS', 'Invalid --repo segments', EXIT_ERROR);
-  }
+  if (!owner || !name || owner === '.' || name === '.') fail('PR_INVALID_ARGS', 'Invalid --repo segments');
   return { owner, name, full: `${owner}/${name}` };
 }
 
 function validatePr(prStr) {
-  if (!prStr || hasControlChars(prStr) || !PR_RE.test(prStr)) {
-    fail('PR_INVALID_ARGS', 'Invalid --pr (expected positive integer)', EXIT_ERROR);
-  }
+  if (!prStr || hasControlChars(prStr) || !PR_RE.test(prStr)) fail('PR_INVALID_ARGS', 'Invalid --pr (expected positive integer)');
   const num = Number.parseInt(prStr, 10);
-  if (!Number.isSafeInteger(num) || num <= 0) {
-    fail('PR_INVALID_ARGS', 'Invalid --pr value', EXIT_ERROR);
-  }
+  if (!Number.isSafeInteger(num) || num <= 0) fail('PR_INVALID_ARGS', 'Invalid --pr value');
   return num;
 }
 
 function validateSha(sha, flagName) {
-  if (!sha || hasControlChars(sha) || !SHA_RE.test(sha)) {
-    fail('PR_INVALID_ARGS', `Invalid ${flagName} (expected 40-hex commit SHA)`, EXIT_ERROR);
-  }
+  if (!sha || hasControlChars(sha) || !SHA_RE.test(sha)) fail('PR_INVALID_ARGS', `Invalid ${flagName} (expected 40-hex commit SHA)`);
   return sha.toLowerCase();
 }
 
 function validateId(id, flagName) {
-  if (!id || hasControlChars(id) || !ID_RE.test(id)) {
-    fail('PR_INVALID_ARGS', `Invalid ${flagName}`, EXIT_ERROR);
-  }
+  if (!id || hasControlChars(id) || !ID_RE.test(id)) fail('PR_INVALID_ARGS', `Invalid ${flagName}`);
   return id;
-}
-
-function validateThreadIdList(raw) {
-  if (!raw) return [];
-  const parts = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
-  if (parts.length === 0 || parts.length > 50) {
-    fail('PR_INVALID_ARGS', 'Invalid --thread-id list (expected 1-50 comma-separated IDs)', EXIT_ERROR);
-  }
-  return parts.map((id) => validateId(id, '--thread-id'));
 }
 
 function validateKey(key) {
   if (key === undefined) return '';
-  if (!key || hasControlChars(key) || !KEY_RE.test(key)) {
-    fail('PR_INVALID_ARGS', 'Invalid --idempotency-key (expected 4-80 chars of [A-Za-z0-9._:-])', EXIT_ERROR);
-  }
+  if (!key || hasControlChars(key) || !KEY_RE.test(key)) fail('PR_INVALID_ARGS', 'Invalid --idempotency-key (expected 4-80 chars of [A-Za-z0-9._:-])');
   return key;
 }
 
 function validateMaxPages(val) {
   if (val === undefined) return DEFAULT_MAX_PAGES;
-  if (hasControlChars(val) || !PR_RE.test(val)) {
-    fail('PR_INVALID_ARGS', 'Invalid --max-pages', EXIT_ERROR);
-  }
+  if (hasControlChars(val) || !PR_RE.test(val)) fail('PR_INVALID_ARGS', 'Invalid --max-pages');
   const num = Number.parseInt(val, 10);
-  if (num < 1 || num > MAX_ALLOWED_PAGES) {
-    fail('PR_INVALID_ARGS', `--max-pages must be between 1 and ${MAX_ALLOWED_PAGES}`, EXIT_ERROR);
-  }
+  if (num < 1 || num > MAX_ALLOWED_PAGES) fail('PR_INVALID_ARGS', `--max-pages must be between 1 and ${MAX_ALLOWED_PAGES}`);
   return num;
 }
 
 function validateRelPath(p, label) {
   if (!p || hasControlChars(p) || p.startsWith('/') || p.includes('\\') || p.split('/').includes('..')) {
-    fail('PR_INVALID_ARGS', `Invalid relative path in ${label}`, EXIT_ERROR);
+    fail('PR_INVALID_ARGS', `Invalid relative path in ${label}`);
   }
   return p;
 }
 
 // --- R007: Unified safe-path & symlink/reparse-point guard ---
 function validateRawPathSyntax(filePath, flagName, rejectTraversal = true) {
-  if (!filePath || hasControlChars(filePath) || filePath.includes('\0')) {
-    fail('PR_INVALID_ARGS', `Invalid ${flagName}`, EXIT_ERROR);
-  }
-  if (/^[\\/]{2}/.test(filePath)) {
-    fail('PR_FILE_GUARD', `UNC/device namespace path rejected for ${flagName}`, EXIT_ERROR);
-  }
-  if (/^[A-Za-z]:(?![\\/])/.test(filePath)) {
-    fail('PR_FILE_GUARD', `Drive-relative path rejected for ${flagName}`, EXIT_ERROR);
-  }
-  // Reject Windows Alternate Data Streams (colon outside leading drive letter).
+  if (!filePath || hasControlChars(filePath) || filePath.includes('\0')) fail('PR_INVALID_ARGS', `Invalid ${flagName}`);
+  if (/^[\\/]{2}/.test(filePath)) fail('PR_FILE_GUARD', `UNC/device namespace path rejected for ${flagName}`);
+  if (/^[A-Za-z]:(?![\\/])/.test(filePath)) fail('PR_FILE_GUARD', `Drive-relative path rejected for ${flagName}`);
   const withoutDrive = filePath.replace(/^[A-Za-z]:/, '');
-  if (withoutDrive.includes(':')) {
-    fail('PR_FILE_GUARD', `Unsafe path syntax rejected for ${flagName}`, EXIT_ERROR);
-  }
+  if (withoutDrive.includes(':')) fail('PR_FILE_GUARD', `Unsafe path syntax rejected for ${flagName}`);
   const segments = withoutDrive.split(/[\\/]+/).filter(Boolean);
-  if (rejectTraversal && segments.includes('..')) {
-    fail('PR_FILE_GUARD', `Path traversal rejected for ${flagName}`, EXIT_ERROR);
-  }
+  if (rejectTraversal && segments.includes('..')) fail('PR_FILE_GUARD', `Path traversal rejected for ${flagName}`);
   for (const seg of segments) {
     const cleaned = seg.replace(/[\s.]+$/g, '').trim();
     const baseStem = seg.split('.')[0].trim();
     if (WIN_DEVICE_RE.test(cleaned) || WIN_DEVICE_RE.test(baseStem)) {
-      fail('PR_FILE_GUARD', `Reserved device path rejected for ${flagName}`, EXIT_ERROR);
+      fail('PR_FILE_GUARD', `Reserved device path rejected for ${flagName}`);
     }
   }
 }
 
-function validateSafeFilePath(filePath, flagName, options = {}) {
-  const { mustExist = true, rejectTraversal = true, maxBytes = MAX_FILE_BYTES } = options;
-  validateRawPathSyntax(filePath, flagName, rejectTraversal);
-
-  const resolved = path.resolve(filePath);
-  let leafStat = null;
-  try {
-    leafStat = fs.lstatSync(resolved);
-  } catch (err) {
-    if (mustExist || !err || err.code !== 'ENOENT') {
-      fail('PR_FILE_GUARD', `Cannot access ${flagName}: ${err?.code || 'ERR'}`, EXIT_ERROR);
-    }
-  }
-  if (leafStat) {
-    if (leafStat.isSymbolicLink()) {
-      fail('PR_FILE_GUARD', `Symlink/reparse point rejected for ${flagName}`, EXIT_ERROR);
-    }
-    if (!leafStat.isFile()) {
-      fail('PR_FILE_GUARD', `Regular file required for ${flagName}`, EXIT_ERROR);
-    }
-    if (mustExist && leafStat.size > maxBytes) {
-      fail('PR_FILE_GUARD', `${flagName} exceeds ${maxBytes} bytes`, EXIT_ERROR);
-    }
-  }
-
-  // Walk every existing ancestor directory (only skipping macOS OS-mandated /var,/tmp,/etc symlinks).
-  let cur = path.dirname(resolved);
+function assertAncestorsSafe(targetPath, flagName) {
+  let cur = path.dirname(targetPath);
   const visited = new Set();
   while (cur && !visited.has(cur)) {
     visited.add(cur);
-    if (process.platform === 'darwin' && (cur === '/var' || cur === '/tmp' || cur === '/etc')) {
-      break;
-    }
+    if (process.platform === 'darwin' && (cur === '/var' || cur === '/tmp' || cur === '/etc')) break;
     let pst = null;
     try {
       pst = fs.lstatSync(cur);
     } catch (err) {
-      if (!err || err.code !== 'ENOENT') {
-        fail('PR_FILE_GUARD', `Cannot inspect ancestor for ${flagName}: ${err?.code || 'ERR'}`, EXIT_ERROR);
-      }
+      if (!err || err.code !== 'ENOENT') fail('PR_FILE_GUARD', `Cannot inspect ancestor for ${flagName}: ${err?.code || 'ERR'}`);
     }
     if (pst) {
-      if (pst.isSymbolicLink()) {
-        fail('PR_FILE_GUARD', `Symlink/reparse ancestor directory rejected for ${flagName}`, EXIT_ERROR);
-      }
-      if (!pst.isDirectory()) {
-        fail('PR_FILE_GUARD', `Non-directory ancestor rejected for ${flagName}`, EXIT_ERROR);
-      }
+      if (pst.isSymbolicLink()) fail('PR_FILE_GUARD', `Symlink/reparse ancestor directory rejected for ${flagName}`);
+      if (!pst.isDirectory()) fail('PR_FILE_GUARD', `Non-directory ancestor rejected for ${flagName}`);
     }
     const next = path.dirname(cur);
     if (next === cur) break;
     cur = next;
   }
+}
+
+function validateSafePath(targetPath, flagName, { expectDir = false, mustExist = true, maxBytes = MAX_FILE_BYTES } = {}) {
+  validateRawPathSyntax(targetPath, flagName, true);
+  const resolved = path.resolve(targetPath);
+  let st = null;
+  try {
+    st = fs.lstatSync(resolved);
+  } catch (err) {
+    if (mustExist || !err || err.code !== 'ENOENT') fail('PR_FILE_GUARD', `Cannot access ${flagName}: ${err?.code || 'ERR'}`);
+  }
+  if (st) {
+    if (st.isSymbolicLink()) fail('PR_FILE_GUARD', `Symlink/reparse point rejected for ${flagName}`);
+    if (expectDir ? !st.isDirectory() : !st.isFile()) {
+      fail('PR_FILE_GUARD', `${expectDir ? 'Directory' : 'Regular file'} required for ${flagName}`);
+    }
+    if (!expectDir && mustExist && st.size > maxBytes) fail('PR_FILE_GUARD', `${flagName} exceeds ${maxBytes} bytes`);
+  }
+  assertAncestorsSafe(resolved, flagName);
   return resolved;
 }
 
 function readSafeInputFile(filePath, flagName, maxBytes = MAX_FILE_BYTES) {
-  const resolved = validateSafeFilePath(filePath, flagName, { mustExist: true, rejectTraversal: true, maxBytes });
+  const resolved = validateSafePath(filePath, flagName, { expectDir: false, mustExist: true, maxBytes });
   return fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, '');
 }
 
-// --- R003 / R004: State-file locking, audit log & reconciliation guard ---
+// --- R010: Canonical per-repo/PR state identity + R012: PID-safe lock ---
+function resolveRepoRoot(rawRepoRoot) {
+  const base = rawRepoRoot
+    ? validateSafePath(rawRepoRoot, '--repo-root', { expectDir: true, mustExist: true })
+    : validateSafePath(process.cwd(), 'cwd', { expectDir: true, mustExist: true });
+  const gitRes = spawnSync('git', ['-C', base, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', shell: false, windowsHide: true });
+  if (gitRes.error || gitRes.status !== 0 || !gitRes.stdout.trim()) {
+    fail('PR_FILE_GUARD', `Directory is not inside a Git working tree (${base}); canonical state requires a Git repository root`);
+  }
+  return validateSafePath(gitRes.stdout.trim(), 'git-toplevel', { expectDir: true, mustExist: true });
+}
+
+function resolveCanonicalStatePath(repoRoot, repoFull, prNumber) {
+  const safeSlug = repoFull.toLowerCase().replace(/[^a-z0-9._-]/g, '__');
+  const statePath = path.join(repoRoot, '.b3', 'pr-feedback', `${safeSlug}__pr-${prNumber}.state.json`);
+  return validateSafePath(statePath, 'canonical-state', { expectDir: false, mustExist: false });
+}
+
 function readStateRecords(statePath) {
-  if (!statePath || !fs.existsSync(statePath)) return [];
+  if (!fs.existsSync(statePath)) return [];
   let raw;
   try {
     raw = fs.readFileSync(statePath, 'utf8').replace(/^\uFEFF/, '');
   } catch (err) {
-    fail('PR_FILE_GUARD', `Cannot read --state-file: ${err?.code || 'ERR'}`, EXIT_ERROR);
+    fail('PR_FILE_GUARD', `Cannot read canonical state file: ${err?.code || 'ERR'}`);
   }
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    fail('PR_FILE_GUARD', 'Corrupt JSON in --state-file; refusing to overwrite or bypass reconciliation', EXIT_ERROR);
+    fail('PR_FILE_GUARD', 'Corrupt JSON in canonical state file; refusing to overwrite or bypass reconciliation');
   }
-  if (!Array.isArray(parsed)) {
-    fail('PR_FILE_GUARD', '--state-file must contain a JSON array', EXIT_ERROR);
-  }
+  if (!Array.isArray(parsed)) fail('PR_FILE_GUARD', 'Canonical state file must contain a JSON array');
   return parsed;
 }
 
-function writeStateRecords(statePath, records) {
-  if (!statePath) return;
-  const dir = path.dirname(statePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  const tmpPath = `${statePath}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
-  fs.writeFileSync(tmpPath, JSON.stringify(records, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  fs.renameSync(tmpPath, statePath);
-}
-
-function recordAuditState(statePath, entry, options = {}) {
-  if (!statePath) return true;
-  const { critical = false } = options;
+function appendStateRecord(statePath, entry, critical = false) {
   try {
+    const dir = path.dirname(statePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    assertAncestorsSafe(statePath, 'canonical-state');
     const records = readStateRecords(statePath);
     records.push({ ...entry, recorded_at_utc: new Date().toISOString() });
-    writeStateRecords(statePath, records);
+    const tmpPath = `${statePath}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(records, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fs.renameSync(tmpPath, statePath);
     return true;
   } catch (err) {
     if (err instanceof B3Exit) {
       if (critical) throw err;
       return false;
     }
-    if (critical) {
-      fail('PR_FILE_GUARD', `Failed to persist critical state record: ${err?.code || err?.message || 'ERR'}`, EXIT_ERROR);
-    }
+    if (critical) fail('PR_FILE_GUARD', `Failed to persist critical state record: ${err?.code || err?.message || 'ERR'}`);
     return false;
   }
 }
 
-function clearReconciliationFlag(statePath, repoFull, prNumber, inspectedHead) {
-  if (!statePath) return;
-  withStateLock(statePath, () => {
-    const records = readStateRecords(statePath);
-    if (records.some((r) => r.repo === repoFull && r.pr === prNumber && (r.reconciliation_required || r.status === 'PENDING'))) {
-      records.push({
-        action: 'reconcile',
-        status: 'PR_RECONCILED',
-        repo: repoFull,
-        pr: prNumber,
-        reconciled_head: inspectedHead,
-        recorded_at_utc: new Date().toISOString()
-      });
-      writeStateRecords(statePath, records);
-    }
-  });
-}
-
-function assertNoPendingReconciliation(statePath, repoFull, prNumber) {
-  if (!statePath) return;
-  const records = readStateRecords(statePath);
-  let pending = null;
+function getUnresolvedPendingRecords(records, repoFull, prNumber) {
+  const byOp = new Map();
   for (const r of records) {
-    if (r.repo !== repoFull || r.pr !== prNumber) continue;
-    if (r.reconciliation_required || r.status === 'PENDING') {
-      pending = r;
-    } else if (
-      r.status === 'PR_RECONCILED' ||
-      r.status === 'PR_REPLY_OK' ||
-      r.status === 'PR_RESOLVE_OK' ||
-      r.status === 'PR_COMMENT_OK' ||
-      r.status === 'PR_IDEMPOTENT_SKIP' ||
-      r.status === 'PR_ALREADY_RESOLVED'
-    ) {
-      pending = null;
+    if (String(r.repo || '').toLowerCase() !== repoFull.toLowerCase() || Number(r.pr) !== prNumber) continue;
+    const opId = String(r.op_id || '__legacy__');
+    if (r.status === 'PENDING' || r.reconciliation_required) {
+      byOp.set(opId, r);
+    } else if (RESOLVED_STATUSES.has(r.status)) {
+      byOp.delete(opId);
     }
   }
-  if (pending) {
-    fail(
-      'PR_RECONCILIATION_REQUIRED',
-      `Prior unresolved/post-write state (${pending.status}) on ${repoFull}#${prNumber} requires full remote reconciliation via fetch --state-file before continuing`,
-      EXIT_BLOCKED,
-      { outcome: 'blocked_before_write', mutated: false, pending_record: pending }
-    );
+  return [...byOp.values()];
+}
+
+function isPidAliveSameHost(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return 'UNKNOWN';
+  try {
+    process.kill(pid, 0);
+    return 'ALIVE';
+  } catch (err) {
+    if (err && err.code === 'ESRCH') return 'DEAD';
+    if (err && err.code === 'EPERM') return 'ALIVE';
+    return 'UNKNOWN';
   }
 }
 
-function withStateLock(statePath, fn) {
-  if (!statePath) return fn();
+function withStateLock(statePath, opName, fn) {
   const dir = path.dirname(statePath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  assertAncestorsSafe(statePath, 'canonical-state');
   const lockPath = `${statePath}.lock`;
+  const reclaimLockPath = `${lockPath}.reclaim`;
   const lockToken = crypto.randomBytes(16).toString('hex');
-  const lockBody = JSON.stringify({ pid: process.pid, token: lockToken, started_at: Date.now() }) + '\n';
+  const host = os.hostname();
+  const lockBody = JSON.stringify({ pid: process.pid, host, token: lockToken, op: opName, started_at: Date.now() }) + '\n';
 
-  function acquireOnce() {
+  const acquireOnce = () => {
     const fd = fs.openSync(lockPath, 'wx', 0o600);
-    try {
-      fs.writeSync(fd, lockBody);
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
+    try { fs.writeSync(fd, lockBody); } finally { fs.closeSync(fd); }
+  };
 
   try {
     acquireOnce();
   } catch (err) {
-    if (err && err.code === 'EEXIST') {
-      let st = null;
+    if (!err || err.code !== 'EEXIST') fail('PR_FILE_GUARD', `Unable to create state lock: ${err?.code || 'ERR'}`);
+    let st = null;
+    try { st = fs.lstatSync(lockPath); } catch { st = null; }
+    if (st && st.isSymbolicLink()) fail('PR_FILE_GUARD', `Symlink lock file rejected: ${lockPath}`);
+    let existing = null;
+    try { existing = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { existing = null; }
+    // R012: NEVER reclaim by age alone; reclaim ONLY if same host AND PID confirmed dead (ESRCH).
+    const sameHost = Boolean(existing && typeof existing.host === 'string' && existing.host === host);
+    const liveness = sameHost ? isPidAliveSameHost(Number(existing.pid)) : 'UNKNOWN';
+    if (liveness !== 'DEAD' || !existing?.token) {
+      fail('PR_CONCURRENT_LOCK', `Active or unverified lock held on ${path.basename(statePath)} (host=${existing?.host || 'unknown'}, pid=${existing?.pid || 'unknown'}, state=${liveness})`, EXIT_BLOCKED, {
+        outcome: 'blocked_before_write', mutated: false
+      });
+    }
+    const reclaimToken = crypto.randomBytes(16).toString('hex');
+    const reclaimBody = JSON.stringify({ pid: process.pid, host, token: reclaimToken, op: opName }) + '\n';
+    try {
+      const rfd = fs.openSync(reclaimLockPath, 'wx', 0o600);
+      try { fs.writeSync(rfd, reclaimBody); } finally { fs.closeSync(rfd); }
+    } catch (rErr) {
+      let rst = null;
+      try { rst = fs.lstatSync(reclaimLockPath); } catch { rst = null; }
+      if (rst && rst.isSymbolicLink()) fail('PR_FILE_GUARD', `Symlink reclaim lock rejected: ${reclaimLockPath}`);
+      if (rErr && rErr.code !== 'EEXIST') fail('PR_FILE_GUARD', `Unable to create reclaim mutex: ${rErr.code}`);
+      fail('PR_CONCURRENT_LOCK', `Concurrent lock reclamation in progress for ${path.basename(statePath)}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+    }
+    try {
+      let curSt = null;
+      try { curSt = fs.lstatSync(lockPath); } catch { curSt = null; }
+      if (curSt && curSt.isSymbolicLink()) fail('PR_FILE_GUARD', `Symlink lock file rejected: ${lockPath}`);
+      let recheck = null;
+      try { recheck = JSON.parse(fs.readFileSync(lockPath, 'utf8')); } catch { recheck = null; }
+      const stillSameDead = Boolean(
+        recheck && recheck.token === existing.token && recheck.host === host &&
+        Number(recheck.pid) === Number(existing.pid) && isPidAliveSameHost(Number(recheck.pid)) === 'DEAD'
+      );
+      if (!stillSameDead) {
+        fail('PR_CONCURRENT_LOCK', `Concurrent operation already reclaimed or replaced lock on ${path.basename(statePath)}`, EXIT_BLOCKED, {
+          outcome: 'blocked_before_write', mutated: false
+        });
+      }
+      const deadCopy = `${lockPath}.dead.${process.pid}.${lockToken.slice(0, 8)}`;
       try {
-        st = fs.lstatSync(lockPath);
+        fs.renameSync(lockPath, deadCopy);
+        try { fs.unlinkSync(deadCopy); } catch { /* ignore */ }
+        acquireOnce();
       } catch {
-        st = null;
+        fail('PR_CONCURRENT_LOCK', `Concurrent operation holds lock on ${path.basename(statePath)}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
       }
-      if (st && st.isSymbolicLink()) {
-        fail('PR_FILE_GUARD', `Symlink lock file rejected: ${lockPath}`, EXIT_ERROR);
-      }
-      const isStale = Boolean(st && st.isFile() && Date.now() - st.mtimeMs > LOCK_STALE_MS);
-      if (isStale) {
-        try {
-          const staleCopy = `${lockPath}.stale.${process.pid}.${lockToken.slice(0, 8)}`;
-          fs.renameSync(lockPath, staleCopy);
-          try { fs.unlinkSync(staleCopy); } catch { /* ignore */ }
-          acquireOnce();
-        } catch {
-          fail('PR_CONCURRENT_LOCK', `Concurrent operation holds lock on ${statePath}; retry after completion`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-        }
-      } else {
-        fail('PR_CONCURRENT_LOCK', `Concurrent operation holds lock on ${statePath}; retry after completion`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-      }
-    } else {
-      fail('PR_FILE_GUARD', `Unable to create state lock: ${err?.code || 'ERR'}`, EXIT_ERROR);
+    } finally {
+      try {
+        const recRaw = fs.readFileSync(reclaimLockPath, 'utf8');
+        if (recRaw.includes(reclaimToken)) fs.unlinkSync(reclaimLockPath);
+      } catch { /* ignore */ }
     }
   }
   try {
@@ -459,12 +366,8 @@ function withStateLock(statePath, fn) {
   } finally {
     try {
       const curRaw = fs.readFileSync(lockPath, 'utf8');
-      if (curRaw.includes(lockToken)) {
-        fs.unlinkSync(lockPath);
-      }
-    } catch {
-      // ignore cleanup error
-    }
+      if (curRaw.includes(lockToken)) fs.unlinkSync(lockPath);
+    } catch { /* ignore */ }
   }
 }
 
@@ -472,203 +375,115 @@ function withStateLock(statePath, fn) {
 let cachedGhPath = null;
 function resolveGhBinary() {
   if (cachedGhPath) return cachedGhPath;
-  const pathEnv = process.env.PATH || process.env.Path || '';
-  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+  const dirs = (process.env.PATH || process.env.Path || '').split(path.delimiter).filter(Boolean);
   const isWin = process.platform === 'win32';
   const names = isWin ? ['gh.exe', 'gh.cmd', 'gh.bat'] : ['gh'];
-
   for (const dir of dirs) {
     for (const name of names) {
       const candidate = path.join(dir, name);
       try {
-        const st = fs.statSync(candidate);
-        if (!st.isFile()) continue;
-        if (!isWin) {
-          fs.accessSync(candidate, fs.constants.X_OK);
-        }
+        if (!fs.statSync(candidate).isFile()) continue;
+        if (!isWin) fs.accessSync(candidate, fs.constants.X_OK);
         cachedGhPath = candidate;
         return candidate;
-      } catch {
-        // continue
-      }
+      } catch { /* continue */ }
     }
   }
-  fail('PR_API_ERROR', 'gh CLI not found in PATH', EXIT_ERROR);
+  fail('PR_API_ERROR', 'gh CLI not found in PATH');
 }
 
 function invokeGh(args, stdinStr = null, options = {}) {
   for (const a of args) {
-    if (!SAFE_GH_ARG_RE.test(a)) {
-      fail('PR_INVALID_ARGS', `Unsafe gh argument rejected: ${a}`, EXIT_ERROR);
-    }
+    if (!SAFE_GH_ARG_RE.test(a)) fail('PR_INVALID_ARGS', `Unsafe gh argument rejected: ${a}`);
   }
   const ghBin = resolveGhBinary();
   const isWinBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(ghBin);
-  const spawnOpts = {
-    encoding: 'utf8',
-    windowsHide: true,
-    maxBuffer: 64 * 1024 * 1024
-  };
-  if (stdinStr !== null) {
-    spawnOpts.input = stdinStr;
-  }
-
+  const spawnOpts = { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 };
+  if (stdinStr !== null) spawnOpts.input = stdinStr;
   let res;
   if (isWinBatch) {
-    if (/[%"!&|<>^\x00-\x1F\x7F]/.test(ghBin)) {
-      fail('PR_API_ERROR', 'Unsafe Windows batch path for gh CLI rejected', EXIT_ERROR);
-    }
-    const comspec = process.env.ComSpec || 'cmd.exe';
+    if (/[%"!&|<>^\x00-\x1F\x7F]/.test(ghBin)) fail('PR_API_ERROR', 'Unsafe Windows batch path for gh CLI rejected');
     const cmdLine = `"${ghBin}" ${args.map((a) => `"${a}"`).join(' ')}`;
-    res = spawnSync(comspec, ['/d', '/s', '/c', `"${cmdLine}"`], { ...spawnOpts, windowsVerbatimArguments: true });
+    res = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${cmdLine}"`], { ...spawnOpts, windowsVerbatimArguments: true });
   } else {
     res = spawnSync(ghBin, args, { ...spawnOpts, shell: false });
   }
-
-  if (res.error) {
-    fail('PR_API_ERROR', `Failed to invoke gh: ${res.error.message}`, EXIT_ERROR);
-  }
+  if (res.error) fail('PR_API_ERROR', `Failed to invoke gh: ${res.error.message}`);
   const stdout = (res.stdout || '').trim();
   const stderr = (res.stderr || '').trim();
   if (res.status !== 0) {
-    if (options.allowNotFound && /404|Not Found/i.test(`${stderr}\n${stdout}`)) {
-      return { notFound: true, data: null };
-    }
-    fail('PR_API_ERROR', `gh api failed (exit ${res.status}): ${sanitizeUntrustedText(stderr || stdout).slice(0, 300)}`, EXIT_ERROR);
+    if (options.allowNotFound && /404|Not Found/i.test(`${stderr}\n${stdout}`)) return { notFound: true, data: null };
+    fail('PR_API_ERROR', `gh api failed (exit ${res.status}): ${sanitizeUntrustedText(stderr || stdout).slice(0, 300)}`);
   }
-  if (!stdout) {
-    return { notFound: false, data: null };
-  }
+  if (!stdout) return { notFound: false, data: null };
   try {
     return { notFound: false, data: JSON.parse(stdout) };
   } catch {
-    fail('PR_API_ERROR', 'gh api returned non-JSON output', EXIT_ERROR);
+    fail('PR_API_ERROR', 'gh api returned non-JSON output');
   }
 }
 
 function ghGraphQL(query, variables = {}) {
-  const payload = JSON.stringify({ query, variables });
-  const { data } = invokeGh(['api', 'graphql', '--input', '-'], payload);
-  if (!data || typeof data !== 'object') {
-    fail('PR_API_ERROR', 'Empty GraphQL response', EXIT_ERROR);
+  const { data } = invokeGh(['api', 'graphql', '--input', '-'], JSON.stringify({ query, variables }));
+  if (!data || typeof data !== 'object') fail('PR_API_ERROR', 'Empty GraphQL response');
+  if (Array.isArray(data.errors) && data.errors.length) {
+    fail('PR_API_ERROR', `GraphQL error: ${sanitizeUntrustedText(data.errors.map((e) => e.message || 'GraphQL error').join('; ')).slice(0, 300)}`);
   }
-  if (Array.isArray(data.errors) && data.errors.length > 0) {
-    const msg = data.errors.map((e) => e.message || 'GraphQL error').join('; ');
-    fail('PR_API_ERROR', `GraphQL error: ${sanitizeUntrustedText(msg).slice(0, 300)}`, EXIT_ERROR);
-  }
-  if (!data.data) {
-    fail('PR_API_ERROR', 'Missing data in GraphQL response', EXIT_ERROR);
-  }
+  if (!data.data) fail('PR_API_ERROR', 'Missing data in GraphQL response');
   return data.data;
 }
 
-function ghRestGet(endpoint, options = {}) {
-  return invokeGh(['api', endpoint], null, options);
-}
-
-function ghRestPost(endpoint, bodyObj) {
-  const { data } = invokeGh(['api', endpoint, '--method', 'POST', '--input', '-'], JSON.stringify(bodyObj));
-  return data;
-}
+const ghRestGet = (endpoint, options = {}) => invokeGh(['api', endpoint], null, options);
+const ghRestPost = (endpoint, bodyObj) => invokeGh(['api', endpoint, '--method', 'POST', '--input', '-'], JSON.stringify(bodyObj)).data;
 
 function fetchRestPaginated(endpointBase, maxPages) {
   const items = [];
   const sep = endpointBase.includes('?') ? '&' : '?';
   for (let page = 1; page <= maxPages; page += 1) {
     const { data } = ghRestGet(`${endpointBase}${sep}per_page=100&page=${page}`);
-    if (!Array.isArray(data)) {
-      fail('PR_API_ERROR', `Expected array from ${endpointBase}`, EXIT_ERROR);
-    }
+    if (!Array.isArray(data)) fail('PR_API_ERROR', `Expected array from ${endpointBase}`);
     items.push(...data);
-    if (data.length < 100) {
-      return items;
-    }
+    if (data.length < 100) return items;
   }
   fail('PR_PAGINATION_INCOMPLETE', `Pagination reached --max-pages (${maxPages}) on ${endpointBase}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 }
 
-// --- Shared PR header & freshness helpers (R004) ---
+// --- PR header, freshness & targeted retrieval (R004, R008) ---
 function fetchPrHeader(owner, repo, prNumber) {
-  const query = `
-    query($owner: String!, $repo: String!, $pr: Int!) {
-      viewer { login }
-      repository(owner: $owner, name: $repo) {
-        pullRequest(number: $pr) {
-          number
-          state
-          headRefOid
-        }
-      }
-    }
-  `;
+  const query = `query($owner: String!, $repo: String!, $pr: Int!) {
+    viewer { login }
+    repository(owner: $owner, name: $repo) { pullRequest(number: $pr) { number state headRefOid } }
+  }`;
   const data = ghGraphQL(query, { owner, repo, pr: prNumber });
-  const viewer = data.viewer && data.viewer.login ? String(data.viewer.login) : '';
-  const pr = data.repository && data.repository.pullRequest;
-  if (!pr) {
-    fail('PR_TARGET_MISMATCH', `Pull request ${owner}/${repo}#${prNumber} not found`, EXIT_ERROR);
-  }
-  if (!viewer) {
-    fail('PR_API_ERROR', 'Unable to resolve authenticated viewer.login', EXIT_ERROR);
-  }
-  return {
-    viewer,
-    state: String(pr.state || ''),
-    headSha: String(pr.headRefOid || '').toLowerCase()
-  };
+  const viewer = data.viewer?.login ? String(data.viewer.login) : '';
+  const pr = data.repository?.pullRequest;
+  if (!pr) fail('PR_TARGET_MISMATCH', `Pull request ${owner}/${repo}#${prNumber} not found`);
+  if (!viewer) fail('PR_API_ERROR', 'Unable to resolve authenticated viewer.login');
+  return { viewer, state: String(pr.state || ''), headSha: String(pr.headRefOid || '').toLowerCase() };
 }
 
 function assertOpenAndFreshHead(header, expectedHead) {
   if (header.state !== 'OPEN') {
-    fail('PR_NOT_OPEN', `Pull request state is ${header.state}; expected OPEN`, EXIT_BLOCKED, {
-      outcome: 'blocked_before_write',
-      mutated: false,
-      state: header.state
-    });
+    fail('PR_NOT_OPEN', `Pull request state is ${header.state}; expected OPEN`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false, state: header.state });
   }
   if (header.headSha !== expectedHead) {
     fail('PR_STALE_HEAD', `Remote PR HEAD (${header.headSha}) does not match expected (${expectedHead})`, EXIT_BLOCKED, {
-      outcome: 'blocked_before_write',
-      mutated: false,
-      remote_head: header.headSha,
-      expected_head: expectedHead
+      outcome: 'blocked_before_write', mutated: false, remote_head: header.headSha, expected_head: expectedHead
     });
   }
 }
 
-function recheckFreshBeforeMutation(owner, repo, prNumber, expectedHead) {
-  const liveHeader = fetchPrHeader(owner, repo, prNumber);
-  assertOpenAndFreshHead(liveHeader, expectedHead);
-  return liveHeader;
-}
-
-// --- R008: Targeted single-thread & metadata-first retrieval ---
 function paginateNestedThreadComments(threadId, initialConn, maxPages, includeBodies) {
-  const commentFields = includeBodies ? 'id author { login } body' : 'id author { login }';
-  const nestedQuery = `
-    query($threadId: ID!, $cursor: String) {
-      node(id: $threadId) {
-        ... on PullRequestReviewThread {
-          comments(first: 100, after: $cursor) {
-            pageInfo { hasNextPage endCursor }
-            nodes { ${commentFields} }
-          }
-        }
-      }
-    }
-  `;
+  const fields = includeBodies ? 'id author { login } body' : 'id author { login }';
+  const query = `query($threadId: ID!, $cursor: String) {
+    node(id: $threadId) { ... on PullRequestReviewThread { comments(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { ${fields} } } } }
+  }`;
   const comments = Array.isArray(initialConn?.nodes) ? [...initialConn.nodes] : [];
   let cInfo = initialConn?.pageInfo || { hasNextPage: false, endCursor: null };
-  let nestedPages = 1;
-  while (cInfo.hasNextPage) {
-    if (nestedPages >= maxPages) {
-      fail('PR_PAGINATION_INCOMPLETE', `Nested comment pagination reached --max-pages (${maxPages}) on thread ${threadId}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-    nestedPages += 1;
-    const nData = ghGraphQL(nestedQuery, { threadId, cursor: cInfo.endCursor });
-    const nConn = nData.node && nData.node.comments;
-    if (!nConn || !Array.isArray(nConn.nodes)) {
-      fail('PR_API_ERROR', `Unexpected nested comment response for thread ${threadId}`, EXIT_ERROR);
-    }
+  for (let p = 1; cInfo.hasNextPage; p += 1) {
+    if (p >= maxPages) fail('PR_PAGINATION_INCOMPLETE', `Nested comment pagination reached --max-pages (${maxPages}) on thread ${threadId}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+    const nConn = ghGraphQL(query, { threadId, cursor: cInfo.endCursor }).node?.comments;
+    if (!nConn || !Array.isArray(nConn.nodes)) fail('PR_API_ERROR', `Unexpected nested comment response for thread ${threadId}`);
     comments.push(...nConn.nodes);
     cInfo = nConn.pageInfo || { hasNextPage: false, endCursor: null };
   }
@@ -676,37 +491,24 @@ function paginateNestedThreadComments(threadId, initialConn, maxPages, includeBo
 }
 
 function fetchSingleReviewThread(repoFull, prNumber, threadId, maxPages, includeComments) {
-  const commentsBlock = includeComments
-    ? `comments(first: 100) { totalCount pageInfo { hasNextPage endCursor } nodes { id author { login } body } }`
-    : `comments(first: 1) { totalCount }`;
-  const query = `
-    query($threadId: ID!) {
-      node(id: $threadId) {
-        ... on PullRequestReviewThread {
-          id
-          isResolved
-          isOutdated
-          path
-          line
-          originalLine
-          pullRequest {
-            number
-            repository { nameWithOwner }
-          }
-          ${commentsBlock}
-        }
+  const cBlock = includeComments
+    ? 'comments(first: 100) { totalCount pageInfo { hasNextPage endCursor } nodes { id author { login } body } }'
+    : 'comments(first: 1) { totalCount }';
+  const query = `query($threadId: ID!) {
+    node(id: $threadId) {
+      ... on PullRequestReviewThread {
+        id isResolved isOutdated path line originalLine
+        pullRequest { number repository { nameWithOwner } }
+        ${cBlock}
       }
     }
-  `;
-  const data = ghGraphQL(query, { threadId });
-  const node = data.node;
-  if (!node || !node.id) {
-    return null;
-  }
+  }`;
+  const node = ghGraphQL(query, { threadId }).node;
+  if (!node || !node.id) return null;
   const ownerRepo = String(node.pullRequest?.repository?.nameWithOwner || '').toLowerCase();
   const nodePr = Number(node.pullRequest?.number || 0);
   if (!ownerRepo || ownerRepo !== repoFull.toLowerCase() || nodePr !== prNumber) {
-    fail('PR_TARGET_MISMATCH', `Review thread ${threadId} belongs to ${ownerRepo || 'unknown'}#${nodePr}, not ${repoFull}#${prNumber}`, EXIT_ERROR);
+    fail('PR_TARGET_MISMATCH', `Review thread ${threadId} belongs to ${ownerRepo || 'unknown'}#${nodePr}, not ${repoFull}#${prNumber}`);
   }
   const comments = includeComments ? paginateNestedThreadComments(threadId, node.comments, maxPages, true) : [];
   return {
@@ -716,124 +518,67 @@ function fetchSingleReviewThread(repoFull, prNumber, threadId, maxPages, include
     path: String(node.path || ''),
     line: node.line ?? node.originalLine ?? null,
     totalCount: node.comments?.totalCount ?? comments.length,
-    comments: comments.map((c) => ({
-      id: String(c.id || ''),
-      author: c.author?.login ? String(c.author.login) : 'unknown',
-      body: String(c.body || '')
-    }))
+    comments: comments.map((c) => ({ id: String(c.id || ''), author: c.author?.login ? String(c.author.login) : 'unknown', body: String(c.body || '') }))
   };
 }
 
 function fetchAllReviewThreads(owner, repo, prNumber, maxPages, includeBodies) {
-  const commentFields = includeBodies ? 'id author { login } body' : 'id author { login }';
-  const prBodyField = includeBodies ? 'body' : '';
-  const query = `
-    query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
-      viewer { login }
-      repository(owner: $owner, name: $repo) {
-        pullRequest(number: $pr) {
-          number
-          state
-          headRefOid
-          title
-          baseRefName
-          headRefName
-          ${prBodyField}
-          reviewThreads(first: 100, after: $cursor) {
-            pageInfo { hasNextPage endCursor }
-            nodes {
-              id
-              isResolved
-              isOutdated
-              path
-              line
-              originalLine
-              comments(first: 100) {
-                totalCount
-                pageInfo { hasNextPage endCursor }
-                nodes { ${commentFields} }
-              }
-            }
+  const fields = includeBodies ? 'id author { login } body' : 'id author { login }';
+  const query = `query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
+    viewer { login }
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        number state headRefOid title baseRefName headRefName ${includeBodies ? 'body' : ''}
+        reviewThreads(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            id isResolved isOutdated path line originalLine
+            comments(first: 100) { totalCount pageInfo { hasNextPage endCursor } nodes { ${fields} } }
           }
         }
       }
     }
-  `;
-
+  }`;
   let cursor = null;
   let viewer = '';
   let prMeta = null;
   const threads = [];
-
   for (let page = 1; page <= maxPages; page += 1) {
     const data = ghGraphQL(query, { owner, repo, pr: prNumber, cursor });
     if (!viewer && data.viewer?.login) viewer = String(data.viewer.login);
     const pr = data.repository?.pullRequest;
-    if (!pr) {
-      fail('PR_TARGET_MISMATCH', `Pull request ${owner}/${repo}#${prNumber} not found`, EXIT_ERROR);
-    }
+    if (!pr) fail('PR_TARGET_MISMATCH', `Pull request ${owner}/${repo}#${prNumber} not found`);
     if (!prMeta) {
-      prMeta = {
-        number: pr.number,
-        state: String(pr.state || ''),
-        headSha: String(pr.headRefOid || '').toLowerCase(),
-        title: pr.title || '',
-        baseRefName: pr.baseRefName || '',
-        headRefName: pr.headRefName || '',
-        body: includeBodies ? (pr.body || '') : undefined
-      };
+      prMeta = { number: pr.number, state: String(pr.state || ''), headSha: String(pr.headRefOid || '').toLowerCase(), title: pr.title || '', baseRefName: pr.baseRefName || '', headRefName: pr.headRefName || '', body: includeBodies ? (pr.body || '') : undefined };
     }
     const rt = pr.reviewThreads;
-    const nodes = Array.isArray(rt?.nodes) ? rt.nodes : [];
-    for (const t of nodes) {
-      if (!t || !t.id) continue;
-      const commentsConn = t.comments || {};
-      // R008: paginate nested comments ONLY when includeBodies is requested; metadata-first uses totalCount.
-      const comments = includeBodies
-        ? paginateNestedThreadComments(String(t.id), commentsConn, maxPages, true)
-        : (Array.isArray(commentsConn.nodes) ? commentsConn.nodes : []);
+    for (const t of (Array.isArray(rt?.nodes) ? rt.nodes : [])) {
+      if (!t?.id) continue;
+      const cc = t.comments || {};
+      const comments = includeBodies ? paginateNestedThreadComments(String(t.id), cc, maxPages, true) : (Array.isArray(cc.nodes) ? cc.nodes : []);
       threads.push({
-        id: String(t.id),
-        isResolved: Boolean(t.isResolved),
-        isOutdated: Boolean(t.isOutdated),
-        path: t.path || '',
-        line: t.line ?? t.originalLine ?? null,
-        totalCount: commentsConn.totalCount ?? comments.length,
-        hasMoreNestedComments: Boolean(commentsConn.pageInfo?.hasNextPage) && !includeBodies,
-        comments: comments.map((c) => ({
-          id: String(c.id || ''),
-          author: c.author?.login ? String(c.author.login) : 'unknown',
-          body: includeBodies ? String(c.body || '') : undefined
-        }))
+        id: String(t.id), isResolved: Boolean(t.isResolved), isOutdated: Boolean(t.isOutdated),
+        path: t.path || '', line: t.line ?? t.originalLine ?? null, totalCount: cc.totalCount ?? comments.length,
+        hasMoreNestedComments: Boolean(cc.pageInfo?.hasNextPage) && !includeBodies,
+        comments: comments.map((c) => ({ id: String(c.id || ''), author: c.author?.login ? String(c.author.login) : 'unknown', body: includeBodies ? String(c.body || '') : undefined }))
       });
     }
-    const pInfo = rt?.pageInfo || { hasNextPage: false, endCursor: null };
-    if (!pInfo.hasNextPage) {
-      return { viewer, prMeta, threads };
-    }
-    cursor = pInfo.endCursor;
+    if (!rt?.pageInfo?.hasNextPage) return { viewer, prMeta, threads };
+    cursor = rt.pageInfo.endCursor;
   }
   fail('PR_PAGINATION_INCOMPLETE', `Review thread pagination reached --max-pages (${maxPages})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 }
 
-// --- R003: Operation identity, marker formatting & collision detection ---
+// --- R003 / R013: Operation identity & shared remote object verifier (reused by R009, R011, R013!) ---
 function computeOperationIdentity(parts) {
   const canonical = JSON.stringify({
-    repo: parts.repo.toLowerCase(),
-    pr: parts.pr,
-    actor: parts.actor.toLowerCase(),
-    op: parts.op,
-    target_kind: parts.targetKind || '',
-    target_id: parts.targetId || '',
-    reviewed_sha: parts.reviewedSha.toLowerCase(),
-    mode: parts.mode || '',
-    event: parts.event || '',
-    payload_sha256: sha256Hex(normalizeText(parts.normalizedPayload))
+    repo: parts.repo.toLowerCase(), pr: parts.pr, actor: parts.actor.toLowerCase(), op: parts.op,
+    target_kind: parts.targetKind || '', target_id: parts.targetId || '', reviewed_sha: parts.reviewedSha.toLowerCase(),
+    mode: parts.mode || '', event: parts.event || '', payload_sha256: sha256Hex(normalizeText(parts.normalizedPayload))
   });
   const opHash = sha256Hex(canonical).slice(0, 16);
   const key = parts.explicitKey || `auto-${opHash}`;
-  const marker = `<!-- b3-pr-key:${key};op=${opHash} -->`;
-  return { key, opHash, marker };
+  return { key, opHash, marker: `<!-- b3-pr-key:${key};op=${opHash} -->` };
 }
 
 function appendMarker(body, marker) {
@@ -841,382 +586,466 @@ function appendMarker(body, marker) {
   return cleaned ? `${cleaned}\n\n${marker}` : marker;
 }
 
-function scanRemoteIdempotency(items, viewerLogin, identity, expectedNormalizedBody, allowLegacyFallback = true) {
+function verifyInlineCommentsMatch(expectedInline, remoteComments) {
+  if (!expectedInline || expectedInline.length === 0) return true;
+  if (!Array.isArray(remoteComments) || remoteComments.length !== expectedInline.length) return false;
+  const returnedKeys = new Set(remoteComments.map((rc) => `${rc.path}:${rc.line || rc.original_line}:${String(rc.side || '').toUpperCase()}:${normalizeText(rc.body || '')}`));
+  return expectedInline.every((ic) => returnedKeys.has(`${ic.path}:${ic.line}:${ic.side}:${normalizeText(ic.body)}`));
+}
+
+function verifyRemoteObject(spec, maxPages) {
+  const { kind, repo, pr, viewer, createdId, threadId, expectedHead, expectedBody, expectedBodySha256, marker, event, expectedInline } = spec;
+  const actorLower = String(viewer || '').toLowerCase();
+  const bodyMatches = (remoteBody) => {
+    const str = String(remoteBody || '');
+    if (marker && !str.includes(marker)) return false;
+    const stripped = stripMarkers(str);
+    if (expectedBody !== undefined && stripped !== stripMarkers(expectedBody)) return false;
+    if (expectedBodySha256 && sha256Hex(stripped) !== expectedBodySha256) return false;
+    return true;
+  };
+  const [owner, name] = repo.split('/');
+
+  if (kind === 'review_thread_reply') {
+    const q = `query($owner: String!, $repo: String!, $pr: Int!, $threadId: ID!, $commentId: ID!) {
+      repository(owner: $owner, name: $repo) { pullRequest(number: $pr) { state headRefOid } }
+      thread: node(id: $threadId) { ... on PullRequestReviewThread { id isResolved pullRequest { number repository { nameWithOwner } } } }
+      comment: node(id: $commentId) { ... on PullRequestReviewComment { id author { login } body pullRequest { number } } }
+    }`;
+    const d = ghGraphQL(q, { owner, repo: name, pr, threadId, commentId: createdId });
+    const postState = String(d.repository?.pullRequest?.state || '');
+    const postHead = String(d.repository?.pullRequest?.headRefOid || '').toLowerCase();
+    const c = d.comment;
+    const t = d.thread;
+    if (!c) return { found: false, ok: false, postState, postHead, reason: 'comment_not_found' };
+    const tOwner = String(t?.pullRequest?.repository?.nameWithOwner || '').toLowerCase();
+    const ok = String(c.id) === String(createdId) &&
+      String(c.author?.login || '').toLowerCase() === actorLower &&
+      Number(c.pullRequest?.number) === pr &&
+      Boolean(t && String(t.id) === threadId && (!tOwner || tOwner === repo.toLowerCase())) &&
+      bodyMatches(c.body);
+    return { found: true, ok, postState, postHead, reason: ok ? 'verified' : 'content_or_target_mismatch' };
+  }
+
+  if (kind === 'issue_comment') {
+    const vRes = ghRestGet(`repos/${repo}/issues/comments/${createdId}`, { allowNotFound: true });
+    const postHeader = fetchPrHeader(owner, name, pr);
+    const c = vRes.data;
+    if (vRes.notFound || !c) return { found: false, ok: false, postState: postHeader.state, postHead: postHeader.headSha, reason: 'comment_not_found' };
+    const ok = String(c.id) === String(createdId) &&
+      String(c.user?.login || '').toLowerCase() === actorLower &&
+      String(c.issue_url || '').endsWith(`/issues/${pr}`) &&
+      bodyMatches(c.body);
+    return { found: true, ok, postState: postHeader.state, postHead: postHeader.headSha, reason: ok ? 'verified' : 'content_or_target_mismatch' };
+  }
+
+  if (kind === 'pull_review') {
+    const vRes = ghRestGet(`repos/${repo}/pulls/${pr}/reviews/${createdId}`, { allowNotFound: true });
+    const postHeader = fetchPrHeader(owner, name, pr);
+    const r = vRes.data;
+    if (vRes.notFound || !r) return { found: false, ok: false, postState: postHeader.state, postHead: postHeader.headSha, reason: 'review_not_found' };
+    const revState = String(r.state || '').toUpperCase();
+    const stateOk = revState !== 'DISMISSED' && (revState === EVENT_TO_REVIEW_STATE[event] || revState === event);
+    const commitOk = String(r.commit_id || '').toLowerCase() === String(expectedHead || '').toLowerCase();
+    const revComments = (expectedInline && expectedInline.length > 0)
+      ? fetchRestPaginated(`repos/${repo}/pulls/${pr}/reviews/${createdId}/comments`, maxPages)
+      : [];
+    const inlineOk = verifyInlineCommentsMatch(expectedInline, revComments);
+    const ok = String(r.id) === String(createdId) &&
+      String(r.user?.login || '').toLowerCase() === actorLower &&
+      stateOk && commitOk && bodyMatches(r.body) && inlineOk;
+    return { found: true, ok, postState: postHeader.state, postHead: postHeader.headSha, reason: ok ? 'verified' : `review_mismatch(state=${revState},commitOk=${commitOk},inlineOk=${inlineOk})` };
+  }
+
+  if (kind === 'resolve_thread') {
+    const q = `query($owner: String!, $repo: String!, $pr: Int!, $threadId: ID!) {
+      repository(owner: $owner, name: $repo) { pullRequest(number: $pr) { state headRefOid } }
+      node(id: $threadId) { ... on PullRequestReviewThread { id isResolved pullRequest { number repository { nameWithOwner } } } }
+    }`;
+    const d = ghGraphQL(q, { owner, repo: name, pr, threadId });
+    const postState = String(d.repository?.pullRequest?.state || '');
+    const postHead = String(d.repository?.pullRequest?.headRefOid || '').toLowerCase();
+    const t = d.node;
+    if (!t) return { found: false, ok: false, postState, postHead, reason: 'thread_not_found' };
+    const tOwner = String(t.pullRequest?.repository?.nameWithOwner || '').toLowerCase();
+    const ok = String(t.id) === threadId && Boolean(t.isResolved) && tOwner === repo.toLowerCase() && Number(t.pullRequest?.number) === pr;
+    return { found: true, ok, isResolved: Boolean(t.isResolved), postState, postHead, reason: ok ? 'verified' : 'thread_not_resolved_or_mismatch' };
+  }
+
+  fail('PR_API_ERROR', `Unknown verification kind: ${kind}`);
+}
+
+function checkIdempotencyWithRevalidation(items, viewerLogin, identity, revalidateCandidate) {
   const actorLower = viewerLogin.toLowerCase();
-  const expectedStripped = stripMarkers(expectedNormalizedBody);
   for (const item of items) {
-    const author = String(item.author || '').toLowerCase();
-    if (author !== actorLower) continue;
+    if (String(item.author || '').toLowerCase() !== actorLower) continue;
     const body = String(item.body || '');
-    let match;
     MARKER_SCAN_RE.lastIndex = 0;
-    while ((match = MARKER_SCAN_RE.exec(body)) !== null) {
-      const foundKey = match[1];
-      const foundOp = match[2] || '';
-      if (foundKey === identity.key) {
-        if (foundOp) {
-          if (foundOp === identity.opHash) {
-            return { status: 'MATCH', existingId: String(item.id) };
-          }
-          return { status: 'COLLISION', existingId: String(item.id), existingOp: foundOp };
-        }
-        // Legacy marker without ;op= -> compare normalized body text only when allowed (summary/reply).
-        if (allowLegacyFallback && stripMarkers(body) === expectedStripped) {
-          return { status: 'MATCH', existingId: String(item.id) };
-        }
-        return { status: 'COLLISION', existingId: String(item.id), existingOp: 'legacy-mismatch' };
+    let m;
+    while ((m = MARKER_SCAN_RE.exec(body)) !== null) {
+      const foundKey = m[1];
+      const foundOp = m[2] || '';
+      const keyMatch = foundKey === identity.key;
+      const opMatch = Boolean(foundOp && foundOp === identity.opHash);
+      if (keyMatch && (!foundOp || !opMatch)) {
+        return { status: 'COLLISION', existingId: String(item.id), reason: !foundOp ? 'legacy_marker_missing_op_hash' : 'op_hash_mismatch' };
       }
-      if (foundOp && foundOp === identity.opHash) {
-        return { status: 'MATCH', existingId: String(item.id) };
+      if (keyMatch || opMatch) {
+        const check = revalidateCandidate(item, identity.marker);
+        if (check.ok) return { status: 'MATCH', existingId: String(item.id) };
+        return { status: 'REMOTE_MISMATCH', existingId: String(item.id), reason: check.reason || 'remote_object_modified' };
       }
     }
   }
   return { status: 'NONE' };
 }
 
-function runPostWriteGuarded(statePath, ctx, fn) {
-  try {
-    return fn();
-  } catch (err) {
-    if (err instanceof B3Exit && (err.payload?.status === 'PR_POST_WRITE_UNVERIFIED' || err.payload?.status === 'PR_POST_WRITE_HEAD_MOVED')) {
-      throw err;
-    }
-    const reason = err instanceof B3Exit ? `${err.payload?.status}: ${err.payload?.error}` : sanitizeUntrustedText(err?.message || String(err)).slice(0, 240);
-    recordAuditState(statePath, {
-      action: ctx.action,
-      status: 'PR_POST_WRITE_UNVERIFIED',
-      reconciliation_required: true,
-      repo: ctx.repo,
-      pr: ctx.pr,
-      ...(ctx.extra || {}),
-      detail: reason
-    }, { critical: false });
-    fail(
-      'PR_POST_WRITE_UNVERIFIED',
-      `Post-write verification interrupted after mutation (${reason}); reconcile remote state before retrying`,
-      EXIT_ERROR,
-      { outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, ...(ctx.extra || {}) }
-    );
-  }
-}
-
-// --- R006: Unified diff anchor parser ---
+// --- R014: Strict unified diff hunk validator ---
 function parseUnifiedDiffAnchors(patch) {
-  if (typeof patch !== 'string' || !patch.trim()) {
-    return null;
-  }
+  if (typeof patch !== 'string' || !patch.trim()) return { ok: false, reason: 'missing_or_empty_patch' };
   const rightLines = new Set();
   const leftLines = new Set();
+  const lines = patch.split(/\r?\n/);
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+
+  let sawHunk = false;
+  let inHunk = false;
   let leftLine = 0;
   let rightLine = 0;
-  let sawHunk = false;
-  for (const rawLine of patch.split(/\r?\n/)) {
-    const hunkMatch = rawLine.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (hunkMatch) {
+  let expLeft = 0;
+  let expRight = 0;
+  let seenLeft = 0;
+  let seenRight = 0;
+  const hunkBalanced = () => !inHunk || (seenLeft === expLeft && seenRight === expRight);
+
+  for (const rawLine of lines) {
+    const hunk = rawLine.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (hunk) {
+      if (!hunkBalanced()) return { ok: false, reason: 'truncated_or_count_mismatch' };
       sawHunk = true;
-      leftLine = Number.parseInt(hunkMatch[1], 10);
-      rightLine = Number.parseInt(hunkMatch[2], 10);
+      inHunk = true;
+      leftLine = Number.parseInt(hunk[1], 10);
+      expLeft = hunk[2] !== undefined ? Number.parseInt(hunk[2], 10) : 1;
+      rightLine = Number.parseInt(hunk[3], 10);
+      expRight = hunk[4] !== undefined ? Number.parseInt(hunk[4], 10) : 1;
+      seenLeft = 0;
+      seenRight = 0;
       continue;
     }
-    if (!sawHunk) continue;
+    if (!inHunk) {
+      if (/^(diff --git |index |--- |\+\+\+ |new file|deleted file|old mode|new mode|rename |similarity )/.test(rawLine)) continue;
+      return { ok: false, reason: 'malformed_diff_preamble' };
+    }
     if (rawLine.startsWith('+')) {
-      rightLines.add(rightLine);
-      rightLine += 1;
+      rightLines.add(rightLine++);
+      seenRight += 1;
     } else if (rawLine.startsWith('-')) {
-      leftLines.add(leftLine);
-      leftLine += 1;
+      leftLines.add(leftLine++);
+      seenLeft += 1;
     } else if (rawLine.startsWith(' ')) {
-      leftLines.add(leftLine);
-      rightLines.add(rightLine);
-      leftLine += 1;
-      rightLine += 1;
+      leftLines.add(leftLine++);
+      rightLines.add(rightLine++);
+      seenLeft += 1;
+      seenRight += 1;
+    } else if (rawLine.startsWith('\\ No newline at end of file')) {
+      continue;
+    } else {
+      return { ok: false, reason: 'malformed_hunk_line' };
     }
+    if (seenLeft > expLeft || seenRight > expRight) return { ok: false, reason: 'hunk_line_count_overflow' };
   }
-  return sawHunk ? { rightLines, leftLines } : null;
+  if (!sawHunk || !hunkBalanced()) return { ok: false, reason: 'truncated_or_count_mismatch' };
+  return { ok: true, rightLines, leftLines };
 }
 
-// --- R001: Verification evidence & b3-verify-v1 receipt validator ---
-function parseVerifyReceipt(receiptText) {
-  const map = {};
-  for (const rawLine of receiptText.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const k = line.slice(0, eq).trim();
-    const v = line.slice(eq + 1).trim();
-    map[k] = v;
+// --- R001: Canonical B3 verify-check integration ---
+function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expectedCmd, requiredPaths) {
+  const headRes = spawnSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', shell: false, windowsHide: true });
+  if (headRes.error || headRes.status !== 0) {
+    fail('PR_VERIFY_REQUIRED', `Unable to read local Git HEAD in ${repoRoot} for canonical verify-check`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
-  return map;
+  const localHead = headRes.stdout.trim().toLowerCase();
+  if (localHead !== expectedHead) {
+    fail('PR_VERIFY_REQUIRED', `Local repository HEAD (${localHead}) does not match expected remote PR HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+
+  const realRoot = fs.realpathSync(repoRoot);
+  const realReceipt = fs.realpathSync(receiptFullPath);
+  const relReceipt = path.relative(realRoot, realReceipt).replace(/\\/g, '/');
+  if (!relReceipt || relReceipt === '.' || relReceipt.startsWith('..') || path.isAbsolute(relReceipt) || relReceipt.includes(':')) {
+    fail('PR_VERIFY_REQUIRED', `Verification receipt must reside inside repository root (${repoRoot})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+
+  const reqCsv = requiredPaths.join(',');
+  let guardRes;
+  if (process.platform === 'win32') {
+    guardRes = spawnSync('powershell', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(SCRIPT_ROOT, 'b3-guard.ps1'),
+      'verify-check', '-RepoRoot', repoRoot, '-ReceiptPath', relReceipt, '-ExpectedCmd', expectedCmd, '-RelevantPaths', reqCsv
+    ], { encoding: 'utf8', shell: false, windowsHide: true });
+  } else {
+    guardRes = spawnSync('bash', [
+      path.join(SCRIPT_ROOT, 'b3-guard.sh'),
+      'verify-check', '--repo-root', repoRoot, '--receipt-path', relReceipt, '--expected-cmd', expectedCmd, '--relevant-paths', reqCsv
+    ], { encoding: 'utf8', shell: false, windowsHide: true });
+  }
+  const guardOut = `${guardRes.stdout || ''}\n${guardRes.stderr || ''}`.trim();
+  if (guardRes.error || guardRes.status !== 0 || !guardOut.includes('VERIFY_VALID:')) {
+    fail('PR_VERIFY_REQUIRED', `Canonical b3-guard verify-check failed (exit ${guardRes.status ?? 'err'}): ${sanitizeUntrustedText(guardOut).slice(0, 260)}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+
+  const receiptText = readSafeInputFile(receiptFullPath, 'verify_receipt_path');
+  const headMatch = receiptText.match(/^head_sha=([0-9a-f]{40})$/m);
+  if (!headMatch || headMatch[1].toLowerCase() !== expectedHead) {
+    fail('PR_VERIFY_REQUIRED', `Receipt head_sha (${headMatch ? headMatch[1] : 'missing'}) does not match exact PR HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+  return { guardMessage: guardOut.split(/\r?\n/)[0] };
 }
 
-function pathMatchesRelevant(targetPath, relevantPaths) {
-  const normTarget = targetPath.replace(/\\/g, '/');
-  for (const rp of relevantPaths) {
-    const clean = rp.trim().replace(/\\/g, '/').replace(/\/+$/, '');
-    if (!clean) continue;
-    if (normTarget === clean || normTarget.startsWith(`${clean}/`)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function parseAndValidateEvidenceFile(evidencePath, repoFull, prNumber, expectedHead, threadId, fixCommit) {
+function parseResolveEvidence(evidencePath, repoFull, prNumber, expectedHead, threadId, fixCommit) {
   const raw = readSafeInputFile(evidencePath, '--evidence-file');
   let ev;
-  try {
-    ev = JSON.parse(raw);
-  } catch {
-    fail('PR_VERIFY_REQUIRED', '--evidence-file is not valid JSON', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (!ev || typeof ev !== 'object' || ev.schema !== 'b3-pr-verify-evidence-v1') {
-    fail('PR_VERIFY_REQUIRED', 'Evidence schema must be b3-pr-verify-evidence-v1', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (String(ev.repo || '').toLowerCase() !== repoFull.toLowerCase()) {
-    fail('PR_VERIFY_REQUIRED', `Evidence repo (${ev.repo}) does not match ${repoFull}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (Number(ev.pr) !== prNumber) {
-    fail('PR_VERIFY_REQUIRED', `Evidence PR (${ev.pr}) does not match #${prNumber}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (String(ev.head_sha || '').toLowerCase() !== expectedHead) {
-    fail('PR_VERIFY_REQUIRED', `Evidence head_sha (${ev.head_sha}) does not match expected HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (String(ev.thread_id || '') !== threadId) {
-    fail('PR_VERIFY_REQUIRED', `Evidence thread_id (${ev.thread_id}) does not match ${threadId}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (String(ev.fix_commit || '').toLowerCase() !== fixCommit) {
-    fail('PR_VERIFY_REQUIRED', `Evidence fix_commit (${ev.fix_commit}) does not match ${fixCommit}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
+  try { ev = JSON.parse(raw); } catch { fail('PR_VERIFY_REQUIRED', '--evidence-file is not valid JSON', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false }); }
+  const blocked = (msg) => fail('PR_VERIFY_REQUIRED', msg, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  if (!ev || typeof ev !== 'object' || ev.schema !== 'b3-pr-verify-evidence-v1') blocked('Evidence schema must be b3-pr-verify-evidence-v1');
+  if (String(ev.repo || '').toLowerCase() !== repoFull.toLowerCase()) blocked(`Evidence repo (${ev.repo}) does not match ${repoFull}`);
+  if (Number(ev.pr) !== prNumber) blocked(`Evidence PR (${ev.pr}) does not match #${prNumber}`);
+  if (String(ev.head_sha || '').toLowerCase() !== expectedHead) blocked(`Evidence head_sha (${ev.head_sha}) does not match expected HEAD (${expectedHead})`);
+  if (String(ev.thread_id || '') !== threadId) blocked(`Evidence thread_id (${ev.thread_id}) does not match ${threadId}`);
+  if (String(ev.fix_commit || '').toLowerCase() !== fixCommit) blocked(`Evidence fix_commit (${ev.fix_commit}) does not match ${fixCommit}`);
   const basis = String(ev.resolution_basis || '');
-  if (!ALLOWED_BASES.has(basis)) {
-    fail('PR_VERIFY_REQUIRED', `Invalid evidence resolution_basis (${basis})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  let primaryThreadId = '';
-  if (basis === 'DUPLICATE_FIXED') {
-    primaryThreadId = String(ev.primary_thread_id || '');
-    if (!ID_RE.test(primaryThreadId) || primaryThreadId === threadId) {
-      fail('PR_VERIFY_REQUIRED', 'DUPLICATE_FIXED evidence requires a distinct valid primary_thread_id', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-  }
-  const targetPath = String(ev.target_path || '').trim();
-  if (!targetPath || hasControlChars(targetPath) || targetPath.includes('\\') || targetPath.split('/').includes('..')) {
-    fail('PR_VERIFY_REQUIRED', 'Evidence requires valid target_path', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  const fixedPaths = Array.isArray(ev.fixed_paths)
-    ? ev.fixed_paths.map((p) => String(p || '').trim()).filter(Boolean)
-    : [];
-  for (const fp of fixedPaths) {
-    if (hasControlChars(fp) || fp.includes('\\') || fp.split('/').includes('..')) {
-      fail('PR_VERIFY_REQUIRED', `Invalid fixed_paths entry in evidence: ${fp}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-  }
+  if (!ALLOWED_BASES.has(basis)) blocked(`Invalid evidence resolution_basis (${basis})`);
+  const primaryThreadId = basis === 'DUPLICATE_FIXED' ? String(ev.primary_thread_id || '') : '';
+  if (basis === 'DUPLICATE_FIXED' && (!ID_RE.test(primaryThreadId) || primaryThreadId === threadId)) blocked('DUPLICATE_FIXED requires a distinct valid primary_thread_id');
+  const targetPath = validateRelPath(String(ev.target_path || '').trim(), 'evidence.target_path');
+  const fixedPaths = Array.isArray(ev.fixed_paths) ? ev.fixed_paths.map((p, i) => validateRelPath(String(p || '').trim(), `evidence.fixed_paths[${i}]`)) : [];
+  const checkedCommand = String(ev.checked_command || '').trim();
   const summary = String(ev.summary || '').trim();
-  const checkedCmd = String(ev.checked_command || '').trim();
-  if (summary.length < 10 || !checkedCmd) {
-    fail('PR_VERIFY_REQUIRED', 'Evidence requires non-empty checked_command and descriptive summary', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-
-  // Validate raw verify_receipt_path BEFORE path.resolve so .. traversal / drive-relative / UNC cannot be collapsed away.
+  if (!checkedCommand || summary.length < 10) blocked('Evidence requires non-empty checked_command and descriptive summary (>=10 chars)');
   const receiptRel = String(ev.verify_receipt_path || '').trim();
-  if (!receiptRel) {
-    fail('PR_VERIFY_REQUIRED', 'Evidence requires verify_receipt_path pointing to a b3-verify-v1 receipt', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
+  if (!receiptRel) blocked('Evidence requires verify_receipt_path');
   validateRawPathSyntax(receiptRel, 'verify_receipt_path', true);
-  const receiptFullPath = path.isAbsolute(receiptRel)
-    ? receiptRel
-    : path.resolve(path.dirname(path.resolve(evidencePath)), receiptRel);
-  const receiptText = readSafeInputFile(receiptFullPath, 'verify_receipt_path');
-  const receipt = parseVerifyReceipt(receiptText);
-  if (receipt.schema !== 'b3-verify-v1') {
-    fail('PR_VERIFY_REQUIRED', `Receipt schema must be b3-verify-v1 (got ${receipt.schema || 'missing'})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (receipt.status !== 'PASS' || receipt.exit_code !== '0') {
-    fail('PR_VERIFY_REQUIRED', `Verification receipt did not pass (status=${receipt.status}, exit_code=${receipt.exit_code})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (!SHA_RE.test(receipt.head_sha || '') || receipt.head_sha.toLowerCase() !== expectedHead) {
-    fail('PR_VERIFY_REQUIRED', `Verification receipt head_sha (${receipt.head_sha || 'missing'}) is stale vs expected HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (!SHA_RE.test(receipt.tree_hash || '')) {
-    fail('PR_VERIFY_REQUIRED', 'Verification receipt missing valid 40-hex tree_hash', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (!receipt.command || !receipt.timestamp_utc || Number.isNaN(Date.parse(receipt.timestamp_utc))) {
-    fail('PR_VERIFY_REQUIRED', 'Verification receipt missing valid command or timestamp_utc', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (receipt.log_path && receipt.log_path !== 'none') {
-    validateRawPathSyntax(receipt.log_path, 'receipt.log_path', true);
-  }
-  const receiptScope = String(receipt.scope || '').toLowerCase();
-  const rawRelPaths = String(receipt.relevant_paths || '').trim();
-  const relevantPaths = rawRelPaths && rawRelPaths.toLowerCase() !== 'all'
-    ? rawRelPaths.split(',').map((s) => s.trim()).filter(Boolean)
-    : [];
-  const receiptCoversAll = receiptScope === 'full' || rawRelPaths.toLowerCase() === 'all' || relevantPaths.includes('.');
-  const checkPaths = fixedPaths.length > 0 ? fixedPaths : [targetPath];
-  if (!receiptCoversAll) {
-    const allCovered = checkPaths.every((p) => pathMatchesRelevant(p, relevantPaths));
-    if (!allCovered) {
-      fail('PR_VERIFY_REQUIRED', `Verification receipt relevant_paths (${rawRelPaths || 'none'}) does not cover all target/fix paths (${checkPaths.join(', ')})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-  }
-
-  return {
-    basis,
-    primaryThreadId,
-    targetPath,
-    fixedPaths: checkPaths,
-    hasExplicitFixedPaths: fixedPaths.length > 0,
-    receiptCoversAll,
-    relevantPaths,
-    checkedCommand: checkedCmd,
-    receiptCommand: receipt.command,
-    receiptHeadSha: receipt.head_sha.toLowerCase(),
-    receiptTreeHash: receipt.tree_hash.toLowerCase(),
-    receiptTimestamp: receipt.timestamp_utc
-  };
+  const receiptFullPath = path.isAbsolute(receiptRel) ? receiptRel : path.resolve(path.dirname(path.resolve(evidencePath)), receiptRel);
+  validateSafePath(receiptFullPath, 'verify_receipt_path', { expectDir: false, mustExist: true });
+  return { basis, primaryThreadId, targetPath, fixedPaths, checkedCommand, receiptFullPath };
 }
 
-// --- Subcommand 1: fetch (R008: metadata-first + targeted --thread-id) ---
+// --- Unified guarded mutation lifecycle ---
+function executeGuardedMutation({ statePath, repo, prNumber, expectedHead, action, maxPages, prepare, mutate, verifySpec, onSuccessPayload }) {
+  return withStateLock(statePath, action, () => {
+    const pending = getUnresolvedPendingRecords(readStateRecords(statePath), repo.full, prNumber);
+    if (pending.length > 0) {
+      fail('PR_RECONCILIATION_REQUIRED', `Unresolved prior operation(s) (${pending.map((p) => p.status).join(', ')}) on ${repo.full}#${prNumber} require reconciliation via reconcile subcommand`, EXIT_BLOCKED, {
+        outcome: 'blocked_before_write', mutated: false, pending_records: pending
+      });
+    }
+    const header = fetchPrHeader(repo.owner, repo.name, prNumber);
+    assertOpenAndFreshHead(header, expectedHead);
+
+    const prep = prepare(header);
+    if (prep.earlyEmit) {
+      if (prep.auditRecord) appendStateRecord(statePath, prep.auditRecord);
+      emit(prep.earlyEmit, EXIT_OK);
+    }
+
+    assertOpenAndFreshHead(fetchPrHeader(repo.owner, repo.name, prNumber), expectedHead);
+
+    const opId = `${action}-${crypto.randomBytes(8).toString('hex')}`;
+    const pendingRecord = {
+      op_id: opId, action, status: 'PENDING', repo: repo.full, pr: prNumber, actor: header.viewer,
+      reviewed_sha: expectedHead, ...prep.pendingMeta
+    };
+    appendStateRecord(statePath, pendingRecord, true);
+
+    let createdId = null;
+    const guardPostWrite = (fn) => {
+      try {
+        return fn();
+      } catch (err) {
+        if (err instanceof B3Exit && ['PR_POST_WRITE_UNVERIFIED', 'PR_POST_WRITE_HEAD_MOVED'].includes(err.payload?.status)) throw err;
+        const reason = err instanceof B3Exit ? `${err.payload?.status}: ${err.payload?.error}` : sanitizeUntrustedText(err?.message || String(err)).slice(0, 240);
+        appendStateRecord(statePath, { ...pendingRecord, status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, created_id: createdId, detail: reason });
+        fail('PR_POST_WRITE_UNVERIFIED', `Post-write step interrupted (${reason}); run reconcile before retrying`, EXIT_ERROR, {
+          outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, op_id: opId, ...(createdId ? { created_id: createdId } : {}), ...(prep.extraIds || {})
+        });
+      }
+    };
+
+    const mutResult = guardPostWrite(() => mutate(prep, header));
+    createdId = mutResult?.createdId ? String(mutResult.createdId) : null;
+    if (mutResult?.requireId && !createdId) {
+      appendStateRecord(statePath, { ...pendingRecord, status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, detail: 'missing_created_id' });
+      fail('PR_POST_WRITE_UNVERIFIED', `${action} did not return a created object ID`, EXIT_ERROR, {
+        outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, op_id: opId, ...(prep.extraIds || {})
+      });
+    }
+
+    const vRes = guardPostWrite(() => verifyRemoteObject(verifySpec(prep, header, createdId), maxPages));
+    if (!vRes.ok) {
+      appendStateRecord(statePath, { ...pendingRecord, status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, created_id: createdId, detail: vRes.reason });
+      fail('PR_POST_WRITE_UNVERIFIED', `Remote verification failed for ${action} (${vRes.reason})`, EXIT_ERROR, {
+        outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, op_id: opId, ...(createdId ? { created_id: createdId } : {}), ...(prep.extraIds || {})
+      });
+    }
+    if (vRes.postHead !== expectedHead || vRes.postState !== 'OPEN') {
+      appendStateRecord(statePath, { ...pendingRecord, status: 'PR_POST_WRITE_HEAD_MOVED', reconciliation_required: true, created_id: createdId, remote_head: vRes.postHead, remote_state: vRes.postState });
+      fail('PR_POST_WRITE_HEAD_MOVED', `PR state/HEAD changed concurrently after ${action} (state=${vRes.postState}, head=${expectedHead} -> ${vRes.postHead})`, EXIT_BLOCKED, {
+        outcome: 'mutated_but_stale', mutated: true, reconciliation_required: true, op_id: opId, ...(createdId ? { created_id: createdId } : {}), ...(prep.extraIds || {}), expected_head: expectedHead, remote_head: vRes.postHead, remote_state: vRes.postState
+      });
+    }
+
+    const finalPayload = onSuccessPayload(prep, header, createdId, vRes);
+    appendStateRecord(statePath, { ...pendingRecord, status: finalPayload.status, reconciliation_required: false, created_id: createdId, head_sha: vRes.postHead });
+    emit(finalPayload, EXIT_OK);
+  });
+}
+
+// --- Subcommand 1: fetch (read-only; NEVER modifies/clears pending state) ---
 function handleFetch(flags) {
   const repo = validateRepo(flags.repo);
   const prNumber = validatePr(flags.pr);
   const maxPages = validateMaxPages(flags['max-pages']);
   const includeResolved = Boolean(flags['include-resolved']);
   const includeBodies = Boolean(flags['include-bodies']);
-  const selectedThreadIds = flags['thread-id'] ? validateThreadIdList(flags['thread-id']) : [];
-  const statePath = flags['state-file'] ? validateSafeFilePath(flags['state-file'], '--state-file', { mustExist: false, rejectTraversal: true }) : '';
+  const selectedIds = flags['thread-id'] ? String(flags['thread-id']).split(',').map((s) => s.trim()).filter(Boolean).map((id) => validateId(id, '--thread-id')) : [];
 
-  if (selectedThreadIds.length > 0) {
-    // R008: targeted single/multi-thread retrieval without fetching all PR threads.
+  if (selectedIds.length > 0) {
+    if (selectedIds.length > 50) fail('PR_INVALID_ARGS', 'At most 50 --thread-id values allowed');
     const header = fetchPrHeader(repo.owner, repo.name, prNumber);
-    const fetchedThreads = [];
-    for (const tid of selectedThreadIds) {
+    const reviewThreads = selectedIds.map((tid) => {
       const t = fetchSingleReviewThread(repo.full, prNumber, tid, maxPages, true);
-      if (!t) {
-        fail('PR_TARGET_MISMATCH', `Review thread ${tid} does not belong to ${repo.full}#${prNumber}`, EXIT_ERROR);
-      }
-      fetchedThreads.push({
-        id: t.id,
-        target_kind: 'review_thread',
-        is_resolved: t.isResolved,
-        is_outdated: t.isOutdated,
-        path: frameUntrustedText(t.path),
-        line: t.line,
-        comment_count: t.comments.length,
-        authors: [...new Set(t.comments.map((c) => c.author))].map((a) => frameUntrustedText(a)),
-        comments: t.comments.map((c) => ({
-          id: c.id,
-          author: frameUntrustedText(c.author),
-          body: frameUntrustedText(c.body)
-        }))
-      });
-    }
-    // Do NOT clear PR-wide reconciliation on partial --thread-id fetch; require full PR fetch.
+      if (!t) fail('PR_TARGET_MISMATCH', `Review thread ${tid} does not belong to ${repo.full}#${prNumber}`);
+      return {
+        id: t.id, target_kind: 'review_thread', is_resolved: t.isResolved, is_outdated: t.isOutdated,
+        path: frameUntrustedText(t.path), line: t.line, comment_count: t.comments.length,
+        authors: [...new Set(t.comments.map((c) => c.author))].map(frameUntrustedText),
+        comments: t.comments.map((c) => ({ id: c.id, author: frameUntrustedText(c.author), body: frameUntrustedText(c.body) }))
+      };
+    });
     emit({
-      status: 'PR_FETCH_OK',
-      retrieval_mode: 'targeted_threads',
-      repo: repo.full,
-      pr: prNumber,
-      viewer: header.viewer,
-      untrusted_data_framed: true,
-      pull_request: {
-        number: prNumber,
-        state: header.state,
-        head_sha: header.headSha
-      },
-      counts: {
-        returned_review_threads: fetchedThreads.length,
-        general_comments: 0
-      },
-      review_threads: fetchedThreads,
-      general_comments: []
+      status: 'PR_FETCH_OK', retrieval_mode: 'targeted_threads', repo: repo.full, pr: prNumber, viewer: header.viewer,
+      untrusted_data_framed: true, pull_request: { number: prNumber, state: header.state, head_sha: header.headSha },
+      counts: { returned_review_threads: reviewThreads.length, general_comments: 0 }, review_threads: reviewThreads, general_comments: []
     }, EXIT_OK);
   }
 
   const { viewer, prMeta, threads } = fetchAllReviewThreads(repo.owner, repo.name, prNumber, maxPages, includeBodies);
-  const rawIssueComments = fetchRestPaginated(`repos/${repo.full}/issues/${prNumber}/comments`, maxPages);
-  const visibleThreads = includeResolved ? threads : threads.filter((t) => !t.isResolved);
-
-  const formattedThreads = visibleThreads.map((t) => {
-    const authors = [...new Set(t.comments.map((c) => c.author))].map((a) => frameUntrustedText(a));
-    const obj = {
-      id: t.id,
-      target_kind: 'review_thread',
-      is_resolved: t.isResolved,
-      is_outdated: t.isOutdated,
-      path: frameUntrustedText(t.path),
-      line: t.line,
-      comment_count: t.totalCount,
-      authors
-    };
-    if (includeBodies) {
-      obj.comments = t.comments.map((c) => ({
-        id: c.id,
-        author: frameUntrustedText(c.author),
-        body: frameUntrustedText(c.body)
-      }));
-    } else if (t.hasMoreNestedComments) {
-      obj.nested_comments_omitted = true;
-    }
-    return obj;
-  });
-
-  const formattedGeneral = rawIssueComments.map((c) => {
-    const obj = {
-      id: String(c.id),
-      target_kind: 'general_comment',
-      resolvable: false,
-      html_url: c.html_url ? String(c.html_url) : null,
-      author: frameUntrustedText(c.user?.login ? c.user.login : 'unknown')
-    };
-    if (includeBodies) {
-      obj.body = frameUntrustedText(c.body || '');
-    }
-    return obj;
-  });
-
-  const prOut = {
-    number: prMeta.number,
-    state: prMeta.state,
-    head_sha: prMeta.headSha,
-    title: frameUntrustedText(prMeta.title),
-    base_ref: frameUntrustedText(prMeta.baseRefName),
-    head_ref: frameUntrustedText(prMeta.headRefName)
-  };
-  if (includeBodies) {
-    prOut.body = frameUntrustedText(prMeta.body);
-  }
-
-  clearReconciliationFlag(statePath, repo.full, prNumber, prMeta.headSha);
+  const rawGen = fetchRestPaginated(`repos/${repo.full}/issues/${prNumber}/comments`, maxPages);
+  const visible = includeResolved ? threads : threads.filter((t) => !t.isResolved);
+  const reviewThreads = visible.map((t) => ({
+    id: t.id, target_kind: 'review_thread', is_resolved: t.isResolved, is_outdated: t.isOutdated,
+    path: frameUntrustedText(t.path), line: t.line, comment_count: t.totalCount,
+    authors: [...new Set(t.comments.map((c) => c.author))].map(frameUntrustedText),
+    ...(includeBodies ? { comments: t.comments.map((c) => ({ id: c.id, author: frameUntrustedText(c.author), body: frameUntrustedText(c.body) })) } : (t.hasMoreNestedComments ? { nested_comments_omitted: true } : {}))
+  }));
+  const generalComments = rawGen.map((c) => ({
+    id: String(c.id), target_kind: 'general_comment', resolvable: false, html_url: c.html_url ? String(c.html_url) : null,
+    author: frameUntrustedText(c.user?.login || 'unknown'), ...(includeBodies ? { body: frameUntrustedText(c.body || '') } : {})
+  }));
   emit({
-    status: 'PR_FETCH_OK',
-    retrieval_mode: includeBodies ? 'full_with_bodies' : 'metadata_first',
-    repo: repo.full,
-    pr: prNumber,
-    viewer,
-    untrusted_data_framed: true,
-    include_resolved: includeResolved,
-    include_bodies: includeBodies,
-    pull_request: prOut,
-    counts: {
-      total_review_threads: threads.length,
-      returned_review_threads: formattedThreads.length,
-      general_comments: formattedGeneral.length
+    status: 'PR_FETCH_OK', retrieval_mode: includeBodies ? 'full_with_bodies' : 'metadata_first', repo: repo.full, pr: prNumber,
+    viewer, untrusted_data_framed: true, include_resolved: includeResolved, include_bodies: includeBodies,
+    pull_request: {
+      number: prMeta.number, state: prMeta.state, head_sha: prMeta.headSha, title: frameUntrustedText(prMeta.title),
+      base_ref: frameUntrustedText(prMeta.baseRefName), head_ref: frameUntrustedText(prMeta.headRefName),
+      ...(includeBodies ? { body: frameUntrustedText(prMeta.body) } : {})
     },
-    review_threads: formattedThreads,
-    general_comments: formattedGeneral
+    counts: { total_review_threads: threads.length, returned_review_threads: reviewThreads.length, general_comments: generalComments.length },
+    review_threads: reviewThreads, general_comments: generalComments
   }, EXIT_OK);
 }
 
-// --- Subcommand 2: reply (R003, R004, R005, R008, R009) ---
+// --- Subcommand 2: reconcile (R011: verifies specific pending ops against actual remote objects) ---
+function handleReconcile(flags) {
+  const repo = validateRepo(flags.repo);
+  const prNumber = validatePr(flags.pr);
+  const maxPages = validateMaxPages(flags['max-pages']);
+  const statePath = resolveCanonicalStatePath(resolveRepoRoot(flags['repo-root']), repo.full, prNumber);
+
+  return withStateLock(statePath, 'reconcile', () => {
+    const pending = getUnresolvedPendingRecords(readStateRecords(statePath), repo.full, prNumber);
+    if (pending.length === 0) {
+      emit({ status: 'PR_RECONCILE_OK', repo: repo.full, pr: prNumber, reconciled_count: 0, outcomes: [] }, EXIT_OK);
+    }
+    const header = fetchPrHeader(repo.owner, repo.name, prNumber);
+    const outcomes = [];
+    let hasUncertain = false;
+
+    const classifyFound = (v, reviewedSha, label) => {
+      if (!v.ok) return { outcome: 'UNCERTAIN', detail: v.reason };
+      if (v.postHead === reviewedSha && v.postState === 'OPEN') return { outcome: 'CONFIRMED_SUCCESS', detail: `verified_${label}` };
+      return { outcome: 'STALE_MUTATION', detail: `${label}_on_moved_or_nonopen_pr(${v.postState},${v.postHead})` };
+    };
+
+    for (const rec of pending) {
+      const opId = rec.op_id || '__legacy__';
+      const actor = String(rec.actor || header.viewer);
+      const marker = rec.key && rec.op_hash ? `<!-- b3-pr-key:${rec.key};op=${rec.op_hash} -->` : '';
+      let outcome = 'UNCERTAIN';
+      let detail = 'unverifiable_record';
+      let resolvedId = rec.created_id || null;
+
+      if (rec.action === 'resolve' && rec.target_id) {
+        const v = verifyRemoteObject({ kind: 'resolve_thread', repo: repo.full, pr: prNumber, viewer: actor, threadId: rec.target_id }, maxPages);
+        if (!v.found) { outcome = 'UNCERTAIN'; detail = 'thread_not_found'; }
+        else if (v.ok) ({ outcome, detail } = classifyFound(v, rec.reviewed_sha, 'resolve'));
+        else if (!v.isResolved && rec.status === 'PENDING') { outcome = 'CONFIRMED_ABSENCE'; detail = 'thread_still_unresolved'; }
+        else { outcome = 'UNCERTAIN'; detail = v.reason; }
+      } else if ((rec.action === 'reply' && rec.target_kind === 'review_thread' && rec.target_id) ||
+                 (rec.action === 'reply' && rec.target_kind === 'general_comment') ||
+                 (rec.action === 'comment' && (rec.transport === 'issue_comment' || rec.transport === 'pull_review'))) {
+        const kind = rec.target_kind === 'review_thread' ? 'review_thread_reply' : (rec.transport === 'pull_review' ? 'pull_review' : 'issue_comment');
+        let cid = resolvedId;
+        if (!cid && marker) {
+          if (kind === 'review_thread_reply') {
+            const th = fetchSingleReviewThread(repo.full, prNumber, rec.target_id, maxPages, true);
+            const hit = th?.comments.find((c) => c.author.toLowerCase() === actor.toLowerCase() && c.body.includes(marker));
+            if (hit) cid = hit.id;
+          } else if (kind === 'issue_comment') {
+            const hit = fetchRestPaginated(`repos/${repo.full}/issues/${prNumber}/comments`, maxPages).find((c) => String(c.user?.login || '').toLowerCase() === actor.toLowerCase() && String(c.body || '').includes(marker));
+            if (hit) cid = String(hit.id);
+          } else {
+            const hit = fetchRestPaginated(`repos/${repo.full}/pulls/${prNumber}/reviews`, maxPages).find((r) => String(r.user?.login || '').toLowerCase() === actor.toLowerCase() && String(r.body || '').includes(marker));
+            if (hit) cid = String(hit.id);
+          }
+        }
+        if (cid) {
+          resolvedId = cid;
+          const v = verifyRemoteObject({
+            kind, repo: repo.full, pr: prNumber, viewer: actor, createdId: cid, threadId: rec.target_id,
+            expectedHead: rec.reviewed_sha, expectedBodySha256: rec.body_sha256, marker, event: rec.event, expectedInline: rec.expected_inline
+          }, maxPages);
+          if (!v.found) { outcome = 'UNCERTAIN'; detail = 'recorded_id_missing_remotely'; }
+          else ({ outcome, detail } = classifyFound(v, rec.reviewed_sha, kind));
+        } else if (rec.status === 'PENDING' && marker) {
+          outcome = 'CONFIRMED_ABSENCE'; detail = `no_matching_${kind}_found`;
+        } else {
+          outcome = 'UNCERTAIN'; detail = 'missing_identity_for_reconciliation';
+        }
+      }
+
+      outcomes.push({ op_id: opId, action: rec.action, outcome, detail, created_id: resolvedId, reviewed_sha: rec.reviewed_sha, remote_head: header.headSha, remote_state: header.state });
+      if (outcome === 'CONFIRMED_SUCCESS') appendStateRecord(statePath, { op_id: opId, action: 'reconcile', status: 'RECONCILED_CONFIRMED', repo: repo.full, pr: prNumber, created_id: resolvedId, remote_head: header.headSha }, true);
+      else if (outcome === 'CONFIRMED_ABSENCE') appendStateRecord(statePath, { op_id: opId, action: 'reconcile', status: 'RECONCILED_ABSENT', repo: repo.full, pr: prNumber, remote_head: header.headSha }, true);
+      else if (outcome === 'STALE_MUTATION') appendStateRecord(statePath, { op_id: opId, action: 'reconcile', status: 'RECONCILED_STALE', repo: repo.full, pr: prNumber, created_id: resolvedId, reviewed_sha: rec.reviewed_sha, remote_head: header.headSha }, true);
+      else hasUncertain = true;
+    }
+
+    if (hasUncertain) {
+      fail('PR_RECONCILIATION_UNCERTAIN', 'One or more pending operations could not be safely reconciled; dependent writes remain blocked', EXIT_BLOCKED, {
+        repo: repo.full, pr: prNumber, remote_head: header.headSha, outcomes
+      });
+    }
+    emit({ status: 'PR_RECONCILE_OK', repo: repo.full, pr: prNumber, remote_head: header.headSha, reconciled_count: outcomes.length, outcomes }, EXIT_OK);
+  });
+}
+
+// --- Subcommand 3: reply ---
 function formatGeneralReplyWithRef(rawBody, targetId, htmlUrl) {
   const clean = normalizeText(rawBody);
-  const alreadyHasRef = (htmlUrl && clean.includes(htmlUrl)) || clean.includes(`#issuecomment-${targetId}`);
-  if (alreadyHasRef) return clean;
-  const refLine = htmlUrl && /^https?:\/\//i.test(htmlUrl)
-    ? `> Replying to [comment #${targetId}](${htmlUrl})`
-    : `> Replying to comment #${targetId} (#issuecomment-${targetId})`;
-  return `${refLine}\n\n${clean}`;
+  if ((htmlUrl && clean.includes(htmlUrl)) || clean.includes(`#issuecomment-${targetId}`)) return clean;
+  const ref = htmlUrl && /^https?:\/\//i.test(htmlUrl) ? `> Replying to [comment #${targetId}](${htmlUrl})` : `> Replying to comment #${targetId} (#issuecomment-${targetId})`;
+  return `${ref}\n\n${clean}`;
 }
 
 function handleReply(flags) {
@@ -1224,243 +1053,95 @@ function handleReply(flags) {
   const prNumber = validatePr(flags.pr);
   const expectedHead = validateSha(flags['expected-head'], '--expected-head');
   const targetKind = flags['target-kind'];
-  if (!ALLOWED_TARGET_KINDS.has(targetKind)) {
-    fail('PR_INVALID_ARGS', 'Invalid --target-kind (expected review_thread|general_comment)', EXIT_ERROR);
-  }
+  if (!ALLOWED_TARGET_KINDS.has(targetKind)) fail('PR_INVALID_ARGS', 'Invalid --target-kind (expected review_thread|general_comment)');
   const targetId = validateId(flags['target-id'], '--target-id');
   const rawBody = readSafeInputFile(flags['body-file'], '--body-file');
-  if (!rawBody.trim()) {
-    fail('PR_INVALID_ARGS', '--body-file is empty', EXIT_ERROR);
-  }
+  if (!rawBody.trim()) fail('PR_INVALID_ARGS', '--body-file is empty');
   const explicitKey = validateKey(flags['idempotency-key']);
   const maxPages = validateMaxPages(flags['max-pages']);
-  const statePath = flags['state-file'] ? validateSafeFilePath(flags['state-file'], '--state-file', { mustExist: false, rejectTraversal: true }) : '';
   const isDraft = Boolean(flags.draft);
   const authWrite = Boolean(flags['authorize-write']);
+  if (isDraft && authWrite) fail('PR_INVALID_ARGS', '--draft cannot be combined with --authorize-write');
 
-  if (isDraft && authWrite) {
-    fail('PR_INVALID_ARGS', '--draft cannot be combined with --authorize-write', EXIT_ERROR);
-  }
   if (isDraft) {
     const previewBase = targetKind === 'general_comment' ? formatGeneralReplyWithRef(rawBody, targetId, null) : normalizeText(rawBody);
-    const draftIdentity = computeOperationIdentity({
-      repo: repo.full, pr: prNumber, actor: 'draft', op: 'reply', targetKind, targetId, reviewedSha: expectedHead, normalizedPayload: previewBase, explicitKey
-    });
-    const preview = appendMarker(previewBase, draftIdentity.marker);
-    if (preview.length > MAX_BODY_CHARS) {
-      fail('PR_FILE_GUARD', `Reply body exceeds ${MAX_BODY_CHARS} chars`, EXIT_ERROR);
-    }
-    emit({
-      status: 'PR_DRAFT_OK',
-      action: 'reply',
-      mutated: false,
-      repo: repo.full,
-      pr: prNumber,
-      expected_head: expectedHead,
-      target_kind: targetKind,
-      target_id: targetId,
-      idempotency_key: draftIdentity.key,
-      operation_hash: draftIdentity.opHash,
-      body_preview: preview
-    }, EXIT_OK);
+    const idObj = computeOperationIdentity({ repo: repo.full, pr: prNumber, actor: 'draft', op: 'reply', targetKind, targetId, reviewedSha: expectedHead, normalizedPayload: previewBase, explicitKey });
+    const preview = appendMarker(previewBase, idObj.marker);
+    if (preview.length > MAX_BODY_CHARS) fail('PR_FILE_GUARD', `Reply body exceeds ${MAX_BODY_CHARS} chars`);
+    emit({ status: 'PR_DRAFT_OK', action: 'reply', mutated: false, repo: repo.full, pr: prNumber, expected_head: expectedHead, target_kind: targetKind, target_id: targetId, idempotency_key: idObj.key, operation_hash: idObj.opHash, body_preview: preview }, EXIT_OK);
   }
-  if (!authWrite) {
-    fail('PR_AUTH_REQUIRED', 'Explicit --authorize-write is required to post a PR reply (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
+  if (!authWrite) fail('PR_AUTH_REQUIRED', 'Explicit --authorize-write is required to post a PR reply (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 
-  return withStateLock(statePath, () => {
-    assertNoPendingReconciliation(statePath, repo.full, prNumber);
-    const header = fetchPrHeader(repo.owner, repo.name, prNumber);
-    assertOpenAndFreshHead(header, expectedHead);
+  const statePath = resolveCanonicalStatePath(resolveRepoRoot(flags['repo-root']), repo.full, prNumber);
 
-    if (targetKind === 'review_thread') {
-      // R008: targeted single-thread retrieval only.
-      const thread = fetchSingleReviewThread(repo.full, prNumber, targetId, maxPages, true);
-      if (!thread) {
-        fail('PR_TARGET_MISMATCH', `Review thread ${targetId} does not belong to ${repo.full}#${prNumber}`, EXIT_ERROR);
-      }
-      const normalizedBody = normalizeText(rawBody);
-      const identity = computeOperationIdentity({
-        repo: repo.full, pr: prNumber, actor: header.viewer, op: 'reply', targetKind, targetId, reviewedSha: expectedHead, normalizedPayload: normalizedBody, explicitKey
-      });
-      const finalBody = appendMarker(normalizedBody, identity.marker);
-      if (finalBody.length > MAX_BODY_CHARS) {
-        fail('PR_FILE_GUARD', `Reply body exceeds ${MAX_BODY_CHARS} chars`, EXIT_ERROR);
-      }
-
-      const idem = scanRemoteIdempotency(thread.comments, header.viewer, identity, normalizedBody);
-      if (idem.status === 'COLLISION') {
-        fail('PR_KEY_COLLISION', `Idempotency key ${identity.key} already used for a different operation on ${targetId} (comment ${idem.existingId})`, EXIT_BLOCKED, {
-          outcome: 'blocked_before_write', mutated: false, existing_comment_id: idem.existingId, key: identity.key
-        });
-      }
-      if (idem.status === 'MATCH') {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_IDEMPOTENT_SKIP', repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash, comment_id: idem.existingId });
-        emit({ status: 'PR_IDEMPOTENT_SKIP', action: 'reply', mutated: false, target_kind: targetKind, target_id: targetId, key: identity.key, operation_hash: identity.opHash, existing_comment_id: idem.existingId }, EXIT_OK);
-      }
-
-      // R004: immediate pre-write freshness recheck after all reads.
-      recheckFreshBeforeMutation(repo.owner, repo.name, prNumber, expectedHead);
-      recordAuditState(statePath, { action: 'reply', status: 'PENDING', repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash }, { critical: true });
-
-      const mut = `
-        mutation($threadId: ID!, $body: String!) {
-          addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
-            comment { id url }
-          }
+  return executeGuardedMutation({
+    statePath, repo, prNumber, expectedHead, action: 'reply', maxPages,
+    prepare(header) {
+      let targetUrl = null;
+      let baseBody = normalizeText(rawBody);
+      let scanItems = [];
+      if (targetKind === 'review_thread') {
+        const thread = fetchSingleReviewThread(repo.full, prNumber, targetId, maxPages, true);
+        if (!thread) fail('PR_TARGET_MISMATCH', `Review thread ${targetId} does not belong to ${repo.full}#${prNumber}`);
+        scanItems = thread.comments;
+      } else {
+        const tRes = ghRestGet(`repos/${repo.full}/issues/comments/${targetId}`, { allowNotFound: true });
+        if (tRes.notFound || !tRes.data || String(tRes.data.id) !== targetId || !String(tRes.data.issue_url || '').endsWith(`/issues/${prNumber}`)) {
+          fail('PR_TARGET_MISMATCH', `General PR comment ${targetId} does not belong to ${repo.full}#${prNumber}`);
         }
-      `;
-      const res = runPostWriteGuarded(statePath, { action: 'reply', repo: repo.full, pr: prNumber, extra: { target_id: targetId, key: identity.key } }, () => ghGraphQL(mut, { threadId: targetId, body: finalBody }));
-      const created = res.addPullRequestReviewThreadReply?.comment;
-      if (!created || !created.id) {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, target_id: targetId, key: identity.key }, { critical: false });
-        fail('PR_POST_WRITE_UNVERIFIED', 'Thread reply did not return a created comment ID', EXIT_ERROR, { outcome: 'mutated_unverified', mutated: true, reconciliation_required: true });
+        targetUrl = tRes.data.html_url ? String(tRes.data.html_url) : null;
+        baseBody = formatGeneralReplyWithRef(rawBody, targetId, targetUrl);
+        scanItems = fetchRestPaginated(`repos/${repo.full}/issues/${prNumber}/comments`, maxPages).map((c) => ({ id: c.id, author: c.user?.login || '', body: c.body || '' }));
       }
-      const createdId = String(created.id);
+      const identity = computeOperationIdentity({ repo: repo.full, pr: prNumber, actor: header.viewer, op: 'reply', targetKind, targetId, reviewedSha: expectedHead, normalizedPayload: baseBody, explicitKey });
+      const finalBody = appendMarker(baseBody, identity.marker);
+      if (finalBody.length > MAX_BODY_CHARS) fail('PR_FILE_GUARD', `Reply body exceeds ${MAX_BODY_CHARS} chars`);
 
-      // R009 + R004: verify actual created comment object, actor, content, target, PR state & HEAD.
-      const verifyQuery = `
-        query($owner: String!, $repo: String!, $pr: Int!, $threadId: ID!, $commentId: ID!) {
-          repository(owner: $owner, name: $repo) { pullRequest(number: $pr) { state headRefOid } }
-          thread: node(id: $threadId) { ... on PullRequestReviewThread { id isResolved } }
-          comment: node(id: $commentId) {
-            ... on PullRequestReviewComment {
-              id
-              author { login }
-              body
-              pullRequest { number }
-            }
-          }
-        }
-      `;
-      const vData = runPostWriteGuarded(statePath, { action: 'reply', repo: repo.full, pr: prNumber, extra: { target_id: targetId, comment_id: createdId, key: identity.key } }, () => ghGraphQL(verifyQuery, { owner: repo.owner, repo: repo.name, pr: prNumber, threadId: targetId, commentId: createdId }));
-      const vComment = vData.comment;
-      const vThread = vData.thread;
-      const postState = String(vData.repository?.pullRequest?.state || '');
-      const postHead = String(vData.repository?.pullRequest?.headRefOid || '').toLowerCase();
-      const authorOk = String(vComment?.author?.login || '').toLowerCase() === header.viewer.toLowerCase();
-      const bodyOk = String(vComment?.body || '').includes(identity.marker) && stripMarkers(vComment?.body || '') === stripMarkers(normalizedBody);
-      const prOk = Number(vComment?.pullRequest?.number) === prNumber;
-      const threadOk = Boolean(vThread && String(vThread.id) === targetId);
-
-      if (!vComment || String(vComment.id) !== createdId || !authorOk || !bodyOk || !prOk || !threadOk) {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, target_id: targetId, comment_id: createdId, key: identity.key }, { critical: false });
-        fail('PR_POST_WRITE_UNVERIFIED', `Post-write verification failed for thread reply ${createdId} (authorOk=${authorOk}, bodyOk=${bodyOk}, prOk=${prOk}, threadOk=${threadOk})`, EXIT_ERROR, {
-          outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, comment_id: createdId
-        });
-      }
-      if (postHead !== expectedHead || postState !== 'OPEN') {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_POST_WRITE_HEAD_MOVED', reconciliation_required: true, repo: repo.full, pr: prNumber, target_id: targetId, comment_id: createdId, expected_head: expectedHead, remote_head: postHead, remote_state: postState }, { critical: false });
-        fail('PR_POST_WRITE_HEAD_MOVED', `PR state/HEAD changed concurrently after reply (state=${postState}, head=${expectedHead} -> ${postHead})`, EXIT_BLOCKED, {
-          outcome: 'mutated_but_stale', mutated: true, reconciliation_required: true, comment_id: createdId, expected_head: expectedHead, remote_head: postHead, remote_state: postState
-        });
-      }
-
-      recordAuditState(statePath, { action: 'reply', status: 'PR_REPLY_OK', repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash, comment_id: createdId, head_sha: postHead });
-      emit({
-        status: 'PR_REPLY_OK',
-        action: 'reply',
-        mutated: true,
-        repo: repo.full,
-        pr: prNumber,
-        target_kind: targetKind,
-        target_id: targetId,
-        comment_id: createdId,
-        idempotency_key: identity.key,
-        operation_hash: identity.opHash,
-        verified_remote: true,
-        verified_head: postHead
-      }, EXIT_OK);
-    } else {
-      // R005 + R008: verify target general comment directly & include reliable permalink/reference.
-      const targetRes = ghRestGet(`repos/${repo.full}/issues/comments/${targetId}`, { allowNotFound: true });
-      const targetObj = targetRes.data;
-      const issueUrl = String(targetObj?.issue_url || '');
-      if (targetRes.notFound || !targetObj || String(targetObj.id) !== targetId || !issueUrl.endsWith(`/issues/${prNumber}`)) {
-        fail('PR_TARGET_MISMATCH', `General PR comment ${targetId} does not belong to ${repo.full}#${prNumber}`, EXIT_ERROR);
-      }
-      const targetUrl = targetObj.html_url ? String(targetObj.html_url) : null;
-      const referencedBody = formatGeneralReplyWithRef(rawBody, targetId, targetUrl);
-      const identity = computeOperationIdentity({
-        repo: repo.full, pr: prNumber, actor: header.viewer, op: 'reply', targetKind, targetId, reviewedSha: expectedHead, normalizedPayload: referencedBody, explicitKey
-      });
-      const finalBody = appendMarker(referencedBody, identity.marker);
-      if (finalBody.length > MAX_BODY_CHARS) {
-        fail('PR_FILE_GUARD', `Reply body exceeds ${MAX_BODY_CHARS} chars`, EXIT_ERROR);
-      }
-
-      const comments = fetchRestPaginated(`repos/${repo.full}/issues/${prNumber}/comments`, maxPages);
-      const idem = scanRemoteIdempotency(
-        comments.map((c) => ({ id: c.id, author: c.user?.login || '', body: c.body || '' })),
-        header.viewer,
-        identity,
-        referencedBody
-      );
-      if (idem.status === 'COLLISION') {
-        fail('PR_KEY_COLLISION', `Idempotency key ${identity.key} already used for a different operation on PR #${prNumber} (comment ${idem.existingId})`, EXIT_BLOCKED, {
-          outcome: 'blocked_before_write', mutated: false, existing_comment_id: idem.existingId, key: identity.key
-        });
-      }
+      const idem = checkIdempotencyWithRevalidation(scanItems, header.viewer, identity, (cand, expMarker) => (
+        verifyRemoteObject({
+          kind: targetKind === 'review_thread' ? 'review_thread_reply' : 'issue_comment',
+          repo: repo.full, pr: prNumber, viewer: header.viewer, createdId: String(cand.id),
+          threadId: targetKind === 'review_thread' ? targetId : undefined, expectedBody: baseBody, marker: expMarker
+        }, maxPages)
+      ));
+      if (idem.status === 'COLLISION') fail('PR_KEY_COLLISION', `Idempotency key ${identity.key} already used for a different operation (${idem.existingId})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false, existing_comment_id: idem.existingId, key: identity.key });
+      if (idem.status === 'REMOTE_MISMATCH') fail('PR_REMOTE_STATE_MISMATCH', `Existing remote comment ${idem.existingId} with marker ${identity.key} does not match expected content/target (${idem.reason})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false, existing_comment_id: idem.existingId, key: identity.key });
       if (idem.status === 'MATCH') {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_IDEMPOTENT_SKIP', repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash, comment_id: idem.existingId });
-        emit({ status: 'PR_IDEMPOTENT_SKIP', action: 'reply', mutated: false, target_kind: targetKind, target_id: targetId, key: identity.key, operation_hash: identity.opHash, existing_comment_id: idem.existingId }, EXIT_OK);
+        return {
+          earlyEmit: { status: 'PR_IDEMPOTENT_SKIP', action: 'reply', mutated: false, target_kind: targetKind, target_id: targetId, key: identity.key, operation_hash: identity.opHash, existing_comment_id: idem.existingId },
+          auditRecord: { op_id: `skip-${identity.opHash}`, action: 'reply', status: 'PR_IDEMPOTENT_SKIP', repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash, comment_id: idem.existingId }
+        };
       }
-
-      // R004: immediate pre-write freshness recheck.
-      recheckFreshBeforeMutation(repo.owner, repo.name, prNumber, expectedHead);
-      recordAuditState(statePath, { action: 'reply', status: 'PENDING', repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash }, { critical: true });
-
-      const created = runPostWriteGuarded(statePath, { action: 'reply', repo: repo.full, pr: prNumber, extra: { target_id: targetId, key: identity.key } }, () => ghRestPost(`repos/${repo.full}/issues/${prNumber}/comments`, { body: finalBody }));
-      if (!created || !created.id) {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, target_id: targetId, key: identity.key }, { critical: false });
-        fail('PR_POST_WRITE_UNVERIFIED', 'General PR comment reply did not return a created comment ID', EXIT_ERROR, { outcome: 'mutated_unverified', mutated: true, reconciliation_required: true });
+      return {
+        baseBody, finalBody, identity, targetUrl, extraIds: { target_id: targetId },
+        pendingMeta: { target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash, body_sha256: sha256Hex(stripMarkers(baseBody)) }
+      };
+    },
+    mutate(prep) {
+      if (targetKind === 'review_thread') {
+        const res = ghGraphQL('mutation($threadId: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) { comment { id url } } }', { threadId: targetId, body: prep.finalBody });
+        return { createdId: res.addPullRequestReviewThreadReply?.comment?.id, requireId: true };
       }
-      const createdId = String(created.id);
-
-      // R009 + R004: re-fetch created issue comment & verify actor, PR association, content, state & HEAD.
-      const { vRes, postHeader } = runPostWriteGuarded(statePath, { action: 'reply', repo: repo.full, pr: prNumber, extra: { target_id: targetId, comment_id: createdId, key: identity.key } }, () => ({
-        vRes: ghRestGet(`repos/${repo.full}/issues/comments/${createdId}`, { allowNotFound: true }),
-        postHeader: fetchPrHeader(repo.owner, repo.name, prNumber)
-      }));
-      const vComment = vRes.data;
-      const authorOk = String(vComment?.user?.login || '').toLowerCase() === header.viewer.toLowerCase();
-      const prOk = String(vComment?.issue_url || '').endsWith(`/issues/${prNumber}`);
-      const bodyOk = String(vComment?.body || '').includes(identity.marker) && stripMarkers(vComment?.body || '') === stripMarkers(referencedBody);
-
-      if (vRes.notFound || !vComment || String(vComment.id) !== createdId || !authorOk || !prOk || !bodyOk) {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, target_id: targetId, comment_id: createdId, key: identity.key }, { critical: false });
-        fail('PR_POST_WRITE_UNVERIFIED', `Post-write verification failed for general comment ${createdId} (authorOk=${authorOk}, prOk=${prOk}, bodyOk=${bodyOk})`, EXIT_ERROR, {
-          outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, comment_id: createdId
-        });
-      }
-      if (postHeader.headSha !== expectedHead || postHeader.state !== 'OPEN') {
-        recordAuditState(statePath, { action: 'reply', status: 'PR_POST_WRITE_HEAD_MOVED', reconciliation_required: true, repo: repo.full, pr: prNumber, target_id: targetId, comment_id: createdId, expected_head: expectedHead, remote_head: postHeader.headSha, remote_state: postHeader.state }, { critical: false });
-        fail('PR_POST_WRITE_HEAD_MOVED', `PR state/HEAD changed concurrently after reply (state=${postHeader.state}, head=${expectedHead} -> ${postHeader.headSha})`, EXIT_BLOCKED, {
-          outcome: 'mutated_but_stale', mutated: true, reconciliation_required: true, comment_id: createdId, expected_head: expectedHead, remote_head: postHeader.headSha, remote_state: postHeader.state
-        });
-      }
-
-      recordAuditState(statePath, { action: 'reply', status: 'PR_REPLY_OK', repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId, key: identity.key, op_hash: identity.opHash, comment_id: createdId, head_sha: postHeader.headSha });
-      emit({
-        status: 'PR_REPLY_OK',
-        action: 'reply',
-        mutated: true,
-        repo: repo.full,
-        pr: prNumber,
-        target_kind: targetKind,
-        target_id: targetId,
-        referenced_url: targetUrl,
-        comment_id: createdId,
-        idempotency_key: identity.key,
-        operation_hash: identity.opHash,
-        verified_remote: true,
-        verified_head: postHeader.headSha
-      }, EXIT_OK);
+      return { createdId: ghRestPost(`repos/${repo.full}/issues/${prNumber}/comments`, { body: prep.finalBody })?.id, requireId: true };
+    },
+    verifySpec(prep, header, createdId) {
+      return {
+        kind: targetKind === 'review_thread' ? 'review_thread_reply' : 'issue_comment',
+        repo: repo.full, pr: prNumber, viewer: header.viewer, createdId,
+        threadId: targetKind === 'review_thread' ? targetId : undefined, expectedBody: prep.baseBody, marker: prep.identity.marker
+      };
+    },
+    onSuccessPayload(prep, _header, createdId, vRes) {
+      return {
+        status: 'PR_REPLY_OK', action: 'reply', mutated: true, repo: repo.full, pr: prNumber, target_kind: targetKind, target_id: targetId,
+        ...(prep.targetUrl ? { referenced_url: prep.targetUrl } : {}),
+        comment_id: createdId, idempotency_key: prep.identity.key, operation_hash: prep.identity.opHash, verified_remote: true, verified_head: vRes.postHead
+      };
     }
   });
 }
 
-// --- Subcommand 3: resolve (R001, R004, R008, R009) ---
+// --- Subcommand 4: resolve (R001 canonical verify-check + R008 targeted thread) ---
 function handleResolve(flags) {
   const repo = validateRepo(flags.repo);
   const prNumber = validatePr(flags.pr);
@@ -1468,212 +1149,106 @@ function handleResolve(flags) {
   const threadId = validateId(flags['thread-id'], '--thread-id');
   const fixCommit = validateSha(flags['fix-commit'], '--fix-commit');
   const maxPages = validateMaxPages(flags['max-pages']);
-  const statePath = flags['state-file'] ? validateSafeFilePath(flags['state-file'], '--state-file', { mustExist: false, rejectTraversal: true }) : '';
   const isDraft = Boolean(flags.draft);
   const authResolve = Boolean(flags['authorize-resolve']);
 
-  if (isDraft && authResolve) {
-    fail('PR_INVALID_ARGS', '--draft cannot be combined with --authorize-resolve', EXIT_ERROR);
-  }
-  if (/^[0-9]+$/.test(threadId) || threadId.startsWith('IC_')) {
-    fail('PR_NOT_RESOLVABLE', `General PR comments (${threadId}) cannot be resolved as review threads`, EXIT_ERROR);
-  }
-  if (!flags['evidence-file']) {
-    fail('PR_VERIFY_REQUIRED', '--evidence-file (bound to repo, PR, HEAD, thread, fix commit, and passing b3-verify-v1 receipt) is required', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  const evidence = parseAndValidateEvidenceFile(flags['evidence-file'], repo.full, prNumber, expectedHead, threadId, fixCommit);
+  if (isDraft && authResolve) fail('PR_INVALID_ARGS', '--draft cannot be combined with --authorize-resolve');
+  if (/^[0-9]+$/.test(threadId) || threadId.startsWith('IC_')) fail('PR_NOT_RESOLVABLE', `General PR comments (${threadId}) cannot be resolved as review threads`);
+  if (!flags['evidence-file']) fail('PR_VERIFY_REQUIRED', '--evidence-file (bound to repo, PR, HEAD, thread, fix commit, and canonical b3-verify-v1 receipt) is required', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+
+  const repoRoot = resolveRepoRoot(flags['repo-root']);
+  const evidence = parseResolveEvidence(flags['evidence-file'], repo.full, prNumber, expectedHead, threadId, fixCommit);
+  const pathsToVerify = [...new Set([evidence.targetPath, ...evidence.fixedPaths])];
+  const verifyRes = runCanonicalVerifyCheck(repoRoot, evidence.receiptFullPath, expectedHead, evidence.checkedCommand, pathsToVerify);
 
   if (isDraft) {
-    emit({
-      status: 'PR_DRAFT_OK',
-      action: 'resolve',
-      mutated: false,
-      repo: repo.full,
-      pr: prNumber,
-      expected_head: expectedHead,
-      thread_id: threadId,
-      fix_commit: fixCommit,
-      evidence_basis: evidence.basis,
-      target_path: evidence.targetPath,
-      receipt_head_sha: evidence.receiptHeadSha
-    }, EXIT_OK);
+    emit({ status: 'PR_DRAFT_OK', action: 'resolve', mutated: false, repo: repo.full, pr: prNumber, expected_head: expectedHead, thread_id: threadId, fix_commit: fixCommit, evidence_basis: evidence.basis, target_path: evidence.targetPath, verify_check: verifyRes.guardMessage }, EXIT_OK);
   }
-  if (!authResolve) {
-    fail('PR_AUTH_REQUIRED', 'Explicit --authorize-resolve is required to resolve a review thread (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
+  if (!authResolve) fail('PR_AUTH_REQUIRED', 'Explicit --authorize-resolve is required to resolve a review thread (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 
-  return withStateLock(statePath, () => {
-    assertNoPendingReconciliation(statePath, repo.full, prNumber);
-    const header = fetchPrHeader(repo.owner, repo.name, prNumber);
-    assertOpenAndFreshHead(header, expectedHead);
+  const statePath = resolveCanonicalStatePath(repoRoot, repo.full, prNumber);
 
-    // R008: targeted single-thread retrieval only (no full-PR thread scan).
-    const thread = fetchSingleReviewThread(repo.full, prNumber, threadId, maxPages, false);
-    if (!thread) {
-      const genCheck = ghRestGet(`repos/${repo.full}/issues/comments/${threadId}`, { allowNotFound: true });
-      if (!genCheck.notFound && genCheck.data && String(genCheck.data.issue_url || '').endsWith(`/issues/${prNumber}`)) {
-        fail('PR_NOT_RESOLVABLE', `Target ${threadId} is a general PR comment and cannot be resolved`, EXIT_ERROR);
+  return executeGuardedMutation({
+    statePath, repo, prNumber, expectedHead, action: 'resolve', maxPages,
+    prepare(header) {
+      const thread = fetchSingleReviewThread(repo.full, prNumber, threadId, maxPages, false);
+      if (!thread) {
+        const gen = ghRestGet(`repos/${repo.full}/issues/comments/${threadId}`, { allowNotFound: true });
+        if (!gen.notFound && gen.data && String(gen.data.issue_url || '').endsWith(`/issues/${prNumber}`)) {
+          fail('PR_NOT_RESOLVABLE', `Target ${threadId} is a general PR comment and cannot be resolved`);
+        }
+        fail('PR_TARGET_MISMATCH', `Review thread ${threadId} does not belong to ${repo.full}#${prNumber}`);
       }
-      fail('PR_TARGET_MISMATCH', `Review thread ${threadId} does not belong to ${repo.full}#${prNumber}`, EXIT_ERROR);
-    }
-
-    // R001: bind evidence target_path to actual remote thread path.
-    if (!thread.path || evidence.targetPath !== thread.path) {
-      fail('PR_VERIFY_REQUIRED', `Evidence target_path (${evidence.targetPath}) does not match thread path (${thread.path || 'missing'})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-
-    // Prove fix_commit is an ancestor of remote PR HEAD.
-    const cmp = ghRestGet(`repos/${repo.full}/compare/${fixCommit}...${header.headSha}`, { allowNotFound: true });
-    if (cmp.notFound || !cmp.data || typeof cmp.data !== 'object') {
-      fail('PR_FIX_NOT_REMOTE', `Fix commit ${fixCommit} was not found on remote ${repo.full}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-    const cmpStatus = String(cmp.data.status || '');
-    const behindBy = Number(cmp.data.behind_by ?? -1);
-    if (!(cmpStatus === 'identical' || (cmpStatus === 'ahead' && behindBy === 0))) {
-      fail('PR_FIX_NOT_REMOTE', `Fix commit ${fixCommit} is not reachable in remote PR HEAD ${header.headSha} (compare status=${cmpStatus}, behind_by=${behindBy})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-
-    // R001: DUPLICATE_FIXED must remotely verify primary_thread_id exists on this PR and is resolved.
-    if (evidence.basis === 'DUPLICATE_FIXED') {
-      const primaryThread = fetchSingleReviewThread(repo.full, prNumber, evidence.primaryThreadId, maxPages, false);
-      if (!primaryThread || !primaryThread.isResolved) {
-        fail('PR_VERIFY_REQUIRED', `DUPLICATE_FIXED primary_thread_id (${evidence.primaryThreadId}) must exist on ${repo.full}#${prNumber} and be resolved first`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+      if (!thread.path || evidence.targetPath !== thread.path) {
+        fail('PR_VERIFY_REQUIRED', `Evidence target_path (${evidence.targetPath}) does not match thread path (${thread.path || 'missing'})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
       }
-    }
-
-    // R001: ancestry alone does not prove fix relevance — verify remote fix_commit modified ALL declared fix paths
-    // (or thread.path when fixed_paths omitted) AND every such path is covered by the passing b3-verify-v1 receipt.
-    const commitRes = ghRestGet(`repos/${repo.full}/commits/${fixCommit}`, { allowNotFound: true });
-    const commitFiles = Array.isArray(commitRes.data?.files) ? commitRes.data.files : [];
-    const touchedSet = new Set();
-    for (const f of commitFiles) {
-      if (f?.filename) touchedSet.add(String(f.filename));
-      if (f?.previous_filename) touchedSet.add(String(f.previous_filename));
-    }
-    const pathsToProve = evidence.hasExplicitFixedPaths ? evidence.fixedPaths : [thread.path];
-    const allPathsTouchedAndVerified = pathsToProve.length > 0 && pathsToProve.every(
-      (p) => touchedSet.has(p) && (evidence.receiptCoversAll || pathMatchesRelevant(p, evidence.relevantPaths))
-    );
-    if (commitRes.notFound || !allPathsTouchedAndVerified) {
-      fail('PR_VERIFY_REQUIRED', `Fix commit ${fixCommit} and verification receipt do not jointly cover required paths (${pathsToProve.join(', ')})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-    }
-
-    if (thread.isResolved) {
-      recordAuditState(statePath, { action: 'resolve', status: 'PR_ALREADY_RESOLVED', repo: repo.full, pr: prNumber, thread_id: threadId, fix_commit: fixCommit });
-      emit({ status: 'PR_ALREADY_RESOLVED', action: 'resolve', mutated: false, thread_id: threadId, verified_head: header.headSha }, EXIT_OK);
-    }
-
-    // R004: immediate pre-write freshness recheck.
-    recheckFreshBeforeMutation(repo.owner, repo.name, prNumber, expectedHead);
-    recordAuditState(statePath, { action: 'resolve', status: 'PENDING', repo: repo.full, pr: prNumber, thread_id: threadId, fix_commit: fixCommit }, { critical: true });
-
-    const mut = `
-      mutation($threadId: ID!) {
-        resolveReviewThread(input: { threadId: $threadId }) {
-          thread { id isResolved }
+      if (evidence.basis === 'DUPLICATE_FIXED') {
+        const primary = fetchSingleReviewThread(repo.full, prNumber, evidence.primaryThreadId, maxPages, false);
+        if (!primary || !primary.isResolved) {
+          fail('PR_VERIFY_REQUIRED', `DUPLICATE_FIXED primary_thread_id (${evidence.primaryThreadId}) must exist on ${repo.full}#${prNumber} and be resolved first`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
         }
       }
-    `;
-    const res = runPostWriteGuarded(statePath, { action: 'resolve', repo: repo.full, pr: prNumber, extra: { thread_id: threadId } }, () => ghGraphQL(mut, { threadId }));
-    const mutatedThread = res.resolveReviewThread?.thread;
-    if (!mutatedThread || !mutatedThread.isResolved) {
-      recordAuditState(statePath, { action: 'resolve', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, thread_id: threadId }, { critical: false });
-      fail('PR_POST_WRITE_UNVERIFIED', 'resolveReviewThread did not confirm isResolved=true', EXIT_ERROR, { outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, thread_id: threadId });
-    }
-
-    // R009 + R004: re-verify resolved thread ownership, state, PR OPEN & HEAD remotely.
-    const verifyQuery = `
-      query($owner: String!, $repo: String!, $pr: Int!, $threadId: ID!) {
-        repository(owner: $owner, name: $repo) {
-          pullRequest(number: $pr) { state headRefOid }
-        }
-        node(id: $threadId) {
-          ... on PullRequestReviewThread {
-            id
-            isResolved
-            pullRequest { number repository { nameWithOwner } }
-          }
-        }
+      const cmp = ghRestGet(`repos/${repo.full}/compare/${fixCommit}...${header.headSha}`, { allowNotFound: true });
+      const cmpStatus = String(cmp.data?.status || '');
+      const behindBy = Number(cmp.data?.behind_by ?? -1);
+      if (cmp.notFound || !(cmpStatus === 'identical' || (cmpStatus === 'ahead' && behindBy === 0))) {
+        fail('PR_FIX_NOT_REMOTE', `Fix commit ${fixCommit} is not reachable in remote PR HEAD ${header.headSha}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
       }
-    `;
-    const vData = runPostWriteGuarded(statePath, { action: 'resolve', repo: repo.full, pr: prNumber, extra: { thread_id: threadId } }, () => ghGraphQL(verifyQuery, { owner: repo.owner, repo: repo.name, pr: prNumber, threadId }));
-    const postState = String(vData.repository?.pullRequest?.state || '');
-    const postHead = String(vData.repository?.pullRequest?.headRefOid || '').toLowerCase();
-    const vThread = vData.node;
-    const ownerRepo = String(vThread?.pullRequest?.repository?.nameWithOwner || '').toLowerCase();
-    const ownerOk = ownerRepo === repo.full.toLowerCase() && Number(vThread?.pullRequest?.number) === prNumber;
-
-    if (!vThread || String(vThread.id) !== threadId || !vThread.isResolved || !ownerOk) {
-      recordAuditState(statePath, { action: 'resolve', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, thread_id: threadId }, { critical: false });
-      fail('PR_POST_WRITE_UNVERIFIED', `Post-write verification failed: thread ${threadId} is not confirmed resolved on ${repo.full}#${prNumber}`, EXIT_ERROR, {
-        outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, thread_id: threadId
-      });
+      const commitRes = ghRestGet(`repos/${repo.full}/commits/${fixCommit}`, { allowNotFound: true });
+      const touched = new Set();
+      for (const f of (Array.isArray(commitRes.data?.files) ? commitRes.data.files : [])) {
+        if (f?.filename) touched.add(String(f.filename));
+        if (f?.previous_filename) touched.add(String(f.previous_filename));
+      }
+      if (commitRes.notFound || !pathsToVerify.every((p) => touched.has(p))) {
+        fail('PR_VERIFY_REQUIRED', `Remote fix commit ${fixCommit} does not modify all verified paths (${pathsToVerify.join(', ')})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+      }
+      if (thread.isResolved) {
+        return {
+          earlyEmit: { status: 'PR_ALREADY_RESOLVED', action: 'resolve', mutated: false, thread_id: threadId, verified_head: header.headSha },
+          auditRecord: { op_id: `resolved-${threadId}`, action: 'resolve', status: 'PR_ALREADY_RESOLVED', repo: repo.full, pr: prNumber, target_id: threadId, fix_commit: fixCommit }
+        };
+      }
+      return { extraIds: { thread_id: threadId }, pendingMeta: { target_id: threadId, fix_commit: fixCommit } };
+    },
+    mutate() {
+      const res = ghGraphQL('mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }', { threadId });
+      if (!res.resolveReviewThread?.thread?.isResolved) fail('PR_API_ERROR', 'resolveReviewThread did not confirm isResolved=true');
+      return { createdId: threadId, requireId: false };
+    },
+    verifySpec(_prep, header) {
+      return { kind: 'resolve_thread', repo: repo.full, pr: prNumber, viewer: header.viewer, threadId };
+    },
+    onSuccessPayload(_prep, _header, _createdId, vRes) {
+      return {
+        status: 'PR_RESOLVE_OK', action: 'resolve', mutated: true, repo: repo.full, pr: prNumber, thread_id: threadId,
+        fix_commit: fixCommit, is_resolved: true, verify_check: verifyRes.guardMessage, verified_remote: true, verified_head: vRes.postHead
+      };
     }
-    if (postHead !== expectedHead || postState !== 'OPEN') {
-      recordAuditState(statePath, { action: 'resolve', status: 'PR_POST_WRITE_HEAD_MOVED', reconciliation_required: true, repo: repo.full, pr: prNumber, thread_id: threadId, expected_head: expectedHead, remote_head: postHead, remote_state: postState }, { critical: false });
-      fail('PR_POST_WRITE_HEAD_MOVED', `PR state/HEAD changed concurrently after resolve (state=${postState}, head=${expectedHead} -> ${postHead})`, EXIT_BLOCKED, {
-        outcome: 'mutated_but_stale', mutated: true, reconciliation_required: true, thread_id: threadId, expected_head: expectedHead, remote_head: postHead, remote_state: postState
-      });
-    }
-
-    recordAuditState(statePath, { action: 'resolve', status: 'PR_RESOLVE_OK', repo: repo.full, pr: prNumber, thread_id: threadId, fix_commit: fixCommit, head_sha: postHead });
-    emit({
-      status: 'PR_RESOLVE_OK',
-      action: 'resolve',
-      mutated: true,
-      repo: repo.full,
-      pr: prNumber,
-      thread_id: threadId,
-      fix_commit: fixCommit,
-      is_resolved: true,
-      verified_remote: true,
-      verified_head: postHead
-    }, EXIT_OK);
   });
 }
 
-// --- Subcommand 4: comment (R003, R004, R006, R009) ---
+// --- Subcommand 5: comment (R006 + R013 + R014) ---
 function parseAndValidateInlineJson(inlineJsonPath) {
   const raw = readSafeInputFile(inlineJsonPath, '--inline-json');
   let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    fail('PR_INVALID_ARGS', '--inline-json is not valid JSON', EXIT_ERROR);
-  }
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    fail('PR_INVALID_ARGS', '--inline-json must be a non-empty JSON array', EXIT_ERROR);
-  }
+  try { parsed = JSON.parse(raw); } catch { fail('PR_INVALID_ARGS', '--inline-json is not valid JSON'); }
+  if (!Array.isArray(parsed) || parsed.length === 0) fail('PR_INVALID_ARGS', '--inline-json must be a non-empty JSON array');
   return parsed.map((item, idx) => {
-    if (!item || typeof item !== 'object') {
-      fail('PR_INVALID_ARGS', `Inline finding[${idx}] must be an object`, EXIT_ERROR);
-    }
-    if (item.status !== 'CONFIRMED') {
-      fail('PR_INVALID_ARGS', `Inline finding[${idx}] rejected: status must be CONFIRMED (got ${String(item.status)})`, EXIT_ERROR);
-    }
-    if (!ALLOWED_SEVERITIES.has(item.severity)) {
-      fail('PR_INVALID_ARGS', `Inline finding[${idx}] rejected: invalid severity ${String(item.severity)}`, EXIT_ERROR);
-    }
+    if (!item || typeof item !== 'object') fail('PR_INVALID_ARGS', `Inline finding[${idx}] must be an object`);
+    if (item.status !== 'CONFIRMED') fail('PR_INVALID_ARGS', `Inline finding[${idx}] rejected: status must be CONFIRMED`);
+    if (!ALLOWED_SEVERITIES.has(item.severity)) fail('PR_INVALID_ARGS', `Inline finding[${idx}] rejected: invalid severity`);
     const p = validateRelPath(String(item.path || ''), `Inline finding[${idx}].path`);
-    const line = item.line;
-    if (!Number.isInteger(line) || line < 1) {
-      fail('PR_INVALID_ARGS', `Inline finding[${idx}] must have positive integer line`, EXIT_ERROR);
-    }
+    if (!Number.isInteger(item.line) || item.line < 1) fail('PR_INVALID_ARGS', `Inline finding[${idx}] must have positive integer line`);
     const side = item.side ? String(item.side) : 'RIGHT';
-    if (!ALLOWED_SIDES.has(side)) {
-      fail('PR_INVALID_ARGS', `Inline finding[${idx}] has invalid side (expected RIGHT|LEFT)`, EXIT_ERROR);
-    }
+    if (!ALLOWED_SIDES.has(side)) fail('PR_INVALID_ARGS', `Inline finding[${idx}] has invalid side (expected RIGHT|LEFT)`);
     const title = String(item.title || '').trim();
     const body = String(item.body || '').trim();
-    const suggestedFix = String(item.suggested_fix || '').trim();
-    if (!title || !body || !suggestedFix) {
-      fail('PR_INVALID_ARGS', `Inline finding[${idx}] requires non-empty title, body, and suggested_fix`, EXIT_ERROR);
-    }
-    const formattedBody = `**[${item.severity}] — ${title}**\n\n${body}\n\n**Suggested fix:** ${suggestedFix}`;
-    if (formattedBody.length > MAX_BODY_CHARS) {
-      fail('PR_FILE_GUARD', `Inline finding[${idx}] exceeds ${MAX_BODY_CHARS} chars`, EXIT_ERROR);
-    }
-    return { path: p, line, side, body: formattedBody };
+    const fix = String(item.suggested_fix || '').trim();
+    if (!title || !body || !fix) fail('PR_INVALID_ARGS', `Inline finding[${idx}] requires non-empty title, body, and suggested_fix`);
+    const formatted = `**[${item.severity}] — ${title}**\n\n${body}\n\n**Suggested fix:** ${fix}`;
+    if (formatted.length > MAX_BODY_CHARS) fail('PR_FILE_GUARD', `Inline finding[${idx}] exceeds ${MAX_BODY_CHARS} chars`);
+    return { path: p, line: item.line, side, body: formatted };
   });
 }
 
@@ -1682,273 +1257,123 @@ function handleComment(flags) {
   const prNumber = validatePr(flags.pr);
   const expectedHead = validateSha(flags['expected-head'], '--expected-head');
   const mode = flags.mode;
-  if (!ALLOWED_MODES.has(mode)) {
-    fail('PR_INVALID_ARGS', 'Invalid --mode (expected summary|inline|both)', EXIT_ERROR);
-  }
+  if (!ALLOWED_MODES.has(mode)) fail('PR_INVALID_ARGS', 'Invalid --mode (expected summary|inline|both)');
   const event = flags.event || 'COMMENT';
-  if (!ALLOWED_EVENTS.has(event)) {
-    fail('PR_INVALID_ARGS', 'Invalid --event (expected COMMENT|APPROVE|REQUEST_CHANGES)', EXIT_ERROR);
-  }
+  if (!ALLOWED_EVENTS.has(event)) fail('PR_INVALID_ARGS', 'Invalid --event (expected COMMENT|APPROVE|REQUEST_CHANGES)');
   const authReviewEvent = flags['authorize-review-event'];
-  if (authReviewEvent !== undefined && !['APPROVE', 'REQUEST_CHANGES'].includes(authReviewEvent)) {
-    fail('PR_INVALID_ARGS', 'Invalid --authorize-review-event (expected APPROVE|REQUEST_CHANGES)', EXIT_ERROR);
-  }
-  if (authReviewEvent !== undefined && event === 'COMMENT') {
-    fail('PR_INVALID_ARGS', '--authorize-review-event cannot be set when --event is COMMENT', EXIT_ERROR);
-  }
+  if (authReviewEvent !== undefined && !['APPROVE', 'REQUEST_CHANGES'].includes(authReviewEvent)) fail('PR_INVALID_ARGS', 'Invalid --authorize-review-event');
+  if (authReviewEvent !== undefined && event === 'COMMENT') fail('PR_INVALID_ARGS', '--authorize-review-event cannot be set when --event is COMMENT');
   const explicitKey = validateKey(flags['idempotency-key']);
   const maxPages = validateMaxPages(flags['max-pages']);
-  const statePath = flags['state-file'] ? validateSafeFilePath(flags['state-file'], '--state-file', { mustExist: false, rejectTraversal: true }) : '';
   const isDraft = Boolean(flags.draft);
   const authWrite = Boolean(flags['authorize-write']);
-
-  if (isDraft && (authWrite || authReviewEvent !== undefined)) {
-    fail('PR_INVALID_ARGS', '--draft cannot be combined with --authorize-write or --authorize-review-event', EXIT_ERROR);
-  }
+  if (isDraft && (authWrite || authReviewEvent !== undefined)) fail('PR_INVALID_ARGS', '--draft cannot be combined with --authorize-write or --authorize-review-event');
 
   let summaryBody = '';
   let inlineComments = [];
   if (mode === 'summary' || mode === 'both') {
-    if (!flags['summary-file']) {
-      fail('PR_INVALID_ARGS', `--summary-file is required for --mode ${mode}`, EXIT_ERROR);
-    }
+    if (!flags['summary-file']) fail('PR_INVALID_ARGS', `--summary-file is required for --mode ${mode}`);
     summaryBody = normalizeText(readSafeInputFile(flags['summary-file'], '--summary-file'));
-    if (!summaryBody) {
-      fail('PR_INVALID_ARGS', '--summary-file is empty', EXIT_ERROR);
-    }
+    if (!summaryBody) fail('PR_INVALID_ARGS', '--summary-file is empty');
   } else if (flags['summary-file']) {
-    fail('PR_INVALID_ARGS', '--summary-file is not allowed with --mode inline', EXIT_ERROR);
+    fail('PR_INVALID_ARGS', '--summary-file is not allowed with --mode inline');
   }
-
   if (mode === 'inline' || mode === 'both') {
-    if (!flags['inline-json']) {
-      fail('PR_INVALID_ARGS', `--inline-json is required for --mode ${mode}`, EXIT_ERROR);
-    }
+    if (!flags['inline-json']) fail('PR_INVALID_ARGS', `--inline-json is required for --mode ${mode}`);
     inlineComments = parseAndValidateInlineJson(flags['inline-json']);
   } else if (flags['inline-json']) {
-    fail('PR_INVALID_ARGS', '--inline-json is not allowed with --mode summary', EXIT_ERROR);
+    fail('PR_INVALID_ARGS', '--inline-json is not allowed with --mode summary');
   }
 
   const canonicalPayload = JSON.stringify({ summary: summaryBody, inline: inlineComments });
-
   if (isDraft) {
-    const draftIdentity = computeOperationIdentity({
-      repo: repo.full, pr: prNumber, actor: 'draft', op: 'comment', targetKind: 'pr', targetId: String(prNumber), reviewedSha: expectedHead, mode, event, normalizedPayload: canonicalPayload, explicitKey
-    });
-    const finalPreview = appendMarker(summaryBody, draftIdentity.marker);
-    if (finalPreview.length > MAX_BODY_CHARS) {
-      fail('PR_FILE_GUARD', `Summary body exceeds ${MAX_BODY_CHARS} chars`, EXIT_ERROR);
-    }
-    emit({
-      status: 'PR_DRAFT_OK',
-      action: 'comment',
-      mutated: false,
-      repo: repo.full,
-      pr: prNumber,
-      expected_head: expectedHead,
-      mode,
-      event,
-      idempotency_key: draftIdentity.key,
-      operation_hash: draftIdentity.opHash,
-      summary_preview: finalPreview,
-      inline_count: inlineComments.length,
-      inline_preview: inlineComments
-    }, EXIT_OK);
+    const idObj = computeOperationIdentity({ repo: repo.full, pr: prNumber, actor: 'draft', op: 'comment', targetKind: 'pr', targetId: String(prNumber), reviewedSha: expectedHead, mode, event, normalizedPayload: canonicalPayload, explicitKey });
+    const preview = appendMarker(summaryBody, idObj.marker);
+    if (preview.length > MAX_BODY_CHARS) fail('PR_FILE_GUARD', `Summary body exceeds ${MAX_BODY_CHARS} chars`);
+    emit({ status: 'PR_DRAFT_OK', action: 'comment', mutated: false, repo: repo.full, pr: prNumber, expected_head: expectedHead, mode, event, idempotency_key: idObj.key, operation_hash: idObj.opHash, summary_preview: preview, inline_count: inlineComments.length, inline_preview: inlineComments }, EXIT_OK);
   }
+  if (!authWrite) fail('PR_AUTH_REQUIRED', 'Explicit --authorize-write is required to publish PR comments (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  if (event !== 'COMMENT' && authReviewEvent !== event) fail('PR_EVENT_UNAUTHORIZED', `Review event ${event} requires matching --authorize-review-event ${event}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 
-  if (!authWrite) {
-    fail('PR_AUTH_REQUIRED', 'Explicit --authorize-write is required to publish PR comments (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  if (event !== 'COMMENT' && authReviewEvent !== event) {
-    fail('PR_EVENT_UNAUTHORIZED', `Review event ${event} requires matching --authorize-review-event ${event}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
+  const transport = (mode === 'summary' && event === 'COMMENT') ? 'issue_comment' : 'pull_review';
+  const statePath = resolveCanonicalStatePath(resolveRepoRoot(flags['repo-root']), repo.full, prNumber);
 
-  return withStateLock(statePath, () => {
-    assertNoPendingReconciliation(statePath, repo.full, prNumber);
-    const header = fetchPrHeader(repo.owner, repo.name, prNumber);
-    assertOpenAndFreshHead(header, expectedHead);
-
-    // R006: validate changed files AND actual diff hunk anchors (line + side).
-    if (inlineComments.length > 0) {
-      const prFiles = fetchRestPaginated(`repos/${repo.full}/pulls/${prNumber}/files`, maxPages);
-      const fileMap = new Map();
-      for (const f of prFiles) {
-        if (f?.filename) fileMap.set(String(f.filename), f);
-      }
-      for (const ic of inlineComments) {
-        const fileObj = fileMap.get(ic.path);
-        if (!fileObj) {
-          fail('PR_TARGET_MISMATCH', `Inline path ${ic.path} is not in PR ${repo.full}#${prNumber} changed files`, EXIT_ERROR, { outcome: 'blocked_before_write', mutated: false });
-        }
-        const anchors = parseUnifiedDiffAnchors(fileObj.patch);
-        if (!anchors) {
-          fail('PR_DIFF_UNAVAILABLE', `Diff patch for ${ic.path} is unavailable or truncated; cannot validate inline anchor ${ic.path}:${ic.line} (${ic.side})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-        }
-        const validSet = ic.side === 'LEFT' ? anchors.leftLines : anchors.rightLines;
-        if (!validSet.has(ic.line)) {
-          fail('PR_INVALID_ANCHOR', `Inline anchor ${ic.path}:${ic.line} (${ic.side}) is not present in PR diff hunks`, EXIT_ERROR, { outcome: 'blocked_before_write', mutated: false });
-        }
-      }
-    }
-
-    const identity = computeOperationIdentity({
-      repo: repo.full, pr: prNumber, actor: header.viewer, op: 'comment', targetKind: 'pr', targetId: String(prNumber), reviewedSha: expectedHead, mode, event, normalizedPayload: canonicalPayload, explicitKey
-    });
-    const finalBody = appendMarker(summaryBody, identity.marker);
-    if (finalBody.length > MAX_BODY_CHARS) {
-      fail('PR_FILE_GUARD', `Summary body exceeds ${MAX_BODY_CHARS} chars`, EXIT_ERROR);
-    }
-
-    // R003: scan both issue comments & PR reviews for actor-scoped idempotency & key collisions.
-    const issueComments = fetchRestPaginated(`repos/${repo.full}/issues/${prNumber}/comments`, maxPages);
-    const reviews = fetchRestPaginated(`repos/${repo.full}/pulls/${prNumber}/reviews`, maxPages);
-    const combinedItems = [
-      ...issueComments.map((c) => ({ id: c.id, author: c.user?.login || '', body: c.body || '' })),
-      ...reviews.map((r) => ({ id: r.id, author: r.user?.login || '', body: r.body || '' }))
-    ];
-    const allowLegacy = mode === 'summary' && event === 'COMMENT' && inlineComments.length === 0;
-    const idem = scanRemoteIdempotency(combinedItems, header.viewer, identity, summaryBody, allowLegacy);
-    if (idem.status === 'COLLISION') {
-      fail('PR_KEY_COLLISION', `Idempotency key ${identity.key} already used for a different comment/review on PR #${prNumber} (id ${idem.existingId})`, EXIT_BLOCKED, {
-        outcome: 'blocked_before_write', mutated: false, existing_id: idem.existingId, key: identity.key
-      });
-    }
-    if (idem.status === 'MATCH') {
-      recordAuditState(statePath, { action: 'comment', status: 'PR_IDEMPOTENT_SKIP', repo: repo.full, pr: prNumber, mode, key: identity.key, op_hash: identity.opHash, existing_id: idem.existingId });
-      emit({ status: 'PR_IDEMPOTENT_SKIP', action: 'comment', mutated: false, mode, key: identity.key, operation_hash: identity.opHash, existing_id: idem.existingId }, EXIT_OK);
-    }
-
-    // R004: immediate pre-write freshness recheck after all reads.
-    recheckFreshBeforeMutation(repo.owner, repo.name, prNumber, expectedHead);
-    recordAuditState(statePath, { action: 'comment', status: 'PENDING', repo: repo.full, pr: prNumber, mode, event, key: identity.key, op_hash: identity.opHash }, { critical: true });
-
-    let created;
-    let transport;
-    if (mode === 'summary' && event === 'COMMENT') {
-      transport = 'issue_comment';
-      created = runPostWriteGuarded(statePath, { action: 'comment', repo: repo.full, pr: prNumber, extra: { mode, key: identity.key } }, () => ghRestPost(`repos/${repo.full}/issues/${prNumber}/comments`, { body: finalBody }));
-    } else {
-      transport = 'pull_review';
-      const reviewPayload = { commit_id: expectedHead, event, body: finalBody };
+  return executeGuardedMutation({
+    statePath, repo, prNumber, expectedHead, action: 'comment', maxPages,
+    prepare(header) {
       if (inlineComments.length > 0) {
-        reviewPayload.comments = inlineComments;
+        const fileMap = new Map(fetchRestPaginated(`repos/${repo.full}/pulls/${prNumber}/files`, maxPages).filter((f) => f?.filename).map((f) => [String(f.filename), f]));
+        for (const ic of inlineComments) {
+          const fObj = fileMap.get(ic.path);
+          if (!fObj) fail('PR_TARGET_MISMATCH', `Inline path ${ic.path} is not in PR ${repo.full}#${prNumber} changed files`, EXIT_ERROR, { outcome: 'blocked_before_write', mutated: false });
+          const anchors = parseUnifiedDiffAnchors(fObj.patch);
+          if (!anchors.ok) fail('PR_DIFF_UNAVAILABLE', `Diff patch for ${ic.path} cannot be validated (${anchors.reason}); cannot anchor ${ic.path}:${ic.line} (${ic.side})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+          const validSet = ic.side === 'LEFT' ? anchors.leftLines : anchors.rightLines;
+          if (!validSet.has(ic.line)) fail('PR_INVALID_ANCHOR', `Inline anchor ${ic.path}:${ic.line} (${ic.side}) is not present in PR diff hunks`, EXIT_ERROR, { outcome: 'blocked_before_write', mutated: false });
+        }
       }
-      created = runPostWriteGuarded(statePath, { action: 'comment', repo: repo.full, pr: prNumber, extra: { mode, key: identity.key } }, () => ghRestPost(`repos/${repo.full}/pulls/${prNumber}/reviews`, reviewPayload));
-    }
+      const identity = computeOperationIdentity({ repo: repo.full, pr: prNumber, actor: header.viewer, op: 'comment', targetKind: 'pr', targetId: String(prNumber), reviewedSha: expectedHead, mode, event, normalizedPayload: canonicalPayload, explicitKey });
+      const finalBody = appendMarker(summaryBody, identity.marker);
+      if (finalBody.length > MAX_BODY_CHARS) fail('PR_FILE_GUARD', `Summary body exceeds ${MAX_BODY_CHARS} chars`);
 
-    if (!created || !created.id) {
-      recordAuditState(statePath, { action: 'comment', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, mode, key: identity.key }, { critical: false });
-      fail('PR_POST_WRITE_UNVERIFIED', `Publishing PR comment (${transport}) did not return a created ID`, EXIT_ERROR, { outcome: 'mutated_unverified', mutated: true, reconciliation_required: true });
-    }
-    const createdId = String(created.id);
-
-    // R009 + R004: re-fetch actual created comment/review object & verify actor, target, content, inline anchors, state & HEAD.
-    const postHeader = runPostWriteGuarded(statePath, { action: 'comment', repo: repo.full, pr: prNumber, extra: { created_id: createdId, key: identity.key } }, () => fetchPrHeader(repo.owner, repo.name, prNumber));
-    if (transport === 'issue_comment') {
-      const vRes = runPostWriteGuarded(statePath, { action: 'comment', repo: repo.full, pr: prNumber, extra: { created_id: createdId, key: identity.key } }, () => ghRestGet(`repos/${repo.full}/issues/comments/${createdId}`, { allowNotFound: true }));
-      const vObj = vRes.data;
-      const authorOk = String(vObj?.user?.login || '').toLowerCase() === header.viewer.toLowerCase();
-      const prOk = String(vObj?.issue_url || '').endsWith(`/issues/${prNumber}`);
-      const bodyOk = String(vObj?.body || '').includes(identity.marker) && stripMarkers(vObj?.body || '') === stripMarkers(summaryBody);
-      if (vRes.notFound || !vObj || String(vObj.id) !== createdId || !authorOk || !prOk || !bodyOk) {
-        recordAuditState(statePath, { action: 'comment', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, created_id: createdId, key: identity.key }, { critical: false });
-        fail('PR_POST_WRITE_UNVERIFIED', `Post-write verification failed for issue comment ${createdId} (authorOk=${authorOk}, prOk=${prOk}, bodyOk=${bodyOk})`, EXIT_ERROR, {
-          outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, created_id: createdId
-        });
-      }
-    } else {
-      const { vRes, revComments } = runPostWriteGuarded(statePath, { action: 'comment', repo: repo.full, pr: prNumber, extra: { created_id: createdId, key: identity.key } }, () => ({
-        vRes: ghRestGet(`repos/${repo.full}/pulls/${prNumber}/reviews/${createdId}`, { allowNotFound: true }),
-        revComments: inlineComments.length > 0 ? fetchRestPaginated(`repos/${repo.full}/pulls/${prNumber}/reviews/${createdId}/comments`, maxPages) : []
-      }));
-      const vRev = vRes.data;
-      const authorOk = String(vRev?.user?.login || '').toLowerCase() === header.viewer.toLowerCase();
-      const commitOk = String(vRev?.commit_id || '').toLowerCase() === expectedHead;
-      const bodyOk = String(vRev?.body || '').includes(identity.marker) && stripMarkers(vRev?.body || '') === stripMarkers(summaryBody);
-      const expectedStates = { COMMENT: 'COMMENTED', APPROVE: 'APPROVED', REQUEST_CHANGES: 'CHANGES_REQUESTED' };
-      const revState = String(vRev?.state || '').toUpperCase();
-      const stateOk = revState === expectedStates[event] || revState === event;
-      let inlineOk = true;
-      if (inlineComments.length > 0) {
-        const returnedKeys = new Set(revComments.map((rc) => `${rc.path}:${rc.line || rc.original_line}:${String(rc.side || '').toUpperCase()}:${normalizeText(rc.body || '')}`));
-        inlineOk = revComments.length === inlineComments.length && inlineComments.every((ic) => returnedKeys.has(`${ic.path}:${ic.line}:${ic.side}:${normalizeText(ic.body)}`));
-      }
-      if (vRes.notFound || !vRev || String(vRev.id) !== createdId || !authorOk || !commitOk || !bodyOk || !stateOk || !inlineOk) {
-        recordAuditState(statePath, { action: 'comment', status: 'PR_POST_WRITE_UNVERIFIED', reconciliation_required: true, repo: repo.full, pr: prNumber, created_id: createdId, key: identity.key }, { critical: false });
-        fail('PR_POST_WRITE_UNVERIFIED', `Post-write verification failed for pull review ${createdId} (authorOk=${authorOk}, commitOk=${commitOk}, bodyOk=${bodyOk}, stateOk=${stateOk}, inlineOk=${inlineOk})`, EXIT_ERROR, {
-          outcome: 'mutated_unverified', mutated: true, reconciliation_required: true, created_id: createdId
-        });
-      }
-    }
-
-    if (postHeader.headSha !== expectedHead || postHeader.state !== 'OPEN') {
-      recordAuditState(statePath, { action: 'comment', status: 'PR_POST_WRITE_HEAD_MOVED', reconciliation_required: true, repo: repo.full, pr: prNumber, created_id: createdId, expected_head: expectedHead, remote_head: postHeader.headSha, remote_state: postHeader.state }, { critical: false });
-      fail('PR_POST_WRITE_HEAD_MOVED', `PR state/HEAD changed concurrently after publishing comment (state=${postHeader.state}, head=${expectedHead} -> ${postHeader.headSha})`, EXIT_BLOCKED, {
-        outcome: 'mutated_but_stale', mutated: true, reconciliation_required: true, created_id: createdId, expected_head: expectedHead, remote_head: postHeader.headSha, remote_state: postHeader.state
+      const issueComments = fetchRestPaginated(`repos/${repo.full}/issues/${prNumber}/comments`, maxPages).map((c) => ({ id: c.id, kind: 'issue_comment', author: c.user?.login || '', body: c.body || '' }));
+      const reviews = fetchRestPaginated(`repos/${repo.full}/pulls/${prNumber}/reviews`, maxPages).map((r) => ({ id: r.id, kind: 'pull_review', author: r.user?.login || '', body: r.body || '' }));
+      const idem = checkIdempotencyWithRevalidation([...issueComments, ...reviews], header.viewer, identity, (cand, expMarker) => {
+        if (cand.kind !== transport) return { ok: false, reason: `transport_mismatch(${cand.kind}!=${transport})` };
+        return verifyRemoteObject({
+          kind: transport, repo: repo.full, pr: prNumber, viewer: header.viewer, createdId: String(cand.id),
+          expectedHead, expectedBody: summaryBody, marker: expMarker, event, expectedInline: inlineComments
+        }, maxPages);
       });
-    }
 
-    recordAuditState(statePath, { action: 'comment', status: 'PR_COMMENT_OK', repo: repo.full, pr: prNumber, mode, event, transport, key: identity.key, op_hash: identity.opHash, created_id: createdId, head_sha: postHeader.headSha });
-    emit({
-      status: 'PR_COMMENT_OK',
-      action: 'comment',
-      mutated: true,
-      repo: repo.full,
-      pr: prNumber,
-      mode,
-      event,
-      transport,
-      created_id: createdId,
-      idempotency_key: identity.key,
-      operation_hash: identity.opHash,
-      inline_count: inlineComments.length,
-      verified_remote: true,
-      verified_head: postHeader.headSha
-    }, EXIT_OK);
+      if (idem.status === 'COLLISION') fail('PR_KEY_COLLISION', `Idempotency key ${identity.key} already used for a different comment/review (${idem.existingId})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false, existing_id: idem.existingId, key: identity.key });
+      if (idem.status === 'REMOTE_MISMATCH') fail('PR_REMOTE_STATE_MISMATCH', `Existing remote ${transport} ${idem.existingId} with marker ${identity.key} is inconsistent (${idem.reason})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false, existing_id: idem.existingId, key: identity.key });
+      if (idem.status === 'MATCH') {
+        return {
+          earlyEmit: { status: 'PR_IDEMPOTENT_SKIP', action: 'comment', mutated: false, mode, key: identity.key, operation_hash: identity.opHash, existing_id: idem.existingId },
+          auditRecord: { op_id: `skip-${identity.opHash}`, action: 'comment', status: 'PR_IDEMPOTENT_SKIP', repo: repo.full, pr: prNumber, mode, key: identity.key, op_hash: identity.opHash, existing_id: idem.existingId }
+        };
+      }
+      return {
+        finalBody, identity,
+        pendingMeta: { mode, event, transport, key: identity.key, op_hash: identity.opHash, body_sha256: sha256Hex(stripMarkers(summaryBody)), expected_inline: inlineComments }
+      };
+    },
+    mutate(prep) {
+      if (transport === 'issue_comment') {
+        return { createdId: ghRestPost(`repos/${repo.full}/issues/${prNumber}/comments`, { body: prep.finalBody })?.id, requireId: true };
+      }
+      const payload = { commit_id: expectedHead, event, body: prep.finalBody, ...(inlineComments.length > 0 ? { comments: inlineComments } : {}) };
+      return { createdId: ghRestPost(`repos/${repo.full}/pulls/${prNumber}/reviews`, payload)?.id, requireId: true };
+    },
+    verifySpec(prep, header, createdId) {
+      return { kind: transport, repo: repo.full, pr: prNumber, viewer: header.viewer, createdId, expectedHead, expectedBody: summaryBody, marker: prep.identity.marker, event, expectedInline: inlineComments };
+    },
+    onSuccessPayload(prep, _header, createdId, vRes) {
+      return {
+        status: 'PR_COMMENT_OK', action: 'comment', mutated: true, repo: repo.full, pr: prNumber, mode, event, transport,
+        created_id: createdId, idempotency_key: prep.identity.key, operation_hash: prep.identity.opHash, inline_count: inlineComments.length, verified_remote: true, verified_head: vRes.postHead
+      };
+    }
   });
 }
 
 // --- Top-level entry with safe full stdout drain (R002) ---
-function main() {
-  const { cmd, flags } = parseArgs(process.argv.slice(2));
-  switch (cmd) {
-    case 'fetch':
-      handleFetch(flags);
-      break;
-    case 'reply':
-      handleReply(flags);
-      break;
-    case 'resolve':
-      handleResolve(flags);
-      break;
-    case 'comment':
-      handleComment(flags);
-      break;
-    default:
-      fail('PR_INVALID_ARGS', `Unknown subcommand: ${cmd}`, EXIT_ERROR);
-  }
-}
-
 process.stdout.on('error', (err) => {
-  if (err && err.code === 'EPIPE') {
-    process.exitCode = process.exitCode || EXIT_ERROR;
-  }
+  if (err && err.code === 'EPIPE') process.exitCode = process.exitCode || EXIT_ERROR;
 });
 
 try {
-  main();
+  const { cmd, flags } = parseArgs(process.argv.slice(2));
+  if (cmd === 'fetch') handleFetch(flags);
+  else if (cmd === 'reconcile') handleReconcile(flags);
+  else if (cmd === 'reply') handleReply(flags);
+  else if (cmd === 'resolve') handleResolve(flags);
+  else if (cmd === 'comment') handleComment(flags);
 } catch (err) {
-  let payload;
-  let code;
-  if (err instanceof B3Exit) {
-    payload = err.payload;
-    code = err.code;
-  } else {
-    payload = { status: 'PR_API_ERROR', error: sanitizeUntrustedText(err?.message || String(err)).slice(0, 300) };
-    code = EXIT_ERROR;
-  }
-  const serialized = JSON.stringify(payload) + '\n';
-  process.exitCode = code;
-  // Write full buffer and let Node drain stdout naturally before exiting (no process.exit truncation).
-  process.stdout.write(serialized, 'utf8');
+  const payload = err instanceof B3Exit
+    ? err.payload
+    : { status: 'PR_API_ERROR', error: sanitizeUntrustedText(err?.message || String(err)).slice(0, 300) };
+  process.exitCode = err instanceof B3Exit ? err.code : EXIT_ERROR;
+  process.stdout.write(JSON.stringify(payload) + '\n', 'utf8');
 }

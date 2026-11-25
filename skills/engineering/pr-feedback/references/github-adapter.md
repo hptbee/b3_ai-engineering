@@ -2,62 +2,66 @@
 
 Thin GitHub provider adapter for `skills/engineering/pr-feedback/SKILL.md`. Read-only PR inspection guidelines remain in [`github-pr-review.md`](../../code-review/references/github-pr-review.md); all PR feedback reads and authorized writes route through `scripts/b3-pr-github.{ps1,sh}` (thin shims over `scripts/lib/b3-pr-github.mjs`).
 
-## Prerequisites, Transport & Safety
+## Prerequisites, Transport, State & Limitations
 
 - Requires authenticated `gh` CLI and `node` (built-in modules only — zero npm packages, zero new MCP servers).
-- **Safe transport & stdout:** GraphQL queries/mutations and REST POSTs send JSON strictly via `gh api ... --input -` on `stdin` (never `-F` or shell-interpolated PR text). Exit sets `process.exitCode` and drains `process.stdout` naturally (no `process.exit()` pipe truncation).
-- **Unified file guards:** Input files (`--body-file`, `--summary-file`, `--inline-json`, `--evidence-file`, `verify_receipt_path`) and `--state-file` reject symlinks/reparse points on leaf and ancestor directories (while preserving legitimate OS temp dirs), `..` traversal, drive-relative paths, ADS (`:`), Windows device names, oversized files (`>256 KiB` / `>65536` chars), and strip leading UTF-8 BOM.
-- **Provider limits (honesty):** GitHub APIs do not provide server-side idempotency keys or atomic check-HEAD-and-mutate transactions. Pre-write rechecks, client lockfiles, actor-scoped markers, and post-write object verification minimize duplicates and detect races deterministically, but cannot guarantee server-side atomicity or exactly-once delivery.
+- **Safe transport & stdout:** All GraphQL queries/mutations and REST POSTs pass structured JSON via `gh api ... --input -` (`stdin`). Exit uses `process.exitCode` + natural stdout drain (never `process.exit()`, preventing pipe truncation).
+- **Unified file & path guards:** Rejects symlinks/reparse points on leaf and ancestor directories, `..` traversal (on CLI and relative `verify_receipt_path`), UNC/mixed-slash `^[\\/]{2}`, drive-relative paths, ADS `:`, Windows reserved device names (`CON`, `NUL .`, `CON .txt`), oversized inputs (`>256 KiB` / `>65536` chars), and corrupt state JSON; strips UTF-8 BOM.
+- **Canonical state & PID-safe locking:** Mutations automatically resolve `<git-toplevel>/.b3/pr-feedback/<owner>__<repo>__pr-<pr>.state.json` (alternate `--state-file` overrides rejected; read-only `fetch` and `--draft` create no state/lockfiles). Locks check same-host PID liveness (`ESRCH` only) and never expire by age alone.
+- **Provider limits (honesty):** GitHub lacks server-side idempotency keys and atomic check-HEAD-and-mutate transactions. Pre/post checks, PID-safe locks, revalidated markers, and `reconcile` minimize duplicates and surface races deterministically, without guaranteeing server-side atomicity or strict exactly-once delivery.
 
 ## Subcommands & Flags
 
 PowerShell: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/b3-pr-github.ps1 <cmd> ...`
 Bash: `./scripts/b3-pr-github.sh <cmd> ...`
 
-### 1. `fetch` (read-only, metadata-first or targeted)
+### 1. `fetch` (read-only; never clears pending state)
 ```text
-fetch --repo <owner/repo> --pr <N> [--include-resolved] [--include-bodies] [--thread-id <id[,id...]>] [--max-pages <M>] [--state-file <path>]
+fetch --repo <owner/repo> --pr <N> [--include-resolved] [--include-bodies] [--thread-id <id[,id...]>] [--max-pages <M>]
 ```
-- Default is metadata-first (paginated `reviewThreads` using `totalCount` + REST `issues/<pr>/comments`, omitting bodies/nested comment pages).
-- `--thread-id <id[,id...]>` fetches full paginated comments/bodies ONLY for the named review thread(s) via `node(id: ...)` without scanning the entire PR.
-- All untrusted PR text (`title`, refs, `body`, `path`, `authors`, comment bodies) strips non-whitespace control chars, Unicode bidi overrides/isolates, and Unicode tag chars, breaks delimiter-breakout substrings, and wraps in `BEGIN_UNTRUSTED_PR_DATA` / `END_UNTRUSTED_PR_DATA`.
-- With `--state-file`, reconciles prior `reconciliation_required` records after inspecting fresh remote state.
+- Metadata-first default (`reviewThreads` with `totalCount`, omitting bodies/nested comment pages). `--thread-id` fetches only the named thread(s) via `node(id)`.
+- Sanitizes all PR text (control/bidi/tag chars, delimiter breakout) inside `BEGIN_UNTRUSTED_PR_DATA` / `END_UNTRUSTED_PR_DATA`.
 
-### 2. `reply`
+### 2. `reconcile` (pending-operation recovery)
 ```text
-reply --repo <owner/repo> --pr <N> --expected-head <sha> \
+reconcile --repo <owner/repo> --pr <N> [--repo-root <dir>] [--max-pages <M>]
+```
+- Acquires the canonical PR lock and verifies every `PENDING` / `reconciliation_required` record against live remote objects (`verifyRemoteObject`), classifying `CONFIRMED_SUCCESS`, `CONFIRMED_ABSENCE`, `STALE_MUTATION`, or `UNCERTAIN`.
+- Clears pending blocks only on `CONFIRMED_*` / `STALE_MUTATION`; exits `2` (`PR_RECONCILIATION_UNCERTAIN`) and keeps writes blocked when uncertain.
+
+### 3. `reply`
+```text
+reply --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
   --target-kind review_thread|general_comment --target-id <id> \
   --body-file <path> [--idempotency-key <key>] \
-  [--authorize-write] [--draft] [--state-file <path>] [--max-pages <M>]
+  [--authorize-write] [--draft] [--max-pages <M>]
 ```
-- Requires `--authorize-write` (else `PR_AUTH_REQUIRED`) unless `--draft` (`--draft` + `--authorize-*` fails `PR_INVALID_ARGS`).
-- Uses targeted single-thread GraphQL `node(id)` (`review_thread`) or `GET issues/comments/<id>` (`general_comment`, automatically prepending a permalink/reference to the original comment).
-- Always embeds `<!-- b3-pr-key:<key>;op=<16hex> -->` (auto-derived if omitted), checks actor-scoped idempotency + `PR_KEY_COLLISION`, rechecks `OPEN` + `HEAD` immediately before write, posts reply (never resolves), then re-fetches and verifies the actual created comment object, actor, target, content, and `HEAD`.
+- Targeted `node(id)` (`review_thread`) or `GET issues/comments/<id>` (`general_comment`, prepending `> Replying to [comment #<id>](<html_url>)`).
+- Derives `<!-- b3-pr-key:<key>;op=<16hex> -->`, detects key collisions (`PR_KEY_COLLISION`), revalidates existing remote objects before skipping (`PR_REMOTE_STATE_MISMATCH` on edit), rechecks `OPEN` + `HEAD` pre-write, posts (never resolves), and verifies the created remote object + `HEAD` + `OPEN`.
 
-### 3. `resolve`
+### 4. `resolve`
 ```text
-resolve --repo <owner/repo> --pr <N> --expected-head <sha> \
+resolve --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
   --thread-id <id> --fix-commit <sha> --evidence-file <path> \
-  [--authorize-resolve] [--draft] [--state-file <path>] [--max-pages <M>]
+  [--authorize-resolve] [--draft] [--max-pages <M>]
 ```
-- Bare `--verify-status PASS` is rejected. Requires `--evidence-file` (`schema=b3-pr-verify-evidence-v1`) bound to `repo`, `pr`, `expected_head`, `thread_id`, `fix_commit`, `target_path`, `resolution_basis` (`CONFIRMED_FIXED|ALREADY_FIXED|DUPLICATE_FIXED`), and a valid passing `b3-verify-v1` receipt (`status=PASS`, `exit_code=0`, `head_sha == expected_head`, relevant paths covering target/fix paths).
-- Uses targeted `node(id)` lookup (rejecting general comments with `PR_NOT_RESOLVABLE` and cross-PR threads with `PR_TARGET_MISMATCH`), verifies `evidence.target_path == thread.path`, proves remote `fix_commit` ancestry (`compare` `identical|ahead`, `behind_by == 0`) **and** proves `GET commits/<fix_commit>` modified the target/declared fix paths.
-- Rechecks `OPEN` + `HEAD` immediately before `resolveReviewThread`, then re-queries remote thread ownership, `isResolved == true`, and `HEAD`.
+- Reuses canonical `scripts/b3-guard.{ps1,sh} verify-check` against exact remote PR `HEAD`, `evidence.checked_command`, verified paths, live tree fingerprint, and receipt `head_sha` (no independent duplicate receipt validator).
+- Verifies remote `thread.path == evidence.target_path`, `DUPLICATE_FIXED` `primary_thread_id` resolved remotely, remote `compare` ancestry (`identical|ahead`, `behind_by == 0`), and `GET commits/<fix_commit>` modifying all verified paths.
+- Rechecks `OPEN` + `HEAD` immediately before `resolveReviewThread`, then verifies `isResolved == true`, ownership, `OPEN`, and `HEAD`.
 
-### 4. `comment`
+### 5. `comment`
 ```text
-comment --repo <owner/repo> --pr <N> --expected-head <sha> \
+comment --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
   --mode summary|inline|both [--event COMMENT|APPROVE|REQUEST_CHANGES] \
   [--summary-file <path>] [--inline-json <path>] [--idempotency-key <key>] \
   [--authorize-write] [--authorize-review-event APPROVE|REQUEST_CHANGES] \
-  [--draft] [--state-file <path>] [--max-pages <M>]
+  [--draft] [--max-pages <M>]
 ```
-- Default `--event COMMENT`. Non-`COMMENT` events require both `--authorize-write` and matching `--authorize-review-event <EVENT>`.
-- Validates `--inline-json` (`status == CONFIRMED`, `CRITICAL|HIGH|MEDIUM|LOW`, non-empty `title`/`body`/`suggested_fix`, `line >= 1`, `side in RIGHT|LEFT`) against paginated `pulls/<pr>/files` **and** actual unified diff hunk anchors (`PR_DIFF_UNAVAILABLE` if patch missing/truncated; `PR_INVALID_ANCHOR` if line/side outside hunks).
-- Enforces mandatory/derived `key` + `op` hash (`PR_KEY_COLLISION` on mismatch), immediate pre-write `OPEN` + `HEAD` recheck, and full post-write object verification (re-fetching created issue comment or pull review + review comments, actor, commit SHA, state, body, inline anchors, and `HEAD`).
+- Validates `--inline-json` (`CONFIRMED`, `CRITICAL|HIGH|MEDIUM|LOW`, positive line, `RIGHT|LEFT`) against live `pulls/<pr>/files` AND strict unified diff hunk line counts/completeness (`PR_DIFF_UNAVAILABLE` if truncated/malformed/missing; `PR_INVALID_ANCHOR` if outside hunks).
+- Revalidates actor-scoped candidates before `PR_IDEMPOTENT_SKIP` (rejecting dismissed/edited/mismatched reviews), rechecks `OPEN` + `HEAD` pre-write, posts, and re-verifies the created object, review state, commit SHA, inline `path:line:side:body`, `OPEN`, and `HEAD`.
 
 ## Exit Codes
 
-- `0`: `PR_FETCH_OK`, `PR_DRAFT_OK`, `PR_REPLY_OK`, `PR_RESOLVE_OK`, `PR_COMMENT_OK`, `PR_IDEMPOTENT_SKIP`, `PR_ALREADY_RESOLVED`.
+- `0`: `PR_FETCH_OK`, `PR_RECONCILE_OK`, `PR_DRAFT_OK`, `PR_REPLY_OK`, `PR_RESOLVE_OK`, `PR_COMMENT_OK`, `PR_IDEMPOTENT_SKIP`, `PR_ALREADY_RESOLVED`.
 - `1`: `PR_INVALID_ARGS`, `PR_TARGET_MISMATCH`, `PR_NOT_RESOLVABLE`, `PR_INVALID_ANCHOR`, `PR_FILE_GUARD`, `PR_POST_WRITE_UNVERIFIED`, `PR_API_ERROR`.
-- `2`: `PR_AUTH_REQUIRED`, `PR_EVENT_UNAUTHORIZED`, `PR_NOT_OPEN`, `PR_STALE_HEAD`, `PR_VERIFY_REQUIRED`, `PR_FIX_NOT_REMOTE`, `PR_DIFF_UNAVAILABLE`, `PR_KEY_COLLISION`, `PR_CONCURRENT_LOCK`, `PR_RECONCILIATION_REQUIRED`, `PR_PAGINATION_INCOMPLETE`, `PR_POST_WRITE_HEAD_MOVED`.
+- `2`: `PR_AUTH_REQUIRED`, `PR_EVENT_UNAUTHORIZED`, `PR_NOT_OPEN`, `PR_STALE_HEAD`, `PR_VERIFY_REQUIRED`, `PR_FIX_NOT_REMOTE`, `PR_DIFF_UNAVAILABLE`, `PR_KEY_COLLISION`, `PR_REMOTE_STATE_MISMATCH`, `PR_CONCURRENT_LOCK`, `PR_RECONCILIATION_REQUIRED`, `PR_RECONCILIATION_UNCERTAIN`, `PR_PAGINATION_INCOMPLETE`, `PR_POST_WRITE_HEAD_MOVED`.
