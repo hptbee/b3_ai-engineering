@@ -13,7 +13,7 @@ Personal AI Engineering System with a **host-neutral canonical core** (`rules/`,
 | Default flow | `workflows/feature-implementation.md` | Single-stage feature work |
 | Full lifecycle | `workflows/ship.md`; `workflows/research-ship.md` | `/b3-ship`; `/b3-research-ship` (research-first) |
 | Review loop | `review-loop/strategy.md` (`spec.md` contract) | `/b3-review-loop` |
-| Templates | `workflows/references/pr-template.md`; `skills/engineering/code-review/references/review-template.md` | PRs; standalone `/b3-review` & PR comments |
+| Templates | `workflows/references/pr-template.md`; `skills/engineering/code-review/references/review-template.md` | Branch/PR summaries; standalone `/b3-review` & PR comments |
 | Docs / Evals | `docs/`, `research/`, `evals/` | Standards, provenance, fixtures |
 | Philosophy | `docs/engineering-philosophy.md` | Quality, context, cost, execution invariants |
 | Personal / Adapters | `knowledge/personal/`, `adapters/` | Background (non-rule); host wiring |
@@ -22,13 +22,11 @@ Loop (`docs/architecture.md`; conflicts: `docs/precedence.md`): `Knowledge → S
 
 ## Operating constraints
 
-1. Apply `rules/` via `docs/precedence.md`; preference never silently wins.
-2. Load smallest relevant skill; keep handoffs/replies compact.
-3. Classify claims: official spec, established practice, community/research, personal experience, preference.
-4. Never copy external repos verbatim; log provenance in `research/` (`docs/research-methodology.md`).
-5. Tool failure, missing evidence, empty **named review target**, or iteration cap → `UNKNOWN / INCOMPLETE`, never `PASS` (code review: empty diff = empty target; explicit `design-only`: missing approach = `INCOMPLETE`).
-6. Never claim unimplemented layers; lessons never auto-become rules (`docs/system-lifecycle.md`).
-7. Host link dirs (`.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}`, `.codex/skills`) are gitignored links via `adapters/sync-skills.{ps1,sh}` — never edit through them or mix discovery roots.
-8. In products, resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo); never copy `skills/` (`adapters/install-product.{ps1,sh}`).
+1. Apply `rules/` via `docs/precedence.md` (claims/provenance in `rules/evidence-and-provenance.md`; executed-evidence rules in `rules/verification.md`); preference never silently wins.
+2. Load the smallest relevant skill; keep handoffs and replies compact.
+3. Empty **named review target** (empty code diff, or missing approach in explicit `design-only`) or iteration cap → `UNKNOWN / INCOMPLETE`, never `PASS`.
+4. Never claim unimplemented layers; lessons never auto-become rules (`docs/system-lifecycle.md`).
+5. Host link dirs (`.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}`, `.codex/skills`) are gitignored links via `adapters/sync-skills.{ps1,sh}` — never edit through them or mix discovery roots.
+6. In products, resolve `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo); never copy `skills/` (`adapters/install-product.{ps1,sh}`).
 
 Host setup: [`adapters/README.md`](adapters/README.md). Layout: `research/decisions/decision-013-host-neutral-multi-host-layout.md`.

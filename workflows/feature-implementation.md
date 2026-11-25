@@ -1,6 +1,6 @@
 # Feature implementation
 
-Default product-work sequence. Does not replace skills. Does not replace `review-loop/strategy.md`.
+Default product-work sequence. Does not replace skills or `review-loop/strategy.md`.
 
 ```text
 Scope → Plan → Build → Verify → Review → Fix → Verify
@@ -10,17 +10,15 @@ Scope → Plan → Build → Verify → Review → Fix → Verify
 | --- | --- |
 | Scope | Read known targets directly (short-circuit) or load [`references/context-routing.md`](references/context-routing.md) on demand for unfamiliar architecture/symbols (optional MCP acceleration, native fallback); inspect callers and constraints |
 | Plan | `skills/engineering/planning` when multi-step; else a short plan in-place |
-| Build | `problem-solving` + smallest domain skill |
+| Build | `problem-solving` + smallest domain skill (`XS`+`inline` runs inline when `implementation` model in `.b3/models.md` is unset/`auto`; dispatch `b3-impl-t00N` per [`references/dispatch-naming.md`](references/dispatch-naming.md) when custom `implementation` model or `>=S` applies) |
 | Verify | `verification` (executed checks; `b3-guard verify-run` for non-trivial changes/handoffs) |
-| Review | `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) → diff-first, risk-sensitive `code-review` (`b3-reviewer` + matching specialist on high risk; optional [`references/context-routing.md`](references/context-routing.md) with native fallback) |
+| Review | `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) → diff-first, risk-sensitive `code-review` (`b3-reviewer` + matching specialist on high risk; optional [`references/context-routing.md`](references/context-routing.md) on demand with native fallback) |
 | Fix / Verify | Fix root causes, add regression tests, remove `CONFIRMED` residue, re-verify (max 2 bounded rounds) |
 
-During **Review**, do not only ask "is it correct?" Also ask: *given final requirements, is all of this code still necessary?* Check whether intermediate steps left temporary scaffolding, dead branches, or redundant state.
+During **Review**, do not only ask "is it correct?" Also ask: *given final requirements, is all of this code still necessary?* Remove temporary scaffolding, dead branches, and redundant state.
 
-Independent multi-iteration loop: `commands/b3-review-loop.md` → `review-loop/strategy.md`.
+Independent multi-iteration loop: `commands/b3-review-loop.md` → `review-loop/strategy.md`. `/b3-implement` uses the one-pass review here and does not start the review loop.
 
-`/b3-implement` uses the one-pass review here and does not start the review loop.
+[`ship.md`](ship.md) reuses `Scope`, `Plan`, `Build`, and `Verify` with Just-in-Time `Scope` + `Gate` (Implementation Readiness Gate). Post-code review is risk-tiered: 1 fresh `b3-reviewer` pass **only** on `inline` + `XS`/`S` + `LOW`-risk tasks (escalating to the loop on any confirmed blocker); full `review-loop` on `>=M`, `>=MEDIUM` risk, `notes`/`detailed` tasks, and `Finalize`. Ready tasks continue without stopping between Gate and Build or between tasks.
 
-[`ship.md`](ship.md) uses `Scope`, `Plan`, `Build`, and `Verify`. Per-task scoping uses Just-in-Time `Scope` plus `Gate` (Implementation Readiness Gate) in that file; post-code checking is risk-tiered (1 independent reviewer pass on small `inline` tasks unless a confirmed finding triggers the loop; full `review-loop` on `notes`/`detailed` tasks and `Finalize`). It continues across ready tasks without stopping between Gate and Build, or between tasks.
-
-Architecture choices: `simplest-correct` (strong rule `rules/simplest-correct.md`).
+Architecture choices: `simplest-correct` (`rules/simplest-correct.md`).
