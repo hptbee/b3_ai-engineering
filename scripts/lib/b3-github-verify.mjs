@@ -366,11 +366,11 @@ const fileItems = flattenPages(parseJson(filesRes.stdout, "pr_files"));
 const prChangedList = [];
 for (const fi of fileItems) {
   if (!fi || typeof fi !== "object") continue;
-  if (typeof fi.filename === "string" && fi.filename.trim()) {
-    prChangedList.push(safeText(fi.filename.trim().replace(/\\/g, "/"), "pr_file"));
+  if (typeof fi.filename === "string" && fi.filename.length > 0) {
+    prChangedList.push(safeText(fi.filename, "pr_file"));
   }
-  if (typeof fi.previous_filename === "string" && fi.previous_filename.trim()) {
-    prChangedList.push(safeText(fi.previous_filename.trim().replace(/\\/g, "/"), "pr_prev_file"));
+  if (typeof fi.previous_filename === "string" && fi.previous_filename.length > 0) {
+    prChangedList.push(safeText(fi.previous_filename, "pr_prev_file"));
   }
 }
 const prChangedSorted = sortUnique(prChangedList);

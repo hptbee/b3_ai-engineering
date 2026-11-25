@@ -63,6 +63,163 @@ run_git_cmd_quiet() { local root="$1"; shift; _run_git_cmd_core "$root" "" "quie
 run_git_cmd_with_index() { local root="$1" idx_file="$2"; shift 2; _run_git_cmd_core "$root" "$idx_file" "none" "" "$@"; }
 run_git_cmd_from_file() { local root="$1" stdin_file="$2"; shift 2; _run_git_cmd_core "$root" "" "file" "$stdin_file" "$@"; }
 
+_REPO_CASE_INSENSITIVE="false"
+detect_repo_case_insensitive() {
+  local root="$1" v=""
+  _REPO_CASE_INSENSITIVE="$_B3_IS_CASE_INSENSITIVE_FS"
+  if [[ -n "$root" && -d "$root" ]] && run_git_cmd_quiet "$root" config --bool core.ignorecase; then
+    v="$(printf '%s' "$_GIT_STDOUT" | tr -d '\r\n ' | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$v" == "true" ]]; then
+      _REPO_CASE_INSENSITIVE="true"
+      return 0
+    elif [[ "$v" == "false" ]]; then
+      _REPO_CASE_INSENSITIVE="false"
+      return 0
+    fi
+  fi
+}
+
+is_valid_literal_git_path() {
+  local LC_ALL=C
+  local p="$1"
+  [[ -n "$p" ]] || return 1
+  if [[ "$p" == *$'\n'* || "$p" == *$'\r'* || "$p" =~ [[:cntrl:]] ]]; then
+    return 1
+  fi
+  [[ "$p" != /* ]] || return 1
+  local rem="$p" seg
+  while true; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    if [[ -z "$seg" || "$seg" == "." || "$seg" == ".." ]]; then
+      return 1
+    fi
+    [[ -n "$rem" ]] || break
+  done
+  return 0
+}
+
+_GIT_PATHS_Z=()
+run_git_paths_z() {
+  local root="$1" mode="$2" fail_pfx="$3" idx_file="$4"
+  shift 4
+  [[ "${1:-}" == "--" ]] && shift
+  _GIT_PATHS_Z=()
+  local z_tmp rc=0
+  make_temp_file "b3-gpz" z_tmp
+  if [[ -n "$idx_file" ]]; then
+    if GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" >"$z_tmp" 2>"$_B3_GIT_ERR_FILE"; then rc=0; else rc=$?; fi
+  else
+    if git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" >"$z_tmp" 2>"$_B3_GIT_ERR_FILE"; then rc=0; else rc=$?; fi
+  fi
+  if [[ $rc -ne 0 ]]; then
+    _GIT_STDERR=""
+    [[ -f "$_B3_GIT_ERR_FILE" ]] && _GIT_STDERR="$(< "$_B3_GIT_ERR_FILE")"
+    rm -f "$z_tmp" 2>/dev/null || true
+    echo "${fail_pfx}: git ${1:-cmd} failed: $(git_err_detail)"
+    return 1
+  fi
+
+  local -a toks=()
+  local tok=""
+  while IFS= read -r -d '' tok; do
+    toks+=("$tok")
+  done < "$z_tmp"
+  rm -f "$z_tmp" 2>/dev/null || true
+
+  local n=${#toks[@]} i=0 seen=$'\x1f'
+  _add_lit_z() {
+    local pv="$1"
+    [[ ${#pv} -gt 1 && "$pv" == */ ]] && pv="${pv%/}"
+    if ! is_valid_literal_git_path "$pv"; then
+      echo "${fail_pfx}: unsupported_literal_git_path"
+      return 1
+    fi
+    if [[ "$seen" != *$'\x1f'"${pv}"$'\x1f'* ]]; then
+      seen+="${pv}"$'\x1f'
+      _GIT_PATHS_Z+=("$pv")
+    fi
+    return 0
+  }
+
+  case "$mode" in
+    names|ls-tree-z)
+      for ((i = 0; i < n; i++)); do
+        _add_lit_z "${toks[$i]}" || return 1
+      done
+      ;;
+    name-status-z)
+      local st="" p1="" p2=""
+      while ((i < n)); do
+        st="${toks[$i]}"; i=$((i + 1))
+        if [[ -z "$st" || "$st" =~ [[:cntrl:]] ]]; then
+          echo "${fail_pfx}: git_parser_failed(name-status)"
+          return 1
+        fi
+        if ((i >= n)); then
+          echo "${fail_pfx}: git_parser_failed(name-status)"
+          return 1
+        fi
+        p1="${toks[$i]}"; i=$((i + 1))
+        _add_lit_z "$p1" || return 1
+        if [[ "$st" == R* || "$st" == C* ]]; then
+          if ((i >= n)); then
+            echo "${fail_pfx}: git_parser_failed(name-status-rename)"
+            return 1
+          fi
+          p2="${toks[$i]}"; i=$((i + 1))
+          _add_lit_z "$p2" || return 1
+        fi
+      done
+      ;;
+    status-z)
+      local rec="" xy="" p1="" p2=""
+      while ((i < n)); do
+        rec="${toks[$i]}"; i=$((i + 1))
+        if [[ ${#rec} -lt 4 || "${rec:2:1}" != " " ]]; then
+          echo "${fail_pfx}: git_parser_failed(status-z)"
+          return 1
+        fi
+        xy="${rec:0:2}"
+        p1="${rec:3}"
+        [[ ${#p1} -gt 1 && "$p1" == */ ]] && p1="${p1%/}"
+        _add_lit_z "$p1" || return 1
+        if [[ "$xy" == *R* || "$xy" == *C* ]]; then
+          if ((i >= n)); then
+            echo "${fail_pfx}: git_parser_failed(status-z-rename)"
+            return 1
+          fi
+          p2="${toks[$i]}"; i=$((i + 1))
+          [[ ${#p2} -gt 1 && "$p2" == */ ]] && p2="${p2%/}"
+          _add_lit_z "$p2" || return 1
+        fi
+      done
+      ;;
+    ls-tree-full-z|ls-files-stage-z)
+      local rec="" p=""
+      for ((i = 0; i < n; i++)); do
+        rec="${toks[$i]}"
+        if [[ "$rec" != *$'\t'* ]]; then
+          echo "${fail_pfx}: git_parser_failed(${mode})"
+          return 1
+        fi
+        p="${rec#*$'\t'}"
+        _add_lit_z "$p" || return 1
+      done
+      ;;
+    *)
+      echo "${fail_pfx}: unsupported_git_paths_mode(${mode})"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 git_err_detail() {
   local d
   d="$(trim_str "$_GIT_STDERR")"
@@ -662,43 +819,49 @@ assert_valid_git_rev() {
 }
 
 snapshot_preflight() {
-  local root="$1" prefix="$2" changed untracked links p line sub state
-  if ! run_git_cmd "$root" diff --no-ext-diff --no-renames --diff-filter=d --name-only HEAD --; then
-    echo "${prefix}: unable to inspect snapshot paths"; return 1
-  fi
-  changed="$_GIT_STDOUT"
-  if ! run_git_cmd "$root" ls-files --others --exclude-standard; then
-    echo "${prefix}: unable to inspect untracked snapshot paths"; return 1
-  fi
-  untracked="$_GIT_STDOUT"
-  while IFS= read -r line; do
-    p="$(norm_path "$line")"
+  local root="$1" prefix="$2" p sub
+  local -a ch_paths=() un_paths=()
+  run_git_paths_z "$root" "names" "$prefix" "" -- diff --no-ext-diff --no-renames --diff-filter=d --name-only -z HEAD -- || return 1
+  [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && ch_paths=("${_GIT_PATHS_Z[@]}")
+  run_git_paths_z "$root" "names" "$prefix" "" -- ls-files --others --exclude-standard -z || return 1
+  [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && un_paths=("${_GIT_PATHS_Z[@]}")
+  for p in ${ch_paths[@]+"${ch_paths[@]}"} ${un_paths[@]+"${un_paths[@]}"}; do
     [[ -n "$p" ]] || continue
     if is_secret_path "$p"; then
       echo "${prefix}: sensitive path cannot be snapshotted ($p)"
       return 1
     fi
-  done < <(printf '%s\n%s\n' "$changed" "$untracked")
-  if ! run_git_cmd "$root" ls-files --stage; then
-    echo "${prefix}: unable to inspect submodules"; return 1
+  done
+  local st_tmp rc=0 rec
+  make_temp_file "b3-stage-z" st_tmp
+  if git -C "$root" -c core.quotepath=false ls-files --stage -z >"$st_tmp" 2>"$_B3_GIT_ERR_FILE"; then rc=0; else rc=$?; fi
+  if [[ $rc -ne 0 ]]; then
+    rm -f "$st_tmp" 2>/dev/null || true
+    echo "${prefix}: unable to inspect submodules"
+    return 1
   fi
-  links="$_GIT_STDOUT"
-  while IFS= read -r line; do
-    [[ "$line" == 160000\ * ]] || continue
-    [[ "$line" == *$'\t'* ]] || continue
-    p="${line#*$'\t'}"
-    sub="${root}/${p}"
-    [[ -e "${sub}/.git" ]] || continue
-    if ! run_git_cmd "$sub" status --porcelain --untracked-files=all --ignore-submodules=none; then
-      echo "${prefix}: unable to inspect submodule ($p)"
+  while IFS= read -r -d '' rec; do
+    [[ "$rec" == 160000\ * ]] || continue
+    [[ "$rec" == *$'\t'* ]] || continue
+    p="${rec#*$'\t'}"
+    if ! is_valid_literal_git_path "$p"; then
+      rm -f "$st_tmp" 2>/dev/null || true
+      echo "${prefix}: unsupported_literal_git_path"
       return 1
     fi
-    state="$_GIT_STDOUT"
-    if [[ -n "$state" ]]; then
+    sub="${root}/${p}"
+    [[ -e "${sub}/.git" ]] || continue
+    if ! run_git_paths_z "$sub" "status-z" "$prefix" "" -- status --porcelain --untracked-files=all --ignore-submodules=none -z; then
+      rm -f "$st_tmp" 2>/dev/null || true
+      return 1
+    fi
+    if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then
+      rm -f "$st_tmp" 2>/dev/null || true
       echo "${prefix}: dirty submodule cannot be snapshotted ($p)"
       return 1
     fi
-  done <<< "$links"
+  done < "$st_tmp"
+  rm -f "$st_tmp" 2>/dev/null || true
 }
 
 run_snapshot_chunked_cmd() {
@@ -731,12 +894,11 @@ run_snapshot_chunked_cmd() {
 }
 
 stage_non_secret_tracked() {
-  local root="$1" tmp_idx="$2" line="" p="" ts="" skip="false"
+  local root="$1" tmp_idx="$2" p="" ts="" skip="false"
   shift 2
-  run_git_cmd_with_index "$root" "$tmp_idx" diff --no-ext-diff --no-renames --name-only -- || return 1
+  run_git_paths_z "$root" "names" "GIT_ERROR" "$tmp_idx" -- diff --no-ext-diff --no-renames --name-only -z -- || return 1
   local -a non_secret_tracked=()
-  while IFS= read -r line; do
-    p="$(norm_path "$line")"
+  for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
     [[ -n "$p" ]] || continue
     skip="false"
     for ts in "$@"; do
@@ -748,7 +910,7 @@ stage_non_secret_tracked() {
     if [[ "$skip" != "true" ]]; then
       non_secret_tracked+=("$p")
     fi
-  done <<< "$_GIT_STDOUT"
+  done
   if [[ ${#non_secret_tracked[@]} -gt 0 ]]; then
     run_snapshot_chunked_cmd "$root" "$tmp_idx" add -u -- "${non_secret_tracked[@]}" || return 1
   fi
@@ -757,7 +919,7 @@ stage_non_secret_tracked() {
 
 build_working_tree_oid() {
   local root="$1" prefix="$2" exclude_sensitive="${3:-false}" real_idx_raw="" real_idx="" tmp_idx="" tree_sha=""
-  local has_head="false" ch="" un="" st="" line="" p=""
+  local has_head="false" p=""
   local -a tracked_secrets=()
   local -a unborn_staged_secrets=()
   local -a untracked_to_add=()
@@ -766,45 +928,36 @@ build_working_tree_oid() {
   fi
   if [[ "$exclude_sensitive" == "true" ]]; then
     if [[ "$has_head" == "true" ]]; then
-      if run_git_cmd "$root" diff --no-ext-diff --no-renames --diff-filter=d --name-only HEAD --; then
-        ch="$_GIT_STDOUT"
-        while IFS= read -r line; do
-          p="$(norm_path "$line")"
-          [[ -n "$p" ]] || continue
-          if is_secret_path "$p"; then
-            tracked_secrets+=("$p")
-          fi
-        done <<< "$ch"
-      fi
+      run_git_paths_z "$root" "names" "$prefix" "" -- diff --no-ext-diff --no-renames --diff-filter=d --name-only -z HEAD -- || return 1
+      for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+        [[ -n "$p" ]] || continue
+        if is_secret_path "$p"; then
+          tracked_secrets+=("$p")
+        fi
+      done
     else
-      if run_git_cmd "$root" ls-files --cached; then
-        st="$_GIT_STDOUT"
-        while IFS= read -r line; do
-          p="$(norm_path "$line")"
-          [[ -n "$p" ]] || continue
-          if is_secret_path "$p"; then
-            unborn_staged_secrets+=("$p")
-          fi
-        done <<< "$st"
-      fi
+      run_git_paths_z "$root" "names" "$prefix" "" -- ls-files --cached -z || return 1
+      for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+        [[ -n "$p" ]] || continue
+        if is_secret_path "$p"; then
+          unborn_staged_secrets+=("$p")
+        fi
+      done
     fi
   else
     snapshot_preflight "$root" "$prefix" || return 1
   fi
-  if run_git_cmd "$root" ls-files --others --exclude-standard; then
-    un="$_GIT_STDOUT"
-    while IFS= read -r line; do
-      p="$(norm_path "$line")"
-      [[ -n "$p" ]] || continue
-      case "$p" in
-        .b3/ship|.b3/ship/*|.b3/research-ship|.b3/research-ship/*|.b3/autodev|.b3/autodev/*) continue ;;
-      esac
-      if [[ "$exclude_sensitive" == "true" ]] && is_secret_path "$p"; then
-        continue
-      fi
-      untracked_to_add+=("$p")
-    done <<< "$un"
-  fi
+  run_git_paths_z "$root" "names" "$prefix" "" -- ls-files --others --exclude-standard -z || return 1
+  for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+    [[ -n "$p" ]] || continue
+    case "$p" in
+      .b3/ship|.b3/ship/*|.b3/research-ship|.b3/research-ship/*|.b3/autodev|.b3/autodev/*) continue ;;
+    esac
+    if [[ "$exclude_sensitive" == "true" ]] && is_secret_path "$p"; then
+      continue
+    fi
+    untracked_to_add+=("$p")
+  done
   if ! run_git_cmd "$root" rev-parse --git-path index; then
     echo "${prefix}: failed to locate git index"
     exit 1
@@ -881,20 +1034,27 @@ resolve_auto_base_sha() {
   local root="$1"
   shift
   local -a ignored=("$@")
-  local diff_out="" un_out="" line p
-  if run_git_cmd_quiet "$root" diff --no-ext-diff --no-renames --name-only HEAD --; then diff_out="$_GIT_STDOUT"; fi
-  if run_git_cmd_quiet "$root" ls-files --others --exclude-standard; then un_out="$_GIT_STDOUT"; fi
-  while IFS= read -r line; do
-    p="$(norm_path "$line")"
+  local head_sha="" p="" has_head="false"
+  local -a cands=()
+  if run_git_cmd_quiet "$root" rev-parse --verify --quiet HEAD; then
+    head_sha="$(trim_str "$_GIT_STDOUT")"
+    [[ -n "$head_sha" ]] && has_head="true"
+  fi
+  if [[ "$has_head" == "true" ]]; then
+    run_git_paths_z "$root" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --name-only -z HEAD -- || return 1
+    [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && cands+=("${_GIT_PATHS_Z[@]}")
+  fi
+  run_git_paths_z "$root" "names" "GIT_ERROR" "" -- ls-files --others --exclude-standard -z || return 1
+  [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && cands+=("${_GIT_PATHS_Z[@]}")
+  for p in ${cands[@]+"${cands[@]}"}; do
     [[ -z "$p" ]] && continue
     is_checkpoint_dir "$p" && continue
     if [[ ${#ignored[@]} -gt 0 ]] && path_in_list "$p" "${ignored[@]}"; then continue; fi
     printf '%s' "HEAD"
     return 0
-  done < <(printf '%s\n%s\n' "$diff_out" "$un_out")
+  done
 
-  local head_sha="" ref mb=""
-  if run_git_cmd_quiet "$root" rev-parse HEAD; then head_sha="$(trim_str "$_GIT_STDOUT")"; fi
+  local ref mb=""
   if [[ -n "$head_sha" ]]; then
     for ref in origin/HEAD origin/main origin/master main master; do
       if run_git_cmd_quiet "$root" rev-parse --verify --quiet "$ref"; then
@@ -1443,7 +1603,7 @@ normalize_merge_policy_path() {
   local raw="$1"
   _MP_NORM_PATH=""
   [[ -n "$raw" ]] || return 1
-  if [[ "$raw" =~ [[:cntrl:]] ]]; then return 1; fi
+  if [[ "$raw" == *$'\n'* || "$raw" == *$'\r'* || "$raw" =~ [[:cntrl:]] ]]; then return 1; fi
   local s="${raw//\\//}"
   if [[ "$s" == "." || "$s" == "./" ]]; then
     _MP_NORM_PATH="."
@@ -1452,7 +1612,10 @@ normalize_merge_policy_path() {
   if [[ "$s" == */ ]]; then
     s="${s%/}"
   fi
-  if ! check_safe_repo_path_segments "$s" false; then
+  if [[ "$s" == *:* || "$s" == /* || "$s" == ~* || "$s" == *'*'* || "$s" == *'?'* ]]; then
+    return 1
+  fi
+  if ! is_valid_literal_git_path "$s"; then
     return 1
   fi
   _MP_NORM_PATH="$s"
@@ -1463,12 +1626,18 @@ protected_path_match_ci() {
   local cand="$1"
   shift
   [[ -n "$cand" ]] || return 1
-  local c_low p p_low
-  c_low="$(printf '%s' "$cand" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  local c_cmp="$cand" p p_cmp
+  if [[ "${_MP_CASE_INSENSITIVE:-true}" == "true" ]]; then
+    c_cmp="$(printf '%s' "$cand" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
   for p in "$@"; do
     [[ -n "$p" ]] || continue
-    p_low="$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    if [[ "$p_low" == "." || "$c_low" == "." || "$c_low" == "$p_low" || "$c_low" == "$p_low/"* || "$p_low" == "$c_low/"* ]]; then
+    if [[ "${_MP_CASE_INSENSITIVE:-true}" == "true" ]]; then
+      p_cmp="$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    else
+      p_cmp="$p"
+    fi
+    if [[ "$p_cmp" == "." || "$c_cmp" == "." || "$c_cmp" == "$p_cmp" || "$c_cmp" == "$p_cmp/"* || "$p_cmp" == "$c_cmp/"* ]]; then
       return 0
     fi
   done
@@ -1924,18 +2093,21 @@ resolve_submodule_entry() {
       if $has_fb; then sub_head="$fallback_oid"; else sub_head="UNBORN"; fi
     fi
 
-    if ! run_git_cmd "$sub_full" status --porcelain -uall --ignore-submodules=none; then
+    local st_tmp_sub rc_sub=0
+    make_temp_file "b3-sub-st" st_tmp_sub
+    if git -C "$sub_full" -c core.quotepath=false status --porcelain -uall --ignore-submodules=none -z >"$st_tmp_sub" 2>"$_B3_GIT_ERR_FILE"; then rc_sub=0; else rc_sub=$?; fi
+    if [[ $rc_sub -ne 0 ]]; then
+      _GIT_STDERR=""; [[ -f "$_B3_GIT_ERR_FILE" ]] && _GIT_STDERR="$(< "$_B3_GIT_ERR_FILE")"
+      rm -f "$st_tmp_sub" 2>/dev/null || true
       echo "GIT_ERROR: submodule status failed for ${rel_p}: $(git_err_detail)"
       return 1
     fi
-    local st_out="$_GIT_STDOUT"
     local -a st_lines=()
-    local raw_st clean_st trimmed_st
-    while IFS= read -r raw_st; do
-      clean_st="${raw_st%$'\r'}"
-      trimmed_st="$(trim_str "$clean_st")"
-      [[ -n "$trimmed_st" ]] && st_lines+=("$clean_st")
-    done <<< "$st_out"
+    local raw_st=""
+    while IFS= read -r -d '' raw_st; do
+      [[ -n "$raw_st" ]] && st_lines+=("$raw_st")
+    done < "$st_tmp_sub"
+    rm -f "$st_tmp_sub" 2>/dev/null || true
 
     if [[ ${#st_lines[@]} -eq 0 ]]; then
       printf '160000 commit %s' "$sub_head"
@@ -1947,22 +2119,22 @@ resolve_submodule_entry() {
       [[ -n "$sl" ]] && dirty_buf="${dirty_buf}S ${sl}"$'\n'
     done < <(printf '%s\n' "${st_lines[@]}" | LC_ALL=C sort)
 
-    local s_wt="" s_ca="" s_un=""
-    if $has_head; then
-      run_git_cmd "$sub_full" diff --no-ext-diff --no-renames --name-only --ignore-submodules=none HEAD -- || { echo "GIT_ERROR: submodule diff failed for ${rel_p}: $(git_err_detail)"; return 1; }
-      s_wt="$_GIT_STDOUT"
-    fi
-    run_git_cmd "$sub_full" diff --no-ext-diff --no-renames --cached --name-only -- || { echo "GIT_ERROR: submodule diff cached failed for ${rel_p}: $(git_err_detail)"; return 1; }
-    s_ca="$_GIT_STDOUT"
-    run_git_cmd "$sub_full" ls-files --others --exclude-standard || { echo "GIT_ERROR: submodule ls-files failed for ${rel_p}: $(git_err_detail)"; return 1; }
-    s_un="$_GIT_STDOUT"
-
     local -a s_cands=()
-    local line sp
-    while IFS= read -r line; do
-      sp="$(norm_path "$line")"
-      [[ -n "$sp" ]] && s_cands+=("$sp")
-    done < <(printf '%s\n%s\n%s\n' "$s_wt" "$s_ca" "$s_un")
+    local sp_seen="|" sp
+    if $has_head; then
+      run_git_paths_z "$sub_full" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --name-only --ignore-submodules=none -z HEAD -- || return 1
+      for sp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+        if [[ -n "$sp" && "$sp_seen" != *"|${sp}|"* ]]; then sp_seen+="${sp}|"; s_cands+=("$sp"); fi
+      done
+    fi
+    run_git_paths_z "$sub_full" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --cached --name-only -z -- || return 1
+    for sp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+      if [[ -n "$sp" && "$sp_seen" != *"|${sp}|"* ]]; then sp_seen+="${sp}|"; s_cands+=("$sp"); fi
+    done
+    run_git_paths_z "$sub_full" "names" "GIT_ERROR" "" -- ls-files --others --exclude-standard -z || return 1
+    for sp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+      if [[ -n "$sp" && "$sp_seen" != *"|${sp}|"* ]]; then sp_seen+="${sp}|"; s_cands+=("$sp"); fi
+    done
 
     if [[ ${#s_cands[@]} -gt 0 ]]; then
       local sp_full f_sha n_tag
@@ -2843,7 +3015,7 @@ paths_equal_fs() {
   local a b
   a="$(norm_path "$1")"
   b="$(norm_path "$2")"
-  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$a" =~ ^[A-Za-z]: || "$b" =~ ^[A-Za-z]: ]]; then
+  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
     a="$(printf '%s' "$a" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
     b="$(printf '%s' "$b" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
   fi
@@ -2852,7 +3024,7 @@ paths_equal_fs() {
 
 worktree_roots_overlap() {
   local a="$1" b="$2"
-  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$a" =~ ^[A-Za-z]: || "$b" =~ ^[A-Za-z]: ]]; then
+  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
     a="$(printf '%s' "$a" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
     b="$(printf '%s' "$b" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
   fi
@@ -5122,29 +5294,20 @@ check_graph_index_fresh() {
     return 1
   fi
   if [[ $# -gt 0 ]]; then
-    local w_out c_out u_out line p
-    if ! run_git_cmd "$root" diff --no-ext-diff --no-renames --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
-      echo "CONTEXT_ERROR: git diff failed"
-      exit 1
-    fi
-    w_out="$_GIT_STDOUT"
-    if ! run_git_cmd "$root" diff --no-ext-diff --no-renames --cached --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
-      echo "CONTEXT_ERROR: git diff --cached failed"
-      exit 1
-    fi
-    c_out="$_GIT_STDOUT"
-    if ! run_git_cmd "$root" ls-files --others --exclude-standard -- "$@"; then
-      echo "CONTEXT_ERROR: git ls-files failed"
-      exit 1
-    fi
-    u_out="$_GIT_STDOUT"
-    while IFS= read -r line; do
-      p="$(norm_path "$line")"
+    local p
+    local -a _probe_cands=()
+    run_git_paths_z "$root" "names" "CONTEXT_ERROR" "" -- diff --no-ext-diff --no-renames --name-only --ignore-submodules=none -z "$graph_sha" -- "$@" || exit 1
+    [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _probe_cands+=("${_GIT_PATHS_Z[@]}")
+    run_git_paths_z "$root" "names" "CONTEXT_ERROR" "" -- diff --no-ext-diff --no-renames --cached --name-only --ignore-submodules=none -z "$graph_sha" -- "$@" || exit 1
+    [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _probe_cands+=("${_GIT_PATHS_Z[@]}")
+    run_git_paths_z "$root" "names" "CONTEXT_ERROR" "" -- ls-files --others --exclude-standard -z -- "$@" || exit 1
+    [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _probe_cands+=("${_GIT_PATHS_Z[@]}")
+    for p in ${_probe_cands[@]+"${_probe_cands[@]}"}; do
       [[ -n "$p" ]] || continue
       is_checkpoint_dir "$p" && continue
       if [[ ${#_IGN_PATHS[@]} -gt 0 ]] && path_in_list "$p" "${_IGN_PATHS[@]}"; then continue; fi
       return 1
-    done < <(printf '%s\n%s\n%s\n' "$w_out" "$c_out" "$u_out")
+    done
     return 0
   fi
 
@@ -5231,18 +5394,22 @@ get_effective_repo_path_state() {
     return 0
   fi
   full="${canon_r%/}/${rel_p}"
-  if run_git_cmd_quiet "$canon_r" diff --no-ext-diff --cached --no-renames --name-only HEAD -- "$rel_p" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-    local _iw_hit=false _cadel_hit=false _ex_now=false
-    if run_git_cmd_quiet "$canon_r" diff --no-ext-diff --no-renames --name-only -- "$rel_p" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-      _iw_hit=true
-    fi
-    if run_git_cmd_quiet "$canon_r" diff --no-ext-diff --cached --no-renames --diff-filter=D --name-only -- "$rel_p" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-      _cadel_hit=true
-    fi
-    [[ -e "$full" || -L "$full" ]] && _ex_now=true
-    if $_iw_hit || ( $_cadel_hit && $_ex_now ); then
-      printf 'INDEX_WT_DIVERGED'
-      return 0
+  if run_git_cmd_quiet "$canon_r" rev-parse --verify --quiet HEAD; then
+    if run_git_paths_z "$canon_r" "names" "$fail_pfx" "" -- diff --no-ext-diff --cached --no-renames --name-only -z HEAD -- "$rel_p"; then
+      if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then
+        local _iw_hit=false _cadel_hit=false _ex_now=false
+        run_git_paths_z "$canon_r" "names" "$fail_pfx" "" -- diff --no-ext-diff --no-renames --name-only -z -- "$rel_p" || return 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _iw_hit=true
+        run_git_paths_z "$canon_r" "names" "$fail_pfx" "" -- diff --no-ext-diff --cached --no-renames --diff-filter=D --name-only -z -- "$rel_p" || return 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _cadel_hit=true
+        [[ -e "$full" || -L "$full" ]] && _ex_now=true
+        if $_iw_hit || ( $_cadel_hit && $_ex_now ); then
+          printf 'INDEX_WT_DIVERGED'
+          return 0
+        fi
+      fi
+    else
+      return 1
     fi
   fi
   if [[ ! -e "$full" && ! -L "$full" ]]; then
@@ -5404,17 +5571,15 @@ case "$CMD" in
       exit 1
     fi
 
-    run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$RES_APPROACH_SHA" "$RES_HEAD_SHA" -- || { echo "GIT_ERROR: git diff failed: $(git_err_detail)"; exit 1; }
-    COMMITTED_OUT="$_GIT_STDOUT"
+    run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --name-only -z "$RES_APPROACH_SHA" "$RES_HEAD_SHA" -- || exit 1
     COMMITTED_HITS=()
-    while IFS= read -r line; do
-      p="$(norm_path "$line")"
+    for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
       [[ -z "$p" ]] && continue
       is_checkpoint_dir "$p" && continue
       if path_in_list "$p" "${WATCHED_ARR[@]}"; then
         COMMITTED_HITS+=("$p")
       fi
-    done <<< "$COMMITTED_OUT"
+    done
 
     if [[ ${#COMMITTED_HITS[@]} -gt 0 ]]; then
       HITS_STR="$(printf '%s\n' "${COMMITTED_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
@@ -5430,15 +5595,15 @@ case "$CMD" in
     done
 
     if [[ ${#RO_ARR[@]} -gt 0 ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$RES_APPROACH_SHA" -- || { echo "GIT_ERROR: git diff working tree failed: $(git_err_detail)"; exit 1; }
-      WT_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only -- || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
-      CA_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
-      UN_OUT="$_GIT_STDOUT"
+      _RO_CANDS=()
+      run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --name-only -z "$RES_APPROACH_SHA" -- || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _RO_CANDS+=("${_GIT_PATHS_Z[@]}")
+      run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --cached --name-only -z -- || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _RO_CANDS+=("${_GIT_PATHS_Z[@]}")
+      run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- ls-files --others --exclude-standard -z || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _RO_CANDS+=("${_GIT_PATHS_Z[@]}")
       RO_HITS=()
-      while IFS= read -r line; do
-        p="$(norm_path "$line")"
+      for p in ${_RO_CANDS[@]+"${_RO_CANDS[@]}"}; do
         [[ -z "$p" ]] && continue
         is_checkpoint_dir "$p" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then
@@ -5450,7 +5615,7 @@ case "$CMD" in
         if path_in_list "$p" "${RO_ARR[@]}"; then
           RO_HITS+=("$p")
         fi
-      done < <(printf '%s\n%s\n%s\n' "$WT_OUT" "$CA_OUT" "$UN_OUT")
+      done
 
       if [[ ${#RO_HITS[@]} -gt 0 ]]; then
         HITS_STR="$(printf '%s\n' "${RO_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
@@ -5491,13 +5656,9 @@ case "$CMD" in
     IGN_ARR=()
     [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGN_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
-    run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only -- || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
-    STAGED_OUT="$_GIT_STDOUT"
+    run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --cached --name-only -z -- || exit 1
     STAGED_ARR=()
-    while IFS= read -r line; do
-      p="$(norm_path "$line")"
-      [[ -n "$p" ]] && STAGED_ARR+=("$p")
-    done <<< "$STAGED_OUT"
+    [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && STAGED_ARR=("${_GIT_PATHS_Z[@]}")
 
     if [[ ${#STAGED_ARR[@]} -lt 1 ]]; then
       echo "PRECOMMIT_FAIL: nothing staged"
@@ -5553,22 +5714,16 @@ case "$CMD" in
 
     REQUIRE_RECEIPT="$(trim_str "$REQUIRE_RECEIPT")"
     if [[ -n "$REQUIRE_RECEIPT" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -- "${STAGED_ARR[@]}" || { echo "GIT_ERROR: git diff index-vs-wt failed: $(git_err_detail)"; exit 1; }
-      IDX_VS_WT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --diff-filter=D --name-only -- || { echo "GIT_ERROR: git diff cached delete failed: $(git_err_detail)"; exit 1; }
-      STAGED_DEL="$_GIT_STDOUT"
       WT_MM=()
-      while IFS= read -r line; do
-        p="$(norm_path "$line")"
-        [[ -n "$p" ]] && WT_MM+=("$p")
-      done <<< "$IDX_VS_WT"
-      while IFS= read -r line; do
-        p="$(norm_path "$line")"
+      run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -z -- "${STAGED_ARR[@]}" || exit 1
+      for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do [[ -n "$p" ]] && WT_MM+=("$p"); done
+      run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --cached --diff-filter=D --name-only -z -- || exit 1
+      for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
         [[ -n "$p" ]] || continue
         if [[ -e "${REPO_ROOT}/${p}" ]]; then
           WT_MM+=("$p")
         fi
-      done <<< "$STAGED_DEL"
+      done
       if [[ ${#WT_MM[@]} -gt 0 ]]; then
         MM_STR="$(printf '%s\n' "${WT_MM[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
         echo "PRECOMMIT_FAIL: staged content differs from working tree (${MM_STR//,/, })"
@@ -5625,20 +5780,20 @@ case "$CMD" in
           SCOPE_ARR+=("$rp")
         done < <(split_csv_lines "$_VR_REL_PATHS" true | LC_ALL=C sort -u)
       fi
-      if $SCOPE_ALL; then
-        run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -- || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
-        UNSTAGED_RAW="$_GIT_STDOUT"
-        run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
-        UNTRACKED_RAW="$_GIT_STDOUT"
-      else
-        run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
-        UNSTAGED_RAW="$_GIT_STDOUT"
-        run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
-        UNTRACKED_RAW="$_GIT_STDOUT"
-      fi
       UNSTAGED_SCOPE=()
-      while IFS= read -r line; do
-        p="$(norm_path "$line")"
+      _UNSTAGED_CANDS=()
+      if $SCOPE_ALL; then
+        run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -z -- || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _UNSTAGED_CANDS+=("${_GIT_PATHS_Z[@]}")
+        run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- ls-files --others --exclude-standard -z || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _UNSTAGED_CANDS+=("${_GIT_PATHS_Z[@]}")
+      else
+        run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -z -- "${SCOPE_ARR[@]}" || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _UNSTAGED_CANDS+=("${_GIT_PATHS_Z[@]}")
+        run_git_paths_z "$REPO_ROOT" "names" "GIT_ERROR" "" -- ls-files --others --exclude-standard -z -- "${SCOPE_ARR[@]}" || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _UNSTAGED_CANDS+=("${_GIT_PATHS_Z[@]}")
+      fi
+      for p in ${_UNSTAGED_CANDS[@]+"${_UNSTAGED_CANDS[@]}"}; do
         [[ -n "$p" ]] || continue
         is_checkpoint_dir "$p" && continue
         if [[ ${#IGN_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGN_ARR[@]}"; then continue; fi
@@ -5646,7 +5801,7 @@ case "$CMD" in
           [[ ${#SCOPE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${SCOPE_ARR[@]}" || continue
         fi
         UNSTAGED_SCOPE+=("$p")
-      done < <(printf '%s\n%s\n' "$UNSTAGED_RAW" "$UNTRACKED_RAW")
+      done
       if [[ ${#UNSTAGED_SCOPE[@]} -gt 0 ]]; then
         UN_STR="$(printf '%s\n' "${UNSTAGED_SCOPE[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
         echo "PRECOMMIT_FAIL: unstaged changes in receipt scope (${UN_STR//,/, })"
@@ -5738,17 +5893,15 @@ case "$CMD" in
         build_working_tree_oid "$REPO_ROOT" "DIFF_SCOPE_FAIL"
         DELTA_END="$_WT_TREE_OID"
       fi
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$PREV_SHA" "$DELTA_END" -- || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
-      DELTA_OUT="$_GIT_STDOUT"
+      run_git_paths_z "$REPO_ROOT" "names" "DIFF_SCOPE_FAIL" "" -- diff --no-ext-diff --no-renames --name-only -z "$PREV_SHA" "$DELTA_END" -- || exit 1
       DELTA_ARR=()
-      while IFS= read -r line; do
-        p="$(norm_path "$line")"
+      for p in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
         [[ -z "$p" ]] && continue
         is_checkpoint_dir "$p" && continue
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
         if is_noise_file "$p"; then continue; fi
         DELTA_ARR+=("$p")
-      done <<< "$DELTA_OUT"
+      done
       if [[ ${#DELTA_ARR[@]} -gt 0 ]]; then
         DF_OUT="$(printf '%s\n' "${DELTA_ARR[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
       fi
@@ -5806,6 +5959,8 @@ case "$CMD" in
 
     REPO_EXISTS_MC="false"
     [[ -n "$REPO_ROOT" && -d "$REPO_ROOT" ]] && REPO_EXISTS_MC="true"
+    detect_repo_case_insensitive "$REPO_ROOT"
+    _B3_IS_CASE_INSENSITIVE_FS="$_REPO_CASE_INSENSITIVE"
 
     HAS_WAVE_SPECS="false"
     [[ -n "$(trim_str "$WAVE_SPECS")" ]] && HAS_WAVE_SPECS="true"
@@ -5848,17 +6003,25 @@ case "$CMD" in
             exit 1
           fi
           MC_PROT_LIST+=("$prot")
-          MC_PROT_LOW_LIST+=("$(printf '%s' "$prot" | LC_ALL=C tr '[:upper:]' '[:lower:]')")
+          if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+            MC_PROT_LOW_LIST+=("$(printf '%s' "$prot" | LC_ALL=C tr '[:upper:]' '[:lower:]')")
+          else
+            MC_PROT_LOW_LIST+=("$prot")
+          fi
         done
       fi
     fi
 
     _mc_prot_match_ci() {
-      local cand="$1" c_low p_low
+      local cand="$1" c_cmp p_cmp
       [[ ${#MC_PROT_LOW_LIST[@]} -gt 0 && -n "$cand" ]] || return 1
-      c_low="$(printf '%s' "$cand" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-      for p_low in "${MC_PROT_LOW_LIST[@]}"; do
-        if [[ "$p_low" == "." || "$c_low" == "$p_low" || "$c_low" == "${p_low}/"* ]]; then
+      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+        c_cmp="$(printf '%s' "$cand" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      else
+        c_cmp="$cand"
+      fi
+      for p_cmp in "${MC_PROT_LOW_LIST[@]}"; do
+        if [[ "$p_cmp" == "." || "$c_cmp" == "$p_cmp" || "$c_cmp" == "${p_cmp}/"* ]]; then
           return 0
         fi
       done
@@ -6079,43 +6242,51 @@ case "$CMD" in
     TARGET_COMMIT_SHA="$_SCOPE_TARGET_SHA"
     BASE_SHA="$_SCOPE_BASE_SHA"
 
-    CA_BASE_CH_OUT=""
-    CA_BASE_NONDEL_OUT=""
+    CH_PATHS=()
+    NONDEL_PATHS=()
+    UN_PATHS=()
+    CA_BASE_CH_PATHS=()
+    CA_BASE_NONDEL_PATHS=()
     if [[ -n "$TARGET_REF" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
-      CH_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --diff-filter=d --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
-      NONDEL_OUT="$_GIT_STDOUT"
-      UN_OUT=""
+      run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --name-only -z "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && CH_PATHS=("${_GIT_PATHS_Z[@]}")
+      run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --diff-filter=d --name-only -z "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && NONDEL_PATHS=("${_GIT_PATHS_Z[@]}")
     else
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
-      CH_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --diff-filter=d --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
-      NONDEL_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --cached --name-only failed: $(git_err_detail)"; exit 1; }
-      CA_BASE_CH_OUT="$_GIT_STDOUT"
-      if [[ -n "$(trim_str "$CA_BASE_CH_OUT")" ]]; then
-        run_git_cmd "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --diff-filter=d --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --cached --diff-filter=d failed: $(git_err_detail)"; exit 1; }
-        CA_BASE_NONDEL_OUT="$_GIT_STDOUT"
+      run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --name-only -z "$BASE_SHA" -- || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && CH_PATHS=("${_GIT_PATHS_Z[@]}")
+      run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --diff-filter=d --name-only -z "$BASE_SHA" -- || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && NONDEL_PATHS=("${_GIT_PATHS_Z[@]}")
+      run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --cached --no-renames --name-only -z "$BASE_SHA" -- || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && CA_BASE_CH_PATHS=("${_GIT_PATHS_Z[@]}")
+      if [[ ${#CA_BASE_CH_PATHS[@]} -gt 0 ]]; then
+        run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --cached --no-renames --diff-filter=d --name-only -z "$BASE_SHA" -- || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && CA_BASE_NONDEL_PATHS=("${_GIT_PATHS_Z[@]}")
       fi
-      run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MECHANICAL_FAIL: git ls-files failed: $(git_err_detail)"; exit 1; }
-      UN_OUT="$_GIT_STDOUT"
+      run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- ls-files --others --exclude-standard -z || exit 1
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && UN_PATHS=("${_GIT_PATHS_Z[@]}")
     fi
 
     RAW_BEFORE_IGN=()
+    _RAW_CANDS=(${CH_PATHS[@]+"${CH_PATHS[@]}"} ${CA_BASE_CH_PATHS[@]+"${CA_BASE_CH_PATHS[@]}"} ${UN_PATHS[@]+"${UN_PATHS[@]}"})
     if [[ "$HAS_PROTECTED_ARG" == "true" || "$HAS_DIRTY_DIGESTS_ARG" == "true" ]]; then
-      EXTRA_DIRTY_OUT=""
       if [[ -z "$TARGET_REF" ]]; then
-        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only HEAD --; then EXTRA_DIRTY_OUT+="$_GIT_STDOUT"$'\n'; fi
-        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only --; then EXTRA_DIRTY_OUT+="$_GIT_STDOUT"$'\n'; fi
-        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only --; then EXTRA_DIRTY_OUT+="$_GIT_STDOUT"$'\n'; fi
+        run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --name-only -z HEAD -- || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _RAW_CANDS+=("${_GIT_PATHS_Z[@]}")
+        run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --cached --name-only -z -- || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _RAW_CANDS+=("${_GIT_PATHS_Z[@]}")
+        run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --name-only -z -- || exit 1
+        [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _RAW_CANDS+=("${_GIT_PATHS_Z[@]}")
       fi
-      while IFS= read -r rline; do
-        [[ -n "$rline" ]] && RAW_BEFORE_IGN+=("$rline")
-      done < <(printf '%s\n%s\n%s\n%s\n' "$CH_OUT" "$CA_BASE_CH_OUT" "$UN_OUT" "$EXTRA_DIRTY_OUT" | while IFS= read -r x; do
-        xp="$(norm_path "$x")"
-        [[ -n "$xp" ]] && ! is_checkpoint_dir "$xp" && printf '%s\n' "$xp"
-      done | LC_ALL=C sort -u)
+      _raw_seen=$'\x1f'
+      for xp in ${_RAW_CANDS[@]+"${_RAW_CANDS[@]}"}; do
+        [[ -n "$xp" ]] || continue
+        is_checkpoint_dir "$xp" && continue
+        if [[ "$_raw_seen" != *$'\x1f'"${xp}"$'\x1f'* ]]; then
+          _raw_seen+="${xp}"$'\x1f'
+          RAW_BEFORE_IGN+=("$xp")
+        fi
+      done
     fi
 
     PROTECTED_VIOLATIONS=()
@@ -6169,35 +6340,37 @@ case "$CMD" in
       fi
     fi
 
+    IGN_PACKED_MC=""
+    if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+      IGN_PACKED_MC="$(IFS='|'; printf '%s' "${IGNORE_ARR[*]}")"
+    fi
     ALL_CHANGED=()
-    ALL_CHANGED_DEDUP="|"
-    while IFS= read -r line; do
-      p="$(norm_path "$line")"
+    ALL_CHANGED_DEDUP=$'\x1f'
+    for p in ${CH_PATHS[@]+"${CH_PATHS[@]}"} ${UN_PATHS[@]+"${UN_PATHS[@]}"} ${CA_BASE_CH_PATHS[@]+"${CA_BASE_CH_PATHS[@]}"}; do
       [[ -z "$p" ]] && continue
       is_checkpoint_dir "$p" && continue
       p_key="$p"
       if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
         p_key="$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
       fi
-      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
-      if [[ "$ALL_CHANGED_DEDUP" != *"|${p_key}|"* ]]; then
-        ALL_CHANGED_DEDUP+="${p_key}|"
+      if [[ -n "$IGN_PACKED_MC" ]] && ownership_path_match "$p" "$IGN_PACKED_MC"; then continue; fi
+      if [[ "$ALL_CHANGED_DEDUP" != *$'\x1f'"${p_key}"$'\x1f'* ]]; then
+        ALL_CHANGED_DEDUP+="${p_key}"$'\x1f'
         ALL_CHANGED+=("$p")
       fi
-    done < <(printf '%s\n%s\n%s\n' "$CH_OUT" "$UN_OUT" "$CA_BASE_CH_OUT")
+    done
 
     NON_DEL_CHANGED=()
-    NON_DEL_DEDUP="|"
-    while IFS= read -r line; do
-      p="$(norm_path "$line")"
+    NON_DEL_DEDUP=$'\x1f'
+    for p in ${NONDEL_PATHS[@]+"${NONDEL_PATHS[@]}"} ${UN_PATHS[@]+"${UN_PATHS[@]}"} ${CA_BASE_NONDEL_PATHS[@]+"${CA_BASE_NONDEL_PATHS[@]}"}; do
       [[ -z "$p" ]] && continue
       is_checkpoint_dir "$p" && continue
-      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
-      if [[ "$NON_DEL_DEDUP" != *"|${p}|"* ]]; then
-        NON_DEL_DEDUP+="${p}|"
+      if [[ -n "$IGN_PACKED_MC" ]] && ownership_path_match "$p" "$IGN_PACKED_MC"; then continue; fi
+      if [[ "$NON_DEL_DEDUP" != *$'\x1f'"${p}"$'\x1f'* ]]; then
+        NON_DEL_DEDUP+="${p}"$'\x1f'
         NON_DEL_CHANGED+=("$p")
       fi
-    done < <(printf '%s\n%s\n%s\n' "$NONDEL_OUT" "$UN_OUT" "$CA_BASE_NONDEL_OUT")
+    done
 
     SCOPE_CREEP=()
     if [[ ${#ALLOWED_ARR[@]} -gt 0 && ${#ALL_CHANGED[@]} -gt 0 ]]; then
@@ -6227,7 +6400,7 @@ case "$CMD" in
     else
       run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames -U0 "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
-      if [[ -n "$(trim_str "$CA_BASE_CH_OUT")" ]]; then
+      if [[ ${#CA_BASE_CH_PATHS[@]} -gt 0 ]]; then
         run_git_cmd "$REPO_ROOT" diff --no-ext-diff --cached --no-renames -U0 "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --cached -U0 failed: $(git_err_detail)"; exit 1; }
         DIFF_CA_U0="$_GIT_STDOUT"
       fi
@@ -6304,18 +6477,14 @@ case "$CMD" in
       done <<< "$_u0_blob"
     done
 
-    UN_SORTED=()
-    while IFS= read -r line; do
-      p="$(norm_path "$line")"
-      [[ -n "$p" ]] && UN_SORTED+=("$p")
-    done < <(printf '%s\n' "$UN_OUT" | LC_ALL=C sort -u)
+    UN_SORTED=(${UN_PATHS[@]+"${UN_PATHS[@]}"})
 
     if [[ ${#UN_SORTED[@]} -gt 0 ]]; then
       for u in "${UN_SORTED[@]}"; do
         if [[ ${#LEFTOVER_HITS[@]} -ge 10 && $SQL_HIT_COUNT -ge 10 ]]; then break; fi
         if is_checkpoint_dir "$u" || is_md_file "$u"; then continue; fi
         is_noise_file "$u" && continue
-        if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$u" "${IGNORE_ARR[@]}"; then continue; fi
+        if [[ -n "$IGN_PACKED_MC" ]] && ownership_path_match "$u" "$IGN_PACKED_MC"; then continue; fi
         [[ -f "${REPO_ROOT}/${u}" ]] || continue
         is_binary_file "${REPO_ROOT}/${u}" && continue
         u_is_test=false
@@ -6336,19 +6505,18 @@ case "$CMD" in
       done
     fi
 
-    CAND_DEL_SEEN="|"
+    CAND_DEL_SEEN=$'\x1f'
     CAND_DEL_COUNT=0
-    while IFS= read -r line; do
-      dp="$(norm_path "$line")"
+    for dp in ${CH_PATHS[@]+"${CH_PATHS[@]}"}; do
       [[ -n "$dp" ]] || continue
       is_checkpoint_dir "$dp" && continue
-      if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$dp" "${IGNORE_ARR[@]}"; then continue; fi
+      if [[ -n "$IGN_PACKED_MC" ]] && ownership_path_match "$dp" "$IGN_PACKED_MC"; then continue; fi
       is_noise_file "$dp" && continue
-      if [[ "$NON_DEL_DEDUP" != *"|${dp}|"* && "$CAND_DEL_SEEN" != *"|${dp}|"* ]]; then
-        CAND_DEL_SEEN+="${dp}|"
+      if [[ "$NON_DEL_DEDUP" != *$'\x1f'"${dp}"$'\x1f'* && "$CAND_DEL_SEEN" != *$'\x1f'"${dp}"$'\x1f'* ]]; then
+        CAND_DEL_SEEN+="${dp}"$'\x1f'
         CAND_DEL_COUNT=$((CAND_DEL_COUNT + 1))
       fi
-    done <<< "$CH_OUT"
+    done
 
     if ! $ALLOW_MASS_DELETE && [[ $CAND_DEL_COUNT -ge 10 ]]; then
       if [[ -n "$TARGET_REF" ]]; then
@@ -6357,21 +6525,15 @@ case "$CMD" in
         build_working_tree_oid "$REPO_ROOT" "MECHANICAL_FAIL" "true"
         DEL_TARGET="$_WT_TREE_OID"
       fi
-      run_git_cmd "$REPO_ROOT" diff --no-ext-diff -M --diff-filter=D --name-only "$BASE_SHA" "$DEL_TARGET" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
-      DEL_OUT="$_GIT_STDOUT"
-      DEL_ARR=()
-      while IFS= read -r line; do
-        dp="$(norm_path "$line")"
+      run_git_paths_z "$REPO_ROOT" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff -M --diff-filter=D --name-only -z "$BASE_SHA" "$DEL_TARGET" -- || exit 1
+      DEL_COUNT=0
+      for dp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
         [[ -n "$dp" ]] || continue
         is_checkpoint_dir "$dp" && continue
-        if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$dp" "${IGNORE_ARR[@]}"; then continue; fi
+        if [[ -n "$IGN_PACKED_MC" ]] && ownership_path_match "$dp" "$IGN_PACKED_MC"; then continue; fi
         is_noise_file "$dp" && continue
-        DEL_ARR+=("$dp")
-      done <<< "$DEL_OUT"
-      DEL_COUNT=0
-      if [[ ${#DEL_ARR[@]} -gt 0 ]]; then
-        DEL_COUNT="$(printf '%s\n' "${DEL_ARR[@]}" | LC_ALL=C sort -u | wc -l | tr -d ' ')"
-      fi
+        DEL_COUNT=$((DEL_COUNT + 1))
+      done
       if [[ $DEL_COUNT -ge 10 ]]; then
         SAFETY_HITS+=("mass_delete:${DEL_COUNT}f")
       fi
@@ -6390,14 +6552,10 @@ case "$CMD" in
           fi
         done
         if [[ ${#OBS_LS_PATHS[@]} -gt 0 ]]; then
-          if run_git_cmd_quiet "$REPO_ROOT" ls-tree "$TARGET_COMMIT_SHA" -- "${OBS_LS_PATHS[@]}"; then
-            while IFS= read -r lrow; do
-              if [[ "$lrow" == *$'\t'* ]]; then
-                lp="$(norm_path "${lrow#*$'\t'}")"
-                [[ -n "$lp" ]] && OBS_EXISTING_PACKED+="${lp}|"
-              fi
-            done <<< "$_GIT_STDOUT"
-          fi
+          run_git_paths_z "$REPO_ROOT" "ls-tree-z" "MECHANICAL_FAIL" "" -- ls-tree --name-only -z "$TARGET_COMMIT_SHA" -- "${OBS_LS_PATHS[@]}" || exit 1
+          for lp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+            [[ -n "$lp" ]] && OBS_EXISTING_PACKED+="${lp}|"
+          done
         fi
       fi
 
@@ -6665,24 +6823,23 @@ case "$CMD" in
             exit 2
           fi
 
-          run_git_cmd "$W_TOP_NORM" diff --no-ext-diff --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: worker '$tid' git diff failed: $(git_err_detail)"; exit 1; }
-          W_DIFF_OUT="$_GIT_STDOUT"
-          run_git_cmd "$W_TOP_NORM" diff --no-ext-diff --cached --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: worker '$tid' git diff --cached failed: $(git_err_detail)"; exit 1; }
-          W_CA_DIFF_OUT="$_GIT_STDOUT"
-          run_git_cmd "$W_TOP_NORM" ls-files --others --exclude-standard || { echo "MECHANICAL_FAIL: worker '$tid' git ls-files failed: $(git_err_detail)"; exit 1; }
-          W_UN_OUT="$_GIT_STDOUT"
-
           W_CHANGED=()
-          W_SEEN="|"
-          while IFS= read -r wln; do
-            wp="$(norm_path "$wln")"
+          W_SEEN=$'\x1f'
+          _W_CANDS=()
+          run_git_paths_z "$W_TOP_NORM" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --no-renames --name-only -z "$BASE_SHA" -- || exit 1
+          [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _W_CANDS+=("${_GIT_PATHS_Z[@]}")
+          run_git_paths_z "$W_TOP_NORM" "names" "MECHANICAL_FAIL" "" -- diff --no-ext-diff --cached --no-renames --name-only -z "$BASE_SHA" -- || exit 1
+          [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _W_CANDS+=("${_GIT_PATHS_Z[@]}")
+          run_git_paths_z "$W_TOP_NORM" "names" "MECHANICAL_FAIL" "" -- ls-files --others --exclude-standard -z || exit 1
+          [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _W_CANDS+=("${_GIT_PATHS_Z[@]}")
+          for wp in ${_W_CANDS[@]+"${_W_CANDS[@]}"}; do
             [[ -n "$wp" ]] || continue
             is_checkpoint_dir "$wp" && continue
-            if [[ "$W_SEEN" != *"|${wp}|"* ]]; then
-              W_SEEN+="${wp}|"
+            if [[ "$W_SEEN" != *$'\x1f'"${wp}"$'\x1f'* ]]; then
+              W_SEEN+="${wp}"$'\x1f'
               W_CHANGED+=("$wp")
             fi
-          done < <(printf '%s\n%s\n%s\n' "$W_DIFF_OUT" "$W_CA_DIFF_OUT" "$W_UN_OUT")
+          done
 
           tid_owned=""
           for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
@@ -6880,6 +7037,8 @@ case "$CMD" in
     if [[ -d "$REPO_ROOT" ]]; then
       REPO_EXISTS="true"
     fi
+    detect_repo_case_insensitive "$REPO_ROOT"
+    _B3_IS_CASE_INSENSITIVE_FS="$_REPO_CASE_INSENSITIVE"
 
     parse_wave_task_map "$WAVE_SPECS" "$REPO_ROOT" "WAVE_FAIL" "WaveSpecs" "--wave-specs" true "$PARTITION" true ""
     TASK_IDS=("${_WTM_IDS[@]}")
@@ -7112,31 +7271,19 @@ case "$CMD" in
         exit 2
       fi
 
-      if ! run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only HEAD --; then
-        echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
-        exit 2
-      fi
-      DIFF_HEAD_OUT="$_GIT_STDOUT"
-      if ! run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only --; then
-        echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
-        exit 2
-      fi
-      DIFF_CACHED_OUT="$_GIT_STDOUT"
-      if ! run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard; then
-        echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
-        exit 2
-      fi
-      LS_UNTRACKED_OUT="$_GIT_STDOUT"
+      _WAVE_DIRTY_CANDS=()
+      if ! run_git_paths_z "$REPO_ROOT" "names" "WAVE_BASE_MISMATCH" "" -- diff --no-ext-diff --no-renames --name-only -z HEAD --; then exit 2; fi
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _WAVE_DIRTY_CANDS+=("${_GIT_PATHS_Z[@]}")
+      if ! run_git_paths_z "$REPO_ROOT" "names" "WAVE_BASE_MISMATCH" "" -- diff --no-ext-diff --no-renames --cached --name-only -z --; then exit 2; fi
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _WAVE_DIRTY_CANDS+=("${_GIT_PATHS_Z[@]}")
+      if ! run_git_paths_z "$REPO_ROOT" "names" "WAVE_BASE_MISMATCH" "" -- ls-files --others --exclude-standard -z; then exit 2; fi
+      [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]] && _WAVE_DIRTY_CANDS+=("${_GIT_PATHS_Z[@]}")
 
       DIRTY_RAW_ARR=()
-      for chunk in "$DIFF_HEAD_OUT" "$DIFF_CACHED_OUT" "$LS_UNTRACKED_OUT"; do
-        [[ -n "$chunk" ]] || continue
-        while IFS= read -r raw_line; do
-          dp="$(norm_path "$raw_line")"
-          [[ -n "$dp" ]] || continue
-          is_checkpoint_dir "$dp" && continue
-          DIRTY_RAW_ARR+=("$dp")
-        done <<< "$chunk"
+      for dp in ${_WAVE_DIRTY_CANDS[@]+"${_WAVE_DIRTY_CANDS[@]}"}; do
+        [[ -n "$dp" ]] || continue
+        is_checkpoint_dir "$dp" && continue
+        DIRTY_RAW_ARR+=("$dp")
       done
 
       DIRTY_SORTED=()
@@ -9738,6 +9885,8 @@ ${el}"
     fi
 
     # --- Unified Provider-Neutral Pre-Merge Pipeline ---
+    detect_repo_case_insensitive "$REPO_ROOT"
+    _MP_CASE_INSENSITIVE="$_REPO_CASE_INSENSITIVE"
     if [[ -L "${REPO_ROOT%/}/.b3" ]] || { [[ -d "${REPO_ROOT%/}/.b3" ]] && is_dir_link_or_junction "$REPO_ROOT" ".b3"; }; then
       echo "MERGE_BLOCKED: invalid_policy_path"
       exit 1
@@ -9790,14 +9939,18 @@ ${el}"
           _cp_rem=""
           _cp_more=false
         fi
-        while [[ "$_cp_tok" == " "* ]]; do _cp_tok="${_cp_tok# }"; done
-        if ! normalize_merge_policy_path "$_cp_tok"; then
-          echo "MERGE_BLOCKED: invalid_changed_path"
-          exit 1
+        _cp_tok_slash="${_cp_tok//\\//}"
+        [[ "$_cp_tok_slash" == "./" ]] && _cp_tok_slash="."
+        if [[ "$_cp_tok_slash" != "." ]] && ! is_valid_literal_git_path "$_cp_tok_slash"; then
+          while [[ "$_cp_tok_slash" == " "* ]]; do _cp_tok_slash="${_cp_tok_slash# }"; done
+          if ! is_valid_literal_git_path "$_cp_tok_slash"; then
+            echo "MERGE_BLOCKED: invalid_changed_path"
+            exit 1
+          fi
         fi
-        if [[ "$_seen_chg" != *"|${_MP_NORM_PATH}|"* ]]; then
-          _seen_chg+="${_MP_NORM_PATH}|"
-          CHANGED_ARR+=("$_MP_NORM_PATH")
+        if [[ "$_seen_chg" != *"|${_cp_tok_slash}|"* ]]; then
+          _seen_chg+="${_cp_tok_slash}|"
+          CHANGED_ARR+=("$_cp_tok_slash")
         fi
         $_cp_more || break
       done
@@ -10021,42 +10174,44 @@ ${el}"
       fi
       if $AUTH_HAS_COMMITTED_POL; then
         if [[ -n "$INSPECT_AUTH_SHA" && -n "$LIVE_HEAD_SHA" && "$INSPECT_AUTH_SHA" != "$LIVE_HEAD_SHA" ]]; then
-          if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then
+          _mb_rc_i=0
+          if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then _mb_rc_i=0; else _mb_rc_i=$?; fi
+          if [[ $_mb_rc_i -eq 0 ]]; then
             _mb_insp="$(trim_str "$_GIT_STDOUT")"
             if [[ "$_mb_insp" =~ ^[0-9a-f]{40}$ ]]; then
-              if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${_mb_insp}..${LIVE_HEAD_SHA}" -- ".b3/research-policy.json"; then
-                if [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-                  echo "MERGE_BLOCKED: policy_modified_in_pr"
-                  exit 1
-                fi
+              run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z "${_mb_insp}..${LIVE_HEAD_SHA}" -- ".b3/research-policy.json" || exit 1
+              if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then
+                echo "MERGE_BLOCKED: policy_modified_in_pr"
+                exit 1
               fi
             fi
+          elif [[ $_mb_rc_i -gt 1 ]]; then
+            echo "MERGE_BLOCKED: git_diff_failed"
+            exit 1
           fi
         fi
-        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only -- ".b3/research-policy.json" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-          echo "MERGE_BLOCKED: policy_modified_in_pr"
-          exit 1
-        fi
-        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only -- ".b3/research-policy.json" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-          echo "MERGE_BLOCKED: policy_modified_in_pr"
-          exit 1
-        fi
-        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only HEAD -- ".b3/research-policy.json" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-          echo "MERGE_BLOCKED: policy_modified_in_pr"
-          exit 1
-        fi
+        run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --cached --name-status -z -- ".b3/research-policy.json" || exit 1
+        if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then echo "MERGE_BLOCKED: policy_modified_in_pr"; exit 1; fi
+        run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z -- ".b3/research-policy.json" || exit 1
+        if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then echo "MERGE_BLOCKED: policy_modified_in_pr"; exit 1; fi
+        run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z HEAD -- ".b3/research-policy.json" || exit 1
+        if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then echo "MERGE_BLOCKED: policy_modified_in_pr"; exit 1; fi
       else
         if [[ -n "$INSPECT_AUTH_SHA" && -n "$LIVE_HEAD_SHA" && "$INSPECT_AUTH_SHA" != "$LIVE_HEAD_SHA" ]]; then
-          if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then
+          _mb_rc_i2=0
+          if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then _mb_rc_i2=0; else _mb_rc_i2=$?; fi
+          if [[ $_mb_rc_i2 -eq 0 ]]; then
             _mb_insp="$(trim_str "$_GIT_STDOUT")"
             if [[ "$_mb_insp" =~ ^[0-9a-f]{40}$ ]]; then
-              if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${_mb_insp}..${LIVE_HEAD_SHA}" -- ".b3/research-policy.json"; then
-                if [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
-                  echo "MERGE_BLOCKED: policy_not_in_authority"
-                  exit 1
-                fi
+              run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z "${_mb_insp}..${LIVE_HEAD_SHA}" -- ".b3/research-policy.json" || exit 1
+              if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then
+                echo "MERGE_BLOCKED: policy_not_in_authority"
+                exit 1
               fi
             fi
+          elif [[ $_mb_rc_i2 -gt 1 ]]; then
+            echo "MERGE_BLOCKED: git_diff_failed"
+            exit 1
           fi
           if [[ -n "$DEF_POL_FILE_FULL" ]]; then
             echo "MERGE_BLOCKED: policy_not_in_authority"
@@ -10094,22 +10249,24 @@ ${el}"
       done
     fi
     if ! $IS_GITHUB_PR_MODE && [[ -n "$INSPECT_AUTH_SHA" && -n "$LIVE_HEAD_SHA" && "$INSPECT_AUTH_SHA" != "$LIVE_HEAD_SHA" ]]; then
-      if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then
+      _mb_rc_c=0
+      if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then _mb_rc_c=0; else _mb_rc_c=$?; fi
+      if [[ $_mb_rc_c -eq 0 ]]; then
         _mb_chg="$(trim_str "$_GIT_STDOUT")"
         if [[ "$_mb_chg" =~ ^[0-9a-f]{40}$ ]]; then
-          if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${_mb_chg}..${LIVE_HEAD_SHA}" --; then
-            while IFS= read -r lln; do
-              lp="$(trim_str "${lln%$'\r'}")"
-              lp="${lp//\\//}"
-              [[ -n "$lp" ]] || continue
-              is_checkpoint_dir "$lp" && continue
-              if [[ "$_seen_lpre" != *"|${lp}|"* ]]; then
-                _seen_lpre+="${lp}|"
-                LOCAL_PRE_CHANGED_ARR+=("$lp")
-              fi
-            done <<< "$_GIT_STDOUT"
-          fi
+          run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z "${_mb_chg}..${LIVE_HEAD_SHA}" -- || exit 1
+          for lp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+            [[ -n "$lp" ]] || continue
+            is_checkpoint_dir "$lp" && continue
+            if [[ "$_seen_lpre" != *"|${lp}|"* ]]; then
+              _seen_lpre+="${lp}|"
+              LOCAL_PRE_CHANGED_ARR+=("$lp")
+            fi
+          done
         fi
+      elif [[ $_mb_rc_c -gt 1 ]]; then
+        echo "MERGE_BLOCKED: git_diff_failed"
+        exit 1
       fi
     fi
 
@@ -10314,28 +10471,24 @@ ${el}"
           echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
           exit 1
         fi
-        run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${MB_AUTH_SHA}..${RES_BASE_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
-        while IFS= read -r tln; do
-          tp="$(trim_str "${tln%$'\r'}")"
-          tp="${tp//\\//}"
+        run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z "${MB_AUTH_SHA}..${RES_BASE_SHA}" -- || exit 1
+        for tp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
           [[ -n "$tp" ]] || continue
           if protected_path_match_ci "$tp" "${POL_PROT_ARR[@]}"; then
             echo "MERGE_BLOCKED: target_branch_modified_policy"
             exit 1
           fi
-        done <<< "$_GIT_STDOUT"
+        done
       fi
 
       HAS_DIRTY_WT=false
       for _dkind in staged wt untracked; do
         case "$_dkind" in
-          staged) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
-          wt) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
-          untracked) run_git_cmd_quiet "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+          staged) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --cached --name-status -z -- || exit 1 ;;
+          wt) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z -- || exit 1 ;;
+          untracked) run_git_paths_z "$REPO_ROOT" "names" "MERGE_BLOCKED" "" -- ls-files --others --exclude-standard -z || exit 1 ;;
         esac
-        while IFS= read -r dln; do
-          dp="$(trim_str "${dln%$'\r'}")"
-          dp="${dp//\\//}"
+        for dp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
           [[ -n "$dp" ]] || continue
           is_checkpoint_dir "$dp" && continue
           if protected_path_match_ci "$dp" "${POL_PROT_ARR[@]}"; then
@@ -10343,7 +10496,7 @@ ${el}"
             exit 1
           fi
           HAS_DIRTY_WT=true
-        done <<< "$_GIT_STDOUT"
+        done
       done
       if $HAS_DIRTY_WT; then
         echo "MERGE_BLOCKED: dirty_worktree"
@@ -10362,27 +10515,25 @@ ${el}"
       fi
       if [[ ${#GH_PR_CHANGED_FILES[@]} -gt 0 ]]; then
         for ghf in "${GH_PR_CHANGED_FILES[@]}"; do
-          if ! normalize_merge_policy_path "$ghf"; then
+          if ! is_valid_literal_git_path "$ghf"; then
             echo "MERGE_BLOCKED: invalid_pr_changed_path"
             exit 1
           fi
-          if [[ "$_seen_all" != *"|${_MP_NORM_PATH}|"* ]]; then
-            _seen_all+="${_MP_NORM_PATH}|"
-            ALL_CHANGED+=("$_MP_NORM_PATH")
+          if [[ "$_seen_all" != *"|${ghf}|"* ]]; then
+            _seen_all+="${ghf}|"
+            ALL_CHANGED+=("$ghf")
           fi
         done
       fi
-      run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
-      while IFS= read -r gln; do
-        gp="$(trim_str "${gln%$'\r'}")"
-        gp="${gp//\\//}"
+      run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || exit 1
+      for gp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
         [[ -n "$gp" ]] || continue
         is_checkpoint_dir "$gp" && continue
         if [[ "$_seen_all" != *"|${gp}|"* ]]; then
           _seen_all+="${gp}|"
           ALL_CHANGED+=("$gp")
         fi
-      done <<< "$_GIT_STDOUT"
+      done
 
       if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
         for cp in "${ALL_CHANGED[@]}"; do
@@ -10552,13 +10703,11 @@ ${el}"
     HAS_DIRTY_LOC=false
     for _dkind in staged wt untracked; do
       case "$_dkind" in
-        staged) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
-        wt) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
-        untracked) run_git_cmd_quiet "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+        staged) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --cached --name-status -z -- || exit 1 ;;
+        wt) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z -- || exit 1 ;;
+        untracked) run_git_paths_z "$REPO_ROOT" "names" "MERGE_BLOCKED" "" -- ls-files --others --exclude-standard -z || exit 1 ;;
       esac
-      while IFS= read -r dln; do
-        dp="$(trim_str "${dln%$'\r'}")"
-        dp="${dp//\\//}"
+      for dp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
         [[ -n "$dp" ]] || continue
         is_checkpoint_dir "$dp" && continue
         if protected_path_match_ci "$dp" "${POL_PROT_ARR[@]}"; then
@@ -10566,7 +10715,7 @@ ${el}"
           exit 1
         fi
         HAS_DIRTY_LOC=true
-      done <<< "$_GIT_STDOUT"
+      done
     done
     if $HAS_DIRTY_LOC; then
       echo "MERGE_BLOCKED: dirty_worktree"
@@ -10767,15 +10916,13 @@ ${el}"
         echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
         exit 1
       fi
-      run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${MB_AUTH_LOC_SHA}..${RES_BASE_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
-      while IFS= read -r tln; do
-        tp="$(trim_str "${tln%$'\r'}")"
-        tp="${tp//\\//}"
+      run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z "${MB_AUTH_LOC_SHA}..${RES_BASE_SHA}" -- || exit 1
+      for tp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
         if [[ -n "$tp" ]] && protected_path_match_ci "$tp" "${POL_PROT_ARR[@]}"; then
           echo "MERGE_BLOCKED: target_branch_modified_policy"
           exit 1
         fi
-      done <<< "$_GIT_STDOUT"
+      done
     fi
 
     ALL_CHANGED_LOC=()
@@ -10788,17 +10935,15 @@ ${el}"
         fi
       done
     fi
-    run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
-    while IFS= read -r gln; do
-      gp="$(trim_str "${gln%$'\r'}")"
-      gp="${gp//\\//}"
+    run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || exit 1
+    for gp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
       [[ -n "$gp" ]] || continue
       is_checkpoint_dir "$gp" && continue
       if [[ "$_seen_aloc" != *"|${gp}|"* ]]; then
         _seen_aloc+="${gp}|"
         ALL_CHANGED_LOC+=("$gp")
       fi
-    done <<< "$_GIT_STDOUT"
+    done
 
     if [[ ${#ALL_CHANGED_LOC[@]} -gt 0 ]]; then
       for cp in "${ALL_CHANGED_LOC[@]}"; do
