@@ -805,7 +805,6 @@ try {
         foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $root $dirRel) -Recurse -File | Where-Object { $_.Extension -in @('.ps1', '.sh') })) {
             foreach ($hit in @(Select-String -LiteralPath $f.FullName -Pattern 'cmd\.exe|cmd\s+/c|\bmklink\b' -ErrorAction SilentlyContinue)) {
                 if ($hit.Line -match '^\s*#' -or $hit.Line -match 'Select-String' -or $hit.Line -match 'no-cmd-exe') { continue }
-                if ($f.Name -eq 'b3-github-verify.ps1' -and $hit.Line -match '\$env:ComSpec') { continue }
                 $cmdHits += "$($f.Name):$($hit.LineNumber)"
             }
         }

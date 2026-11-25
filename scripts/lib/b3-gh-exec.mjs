@@ -243,15 +243,18 @@ export function execGh(args, options = {}) {
 
   let r;
   if (isWin && /\.(cmd|bat)$/i.test(ghBin)) {
-    if (/[!"&|<>^%]/.test(ghBin)) {
+    if (/[!"&|<>^%()]/.test(ghBin)) {
       return { ok: false, reason: 'unsafe_gh_path', error: new Error('Unsafe Windows batch path for gh CLI rejected'), status: null, stdout: '', stderr: '', ghBin };
     }
     for (const a of strArgs) {
-      if (a.includes('"')) {
-        return { ok: false, reason: 'unsafe_gh_arg', error: new Error('Double quotes rejected in Windows batch gh CLI arguments'), status: null, stdout: '', stderr: '', ghBin };
+      if (a.includes('"') || /\\$/.test(a)) {
+        return { ok: false, reason: 'unsafe_gh_arg', error: new Error('Unsafe argument rejected for Windows batch gh CLI'), status: null, stdout: '', stderr: '', ghBin };
       }
     }
     const comSpec = process.env.ComSpec || 'cmd.exe';
+    if (hasControlChars(comSpec) || /["&|<>^%!]/.test(comSpec)) {
+      return { ok: false, reason: 'unsafe_comspec', error: new Error('Unsafe ComSpec rejected'), status: null, stdout: '', stderr: '', ghBin };
+    }
     const cmdEnv = { ...baseEnv, B3_GH_CMD_EXE: ghBin };
     const tokens = [];
     for (let idx = 0; idx < strArgs.length; idx += 1) {
@@ -259,12 +262,12 @@ export function execGh(args, options = {}) {
         tokens.push('""');
       } else {
         const k = `B3_GH_CMD_${idx}`;
-        cmdEnv[k] = strArgs[idx].replace(/(\\+)$/, '$1$1');
+        cmdEnv[k] = strArgs[idx];
         tokens.push(`"%${k}%"`);
       }
     }
-    const cmdLine = '"' + ['call "%B3_GH_CMD_EXE%"', ...tokens].join(' ') + '"';
-    r = spawnSync(comSpec, ['/d', '/s', '/c', cmdLine], {
+    const cmdLine = '"' + ['"%B3_GH_CMD_EXE%"', ...tokens].join(' ') + '"';
+    r = spawnSync(comSpec, ['/d', '/v:off', '/s', '/c', cmdLine], {
       ...spawnOpts,
       env: cmdEnv,
       windowsVerbatimArguments: true,

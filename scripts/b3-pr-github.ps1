@@ -7,10 +7,9 @@ function ConvertTo-Win32Arg([string]$Arg) {
     return '"' + ($Arg -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
 }
 
-$nodeCmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $nodeCmd) {
-    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1
-}
+$nodeCmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue |
+    Where-Object { $_.Source -and (($_.Source -replace '/', '\') -inotmatch '\\microsoft\\windowsapps\\') } |
+    Select-Object -First 1
 if (-not $nodeCmd) {
     [Console]::Out.WriteLine('{"status":"PR_API_ERROR","error":"node is required to run b3-pr-github"}')
     exit 1

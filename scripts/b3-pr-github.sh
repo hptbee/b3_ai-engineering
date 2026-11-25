@@ -24,7 +24,11 @@ if [ -n "${B3_GH_BIN:-}" ]; then
       GH_CAND="$GH_RESOLVED"
     fi
   fi
-  B3_GH_BIN="$(cygpath -m "$GH_CAND" 2>/dev/null || printf '%s' "$GH_CAND")"
+  if [[ "$GH_CAND" == */* || "$GH_CAND" == *\\* ]]; then
+    B3_GH_BIN="$(cygpath -m "$GH_CAND" 2>/dev/null || printf '%s' "$GH_CAND")"
+  else
+    B3_GH_BIN="$GH_CAND"
+  fi
   export B3_GH_BIN
 fi
 
