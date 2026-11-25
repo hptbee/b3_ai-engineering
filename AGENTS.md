@@ -15,6 +15,7 @@ Personal AI Engineering System with a **host-neutral canonical core** (`rules/`,
 | Review loop | `review-loop/strategy.md` (`spec.md` contract) | `/b3-review-loop` |
 | Templates | `workflows/references/pr-template.md`; `skills/engineering/code-review/references/review-template.md` | PRs; standalone `/b3-review` & PR comments |
 | Docs / Evals | `docs/`, `research/`, `evals/` | Standards, provenance, fixtures |
+| Philosophy | `docs/engineering-philosophy.md` | Quality, context, cost, execution invariants |
 | Personal / Adapters | `knowledge/personal/`, `adapters/` | Background (non-rule); host wiring |
 
 Loop (`docs/architecture.md`; conflicts: `docs/precedence.md`): `Knowledge → Skills (Rules) → Commands/Workflows → Agents → Verification/Review Loop → Lessons → Knowledge`. No `profiles/`.

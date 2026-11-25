@@ -127,3 +127,39 @@ Each case should record: intent, input, expected bucket or outcome, and the arti
 - Not a substitute for verifying a product change
 - Not a leaderboard for prompt cleverness
 - Not an excuse to freeze the system; evals should make change safer
+
+## Optimization measurement (proposed methodology)
+
+> **Status: proposed, not verified.** The runtime metrics and formulas below are evaluation methodology specifications aligned with [`engineering-philosophy.md`](engineering-philosophy.md). Zero runtime telemetry infrastructure is implemented or wired by this document.
+
+Optimization claims (context reduction, model routing, or parallel dispatch) should be evaluated end-to-end across nine proposed dimensions:
+
+| # | Dimension | Proposed definition / signal (not verified) |
+| --- | --- | --- |
+| 1 | Verified useful results | Count of tasks/ACs reaching verified completion (`PASS` with receipts) without regressions |
+| 2 | Total execution cost | Sum of worker, retry, orchestration, verification, review, and integration costs |
+| 3 | Token / context consumption | Input + output + cached tokens across parent orchestrator, workers, reviewers, and fixers |
+| 4 | Orchestration overhead | Parent planning, wave-check, Context Packet construction, and result aggregation cost |
+| 5 | Retry and review cost | Extra iterations, `b3-fixer` hops, and re-verification triggered by defects or wave conflicts |
+| 6 | Execution latency | Wall-clock time from run start to verified commit (including sequential integration) |
+| 7 | Parallel utilization | Fraction of eligible independent tasks executed concurrently without idle stalls |
+| 8 | Failed or blocked waves | Waves aborted or serialized due to `WAVE_CONFLICT`, dirty worktrees, or shared-state contention |
+| 9 | False `PASS` rate | Unverified or unsound completions escaping gates (must remain `0`; safety non-negotiable) |
+
+### Proposed composite efficiency lens (not verified)
+
+```text
+Efficiency (proposed) = Verified useful results
+                      / Total execution cost (retries + orchestration + verification + review + integration)
+```
+
+Subject to hard constraints: false `PASS` rate `= 0` and all precedence/verification invariants satisfied.
+
+### Structural comparison: Sequential vs. Parallel scenarios
+
+| Scenario | Recommended mode | Structural rationale |
+| --- | --- | --- |
+| Tiny, overhead-dominated tasks (e.g., 1–2 small edits or single-file fix) | Sequential | Orchestration, wave checks, and Context Packet overhead exceed any concurrency gain |
+| 2+ disjoint medium/large modules with worktree/path isolation | Bounded parallel wave | Independent writes/reads amortize coordination overhead and reduce wall-clock latency |
+| Partially conflicting tasks (shared contracts, ledgers, or overlapping `watched_paths`) | Partitioned sub-waves + single-writer integration | Independent slices run concurrently; shared-state updates serialize to avoid rework and `WAVE_CONFLICT` |
+
