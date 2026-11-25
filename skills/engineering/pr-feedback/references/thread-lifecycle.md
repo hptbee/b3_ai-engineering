@@ -1,57 +1,60 @@
 # PR Thread Lifecycle, Freshness & Idempotency
 
-SCM-neutral rules governing classification, review-thread resolution, stale-review revalidation, retry idempotency, and Research Ship governance.
+SCM-neutral rules governing classification, evidence-bound thread resolution, freshness/race handling, idempotency, and Research Ship governance.
 
 ## 1. Review Threads vs. General PR Comments
 
-| Target kind | Description | Reply supported | Thread resolution supported |
-| --- | --- | --- | --- |
-| `review_thread` | Diff-anchored inline review thread with thread ID and `isResolved` state | Yes (thread reply) | Yes (only when all resolution gates pass) |
-| `general_comment` | Top-level PR conversation comment (issue comment) | Yes (PR conversation reply quoting/referencing target) | **No** — never call thread-resolve APIs on general comments |
+| Target kind | Reply behavior | Thread resolution |
+| --- | --- | --- |
+| `review_thread` | Direct inline thread reply | Eligible only when all §3 gates pass |
+| `general_comment` | PR conversation reply including a reliable reference or permalink to the original comment | **Never** — general comments are not resolvable review threads |
 
 ## 2. Classification -> Allowed Actions Matrix
 
-Every fetched item MUST be validated against current PR `HEAD`, requirements, callers, and tests before classification.
+Validate every item against current PR `HEAD`, requirements, callers, and tests before classifying.
 
 | Classification | Code change | Reply template | Eligible to resolve (`review_thread` only) |
 | --- | --- | --- | --- |
-| `CONFIRMED` | Fix root cause (`problem-solving` + `verification` + `b3-reviewer`) | Fixed | **Yes**, ONLY after fix is committed, pushed to remote PR `HEAD`, verified `PASS`, and remotely confirmed |
-| `ALREADY_FIXED` | None | Already Fixed | **Yes**, ONLY after verifying the fix commit or code is present on remote PR `HEAD` and verified |
-| `DUPLICATE` | Consolidated with primary root cause | Duplicate | **Yes**, ONLY after the primary root-cause fix is verified `PASS` and confirmed on remote PR `HEAD` |
-| `OUTDATED` | None | Already Fixed or Clarification | **No** directly — reclassify to `ALREADY_FIXED` with concrete code/commit evidence first, otherwise leave open |
-| `DISAGREED` | None | Disagreement | **No** — always leave open for reviewer response |
-| `NEEDS_CLARIFICATION` | None | Clarification | **No** — always leave open for reviewer answer |
-| `BLOCKED` | None | Blocked | **No** — always leave open until blocker is cleared |
+| `CONFIRMED` | Fix root cause (`problem-solving` + `verification` + `b3-reviewer`) | Fixed | **Yes**, only after fix is pushed to remote PR `HEAD` and §3 evidence/remote gates pass |
+| `ALREADY_FIXED` | None | Already Fixed | **Yes**, only with §3 bound evidence proving the fix on remote PR `HEAD` |
+| `DUPLICATE` | Consolidated with primary root cause | Duplicate | **Yes**, only after primary root-cause fix passes §3 gates (evidence names `primary_thread_id`) |
+| `OUTDATED` | None | Already Fixed or Clarification | **No** directly — reclassify to `ALREADY_FIXED` with bound evidence first, else leave open |
+| `DISAGREED` | None | Disagreement | **No** — always leave open |
+| `NEEDS_CLARIFICATION` | None | Clarification | **No** — always leave open |
+| `BLOCKED` | None | Blocked | **No** — always leave open |
 
-## 3. Resolution Gates (All Mandatory)
+## 3. Resolution Verification & Gates (All Mandatory)
 
-A `review_thread` may be resolved ONLY when **all** of the following hold:
-1. Separate explicit resolve authorization is granted (independent of write/reply and push authorizations).
-2. Remote PR state is `OPEN` and remote `HEAD` equals `expected_head`.
-3. Target is verified to be a `review_thread` belonging to `<repo>#<pr>` (not a `general_comment` or another PR's thread).
-4. Verification status is strictly `PASS` (`FAIL`, `INCOMPLETE`, or missing evidence blocks resolution).
-5. The fix commit is proven reachable in the remote PR `HEAD` ancestry (never resolve based solely on a local unpushed commit).
-6. Post-write remote verification confirms `isResolved == true` **and** remote `HEAD` still equals `expected_head`. If `HEAD` moved concurrently, report `PR_POST_WRITE_HEAD_MOVED` and stop for revalidation.
+Caller-supplied `PASS` flags and commit ancestry alone are **not** sufficient to resolve a thread. A `review_thread` may be resolved only when **all** hold:
+1. Separate explicit resolve authorization is granted.
+2. Bound verification evidence (`schema=b3-pr-verify-evidence-v1`) matches the exact repository, PR, current `HEAD` SHA, `thread_id`, `fix_commit`, remote `thread.path`, and references a valid passing `b3-verify-v1` receipt (`status=PASS`, `exit_code=0`, `head_sha == expected_head`, relevant paths covering target/fix paths).
+3. Remote PR is `OPEN`, remote `HEAD == expected_head`, `fix_commit` is a remote ancestor of `HEAD` (`identical|ahead`, `behind_by == 0`), **and** remote `fix_commit` modifies the thread's target path or declared verified `fixed_paths`.
+4. Pre-write freshness recheck passes immediately before mutation; post-write remote verification confirms `isResolved == true`, target ownership, and unchanged `HEAD`.
 
-## 4. Stale Review Handling (`b3-pr-comment` & `b3-review --post`)
+## 4. Mutation Freshness, Race Windows & Reconciliation
 
-- **Valid reuse:** Reuse an existing B3 review result when its `reviewed_sha == remote_head`, target scope matches, and verification evidence is intact.
-- **Changed PR HEAD:** Never silently post findings from an older `HEAD`, and never blindly re-run an expensive full review by default. Inspect the delta (`git diff <reviewed_sha>..<current_head>`) and revalidate only affected files/findings:
-  - Drop findings resolved by later commits.
-  - Update line numbers/evidence for findings still present on `current_head`.
-  - Escalate to targeted re-review only if the delta introduced new unreviewed risk.
-- **No spam in Review Loop:** `/b3-review-loop` publishes only the final verified outcome when explicitly authorized — never per-iteration intermediate findings.
+- **Pre-write recheck:** Recheck remote PR `state == OPEN` and `headRefOid == expected_head` immediately before every mutation (after all paginated/diff reads).
+- **Explicit outcomes:**
+  - `blocked_before_write` (`mutated: false`): PR closed, stale HEAD, auth/evidence failure, key collision, or active lock.
+  - `mutated_but_stale` (`mutated: true`, `PR_POST_WRITE_HEAD_MOVED`): mutation succeeded remotely, but `HEAD` moved concurrently. Preserve created IDs/recovery evidence and require remote reconciliation (`fetch --state-file`) before continuing dependent operations.
+  - `mutated_unverified` (`mutated: true`, `PR_POST_WRITE_UNVERIFIED`): remote re-fetch could not verify the created object/actor/content/state. Preserve created IDs and require reconciliation.
+- **Provider race honesty:** GitHub APIs do not provide server-side atomic check-HEAD-and-mutate transactions. Pre-write + post-write checks shrink the race window and detect races deterministically; they do not guarantee provider-side atomicity.
 
-## 5. Idempotency & Partial-Failure Recovery
+## 5. Stale Review Handling & Inline Diff Validation
 
-- **Authoritative ledger:** Remote SCM state (authenticated actor's own comments/reviews containing `<!-- b3-pr-key:<key> -->` on the exact target, plus `isResolved`) is the source of truth.
-- **Anti-spoofing:** Ignore markers authored by any account other than the authenticated actor (`viewer`), and scope scans strictly to the target thread or PR.
-- **Secondary audit file (optional):** When callers pass `--state-file` (recommended path `.b3/pr-feedback/<repo-pr>.state`), record local outcomes for audit/resume without letting stale local state override remote reality.
-- **Retry behavior:** If reply succeeded and resolve failed (e.g., transient network error), retrying skips the duplicate reply (`PR_IDEMPOTENT_SKIP`) and executes only the remaining resolve step.
+- **Reuse vs delta:** Reuse an existing B3 review only when `reviewed_sha == remote_head`, scope, and evidence remain valid. If `HEAD` moved, inspect `git diff <reviewed_sha>..<current_head>` and revalidate affected findings instead of posting stale findings or running an unnecessary full review.
+- **Inline diff anchors:** Validate actual diff-hunk line numbers and `RIGHT`/`LEFT` sides against the live PR diff patch — not merely changed-file membership. If a file's patch is unavailable or truncated, fail closed (`PR_DIFF_UNAVAILABLE`) rather than guessing line anchors.
+- **Review Loop:** Publish only the final verified outcome when authorized — never intermediate iteration spam.
 
-## 6. Research Ship Governance Enforcement
+## 6. Idempotency & Retry Safety
 
-When invoked inside `/b3-research-ship`:
-1. Reviewer feedback on code/formatting/tests may be handled normally, subject to full verification.
-2. Reviewer suggestions that alter research provenance, contradict verified primary sources, or weaken editorial/release claims MUST NOT be blindly applied — re-verify against primary sources or classify as `DISAGREED` / `BLOCKED` for human decision.
-3. Resolving PR threads or posting `b3-pr-comment --event APPROVE` NEVER satisfies Research Ship editorial approval, product-authority sign-off, or release authorization gates.
+- **Mandatory stable identity:** Every external reply/comment carries `<!-- b3-pr-key:<key>;op=<16hex> -->`, automatically derived if `--idempotency-key` is omitted. `op` hashes `(repo, pr, actor, op, target, reviewed_sha, mode, event, normalized_payload)`.
+- **Anti-spoofing & collision detection:** Scan only the authenticated actor (`viewer`) on the exact target. Same `key` + same `op` -> `PR_IDEMPOTENT_SKIP`. Same `key` + different `op`/payload -> fail closed `PR_KEY_COLLISION` (never silently skip a different operation).
+- **Concurrency & limits:** Atomic state-file lock prevents concurrent local retries (`PR_CONCURRENT_LOCK`). Because GitHub lacks server-side idempotency keys, this provides best-effort client-side deduplication and remote reconciliation, **not** strict server-enforced exactly-once delivery.
+
+## 7. Research Ship Governance
+
+Under `/b3-research-ship`:
+1. Reviewer feedback on code/formatting/tests may be handled normally with full verification.
+2. Never apply edits that weaken research provenance, contradict verified primary sources, or alter editorial/release claims without re-verification — escalate as `DISAGREED` or `BLOCKED`.
+3. Resolving PR threads or posting `APPROVE` comments never satisfies editorial approval, product-authority sign-off, or release authorization.

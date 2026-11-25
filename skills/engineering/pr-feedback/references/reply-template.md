@@ -96,6 +96,7 @@ When inline findings are posted alongside the summary (`both` mode), do **not** 
 
 ---
 
-## Idempotency Marker (Optional, Adapter-Appended)
+## General PR Comment Reference & Idempotency Marker (Adapter-Managed)
 
-When an SCM adapter appends an HTML comment key for retry deduplication (`<!-- b3-pr-key:<key> -->`), place it on the final line so rendered PR markdown stays clean.
+- When replying to a top-level general PR comment (`general_comment`), prepend a concise permalink/reference line (`> Replying to [comment #<id>](<html_url>)`) unless the body already cites it.
+- The SCM adapter appends a stable operation-identity HTML comment (`<!-- b3-pr-key:<key>;op=<16hex> -->`) on the final line for actor-scoped deduplication and collision detection while keeping rendered Markdown clean.
