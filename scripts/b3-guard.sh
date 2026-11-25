@@ -93,6 +93,7 @@ fi
 shift
 
 _B3_IS_WINDOWS=false
+_B3_IS_MACOS=false
 _B3_IS_CASE_INSENSITIVE_FS=false
 case "$(uname -s 2>/dev/null || true)" in
   MINGW*|MSYS*|CYGWIN*)
@@ -100,6 +101,7 @@ case "$(uname -s 2>/dev/null || true)" in
     _B3_IS_CASE_INSENSITIVE_FS=true
     ;;
   Darwin*)
+    _B3_IS_MACOS=true
     _B3_IS_CASE_INSENSITIVE_FS=true
     ;;
 esac
@@ -182,6 +184,7 @@ path_in_list() {
 parse_wave_paths() {
   local raw_in="$1"
   local check_protected="${2:-false}"
+  local reject_dot="${3:-false}"
   _WAVE_PARSED_PATHS=()
   local cleaned
   cleaned="$(trim_str "$raw_in")"
@@ -206,7 +209,9 @@ parse_wave_paths() {
   local LC_ALL=C
   local part tok slash norm seg rem low_p
   local re_dotdot='(^|/)\.\.(/|$)'
+  local re_b3='^\.b3(/|$)'
   local re_git='(^|/)\.git(/|$)'
+  local re_gitmodules='(^|/)\.gitmodules$'
   local prev seen
   for part in "${parts[@]}"; do
     if [[ "$part" =~ [[:cntrl:]] ]]; then
@@ -258,10 +263,14 @@ parse_wave_paths() {
     fi
     if [[ "$check_protected" == "true" ]]; then
       low_p="$(printf '%s' "$norm" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-      if is_checkpoint_dir "$norm" || [[ "$low_p" == ".b3" ]] || [[ "$low_p" =~ $re_git ]]; then
+      if [[ "$low_p" =~ $re_b3 || "$low_p" =~ $re_git || "$low_p" =~ $re_gitmodules ]]; then
         echo "WAVE_FAIL: protected path '$norm' cannot be worker-owned"
         exit 1
       fi
+    fi
+    if [[ "$reject_dot" == "true" && "$norm" == "." ]]; then
+      echo "WAVE_FAIL: protected path '.' cannot be worker-owned in parallel partition"
+      exit 1
     fi
     seen="false"
     if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
@@ -276,6 +285,73 @@ parse_wave_paths() {
       _WAVE_PARSED_PATHS+=("$norm")
     fi
   done
+}
+
+check_wave_path_containment() {
+  local root="$1"
+  local norm="$2"
+  [[ -n "$root" && -d "$root" ]] || return 0
+  [[ -n "$norm" && "$norm" != "." ]] || return 0
+  local canon_root
+  canon_root="$(canon_repo_root "$root")" || return 1
+  local target_full
+  target_full="$(resolve_target_path "$canon_root" "$norm")" || return 1
+  [[ -n "$target_full" ]] || return 1
+  local target_trim="${target_full%/}"
+  [[ -L "$target_trim" ]] && return 1
+  if ! _path_within_or_equal "$target_full" "$canon_root"; then
+    return 1
+  fi
+  local cr_cmp="$canon_root" tf_cmp="$target_full"
+  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+    cr_cmp="$(printf '%s' "$cr_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    tf_cmp="$(printf '%s' "$tf_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
+  [[ "$tf_cmp" == "$cr_cmp" ]] && return 1
+
+  local rem="$norm" seg_cur="${canon_root%/}" seg canon_seg seg_cur_cmp canon_seg_cmp
+  while [[ -n "$rem" ]]; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    [[ -z "$seg" || "$seg" == "." ]] && continue
+    if [[ "$seg" == ".." ]]; then
+      return 1
+    fi
+    seg_cur="${seg_cur}/${seg}"
+    seg_cur="${seg_cur%/}"
+    if [[ -L "$seg_cur" ]]; then
+      return 1
+    fi
+    if [[ -d "$seg_cur" ]]; then
+      canon_seg="$(cd -P "$seg_cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+      canon_seg="$(normalize_abs_for_repo "$canon_seg")"
+      if ! _path_within_or_equal "$canon_seg" "$canon_root"; then
+        return 1
+      fi
+      seg_cur_cmp="$seg_cur"
+      canon_seg_cmp="$canon_seg"
+      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+        seg_cur_cmp="$(printf '%s' "$seg_cur_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        canon_seg_cmp="$(printf '%s' "$canon_seg_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      fi
+      if [[ "$canon_seg_cmp" != "$seg_cur_cmp" ]]; then
+        return 1
+      fi
+    fi
+  done
+  if [[ -d "$target_trim" ]]; then
+    local child_sym
+    child_sym="$(find "$target_trim" -mindepth 1 \( -name .git -prune \) -o -type l -print 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$child_sym" ]]; then
+      return 1
+    fi
+  fi
+  return 0
 }
 
 is_valid_wave_task_id() {
@@ -2465,10 +2541,29 @@ resolve_canonical_git_common_dir() {
   fi
   if [[ -d "$gd" ]]; then
     local abs
-    abs="$(cd "$gd" && (pwd -W 2>/dev/null || pwd -P))"
-    norm_path "$abs"
+    abs="$(cd -P "$gd" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+    normalize_abs_for_repo "$abs"
   else
-    norm_path "$gd"
+    normalize_abs_for_repo "$gd"
+  fi
+}
+
+resolve_canonical_git_dir() {
+  local dir="$1"
+  local gd=""
+  if run_git_cmd "$dir" rev-parse --git-dir; then
+    gd="$(trim_str "$_GIT_STDOUT")"
+  fi
+  [[ -n "$gd" ]] || return 1
+  if [[ "$gd" != /* && ! "$gd" =~ ^[A-Za-z]: ]]; then
+    gd="${dir}/${gd}"
+  fi
+  if [[ -d "$gd" ]]; then
+    local abs
+    abs="$(cd -P "$gd" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+    normalize_abs_for_repo "$abs"
+  else
+    normalize_abs_for_repo "$gd"
   fi
 }
 
@@ -2476,11 +2571,200 @@ paths_equal_fs() {
   local a b
   a="$(norm_path "$1")"
   b="$(norm_path "$2")"
-  if [[ "$a" =~ ^[A-Za-z]: || "$b" =~ ^[A-Za-z]: ]]; then
+  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$a" =~ ^[A-Za-z]: || "$b" =~ ^[A-Za-z]: ]]; then
     a="$(printf '%s' "$a" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
     b="$(printf '%s' "$b" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
   fi
   [[ "$a" == "$b" ]]
+}
+
+_normalize_logical_abs_path() {
+  local raw="$1"
+  local p
+  p="$(trim_str "$raw")"
+  [[ -n "$p" ]] || return 1
+  p="${p//\\//}"
+  local abs=""
+  if [[ "$p" == /* || "$p" =~ ^[A-Za-z]: ]]; then
+    abs="$p"
+  else
+    local pwd_l
+    pwd_l="$(pwd -L 2>/dev/null || pwd)"
+    pwd_l="${pwd_l//\\//}"
+    abs="${pwd_l%/}/${p}"
+  fi
+  local prefix="/" rest=""
+  if [[ "$abs" =~ ^([A-Za-z]:)(.*)$ ]]; then
+    prefix="${BASH_REMATCH[1]}/"
+    rest="${BASH_REMATCH[2]#/}"
+  else
+    prefix="/"
+    rest="${abs#/}"
+  fi
+  local -a segs=()
+  local rem="$rest" seg n_segs
+  while [[ -n "$rem" ]]; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    if [[ -z "$seg" || "$seg" == "." ]]; then
+      continue
+    fi
+    if [[ "$seg" == ".." ]]; then
+      n_segs=${#segs[@]}
+      if [[ $n_segs -gt 0 ]]; then
+        unset 'segs[$((n_segs - 1))]'
+        if [[ ${#segs[@]} -gt 0 ]]; then
+          segs=("${segs[@]}")
+        fi
+      fi
+      continue
+    fi
+    segs+=("$seg")
+  done
+  if [[ ${#segs[@]} -eq 0 ]]; then
+    printf '%s' "$prefix"
+  else
+    local joined
+    joined="$(IFS='/'; printf '%s' "${segs[*]}")"
+    if [[ "$prefix" == "/" ]]; then
+      printf '/%s' "$joined"
+    else
+      printf '%s%s' "$prefix" "$joined"
+    fi
+  fi
+}
+
+find_symlink_in_hierarchy() {
+  local abs_path="$1"
+  [[ -n "$abs_path" ]] || return 1
+  local clean="$abs_path"
+  while [[ "$clean" == */ && "$clean" != "/" && ! "$clean" =~ ^[A-Za-z]:/$ ]]; do
+    clean="${clean%/}"
+  done
+  if [[ "$clean" == "/" || "$clean" =~ ^[A-Za-z]:/?$ ]]; then
+    return 1
+  fi
+  local cur="" rest=""
+  if [[ "$clean" =~ ^([A-Za-z]:)(.*)$ ]]; then
+    cur="${BASH_REMATCH[1]}"
+    rest="${BASH_REMATCH[2]#/}"
+  else
+    cur=""
+    rest="${clean#/}"
+  fi
+  local seg
+  while [[ -n "$rest" ]]; do
+    if [[ "$rest" == */* ]]; then
+      seg="${rest%%/*}"
+      rest="${rest#*/}"
+    else
+      seg="$rest"
+      rest=""
+    fi
+    [[ -z "$seg" || "$seg" == "." ]] && continue
+    cur="${cur}/${seg}"
+    if [[ "$_B3_IS_MACOS" == "true" && ( "$cur" == "/var" || "$cur" == "/tmp" ) ]]; then
+      continue
+    fi
+    if [[ -L "$cur" ]]; then
+      printf '%s' "$cur"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_WT_LOGICAL=""
+_WT_TOP_NORM=""
+_WT_COMMON_DIR=""
+_WT_GIT_DIR=""
+_WT_HEAD=""
+check_worktree_identity() {
+  local raw_path="$1"
+  local missing_code="$2"
+  local not_git_code="$3"
+  local require_head="${4:-false}"
+  _WT_LOGICAL=""
+  _WT_TOP_NORM=""
+  _WT_COMMON_DIR=""
+  _WT_GIT_DIR=""
+  _WT_HEAD=""
+
+  local logical sym_hit
+  logical="$(_normalize_logical_abs_path "$raw_path")" || {
+    echo "WORKTREE_UNSAFE: ${missing_code}(${raw_path})"
+    exit 2
+  }
+  sym_hit="$(find_symlink_in_hierarchy "$logical" || true)"
+  if [[ -n "$sym_hit" ]]; then
+    echo "WORKTREE_UNSAFE: unsafe_reparse_root(${sym_hit})"
+    exit 2
+  fi
+  if [[ ! -d "$logical" ]]; then
+    echo "WORKTREE_UNSAFE: ${missing_code}(${raw_path})"
+    exit 2
+  fi
+  local dot_git="${logical%/}/.git"
+  if [[ -L "$dot_git" ]]; then
+    echo "WORKTREE_UNSAFE: unsafe_reparse_root(${dot_git})"
+    exit 2
+  fi
+  local top_raw=""
+  if run_git_cmd "$logical" rev-parse --show-toplevel; then
+    top_raw="$(trim_str "$_GIT_STDOUT")"
+  fi
+  if [[ -z "$top_raw" ]]; then
+    if [[ "$not_git_code" == "not_a_git_repo" ]]; then
+      echo "WORKTREE_UNSAFE: not_a_git_repo"
+    else
+      echo "WORKTREE_UNSAFE: ${not_git_code}(${raw_path})"
+    fi
+    exit 2
+  fi
+  local head_raw=""
+  if [[ "$require_head" == "true" ]]; then
+    if run_git_cmd "$logical" rev-parse HEAD; then
+      head_raw="$(trim_str "$_GIT_STDOUT")"
+    fi
+    if [[ ! "$head_raw" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "WORKTREE_UNSAFE: unborn_or_invalid_head"
+      exit 2
+    fi
+  fi
+  local top_logical top_sym_hit top_dot_git
+  top_logical="$(_normalize_logical_abs_path "$top_raw")" || top_logical="$top_raw"
+  top_sym_hit="$(find_symlink_in_hierarchy "$top_logical" || true)"
+  if [[ -n "$top_sym_hit" ]]; then
+    echo "WORKTREE_UNSAFE: unsafe_reparse_root(${top_sym_hit})"
+    exit 2
+  fi
+  top_dot_git="${top_logical%/}/.git"
+  if [[ -L "$top_dot_git" ]]; then
+    echo "WORKTREE_UNSAFE: unsafe_reparse_root(${top_dot_git})"
+    exit 2
+  fi
+  local top_norm common_dir git_dir
+  top_norm="$(canon_repo_root "$top_logical" 2>/dev/null || norm_path "$top_logical")"
+  common_dir="$(resolve_canonical_git_common_dir "$logical" || true)"
+  git_dir="$(resolve_canonical_git_dir "$logical" || true)"
+  if [[ -z "$common_dir" || -z "$git_dir" ]]; then
+    if [[ "$not_git_code" == "not_a_git_repo" ]]; then
+      echo "WORKTREE_UNSAFE: not_a_git_repo"
+    else
+      echo "WORKTREE_UNSAFE: ${not_git_code}(${raw_path})"
+    fi
+    exit 2
+  fi
+  _WT_LOGICAL="$logical"
+  _WT_TOP_NORM="$top_norm"
+  _WT_COMMON_DIR="$common_dir"
+  _WT_GIT_DIR="$git_dir"
+  _WT_HEAD="$head_raw"
 }
 
 
@@ -5339,6 +5623,9 @@ case "$CMD" in
     EXPECTED_BASE_SHA=""
     PARTITION="false"
     MAX_CONCURRENCY="3"
+    PROTECTED_PATHS=""
+    CHECK_DIRTY_SCOPE="false"
+    IGNORE_DIRTY_PATHS=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; REPO_ROOT="$2"; shift 2 ;;
@@ -5347,15 +5634,27 @@ case "$CMD" in
         --expected-base-sha) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; EXPECTED_BASE_SHA="$2"; shift 2 ;;
         --partition) PARTITION="true"; shift ;;
         --max-concurrency) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; MAX_CONCURRENCY="$2"; shift 2 ;;
+        --protected-paths) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; PROTECTED_PATHS="$2"; shift 2 ;;
+        --check-dirty-scope) CHECK_DIRTY_SCOPE="true"; shift ;;
+        --ignore-dirty-paths) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; IGNORE_DIRTY_PATHS="$2"; shift 2 ;;
         *) echo "WAVE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
     WAVE_SPECS="$(trim_str "$WAVE_SPECS")"
     [[ -n "$WAVE_SPECS" ]] || { echo "WAVE_FAIL: missing --wave-specs"; exit 1; }
+    [[ -n "$REPO_ROOT" ]] || { echo "WAVE_FAIL: missing --repo-root"; exit 1; }
     MAX_CONCURRENCY="$(trim_str "$MAX_CONCURRENCY")"
     if [[ ! "$MAX_CONCURRENCY" =~ ^[1-4]$ ]]; then
       echo "WAVE_FAIL: --max-concurrency must be between 1 and 4"
       exit 1
+    fi
+    REPO_LOGICAL="$(_normalize_logical_abs_path "$REPO_ROOT" || true)"
+    if [[ -n "$REPO_LOGICAL" ]]; then
+      SYM_ROOT_HIT="$(find_symlink_in_hierarchy "$REPO_LOGICAL" || true)"
+      if [[ -n "$SYM_ROOT_HIT" ]]; then
+        echo "WAVE_FAIL: unsafe symlink or junction alias in path '.'"
+        exit 1
+      fi
     fi
 
     EXPECTED_BASE_SHA="$(trim_str "$EXPECTED_BASE_SHA")"
@@ -5378,6 +5677,11 @@ case "$CMD" in
         echo "WAVE_BASE_MISMATCH: expected=${EXPECTED_BASE_SHA} actual=${ACT_HEAD}"
         exit 2
       fi
+    fi
+
+    REPO_EXISTS="false"
+    if [[ -d "$REPO_ROOT" ]]; then
+      REPO_EXISTS="true"
     fi
 
     TASK_IDS=()
@@ -5417,10 +5721,18 @@ case "$CMD" in
             fi
           done
         fi
-        parse_wave_paths "$raw_csv" true
+        parse_wave_paths "$raw_csv" true "$PARTITION"
         if [[ ${#_WAVE_PARSED_PATHS[@]} -lt 1 ]]; then
           echo "WAVE_FAIL: task '$tid' has no owned paths"
           exit 1
+        fi
+        if [[ "$REPO_EXISTS" == "true" ]]; then
+          for wp in "${_WAVE_PARSED_PATHS[@]}"; do
+            if ! check_wave_path_containment "$REPO_ROOT" "$wp"; then
+              echo "WAVE_FAIL: unsafe symlink or junction alias in path '$wp'"
+              exit 1
+            fi
+          done
         fi
         TASK_IDS+=("$tid")
         packed="$(IFS='|'; printf '%s' "${_WAVE_PARSED_PATHS[*]}")"
@@ -5485,8 +5797,16 @@ case "$CMD" in
             exit 1
           fi
           READ_SEEN_IDS+=("$rtid")
-          parse_wave_paths "$rcsv" false
+          parse_wave_paths "$rcsv" false false
           if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+            if [[ "$REPO_EXISTS" == "true" ]]; then
+              for rp in "${_WAVE_PARSED_PATHS[@]}"; do
+                if ! check_wave_path_containment "$REPO_ROOT" "$rp"; then
+                  echo "WAVE_FAIL: unsafe symlink or junction alias in path '$rp'"
+                  exit 1
+                fi
+              done
+            fi
             rpacked="$(IFS='|'; printf '%s' "${_WAVE_PARSED_PATHS[*]}")"
             if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
               rlow_packed="$(printf '%s' "$rpacked" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
@@ -5498,6 +5818,47 @@ case "$CMD" in
           fi
         done
       fi
+    fi
+
+    PROTECTED_LIST=()
+    PROTECTED_LOW_LIST=()
+    PROTECTED_PATHS="$(trim_str "$PROTECTED_PATHS")"
+    if [[ -n "$PROTECTED_PATHS" ]]; then
+      parse_wave_paths "$PROTECTED_PATHS" false false
+      if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+        for prot in "${_WAVE_PARSED_PATHS[@]}"; do
+          if [[ "$prot" == "." ]]; then
+            echo "WAVE_FAIL: invalid protected path '.'"
+            exit 1
+          fi
+          if [[ "$REPO_EXISTS" == "true" ]] && ! check_wave_path_containment "$REPO_ROOT" "$prot"; then
+            echo "WAVE_FAIL: unsafe symlink or junction alias in path '$prot'"
+            exit 1
+          fi
+          PROTECTED_LIST+=("$prot")
+          if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+            PROTECTED_LOW_LIST+=("$(printf '%s' "$prot" | LC_ALL=C tr '[:upper:]' '[:lower:]')")
+          else
+            PROTECTED_LOW_LIST+=("$prot")
+          fi
+        done
+      fi
+    fi
+
+    if [[ ${#PROTECTED_LIST[@]} -gt 0 ]]; then
+      for ((i = 0; i < n_tasks; i++)); do
+        IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
+        IFS='|' read -ra pi_low_arr <<< "${TASK_PATHS_LOW_PACKED[$i]}"
+        for ((pi_k = 0; pi_k < ${#pi_arr[@]}; pi_k++)); do
+          for ((pk = 0; pk < ${#PROTECTED_LIST[@]}; pk++)); do
+            wave_paths_overlap_cmp "${pi_low_arr[$pi_k]}" "${PROTECTED_LOW_LIST[$pk]}"
+            if [[ "$_WAVE_OV" == "equal" || "$_WAVE_OV" == "prefix" ]]; then
+              echo "WAVE_FAIL: protected path '${pi_arr[$pi_k]}' overlaps single-writer boundary '${PROTECTED_LIST[$pk]}'"
+              exit 1
+            fi
+          done
+        done
+      done
     fi
 
     HAS_CONFLICT=()
@@ -5557,8 +5918,190 @@ case "$CMD" in
       done
     done
 
+    IGNORE_DIRTY_PATHS="$(trim_str "$IGNORE_DIRTY_PATHS")"
+    RUN_DIRTY_CHECK="false"
+    if [[ "$CHECK_DIRTY_SCOPE" == "true" || -n "$IGNORE_DIRTY_PATHS" || ( "$PARTITION" == "true" && -n "$EXPECTED_BASE_SHA" ) ]]; then
+      RUN_DIRTY_CHECK="true"
+    fi
+    DIRTY_BLOCKED=()
+    for ((i = 0; i < n_tasks; i++)); do
+      DIRTY_BLOCKED+=(0)
+    done
+    USER_DIRTY_ARR=()
+    UNEXPECTED_DIRTY_ARR=()
+    DIRTY_SCOPE_VAL="not_checked"
+    USER_DIRTY_CSV="none"
+    UNEXPECTED_DIRTY_CSV="none"
+    BLOCKED_TASKS_CSV="none"
+
+    if [[ "$RUN_DIRTY_CHECK" == "true" ]]; then
+      IGNORE_LIST=()
+      IGNORE_LOW_LIST=()
+      if [[ -n "$IGNORE_DIRTY_PATHS" ]]; then
+        parse_wave_paths "$IGNORE_DIRTY_PATHS" false false
+        if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+          for ign in "${_WAVE_PARSED_PATHS[@]}"; do
+            if [[ "$ign" == "." ]]; then
+              echo "WAVE_FAIL: invalid ignore-dirty path '.'"
+              exit 1
+            fi
+            if [[ "$REPO_EXISTS" == "true" ]] && ! check_wave_path_containment "$REPO_ROOT" "$ign"; then
+              echo "WAVE_FAIL: unsafe symlink or junction alias in path '$ign'"
+              exit 1
+            fi
+            IGNORE_LIST+=("$ign")
+            if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+              IGNORE_LOW_LIST+=("$(printf '%s' "$ign" | LC_ALL=C tr '[:upper:]' '[:lower:]')")
+            else
+              IGNORE_LOW_LIST+=("$ign")
+            fi
+          done
+        fi
+      fi
+
+      MID_OP_DIRTY="$(check_git_mid_operation "$REPO_ROOT")"
+      if [[ -n "$MID_OP_DIRTY" ]]; then
+        echo "WAVE_BASE_MISMATCH: git_op_in_progress(${MID_OP_DIRTY})"
+        exit 2
+      fi
+
+      if ! run_git_cmd "$REPO_ROOT" diff --no-renames --name-only HEAD --; then
+        echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
+        exit 2
+      fi
+      DIFF_HEAD_OUT="$_GIT_STDOUT"
+      if ! run_git_cmd "$REPO_ROOT" diff --no-renames --cached --name-only --; then
+        echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
+        exit 2
+      fi
+      DIFF_CACHED_OUT="$_GIT_STDOUT"
+      if ! run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard; then
+        echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
+        exit 2
+      fi
+      LS_UNTRACKED_OUT="$_GIT_STDOUT"
+
+      DIRTY_RAW_ARR=()
+      for chunk in "$DIFF_HEAD_OUT" "$DIFF_CACHED_OUT" "$LS_UNTRACKED_OUT"; do
+        [[ -n "$chunk" ]] || continue
+        while IFS= read -r raw_line; do
+          dp="$(norm_path "$raw_line")"
+          [[ -n "$dp" ]] || continue
+          is_checkpoint_dir "$dp" && continue
+          DIRTY_RAW_ARR+=("$dp")
+        done <<< "$chunk"
+      done
+
+      DIRTY_SORTED=()
+      if [[ ${#DIRTY_RAW_ARR[@]} -gt 0 ]]; then
+        while IFS= read -r sd; do
+          [[ -n "$sd" ]] && DIRTY_SORTED+=("$sd")
+        done < <(printf '%s\n' "${DIRTY_RAW_ARR[@]}" | LC_ALL=C sort -u)
+      fi
+
+      DIRTY_TAGGED_PATHS=()
+      DIRTY_TAGGED_LOW_PATHS=()
+      DIRTY_TAGGED_TAGS=()
+      if [[ ${#DIRTY_SORTED[@]} -gt 0 ]]; then
+        for d in "${DIRTY_SORTED[@]}"; do
+          if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+            d_cmp="$(printf '%s' "$d" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          else
+            d_cmp="$d"
+          fi
+          is_user_dirty="false"
+          if [[ ${#IGNORE_LIST[@]} -gt 0 ]]; then
+            for ((ik = 0; ik < ${#IGNORE_LIST[@]}; ik++)); do
+              ign_orig="${IGNORE_LIST[$ik]}"
+              ign_cmp="${IGNORE_LOW_LIST[$ik]}"
+              if [[ "$d_cmp" == "$ign_cmp" || ( "$ign_orig" != "." && "$d_cmp" == "$ign_cmp/"* ) ]]; then
+                is_user_dirty="true"
+                break
+              fi
+            done
+          fi
+          if [[ "$is_user_dirty" == "true" ]]; then
+            USER_DIRTY_ARR+=("$d")
+            DIRTY_TAGGED_PATHS+=("$d")
+            DIRTY_TAGGED_LOW_PATHS+=("$d_cmp")
+            DIRTY_TAGGED_TAGS+=("USER_DIRTY")
+          else
+            UNEXPECTED_DIRTY_ARR+=("$d")
+            DIRTY_TAGGED_PATHS+=("$d")
+            DIRTY_TAGGED_LOW_PATHS+=("$d_cmp")
+            DIRTY_TAGGED_TAGS+=("UNEXPECTED_DIRTY")
+          fi
+        done
+      fi
+
+      for ((i = 0; i < n_tasks; i++)); do
+        ti="${TASK_IDS[$i]}"
+        TASK_ALL_LOW=()
+        IFS='|' read -ra tw_low <<< "${TASK_PATHS_LOW_PACKED[$i]}"
+        for twp in "${tw_low[@]}"; do
+          TASK_ALL_LOW+=("$twp")
+        done
+        if [[ -n "${TASK_READS_LOW_PACKED[$i]}" ]]; then
+          IFS='|' read -ra tr_low <<< "${TASK_READS_LOW_PACKED[$i]}"
+          for trp in "${tr_low[@]}"; do
+            TASK_ALL_LOW+=("$trp")
+          done
+        fi
+
+        if [[ ${#DIRTY_TAGGED_PATHS[@]} -gt 0 ]]; then
+          for ((dk = 0; dk < ${#DIRTY_TAGGED_PATHS[@]}; dk++)); do
+            d_orig="${DIRTY_TAGGED_PATHS[$dk]}"
+            d_cmp="${DIRTY_TAGGED_LOW_PATHS[$dk]}"
+            d_tag="${DIRTY_TAGGED_TAGS[$dk]}"
+            for tp_cmp in "${TASK_ALL_LOW[@]}"; do
+              wave_paths_overlap_cmp "$d_cmp" "$tp_cmp"
+              if [[ "$_WAVE_OV" == "equal" || "$_WAVE_OV" == "prefix" ]]; then
+                DIRTY_BLOCKED[$i]=1
+                CONFLICTS+=("dirty:${d_orig}(${d_tag}->${ti})")
+                break
+              fi
+            done
+          done
+        fi
+      done
+
+      if [[ ${#UNEXPECTED_DIRTY_ARR[@]} -gt 0 ]]; then
+        DIRTY_SCOPE_VAL="unexpected"
+      elif [[ ${#USER_DIRTY_ARR[@]} -gt 0 ]]; then
+        DIRTY_SCOPE_VAL="user_only"
+      else
+        DIRTY_SCOPE_VAL="clean"
+      fi
+      if [[ ${#USER_DIRTY_ARR[@]} -gt 0 ]]; then
+        USER_DIRTY_CSV="$(IFS=','; printf '%s' "${USER_DIRTY_ARR[*]}")"
+      fi
+      if [[ ${#UNEXPECTED_DIRTY_ARR[@]} -gt 0 ]]; then
+        UNEXPECTED_DIRTY_CSV="$(IFS=','; printf '%s' "${UNEXPECTED_DIRTY_ARR[*]}")"
+      fi
+      BLOCKED_NAMES=()
+      for ((i = 0; i < n_tasks; i++)); do
+        if [[ "${DIRTY_BLOCKED[$i]}" == "1" ]]; then
+          BLOCKED_NAMES+=("${TASK_IDS[$i]}")
+        fi
+      done
+      if [[ ${#BLOCKED_NAMES[@]} -gt 0 ]]; then
+        BLOCKED_TASKS_CSV="$(IFS=','; printf '%s' "${BLOCKED_NAMES[*]}")"
+      fi
+    fi
+
     if [[ "$PARTITION" != "true" ]]; then
-      if [[ ${#CONFLICTS[@]} -gt 0 ]]; then
+      if [[ "$RUN_DIRTY_CHECK" == "true" && ${#UNEXPECTED_DIRTY_ARR[@]} -gt 0 ]]; then
+        echo "WAVE_BASE_MISMATCH: unexpected_dirty(${UNEXPECTED_DIRTY_CSV})"
+        exit 2
+      fi
+      ANY_DIRTY_BLOCKED="false"
+      for ((i = 0; i < n_tasks; i++)); do
+        if [[ "${DIRTY_BLOCKED[$i]}" == "1" ]]; then
+          ANY_DIRTY_BLOCKED="true"
+          break
+        fi
+      done
+      if [[ "$ANY_DIRTY_BLOCKED" == "true" || ${#CONFLICTS[@]} -gt 0 ]]; then
         C_STR="$(printf '%s\n' "${CONFLICTS[@]}" | LC_ALL=C sort -u | awk 'NR>1{printf ", "} {printf "%s", $0}')"
         echo "WAVE_CONFLICT: ${C_STR}"
         exit 2
@@ -5567,35 +6110,46 @@ case "$CMD" in
       exit 0
     fi
 
+    ELIGIBLE_INDICES=()
+    for ((i = 0; i < n_tasks; i++)); do
+      if [[ "${DIRTY_BLOCKED[$i]}" != "1" ]]; then
+        ELIGIBLE_INDICES+=("$i")
+      fi
+    done
+    ELIGIBLE_COUNT="${#ELIGIBLE_INDICES[@]}"
+    BLOCKED_COUNT=$((n_tasks - ELIGIBLE_COUNT))
+
     WAVE_MEMBERS=()
     WAVE_COUNTS=()
-    for ((i = 0; i < n_tasks; i++)); do
-      placed="false"
-      w_len="${#WAVE_MEMBERS[@]}"
-      for ((w = 0; w < w_len; w++)); do
-        if [[ "${WAVE_COUNTS[$w]}" -ge "$MAX_CONCURRENCY" ]]; then
-          continue
-        fi
-        ok="true"
-        IFS=',' read -ra mem_arr <<< "${WAVE_MEMBERS[$w]}"
-        for m in "${mem_arr[@]}"; do
-          if [[ "${HAS_CONFLICT[$((i * n_tasks + m))]}" == "1" ]]; then
-            ok="false"
+    if [[ $ELIGIBLE_COUNT -gt 0 ]]; then
+      for i in "${ELIGIBLE_INDICES[@]}"; do
+        placed="false"
+        w_len="${#WAVE_MEMBERS[@]}"
+        for ((w = 0; w < w_len; w++)); do
+          if [[ "${WAVE_COUNTS[$w]}" -ge "$MAX_CONCURRENCY" ]]; then
+            continue
+          fi
+          ok="true"
+          IFS=',' read -ra mem_arr <<< "${WAVE_MEMBERS[$w]}"
+          for m in "${mem_arr[@]}"; do
+            if [[ "${HAS_CONFLICT[$((i * n_tasks + m))]}" == "1" ]]; then
+              ok="false"
+              break
+            fi
+          done
+          if [[ "$ok" == "true" ]]; then
+            WAVE_MEMBERS[$w]="${WAVE_MEMBERS[$w]},$i"
+            WAVE_COUNTS[$w]=$((WAVE_COUNTS[$w] + 1))
+            placed="true"
             break
           fi
         done
-        if [[ "$ok" == "true" ]]; then
-          WAVE_MEMBERS[$w]="${WAVE_MEMBERS[$w]},$i"
-          WAVE_COUNTS[$w]=$((WAVE_COUNTS[$w] + 1))
-          placed="true"
-          break
+        if [[ "$placed" != "true" ]]; then
+          WAVE_MEMBERS+=("$i")
+          WAVE_COUNTS+=(1)
         fi
       done
-      if [[ "$placed" != "true" ]]; then
-        WAVE_MEMBERS+=("$i")
-        WAVE_COUNTS+=(1)
-      fi
-    done
+    fi
 
     W_COUNT="${#WAVE_MEMBERS[@]}"
     MAX_PARALLEL=0
@@ -5610,6 +6164,10 @@ case "$CMD" in
       CONFLICTS_CSV="none"
     fi
 
+    printf 'dirty_scope=%s\n' "$DIRTY_SCOPE_VAL"
+    printf 'user_dirty=%s\n' "$USER_DIRTY_CSV"
+    printf 'unexpected_dirty=%s\n' "$UNEXPECTED_DIRTY_CSV"
+    printf 'blocked_tasks=%s\n' "$BLOCKED_TASKS_CSV"
     printf 'wave_count=%d\n' "$W_COUNT"
     printf 'max_concurrency=%d\n' "$MAX_CONCURRENCY"
     printf 'max_parallel=%d\n' "$MAX_PARALLEL"
@@ -5627,7 +6185,7 @@ case "$CMD" in
         printf 'wave|%d|PARALLEL|agents=%d|tasks=%s|reason=independent_ready_tasks\n' "$((w + 1))" "$cnt" "$tasks_csv"
       else
         t="${mem_arr[0]}"
-        if [[ "$n_tasks" -eq 1 ]]; then
+        if [[ "$ELIGIBLE_COUNT" -eq 1 ]]; then
           w_reason="single_ready_task"
         else
           bounded="false"
@@ -5649,7 +6207,7 @@ case "$CMD" in
           done
           if [[ "$bounded" != "true" && "$MAX_CONCURRENCY" -eq 1 ]]; then
             any_conf="false"
-            for ((u = 0; u < n_tasks; u++)); do
+            for u in "${ELIGIBLE_INDICES[@]}"; do
               if [[ $u -ne $t && "${HAS_CONFLICT[$((t * n_tasks + u))]}" == "1" ]]; then
                 any_conf="true"
                 break
@@ -5669,7 +6227,32 @@ case "$CMD" in
       fi
     done
 
-    if [[ "$W_COUNT" -eq 1 && "$CONFLICTS_CSV" == "none" ]]; then
+    ELIGIBLE_HAS_PAIR_CONFLICT="false"
+    for ((ei = 0; ei < ELIGIBLE_COUNT; ei++)); do
+      for ((ej = ei + 1; ej < ELIGIBLE_COUNT; ej++)); do
+        if [[ "${HAS_CONFLICT[$((ELIGIBLE_INDICES[$ei] * n_tasks + ELIGIBLE_INDICES[$ej]))]}" == "1" ]]; then
+          ELIGIBLE_HAS_PAIR_CONFLICT="true"
+          break
+        fi
+      done
+      [[ "$ELIGIBLE_HAS_PAIR_CONFLICT" == "true" ]] && break
+    done
+
+    if [[ "$RUN_DIRTY_CHECK" == "true" && ${#UNEXPECTED_DIRTY_ARR[@]} -gt 0 ]]; then
+      printf 'WAVE_BASE_MISMATCH: unexpected_dirty(%s)\n' "$UNEXPECTED_DIRTY_CSV"
+      exit 2
+    elif [[ "$ELIGIBLE_COUNT" -eq 0 ]]; then
+      printf 'WAVE_SEQUENTIAL: waves=0 max_parallel=0 reason=dirty_scope_conflict\n'
+      exit 2
+    elif [[ "$BLOCKED_COUNT" -gt 0 ]]; then
+      if [[ "$MAX_PARALLEL" -ge 2 ]]; then
+        printf 'WAVE_PARTITIONED: waves=%d max_parallel=%d reason=dirty_scope_partial_split\n' "$W_COUNT" "$MAX_PARALLEL"
+        exit 0
+      else
+        printf 'WAVE_SEQUENTIAL: waves=%d max_parallel=1 reason=dirty_scope_partial_split\n' "$W_COUNT"
+        if [[ "$ELIGIBLE_HAS_PAIR_CONFLICT" != "true" ]]; then exit 0; else exit 2; fi
+      fi
+    elif [[ "$W_COUNT" -eq 1 && "$CONFLICTS_CSV" == "none" ]]; then
       printf 'WAVE_OK: disjoint (%d tasks, %d paths)\n' "$n_tasks" "$TOTAL_PATHS"
       exit 0
     elif [[ "$MAX_PARALLEL" -ge 2 ]]; then
@@ -6425,60 +7008,39 @@ timestamp_utc=${TS_UTC}
     REPO_ROOT="."
     EXPECTED_ROOT=""
     EXPECTED_BASE_SHA=""
+    PEER_ROOTS=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
-        --expected-root) EXPECTED_ROOT="${2:-}"; shift 2 ;;
-        --expected-base-sha) EXPECTED_BASE_SHA="${2:-}"; shift 2 ;;
+        --repo-root) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; REPO_ROOT="$2"; shift 2 ;;
+        --expected-root) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; EXPECTED_ROOT="$2"; shift 2 ;;
+        --expected-base-sha) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; EXPECTED_BASE_SHA="$2"; shift 2 ;;
+        --peer-roots) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; PEER_ROOTS="$2"; shift 2 ;;
         *) echo "WORKTREE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
 
-    if [[ ! -d "$REPO_ROOT" ]]; then
-      echo "WORKTREE_UNSAFE: missing_repo_root(${REPO_ROOT})"
-      exit 2
-    fi
-    TOP_RAW=""
-    if run_git_cmd "$REPO_ROOT" rev-parse --show-toplevel; then
-      TOP_RAW="$(trim_str "$_GIT_STDOUT")"
-    fi
-    if [[ -z "$TOP_RAW" ]]; then
-      echo "WORKTREE_UNSAFE: not_a_git_repo"
-      exit 2
-    fi
-    HEAD_RAW=""
-    if run_git_cmd "$REPO_ROOT" rev-parse HEAD; then
-      HEAD_RAW="$(trim_str "$_GIT_STDOUT")"
-    fi
-    if [[ ! "$HEAD_RAW" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "WORKTREE_UNSAFE: unborn_or_invalid_head"
-      exit 2
-    fi
-    ACTUAL_ROOT_NORM="$(norm_path "$TOP_RAW")"
+    check_worktree_identity "$REPO_ROOT" "missing_repo_root" "not_a_git_repo" "true"
+    ACTUAL_ROOT_NORM="$_WT_TOP_NORM"
+    ACT_COMMON="$_WT_COMMON_DIR"
+    ACT_GIT_DIR="$_WT_GIT_DIR"
+    HEAD_RAW="$_WT_HEAD"
 
-    MID_OP="$(check_git_mid_operation "$REPO_ROOT")"
+    MID_OP="$(check_git_mid_operation "$_WT_LOGICAL")"
     if [[ -n "$MID_OP" ]]; then
       echo "WORKTREE_UNSAFE: git_op_in_progress(${MID_OP})"
       exit 2
     fi
 
+    IS_LINKED="true"
+    if paths_equal_fs "$ACT_GIT_DIR" "$ACT_COMMON"; then
+      IS_LINKED="false"
+    fi
+
     EXPECTED_ROOT="$(trim_str "$EXPECTED_ROOT")"
     if [[ -n "$EXPECTED_ROOT" ]]; then
-      if [[ ! -d "$EXPECTED_ROOT" ]]; then
-        echo "WORKTREE_UNSAFE: expected_root_missing(${EXPECTED_ROOT})"
-        exit 2
-      fi
-      EXP_TOP_RAW=""
-      if run_git_cmd "$EXPECTED_ROOT" rev-parse --show-toplevel; then
-        EXP_TOP_RAW="$(trim_str "$_GIT_STDOUT")"
-      fi
-      if [[ -z "$EXP_TOP_RAW" ]]; then
-        echo "WORKTREE_UNSAFE: expected_root_not_git(${EXPECTED_ROOT})"
-        exit 2
-      fi
-      EXP_TOP_NORM="$(norm_path "$EXP_TOP_RAW")"
-      ACT_COMMON="$(resolve_canonical_git_common_dir "$REPO_ROOT" || true)"
-      EXP_COMMON="$(resolve_canonical_git_common_dir "$EXPECTED_ROOT" || true)"
+      check_worktree_identity "$EXPECTED_ROOT" "expected_root_missing" "expected_root_not_git" "false"
+      EXP_TOP_NORM="$_WT_TOP_NORM"
+      EXP_COMMON="$_WT_COMMON_DIR"
 
       TOP_SAME=false
       COMMON_SAME=false
@@ -6490,6 +7052,45 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
+    PEER_ROOTS="$(trim_str "$PEER_ROOTS")"
+    if [[ -n "$PEER_ROOTS" ]]; then
+      PEER_LIST=()
+      while IFS= read -r p_item; do
+        [[ -n "$p_item" ]] && PEER_LIST+=("$p_item")
+      done < <(split_csv_lines "$PEER_ROOTS")
+      if [[ ${#PEER_LIST[@]} -gt 0 ]]; then
+        SEEN_TOPS=("$ACTUAL_ROOT_NORM")
+        for peer_raw in "${PEER_LIST[@]}"; do
+          peer="$(trim_str "$peer_raw")"
+          [[ -z "$peer" ]] && continue
+          check_worktree_identity "$peer" "missing_peer_root" "peer_not_git" "false"
+          PEER_TOP_NORM="$_WT_TOP_NORM"
+          PEER_COMMON="$_WT_COMMON_DIR"
+          if ! paths_equal_fs "$ACT_COMMON" "$PEER_COMMON"; then
+            echo "WORKTREE_UNSAFE: peer_repo_mismatch(expected=${ACT_COMMON},actual=${PEER_COMMON})"
+            exit 2
+          fi
+          p_cmp="$PEER_TOP_NORM"
+          if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$p_cmp" =~ ^[A-Za-z]: ]]; then
+            p_cmp="$(printf '%s' "$p_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          fi
+          p_base="${p_cmp%/}"
+          for prev_top in "${SEEN_TOPS[@]}"; do
+            prev_cmp="$prev_top"
+            if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$prev_cmp" =~ ^[A-Za-z]: ]]; then
+              prev_cmp="$(printf '%s' "$prev_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            fi
+            prev_base="${prev_cmp%/}"
+            if [[ "$p_cmp" == "$prev_cmp" || "$p_cmp" == "$prev_base/"* || "$prev_cmp" == "$p_base/"* ]]; then
+              echo "WORKTREE_UNSAFE: duplicate_or_nested_worktree(${PEER_TOP_NORM})"
+              exit 2
+            fi
+          done
+          SEEN_TOPS+=("$PEER_TOP_NORM")
+        done
+      fi
+    fi
+
     EXPECTED_BASE_SHA="$(trim_str "$EXPECTED_BASE_SHA")"
     if [[ -n "$EXPECTED_BASE_SHA" ]]; then
       if [[ "$HEAD_RAW" != "$EXPECTED_BASE_SHA" ]]; then
@@ -6498,7 +7099,7 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
-    printf 'WORKTREE_OK: root=%s head=%s\n' "$ACTUAL_ROOT_NORM" "$HEAD_RAW"
+    printf 'WORKTREE_OK: root=%s head=%s common_dir=%s linked=%s\n' "$ACTUAL_ROOT_NORM" "$HEAD_RAW" "$ACT_COMMON" "$IS_LINKED"
     exit 0
     ;;
 
