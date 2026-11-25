@@ -48,6 +48,8 @@ $tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ("b3-pf-test-" + [Guid]::NewGuid
 $mockBin = Join-Path $tmpRoot 'mock-bin'
 $workDir = Join-Path $tmpRoot 'work'
 $sandboxRepo = Join-Path $tmpRoot 'repo'
+$wt1 = Join-Path $tmpRoot 'wt1'
+$wt2 = Join-Path $tmpRoot 'wt2'
 $jLink = Join-Path $workDir 'j-link'
 $liveLockProc = $null
 
@@ -91,10 +93,35 @@ try {
 
     $validReceipt = Join-Path $sandboxRepo '.b3\ship\verify\valid.receipt'
     $irrelReceipt = Join-Path $sandboxRepo '.b3\ship\verify\irrel.receipt'
+    $dirtyBeforeReceipt = Join-Path $sandboxRepo '.b3\ship\verify\dirty-before.receipt'
+    $stagedReceipt = Join-Path $sandboxRepo '.b3\ship\verify\staged.receipt'
+    $untrackedScopeReceipt = Join-Path $sandboxRepo '.b3\ship\verify\untracked-scope.receipt'
     & powershell -NoProfile -ExecutionPolicy Bypass -File $guardPs verify-run -RepoRoot $sandboxRepo -TaskId T001 -ReceiptPath '.b3/ship/verify/valid.receipt' -VerifyCmd "node -v" -RelevantPaths "src/auth.ts,src/session.ts" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to seed validReceipt" }
     & powershell -NoProfile -ExecutionPolicy Bypass -File $guardPs verify-run -RepoRoot $sandboxRepo -TaskId T002 -ReceiptPath '.b3/ship/verify/irrel.receipt' -VerifyCmd "node -v" -RelevantPaths "README.md" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to seed irrelReceipt" }
+
+    # R016 fixtures: receipt generated on dirty working tree, staged change, and untracked helper absent from remote HEAD
+    [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\auth.ts'), "export const auth = 777;`n", $utf8NoBom)
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $guardPs verify-run -RepoRoot $sandboxRepo -TaskId T003 -ReceiptPath '.b3/ship/verify/dirty-before.receipt' -VerifyCmd "node -v" -RelevantPaths "src/auth.ts" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to seed dirtyBeforeReceipt" }
+    & git -C $sandboxRepo checkout -- src/auth.ts | Out-Null
+
+    [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\auth.ts'), "export const auth = 888;`n", $utf8NoBom)
+    & git -C $sandboxRepo add src/auth.ts | Out-Null
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $guardPs verify-run -RepoRoot $sandboxRepo -TaskId T004 -ReceiptPath '.b3/ship/verify/staged.receipt' -VerifyCmd "node -v" -RelevantPaths "src/auth.ts" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to seed stagedReceipt" }
+    & git -C $sandboxRepo reset --hard -q HEAD | Out-Null
+
+    [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\untracked-helper.ts'), "export const u = 1;`n", $utf8NoBom)
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $guardPs verify-run -RepoRoot $sandboxRepo -TaskId T005 -ReceiptPath '.b3/ship/verify/untracked-scope.receipt' -VerifyCmd "node -v" -RelevantPaths "src/auth.ts,src/untracked-helper.ts" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to seed untrackedScopeReceipt" }
+    Remove-Item -LiteralPath (Join-Path $sandboxRepo 'src\untracked-helper.ts') -Force
+
+    # R015: Create two linked detached Git worktrees sharing git-common-dir
+    & git -C $sandboxRepo worktree add -q --detach $wt1 $headSha | Out-Null
+    & git -C $sandboxRepo worktree add -q --detach $wt2 $headSha | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create linked worktrees" }
 
     $dupFieldReceipt = Join-Path $sandboxRepo '.b3\ship\verify\dup-field.receipt'
     [IO.File]::WriteAllText($dupFieldReceipt, ([IO.File]::ReadAllText($validReceipt, $utf8NoBom) + "status=PASS`n"), $utf8NoBom)
@@ -315,10 +342,11 @@ process.exit(1);
     $truncPatch = "@@ -39,3 +39,5 @@`n const header = parse(req);`n-const oldCheck = header.token;`n+if (!header || !header.payload) return null;`n+const token = header.payload;`n return token;"
     $malformedPatch = "@@ -1,1 +1,1 @@`nGARBAGE_NO_PREFIX`n+x"
 
-    $canonicalState = Join-Path $sandboxRepo '.b3\pr-feedback\acme__demo__pr-42.state.json'
+    $canonicalState = Join-Path $sandboxRepo '.git\b3\pr-feedback\acme__demo__pr-42.state.json'
     function Reset-CanonicalState {
-        $dir = Split-Path $canonicalState -Parent
-        if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+        foreach ($d in @((Split-Path $canonicalState -Parent), (Join-Path $sandboxRepo '.b3\pr-feedback'))) {
+            if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue }
+        }
     }
 
     function New-BaseState {
@@ -359,10 +387,15 @@ process.exit(1);
     function Write-State([hashtable]$Obj, [string]$Path) { [IO.File]::WriteAllText($Path, ($Obj | ConvertTo-Json -Depth 15), $utf8NoBom) }
     function Read-State([string]$Path) { return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
 
-    function Invoke-Adapter([string]$Shell, [string]$StatePath, [string[]]$CliArgs, [string]$WorkingDir = '') {
+    function Invoke-Adapter([string]$Shell, [string]$StatePath, [string[]]$CliArgs, [string]$WorkingDir = '', [hashtable]$EnvVars = $null) {
         $oldPath = $env:PATH; $oldState = $env:MOCK_GH_STATE_FILE; $oldPwd = $PWD.Path
+        $oldRole = $env:B3_PR_MUTATION_ROLE; $oldSub = $env:B3_SUBAGENT
         try {
             $env:PATH = "$mockBin;$oldPath"; $env:MOCK_GH_STATE_FILE = $StatePath
+            if ($EnvVars) {
+                if ($EnvVars.ContainsKey('B3_PR_MUTATION_ROLE')) { $env:B3_PR_MUTATION_ROLE = [string]$EnvVars['B3_PR_MUTATION_ROLE'] }
+                if ($EnvVars.ContainsKey('B3_SUBAGENT')) { $env:B3_SUBAGENT = [string]$EnvVars['B3_SUBAGENT'] }
+            }
             if ($WorkingDir) { Set-Location $WorkingDir }
             if ($Shell -eq 'ps') {
                 $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $psAdapter @CliArgs 2>&1
@@ -381,6 +414,8 @@ process.exit(1);
         } finally {
             Set-Location $oldPwd
             $env:PATH = $oldPath; $env:MOCK_GH_STATE_FILE = $oldState
+            if ($null -eq $oldRole) { Remove-Item Env:B3_PR_MUTATION_ROLE -ErrorAction SilentlyContinue } else { $env:B3_PR_MUTATION_ROLE = $oldRole }
+            if ($null -eq $oldSub) { Remove-Item Env:B3_SUBAGENT -ErrorAction SilentlyContinue } else { $env:B3_SUBAGENT = $oldSub }
         }
     }
 
@@ -409,6 +444,9 @@ process.exit(1);
     $evTravRec = Join-Path $workDir 'ev-trav.json'; Write-Ev $evTravRec @{ verify_receipt_path = '../work/valid.receipt' }
     $evUnpushed = Join-Path $workDir 'ev-unpushed.json'; Write-Ev $evUnpushed @{ fix_commit = $unpushedSha }
     $evDiverged = Join-Path $workDir 'ev-diverged.json'; Write-Ev $evDiverged @{ fix_commit = $divergedSha }
+    $evDirtyBefore = Join-Path $workDir 'ev-dirty-before.json'; Write-Ev $evDirtyBefore @{ verify_receipt_path = $dirtyBeforeReceipt }
+    $evStaged = Join-Path $workDir 'ev-staged.json'; Write-Ev $evStaged @{ verify_receipt_path = $stagedReceipt }
+    $evUntrackedScope = Join-Path $workDir 'ev-untracked.json'; Write-Ev $evUntrackedScope @{ verify_receipt_path = $untrackedScopeReceipt }
 
     $replyBodyPath = Join-Path $workDir 'reply.md'
     [IO.File]::WriteAllText($replyBodyPath, "Fixed in ``$fixSha``.`n`nAdded null guard on token payload.", $utf8NoBom)
@@ -495,11 +533,49 @@ process.exit(1);
             $rNonGitRoot.Code -eq 1 -and $rNonGitRoot.Json.status -eq 'PR_FILE_GUARD' -and
             $rDraft.Code -eq 0 -and $rFetch.Code -eq 0 -and (-not $stateExistsAfterReadOnly) -and
             $rGenReply.Code -eq 0 -and (Test-Path -LiteralPath $canonicalState) -and
+            (-not (Test-Path -LiteralPath (Join-Path $sandboxRepo '.b3\pr-feedback'))) -and
             ($postedGen.body -match 'https://github\.com/acme/demo/pull/42#issuecomment-7001') -and
             $rGenRes.Code -eq 1 -and $rGenRes.Json.status -eq 'PR_NOT_RESOLVABLE') {
             Pass-Case "S02-S03-R005-R010-canonical-state-no-bypass-and-permalink [$sh]"
         } else {
             Fail-Case "S02-S03-R005-R010-canonical-state-no-bypass-and-permalink [$sh]" "byp=$($rBypassFlag.Code) nongit=$($rNonGitRoot.Code)/$($rNonGitRoot.Json.status) ro=$stateExistsAfterReadOnly gen=$($rGenReply.Code) canon=$(Test-Path -LiteralPath $canonicalState) res=$($rGenRes.Code)"
+        }
+
+        # R015: Single-writer parent ownership across parallel linked worktrees, worker bypass attempts & shared cross-context reconcile
+        Reset-CanonicalState; $sR15Obj = New-BaseState; $sR15Obj.moveHeadAfterWrite = $movedSha
+        $sR15 = Join-Path $workDir "sr15-$sh.json"; Write-State $sR15Obj $sR15
+        $rWt1Fetch = Invoke-Adapter $sh $sR15 @('fetch', '--repo', 'acme/demo', '--pr', '42') $wt1
+        $rWt2Draft = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--draft') $wt2
+        $rWt1Reply = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--authorize-write') $wt1
+        $rWt2Comment = Invoke-Adapter $sh $sR15 @('comment', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--mode', 'summary', '--summary-file', $summaryBodyPath, '--authorize-write') $wt2
+        $rWt1Resolve = Invoke-Adapter $sh $sR15 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evValid1, '--authorize-resolve') $wt1
+        $rWt1BypassRoot = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--authorize-write') $wt1
+        $rEnvWorker = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--authorize-write') $sandboxRepo @{ B3_PR_MUTATION_ROLE = 'worker' }
+        $rEnvWorkerDraft = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--draft') $sandboxRepo @{ B3_PR_MUTATION_ROLE = 'worker' }
+        $rEnvSubRec = Invoke-Adapter $sh $sR15 @('reconcile', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo) $sandboxRepo @{ B3_SUBAGENT = '1' }
+        $rWtNoState = (-not (Test-Path -LiteralPath $canonicalState))
+        # Parent creates pending block from main checkout; sub-dir context sees block; wt1 reconcile forbidden; parent reconcile clears for sub-dir!
+        $rParPend = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--authorize-write') $sandboxRepo
+        $rSubBlocked = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $movedSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyAltPath, '--authorize-write') $subDir
+        $rWt1Rec = Invoke-Adapter $sh $sR15 @('reconcile', '--repo', 'acme/demo', '--pr', '42') $wt1
+        $rParRec = Invoke-Adapter $sh $sR15 @('reconcile', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo) $sandboxRepo
+        $rSubAfter = Invoke-Adapter $sh $sR15 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $movedSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyAltPath, '--authorize-write') $subDir
+        $wtStatesClean = (-not (Test-Path -LiteralPath (Join-Path $wt1 '.b3\pr-feedback'))) -and (-not (Test-Path -LiteralPath (Join-Path $sandboxRepo '.b3\pr-feedback'))) -and (Test-Path -LiteralPath $canonicalState)
+        if ($rWt1Fetch.Code -eq 0 -and $rWt2Draft.Code -eq 0 -and $rWtNoState -and
+            $rWt1Reply.Code -eq 2 -and $rWt1Reply.Json.status -eq 'PR_MUTATION_OWNER_REQUIRED' -and $rWt1Reply.Json.reason -eq 'linked_worktree_forbidden' -and
+            $rWt2Comment.Code -eq 2 -and $rWt2Comment.Json.status -eq 'PR_MUTATION_OWNER_REQUIRED' -and
+            $rWt1Resolve.Code -eq 2 -and $rWt1Resolve.Json.status -eq 'PR_MUTATION_OWNER_REQUIRED' -and
+            $rWt1BypassRoot.Code -eq 2 -and $rWt1BypassRoot.Json.status -eq 'PR_MUTATION_OWNER_REQUIRED' -and $rWt1BypassRoot.Json.reason -eq 'linked_worktree_cwd_bypass' -and
+            $rEnvWorker.Code -eq 2 -and $rEnvWorker.Json.status -eq 'PR_MUTATION_OWNER_REQUIRED' -and $rEnvWorkerDraft.Code -eq 0 -and
+            $rEnvSubRec.Code -eq 2 -and $rEnvSubRec.Json.status -eq 'PR_MUTATION_OWNER_REQUIRED' -and
+            $rParPend.Code -eq 2 -and $rParPend.Json.outcome -eq 'mutated_but_stale' -and
+            $rSubBlocked.Code -eq 2 -and $rSubBlocked.Json.status -eq 'PR_RECONCILIATION_REQUIRED' -and
+            $rWt1Rec.Code -eq 2 -and $rWt1Rec.Json.status -eq 'PR_MUTATION_OWNER_REQUIRED' -and
+            $rParRec.Code -eq 0 -and $rParRec.Json.outcomes[0].outcome -eq 'STALE_MUTATION' -and
+            $rSubAfter.Code -eq 0 -and $wtStatesClean) {
+            Pass-Case "R015-single-writer-worktrees-worker-bypass-and-shared-reconcile [$sh]"
+        } else {
+            Fail-Case "R015-single-writer-worktrees-worker-bypass-and-shared-reconcile [$sh]" "fetch=$($rWt1Fetch.Code) dft=$($rWt2Draft.Code) noSt=$rWtNoState wt1R=$($rWt1Reply.Code)/$($rWt1Reply.Json.status) wt2C=$($rWt2Comment.Code)/$($rWt2Comment.Json.status) wt1Res=$($rWt1Resolve.Code)/$($rWt1Resolve.Json.status) byp=$($rWt1BypassRoot.Code)/$($rWt1BypassRoot.Json.status)/$($rWt1BypassRoot.Json.reason) wrk=$($rEnvWorker.Code)/$($rEnvWorker.Json.status) sub=$($rEnvSubRec.Code)/$($rEnvSubRec.Json.status) pend=$($rSubBlocked.Code) wtRec=$($rWt1Rec.Code)/$($rWt1Rec.Json.status) rec=$($rParRec.Code) aft=$($rSubAfter.Code) clean=$wtStatesClean"
         }
 
         # R001: Real canonical b3-guard verify-check enforcement (fabricated/dup/malformed/stale/wrong-cmd/wrong-scope/dirty-tree/unrelated-commit/valid)
@@ -515,10 +591,36 @@ process.exit(1);
         $rAnc = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $unrelatedFixSha, '--evidence-file', $evAncOnly, '--authorize-resolve')
         $rSplit = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $unrelatedFixSha, '--evidence-file', $evSplitBypass, '--authorize-resolve')
         $rTrav = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evTravRec, '--authorize-resolve')
-        # Dirty live tree mismatch -> VERIFY_STALE -> PR_VERIFY_REQUIRED
+        # Dirty live tree mismatch -> PR_VERIFY_REQUIRED; also R016 exact-commit enforcement (dirty-before, staged, unrelated unstaged, untracked, gitignored checkpoint preserved)
         [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\auth.ts'), "export const auth = 999;`n", $utf8NoBom)
         $rDirtyTree = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evValid1, '--authorize-resolve')
-        [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\auth.ts'), "export const auth = 2;`n", $utf8NoBom)
+        [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\auth.ts'), "export const auth = 777;`n", $utf8NoBom)
+        $rDirtyBeforeLive = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evDirtyBefore, '--authorize-resolve')
+        & git -C $sandboxRepo checkout -- src/auth.ts | Out-Null
+        $rDirtyBeforeClean = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evDirtyBefore, '--authorize-resolve')
+
+        [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\auth.ts'), "export const auth = 888;`n", $utf8NoBom)
+        & git -C $sandboxRepo add src/auth.ts | Out-Null
+        $rStagedLive = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evStaged, '--authorize-resolve')
+        & git -C $sandboxRepo reset --hard -q HEAD | Out-Null
+        $rStagedClean = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evStaged, '--authorize-resolve')
+
+        [IO.File]::WriteAllText((Join-Path $sandboxRepo 'README.md'), "uncommitted outside scope`n", $utf8NoBom)
+        $rOutOfScopeDirty = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evValid1, '--authorize-resolve')
+        & git -C $sandboxRepo checkout -- README.md | Out-Null
+
+        [IO.File]::WriteAllText((Join-Path $sandboxRepo 'src\untracked-helper.ts'), "export const u = 1;`n", $utf8NoBom)
+        $rUntrackedBase = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evValid1, '--authorize-resolve')
+        $rUntrackedScope = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evUntrackedScope, '--authorize-resolve')
+        Remove-Item -LiteralPath (Join-Path $sandboxRepo 'src\untracked-helper.ts') -Force
+
+        # SEC-05: Staged rename into .b3/ship/ checkpoint path MUST NOT bypass clean-tree check!
+        & git -C $sandboxRepo mv -f README.md '.b3/ship/moved-readme.md' | Out-Null
+        $rRenameB3 = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evValid1, '--authorize-resolve')
+        & git -C $sandboxRepo reset --hard -q HEAD | Out-Null
+
+        # Legitimate gitignored B3 checkpoint preserved on clean committed HEAD -> resolve MUST succeed!
+        [IO.File]::WriteAllText((Join-Path $sandboxRepo '.b3\ship\checkpoint-note.md'), "checkpoint`n", $utf8NoBom)
         $rDupPre = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t2', '--fix-commit', $headSha, '--evidence-file', $evValid2, '--authorize-resolve')
         $rOk1 = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--evidence-file', $evValid1, '--authorize-resolve')
         $rOk2 = Invoke-Adapter $sh $sR1 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--repo-root', $sandboxRepo, '--expected-head', $headSha, '--thread-id', 'PRRT_t2', '--fix-commit', $headSha, '--evidence-file', $evValid2, '--authorize-resolve')
@@ -526,12 +628,14 @@ process.exit(1);
         if ($rLegacy.Code -eq 1 -and $rDupRec.Code -eq 2 -and $rMalRec.Code -eq 2 -and $rParRec.Code -eq 2 -and
             $rWCmd.Code -eq 2 -and $rIrr.Code -eq 2 -and $rWPr.Code -eq 2 -and $rWPath.Code -eq 2 -and
             $rAnc.Code -eq 2 -and $rSplit.Code -eq 2 -and $rSplit.Json.status -eq 'PR_VERIFY_REQUIRED' -and
-            $rTrav.Code -eq 1 -and $rDirtyTree.Code -eq 2 -and $rDupPre.Code -eq 2 -and
-            $rOk1.Code -eq 0 -and ($rOk1.Json.verify_check -match '^VERIFY_VALID:') -and $rOk2.Code -eq 0 -and
-            $rAlready.Code -eq 0 -and $rAlready.Json.status -eq 'PR_ALREADY_RESOLVED') {
-            Pass-Case "S04-S05-R001-canonical-verify-check-resolution [$sh]"
+            $rTrav.Code -eq 1 -and $rDirtyTree.Code -eq 2 -and $rDirtyBeforeLive.Code -eq 2 -and $rDirtyBeforeClean.Code -eq 2 -and
+            $rStagedLive.Code -eq 2 -and $rStagedClean.Code -eq 2 -and $rOutOfScopeDirty.Code -eq 2 -and
+            $rUntrackedBase.Code -eq 2 -and $rUntrackedScope.Code -eq 2 -and $rRenameB3.Code -eq 2 -and $rDupPre.Code -eq 2 -and
+            $rOk1.Code -eq 0 -and ($rOk1.Json.verify_check -match '^VERIFY_VALID:') -and $rOk1.Json.committed_tree_verified -eq $true -and
+            $rOk2.Code -eq 0 -and $rAlready.Code -eq 0 -and $rAlready.Json.status -eq 'PR_ALREADY_RESOLVED') {
+            Pass-Case "S04-S05-R001-R016-exact-commit-verify-check-resolution [$sh]"
         } else {
-            Fail-Case "S04-S05-R001-canonical-verify-check-resolution [$sh]" "dup=$($rDupRec.Code) mal=$($rMalRec.Code) par=$($rParRec.Code) cmd=$($rWCmd.Code) irr=$($rIrr.Code) split=$($rSplit.Code)/$($rSplit.Json.status) dirty=$($rDirtyTree.Code) ok1=$($rOk1.Code)/$($rOk1.Text) ok2=$($rOk2.Code)"
+            Fail-Case "S04-S05-R001-R016-exact-commit-verify-check-resolution [$sh]" "dup=$($rDupRec.Code) mal=$($rMalRec.Code) dBL=$($rDirtyBeforeLive.Code) dBC=$($rDirtyBeforeClean.Code) stL=$($rStagedLive.Code) stC=$($rStagedClean.Code) out=$($rOutOfScopeDirty.Code) unB=$($rUntrackedBase.Code) unS=$($rUntrackedScope.Code) ren=$($rRenameB3.Code) ok1=$($rOk1.Code)/$($rOk1.Text)"
         }
 
         # S07 + R004 + R011: Pre-write race, post-write race, fetch NEVER clears pending state, reconcile handles STALE_MUTATION / CONFIRMED_SUCCESS / CONFIRMED_ABSENCE / UNCERTAIN
@@ -751,9 +855,14 @@ child.on('close', (code) => {
         Fail-Case "S14-S15-context-headroom-and-governance" "bytes=$pfSkillBytes ctxPs=$ctxPs ctxSh=$ctxSh"
     }
 } finally {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     if ($liveLockProc -and -not $liveLockProc.HasExited) { Stop-Process -Id $liveLockProc.Id -Force -ErrorAction SilentlyContinue }
+    foreach ($w in @($wt1, $wt2)) { if (Test-Path -LiteralPath $w) { & git -C $sandboxRepo worktree remove --force $w *> $null } }
+    & git -C $sandboxRepo worktree prune *> $null
     if (Test-Path -LiteralPath $jLink) { [IO.Directory]::Delete($jLink, $false) }
     if (Test-Path -LiteralPath $tmpRoot) { Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    $ErrorActionPreference = $prevEap
 }
 
 Write-Output ""

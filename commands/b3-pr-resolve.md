@@ -5,4 +5,4 @@ description: Handle PR review feedback end-to-end: validate, fix confirmed root 
 
 # b3-pr-resolve
 
-**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and execute the `resolve` mode in `{B3_HOME}/skills/engineering/pr-feedback/SKILL.md` (loading `references/{thread-lifecycle,reply-template,github-adapter}.md` on demand). Supports all unresolved threads, selected threads, and `--draft`; requires bound verification evidence (`b3-verify-v1` receipt + fix relevance) before resolving eligible `review_thread` items; never auto-merges.
+**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and execute the `resolve` mode in `{B3_HOME}/skills/engineering/pr-feedback/SKILL.md` (loading `references/{thread-lifecycle,reply-template,github-adapter}.md` on demand). Supports all unresolved threads, selected threads, and `--draft`; parent orchestrator owns external PR mutations (parallel workers stay read-only/`--draft`); requires exact-commit canonical `b3-guard verify-check` + fix relevance before resolving eligible `review_thread` items; never auto-merges.

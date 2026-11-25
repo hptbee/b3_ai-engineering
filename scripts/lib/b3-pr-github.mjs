@@ -204,21 +204,62 @@ function readSafeInputFile(filePath, flagName, maxBytes = MAX_FILE_BYTES) {
   return fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, '');
 }
 
-// --- R010: Canonical per-repo/PR state identity + R012: PID-safe lock ---
-function resolveRepoRoot(rawRepoRoot) {
+// --- R010 + R015: Shared <git-common-dir> PR state/lock + single-writer enforcement ---
+const sameFsPath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+const isB3CheckpointPath = (p) => /^\.b3\/(ship|research-ship|autodev)(\/|$)/.test(p);
+const sortOrdinal = (arr) => [...arr].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+function resolveGitContext(rawRepoRoot) {
   const base = rawRepoRoot
     ? validateSafePath(rawRepoRoot, '--repo-root', { expectDir: true, mustExist: true })
     : validateSafePath(process.cwd(), 'cwd', { expectDir: true, mustExist: true });
-  const gitRes = spawnSync('git', ['-C', base, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', shell: false, windowsHide: true });
-  if (gitRes.error || gitRes.status !== 0 || !gitRes.stdout.trim()) {
+  const gitRes = spawnSync('git', ['-C', base, 'rev-parse', '--show-toplevel', '--git-dir', '--git-common-dir'], { encoding: 'utf8', shell: false, windowsHide: true });
+  const lines = gitRes.error || gitRes.status !== 0 ? [] : String(gitRes.stdout || '').trim().split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  if (lines.length < 3) {
     fail('PR_FILE_GUARD', `Directory is not inside a Git working tree (${base}); canonical state requires a Git repository root`);
   }
-  return validateSafePath(gitRes.stdout.trim(), 'git-toplevel', { expectDir: true, mustExist: true });
+  const repoRoot = validateSafePath(lines[0], 'git-toplevel', { expectDir: true, mustExist: true });
+  const gitDir = validateSafePath(path.resolve(base, lines[1]), 'git-dir', { expectDir: true, mustExist: true });
+  const gitCommonDir = validateSafePath(path.resolve(base, lines[2]), 'git-common-dir', { expectDir: true, mustExist: true });
+  const realGitDir = fs.realpathSync(gitDir);
+  const realCommonDir = fs.realpathSync(gitCommonDir);
+  const isLinkedWorktree = !sameFsPath(realGitDir, realCommonDir);
+  return { repoRoot, gitDir, gitCommonDir, realCommonDir, isLinkedWorktree };
 }
 
-function resolveCanonicalStatePath(repoRoot, repoFull, prNumber) {
+function assertMutationOwnerAllowed(gitCtx, action, explicitRepoRoot) {
+  const blocked = (reason, msg) => fail('PR_MUTATION_OWNER_REQUIRED', msg, EXIT_BLOCKED, {
+    outcome: 'blocked_before_write', mutated: false, action, reason
+  });
+  const role = String(process.env.B3_PR_MUTATION_ROLE || '').trim().toLowerCase();
+  const sub = String(process.env.B3_SUBAGENT || '').trim().toLowerCase();
+  if (role === 'worker' || sub === '1' || sub === 'true') {
+    blocked('worker_role_forbidden', `Worker/subagent context cannot execute external PR mutation (${action}); return proposed payload/evidence to parent orchestrator`);
+  }
+  if (gitCtx.isLinkedWorktree) {
+    blocked('linked_worktree_forbidden', `Linked Git worktree (${gitCtx.repoRoot}) cannot execute external PR mutation (${action}); route mutations through the single-writer parent orchestrator`);
+  }
+  if (explicitRepoRoot) {
+    const cwd = validateSafePath(process.cwd(), 'cwd', { expectDir: true, mustExist: true });
+    const cwdRes = spawnSync('git', ['-C', cwd, 'rev-parse', '--git-dir', '--git-common-dir'], { encoding: 'utf8', shell: false, windowsHide: true });
+    const cl = !cwdRes.error && cwdRes.status === 0 ? String(cwdRes.stdout || '').trim().split(/\r?\n/).map((s) => s.trim()).filter(Boolean) : [];
+    if (cl.length >= 2) {
+      let cwdGitDir = null;
+      let cwdCommonDir = null;
+      try {
+        cwdGitDir = fs.realpathSync(path.resolve(cwd, cl[0]));
+        cwdCommonDir = fs.realpathSync(path.resolve(cwd, cl[1]));
+      } catch { /* ignore unresolvable cwd git paths */ }
+      if (cwdGitDir && cwdCommonDir && !sameFsPath(cwdGitDir, cwdCommonDir) && sameFsPath(cwdCommonDir, gitCtx.realCommonDir)) {
+        blocked('linked_worktree_cwd_bypass', `Process CWD is inside a linked worktree sharing ${gitCtx.gitCommonDir}; bypassing via --repo-root is forbidden for ${action}`);
+      }
+    }
+  }
+}
+
+function resolveCanonicalStatePath(gitCommonDir, repoFull, prNumber) {
   const safeSlug = repoFull.toLowerCase().replace(/[^a-z0-9._-]/g, '__');
-  const statePath = path.join(repoRoot, '.b3', 'pr-feedback', `${safeSlug}__pr-${prNumber}.state.json`);
+  const statePath = path.join(gitCommonDir, 'b3', 'pr-feedback', `${safeSlug}__pr-${prNumber}.state.json`);
   return validateSafePath(statePath, 'canonical-state', { expectDir: false, mustExist: false });
 }
 
@@ -758,13 +799,77 @@ function parseUnifiedDiffAnchors(patch) {
   return { ok: true, rightLines, leftLines };
 }
 
-// --- R001: Canonical B3 verify-check integration ---
-function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expectedCmd, requiredPaths) {
-  const headRes = spawnSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8', shell: false, windowsHide: true });
-  if (headRes.error || headRes.status !== 0) {
-    fail('PR_VERIFY_REQUIRED', `Unable to read local Git HEAD in ${repoRoot} for canonical verify-check`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+// --- R001 + R016: Canonical B3 verify-check + exact remote committed-tree verification ---
+function assertCleanIndexAndWorkingTree(repoRoot) {
+  const stRes = spawnSync('git', ['-C', repoRoot, '-c', 'core.quotepath=false', 'status', '--porcelain=v1', '-z', '--untracked-files=all'], { encoding: 'utf8', shell: false, windowsHide: true });
+  if (stRes.error || stRes.status !== 0) {
+    fail('PR_VERIFY_REQUIRED', `Unable to inspect working tree cleanliness in ${repoRoot} for exact-commit verification`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
-  const localHead = headRes.stdout.trim().toLowerCase();
+  const dirty = [];
+  const tokens = String(stRes.stdout || '').split('\0');
+  for (let i = 0; i < tokens.length; i += 1) {
+    const entry = tokens[i];
+    if (!entry) continue;
+    if (entry.length < 4) fail('PR_VERIFY_REQUIRED', 'Malformed git status output during exact-commit verification', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+    const xy = entry.slice(0, 2);
+    const rel = entry.slice(3).replace(/\\/g, '/').replace(/^(\.\/)+/, '');
+    const orig = (xy.includes('R') || xy.includes('C')) ? String(tokens[++i] || '').replace(/\\/g, '/').replace(/^(\.\/)+/, '') : '';
+    if (rel && !isB3CheckpointPath(rel)) dirty.push(rel);
+    else if (orig && !isB3CheckpointPath(orig)) dirty.push(orig);
+  }
+  if (dirty.length > 0) {
+    const preview = dirty.slice(0, 5).map(sanitizeUntrustedText).join(', ') + (dirty.length > 5 ? ` (+${dirty.length - 5} more)` : '');
+    fail('PR_VERIFY_REQUIRED', `Uncommitted or untracked working-tree/index changes absent from PR HEAD (${preview})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false, dirty_paths: dirty.slice(0, 20) });
+  }
+}
+
+function computeCommittedTreeHash(repoRoot, expectedHead, receiptRelPathsRaw) {
+  const normRel = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  let cleanRel = [];
+  if (receiptRelPathsRaw && receiptRelPathsRaw !== 'ALL') {
+    const set = new Set();
+    for (const part of String(receiptRelPathsRaw).split(',')) {
+      const np = normRel(part);
+      if (np && np !== 'none' && !isB3CheckpointPath(np)) set.add(np);
+    }
+    cleanRel = sortOrdinal(set);
+    if (cleanRel.length === 0) fail('PR_VERIFY_REQUIRED', 'Receipt relevant_paths resolved empty during exact-commit check', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+  const pathsCsv = cleanRel.length > 0 ? cleanRel.join(',') : 'ALL';
+  const lsArgs = ['-C', repoRoot, '-c', 'core.quotepath=false', 'ls-tree', '-r', '-z', expectedHead, ...(cleanRel.length > 0 ? ['--', ...cleanRel] : [])];
+  const lsRes = spawnSync('git', lsArgs, { encoding: 'utf8', shell: false, windowsHide: true });
+  if (lsRes.error || lsRes.status !== 0) {
+    fail('PR_VERIFY_REQUIRED', `Unable to read committed tree for ${expectedHead} in ${repoRoot}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+  const effective = new Map();
+  for (const rec of String(lsRes.stdout || '').split('\0')) {
+    if (!rec) continue;
+    const tabIdx = rec.indexOf('\t');
+    if (tabIdx < 1) continue;
+    const meta = rec.slice(0, tabIdx).trim().split(/\s+/);
+    if (meta.length < 3 || !/^[0-9]{6}$/.test(meta[0]) || (meta[1] !== 'blob' && meta[1] !== 'commit') || !/^[0-9a-f]{40}$/.test(meta[2])) continue;
+    const p = normRel(rec.slice(tabIdx + 1));
+    if (!p || isB3CheckpointPath(p)) continue;
+    if (cleanRel.length > 0 && !cleanRel.some((r) => r === '.' || p === r || p.startsWith(`${r}/`))) continue;
+    effective.set(p, `${meta[0]} ${meta[1]} ${meta[2]}`);
+  }
+  const manifestLines = [`PATHS=${pathsCsv}`];
+  for (const ep of sortOrdinal(effective.keys())) manifestLines.push(`E ${effective.get(ep)} ${ep}`);
+  const hashRes = spawnSync('git', ['-C', repoRoot, 'hash-object', '--stdin'], { input: manifestLines.join('\n') + '\n', encoding: 'utf8', shell: false, windowsHide: true });
+  const hash = String(hashRes.stdout || '').trim().toLowerCase();
+  if (hashRes.error || hashRes.status !== 0 || !SHA_RE.test(hash)) {
+    fail('PR_VERIFY_REQUIRED', 'Unable to hash committed tree manifest for exact-commit verification', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+  return hash;
+}
+
+function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expectedCmd, requiredPaths) {
+  const headRes = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--verify', `${expectedHead}^{commit}`], { encoding: 'utf8', shell: false, windowsHide: true });
+  const localHeadRes = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--verify', 'HEAD^{commit}'], { encoding: 'utf8', shell: false, windowsHide: true });
+  if (headRes.error || headRes.status !== 0 || localHeadRes.error || localHeadRes.status !== 0) {
+    fail('PR_VERIFY_REQUIRED', `Unable to verify local Git HEAD or remote commit ${expectedHead} in ${repoRoot}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+  const localHead = localHeadRes.stdout.trim().toLowerCase();
   if (localHead !== expectedHead) {
     fail('PR_VERIFY_REQUIRED', `Local repository HEAD (${localHead}) does not match expected remote PR HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
@@ -777,29 +882,30 @@ function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expect
   }
 
   const reqCsv = requiredPaths.join(',');
-  let guardRes;
-  if (process.platform === 'win32') {
-    guardRes = spawnSync('powershell', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(SCRIPT_ROOT, 'b3-guard.ps1'),
-      'verify-check', '-RepoRoot', repoRoot, '-ReceiptPath', relReceipt, '-ExpectedCmd', expectedCmd, '-RelevantPaths', reqCsv
-    ], { encoding: 'utf8', shell: false, windowsHide: true });
-  } else {
-    guardRes = spawnSync('bash', [
-      path.join(SCRIPT_ROOT, 'b3-guard.sh'),
-      'verify-check', '--repo-root', repoRoot, '--receipt-path', relReceipt, '--expected-cmd', expectedCmd, '--relevant-paths', reqCsv
-    ], { encoding: 'utf8', shell: false, windowsHide: true });
-  }
+  const guardRes = process.platform === 'win32'
+    ? spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(SCRIPT_ROOT, 'b3-guard.ps1'), 'verify-check', '-RepoRoot', repoRoot, '-ReceiptPath', relReceipt, '-ExpectedCmd', expectedCmd, '-RelevantPaths', reqCsv], { encoding: 'utf8', shell: false, windowsHide: true })
+    : spawnSync('bash', [path.join(SCRIPT_ROOT, 'b3-guard.sh'), 'verify-check', '--repo-root', repoRoot, '--receipt-path', relReceipt, '--expected-cmd', expectedCmd, '--relevant-paths', reqCsv], { encoding: 'utf8', shell: false, windowsHide: true });
   const guardOut = `${guardRes.stdout || ''}\n${guardRes.stderr || ''}`.trim();
   if (guardRes.error || guardRes.status !== 0 || !guardOut.includes('VERIFY_VALID:')) {
     fail('PR_VERIFY_REQUIRED', `Canonical b3-guard verify-check failed (exit ${guardRes.status ?? 'err'}): ${sanitizeUntrustedText(guardOut).slice(0, 260)}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
 
   const receiptText = readSafeInputFile(receiptFullPath, 'verify_receipt_path');
-  const headMatch = receiptText.match(/^head_sha=([0-9a-f]{40})$/m);
-  if (!headMatch || headMatch[1].toLowerCase() !== expectedHead) {
-    fail('PR_VERIFY_REQUIRED', `Receipt head_sha (${headMatch ? headMatch[1] : 'missing'}) does not match exact PR HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  const kv = {};
+  for (const line of receiptText.split(/\r?\n/)) {
+    const eq = line.indexOf('=');
+    if (eq > 0) kv[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
   }
-  return { guardMessage: guardOut.split(/\r?\n/)[0] };
+  const recHead = String(kv.head_sha || '').toLowerCase();
+  if (recHead !== expectedHead) {
+    fail('PR_VERIFY_REQUIRED', `Receipt head_sha (${recHead || 'missing'}) does not match exact PR HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+  assertCleanIndexAndWorkingTree(repoRoot);
+  const committedTreeHash = computeCommittedTreeHash(repoRoot, expectedHead, kv.relevant_paths || 'ALL');
+  if (committedTreeHash !== String(kv.tree_hash || '').toLowerCase()) {
+    fail('PR_VERIFY_REQUIRED', `Receipt tree_hash (${kv.tree_hash || 'missing'}) does not match exact committed tree (${committedTreeHash}) at ${expectedHead}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  }
+  return { guardMessage: guardOut.split(/\r?\n/)[0], committedTreeHash };
 }
 
 function parseResolveEvidence(evidencePath, repoFull, prNumber, expectedHead, threadId, fixCommit) {
@@ -831,7 +937,7 @@ function parseResolveEvidence(evidencePath, repoFull, prNumber, expectedHead, th
 }
 
 // --- Unified guarded mutation lifecycle ---
-function executeGuardedMutation({ statePath, repo, prNumber, expectedHead, action, maxPages, prepare, mutate, verifySpec, onSuccessPayload }) {
+function executeGuardedMutation({ statePath, repo, prNumber, expectedHead, action, maxPages, prepare, beforeMutate, mutate, verifySpec, onSuccessPayload }) {
   return withStateLock(statePath, action, () => {
     const pending = getUnresolvedPendingRecords(readStateRecords(statePath), repo.full, prNumber);
     if (pending.length > 0) {
@@ -849,6 +955,7 @@ function executeGuardedMutation({ statePath, repo, prNumber, expectedHead, actio
     }
 
     assertOpenAndFreshHead(fetchPrHeader(repo.owner, repo.name, prNumber), expectedHead);
+    if (beforeMutate) beforeMutate();
 
     const opId = `${action}-${crypto.randomBytes(8).toString('hex')}`;
     const pendingRecord = {
@@ -960,7 +1067,9 @@ function handleReconcile(flags) {
   const repo = validateRepo(flags.repo);
   const prNumber = validatePr(flags.pr);
   const maxPages = validateMaxPages(flags['max-pages']);
-  const statePath = resolveCanonicalStatePath(resolveRepoRoot(flags['repo-root']), repo.full, prNumber);
+  const gitCtx = resolveGitContext(flags['repo-root']);
+  assertMutationOwnerAllowed(gitCtx, 'reconcile', flags['repo-root']);
+  const statePath = resolveCanonicalStatePath(gitCtx.gitCommonDir, repo.full, prNumber);
 
   return withStateLock(statePath, 'reconcile', () => {
     const pending = getUnresolvedPendingRecords(readStateRecords(statePath), repo.full, prNumber);
@@ -1072,7 +1181,9 @@ function handleReply(flags) {
   }
   if (!authWrite) fail('PR_AUTH_REQUIRED', 'Explicit --authorize-write is required to post a PR reply (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 
-  const statePath = resolveCanonicalStatePath(resolveRepoRoot(flags['repo-root']), repo.full, prNumber);
+  const gitCtx = resolveGitContext(flags['repo-root']);
+  assertMutationOwnerAllowed(gitCtx, 'reply', flags['repo-root']);
+  const statePath = resolveCanonicalStatePath(gitCtx.gitCommonDir, repo.full, prNumber);
 
   return executeGuardedMutation({
     statePath, repo, prNumber, expectedHead, action: 'reply', maxPages,
@@ -1154,19 +1265,22 @@ function handleResolve(flags) {
 
   if (isDraft && authResolve) fail('PR_INVALID_ARGS', '--draft cannot be combined with --authorize-resolve');
   if (/^[0-9]+$/.test(threadId) || threadId.startsWith('IC_')) fail('PR_NOT_RESOLVABLE', `General PR comments (${threadId}) cannot be resolved as review threads`);
-  if (!flags['evidence-file']) fail('PR_VERIFY_REQUIRED', '--evidence-file (bound to repo, PR, HEAD, thread, fix commit, and canonical b3-verify-v1 receipt) is required', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 
-  const repoRoot = resolveRepoRoot(flags['repo-root']);
+  const gitCtx = resolveGitContext(flags['repo-root']);
+  if (!isDraft) {
+    if (!authResolve) fail('PR_AUTH_REQUIRED', 'Explicit --authorize-resolve is required to resolve a review thread (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+    assertMutationOwnerAllowed(gitCtx, 'resolve', flags['repo-root']);
+  }
+  if (!flags['evidence-file']) fail('PR_VERIFY_REQUIRED', '--evidence-file (bound to repo, PR, HEAD, thread, fix commit, and canonical b3-verify-v1 receipt) is required', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   const evidence = parseResolveEvidence(flags['evidence-file'], repo.full, prNumber, expectedHead, threadId, fixCommit);
   const pathsToVerify = [...new Set([evidence.targetPath, ...evidence.fixedPaths])];
-  const verifyRes = runCanonicalVerifyCheck(repoRoot, evidence.receiptFullPath, expectedHead, evidence.checkedCommand, pathsToVerify);
+  const verifyRes = runCanonicalVerifyCheck(gitCtx.repoRoot, evidence.receiptFullPath, expectedHead, evidence.checkedCommand, pathsToVerify);
 
   if (isDraft) {
-    emit({ status: 'PR_DRAFT_OK', action: 'resolve', mutated: false, repo: repo.full, pr: prNumber, expected_head: expectedHead, thread_id: threadId, fix_commit: fixCommit, evidence_basis: evidence.basis, target_path: evidence.targetPath, verify_check: verifyRes.guardMessage }, EXIT_OK);
+    emit({ status: 'PR_DRAFT_OK', action: 'resolve', mutated: false, repo: repo.full, pr: prNumber, expected_head: expectedHead, thread_id: threadId, fix_commit: fixCommit, evidence_basis: evidence.basis, target_path: evidence.targetPath, verify_check: verifyRes.guardMessage, committed_tree_verified: true }, EXIT_OK);
   }
-  if (!authResolve) fail('PR_AUTH_REQUIRED', 'Explicit --authorize-resolve is required to resolve a review thread (or use --draft)', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 
-  const statePath = resolveCanonicalStatePath(repoRoot, repo.full, prNumber);
+  const statePath = resolveCanonicalStatePath(gitCtx.gitCommonDir, repo.full, prNumber);
 
   return executeGuardedMutation({
     statePath, repo, prNumber, expectedHead, action: 'resolve', maxPages,
@@ -1211,6 +1325,9 @@ function handleResolve(flags) {
       }
       return { extraIds: { thread_id: threadId }, pendingMeta: { target_id: threadId, fix_commit: fixCommit } };
     },
+    beforeMutate() {
+      runCanonicalVerifyCheck(gitCtx.repoRoot, evidence.receiptFullPath, expectedHead, evidence.checkedCommand, pathsToVerify);
+    },
     mutate() {
       const res = ghGraphQL('mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { id isResolved } } }', { threadId });
       if (!res.resolveReviewThread?.thread?.isResolved) fail('PR_API_ERROR', 'resolveReviewThread did not confirm isResolved=true');
@@ -1222,7 +1339,7 @@ function handleResolve(flags) {
     onSuccessPayload(_prep, _header, _createdId, vRes) {
       return {
         status: 'PR_RESOLVE_OK', action: 'resolve', mutated: true, repo: repo.full, pr: prNumber, thread_id: threadId,
-        fix_commit: fixCommit, is_resolved: true, verify_check: verifyRes.guardMessage, verified_remote: true, verified_head: vRes.postHead
+        fix_commit: fixCommit, is_resolved: true, verify_check: verifyRes.guardMessage, committed_tree_verified: true, verified_remote: true, verified_head: vRes.postHead
       };
     }
   });
@@ -1296,7 +1413,9 @@ function handleComment(flags) {
   if (event !== 'COMMENT' && authReviewEvent !== event) fail('PR_EVENT_UNAUTHORIZED', `Review event ${event} requires matching --authorize-review-event ${event}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
 
   const transport = (mode === 'summary' && event === 'COMMENT') ? 'issue_comment' : 'pull_review';
-  const statePath = resolveCanonicalStatePath(resolveRepoRoot(flags['repo-root']), repo.full, prNumber);
+  const gitCtx = resolveGitContext(flags['repo-root']);
+  assertMutationOwnerAllowed(gitCtx, 'comment', flags['repo-root']);
+  const statePath = resolveCanonicalStatePath(gitCtx.gitCommonDir, repo.full, prNumber);
 
   return executeGuardedMutation({
     statePath, repo, prNumber, expectedHead, action: 'comment', maxPages,

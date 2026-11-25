@@ -28,9 +28,9 @@ Validate every item against current PR `HEAD`, requirements, callers, and tests 
 Caller-supplied `PASS` flags, commit ancestry, and touching the same file are **not** semantic proof of resolution. A `review_thread` may be resolved only when **all** hold:
 1. Separate explicit resolve authorization is granted.
 2. Bound verification evidence (`schema=b3-pr-verify-evidence-v1`) matches exact repository, PR, current `HEAD` SHA, `thread_id`, `fix_commit`, remote `thread.path`, `resolution_basis`, `checked_command`, and substantive summary.
-3. Canonical B3 verification (`b3-guard verify-check` against exact remote PR `HEAD`, expected command, required target/fix paths, and live Git tree fingerprint — rejecting duplicate/malformed receipt fields, stale fingerprints, and ancestor-only HEADs) returns `VERIFY_VALID`.
+3. Canonical B3 verification (`b3-guard verify-check` against exact remote PR `HEAD`, expected command, required target/fix paths — rejecting duplicate/malformed receipt fields, stale fingerprints, and ancestor-only HEADs) returns `VERIFY_VALID`, **plus** clean non-ignored index and working tree (preserving legitimate gitignored B3 checkpoints under `.b3/{ship,research-ship,autodev}/`) and exact committed-tree fingerprint match against `expected_head` (`ls-tree` + `hash-object`).
 4. Remote PR is `OPEN`, remote `HEAD == expected_head`, `fix_commit` is a remote ancestor of `HEAD` (`identical|ahead`, `behind_by == 0`), **and** remote `fix_commit` modifies all verified paths.
-5. Immediate pre-write freshness check passes; post-write remote verification confirms `isResolved == true`, target ownership, and unchanged `OPEN` + `HEAD`. If trustworthy verification cannot be established, leave the thread open.
+5. Immediate pre-write remote freshness **and** local exact-commit verification rechecks pass before mutation; post-write remote verification confirms `isResolved == true`, target ownership, and unchanged `OPEN` + `HEAD`. If trustworthy exact-commit verification cannot be established, leave the thread open.
 
 ## 4. Mutation Freshness, Race Windows & Explicit Reconciliation
 
@@ -48,10 +48,11 @@ Caller-supplied `PASS` flags, commit ancestry, and touching the same file are **
 - **Strict diff hunk validation:** Parse and verify unified diff hunk line counts and completeness (preserving additions, deletions, context lines, and `LEFT`/`RIGHT` anchors). Reject malformed, truncated, or missing patches (`PR_DIFF_UNAVAILABLE`); never guess anchors.
 - **Review Loop:** Publish only the final verified outcome when authorized — never intermediate iteration spam.
 
-## 6. Mandatory Canonical State, Locking & Revalidated Idempotency
+## 6. Single-Writer Ownership, Canonical State, Locking & Revalidated Idempotency
 
-- **Canonical state identity:** Every external mutation automatically uses one repository-and-PR-scoped state file (omitted or alternate `--state-file` overrides are disallowed). Read-only `fetch` and `--draft` remain lightweight without creating state or lock files.
-- **PID + host liveness lock:** Never reclaim locks based solely on wall-clock age. Only reclaim a same-host lock whose recorded PID is confirmed dead (`ESRCH`); fail closed on active, cross-host, or unverifiable locks.
+- **Canonical state identity:** Every external mutation automatically uses one repository-and-PR state file under `<git-common-dir>/b3/pr-feedback/` shared across the primary checkout and all local worktrees (`--state-file` overrides rejected; non-git directories fail `PR_FILE_GUARD`). Read-only `fetch` and `--draft` remain lightweight without creating state or lock files.
+- **Single-writer parent ownership:** Parallel workers may investigate, edit/test their own assigned files, and run read-only `fetch` or `--draft`, returning proposed replies/evidence to the parent orchestrator. External mutations (`comment`, `reply`, `resolve`, `reconcile`) fail closed (`PR_MUTATION_OWNER_REQUIRED`) when invoked from linked Git worktrees (`git-dir != git-common-dir`, including `--repo-root` bypasses) or worker contexts (`B3_PR_MUTATION_ROLE=worker` / `B3_SUBAGENT=1`). Honest scope limit: separate full clones or unflagged processes running directly inside the primary checkout are serialized by the local lockfile rather than distinguished as workers.
+- **PID + host liveness lock:** Never reclaim locks based solely on wall-clock age. Reclaim a same-host lock only when its recorded PID is confirmed dead (`ESRCH`), serialized via an atomic `.reclaim` mutex + re-check; fail closed on active, cross-host, or unverifiable locks.
 - **Revalidated idempotency:** Every external reply/comment carries an actor-scoped `<!-- b3-pr-key:<key>;op=<16hex> -->` identity (auto-derived if omitted). Before returning `PR_IDEMPOTENT_SKIP`, revalidate the actual remote object's content, target, actor, event/state (rejecting dismissed reviews or edited comments as `PR_REMOTE_STATE_MISMATCH`), and commit SHA. Best-effort client deduplication only — not server-enforced exactly-once delivery.
 
 ## 7. Research Ship Governance
