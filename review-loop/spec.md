@@ -27,21 +27,23 @@ A single invocation of `commands/b3-review-loop.md` runs **review → validate �
 
 Skip a review dimension only when it is out of scope **and** that skip is recorded. “Not relevant” without a reason is not a skip.
 
-The **performance** dimension is always in the general review (light). An extra `b3-performance-reviewer` pass is **risk-based** — [`strategy.md`](strategy.md) routing — not every PR. SPECULATIVE performance items are not quality-gate blockers.
+The **performance** dimension is always in the general review (light). An extra `b3-performance-reviewer` pass is **risk-based** — [`strategy.md`](strategy.md) routing — not every PR. Hot-path `EVIDENCED RISK` performance findings block the quality gate; `SPECULATIVE` performance items are not quality-gate blockers.
 
-The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. This is not aesthetic cleanup or line-count reduction; only CONFIRMED redundancy becomes a fix requirement. Later loop passes pay special attention to residue introduced by earlier fix passes.
+The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. This is not aesthetic cleanup or line-count reduction; only `CONFIRMED REDUNDANCY` becomes a fix requirement. Later loop passes pay special attention to residue introduced by earlier fix passes.
 
-Adaptive path: `XS`/`S`/`M` = this loop on the full PR. `L`/`XL`/`XXL` = logical review **units** (dynamic units, bounded concurrency `<=4`, and coverage ledger on `XXL`), then a **cross-cutting** review (`sizing.md`, [`hierarchical.md`](hierarchical.md)). Size governs partitioning; **Risk** (`LOW|MEDIUM|HIGH|CRITICAL`, never inferred from LOC alone) governs specialist dispatch and verification depth.
+Adaptive path: `XS`/`S`/`M` = this loop on the full PR. `L`/`XL` = bounded cohesive review **units** (`<= 4` units), and `XXL` = dynamic cohesive review **units**; all three (`L`/`XL`/`XXL`) use bounded concurrency `<= 4`, a mandatory fail-closed coverage ledger, and a **cross-cutting** review (`sizing.md`, [`hierarchical.md`](hierarchical.md)). Size governs partitioning; **Risk** (`LOW|MEDIUM|HIGH|CRITICAL`, never inferred from LOC alone) governs specialist dispatch and verification depth.
 
 ## Outcomes
 
-Every check and the loop as a whole must end in one of:
+Every check and the loop as a whole must end in one of the five canonical outcomes (`PASS` | `FAIL` | `STUCK` | `INCOMPLETE` | `BLOCKED`):
 
 | Outcome | Meaning |
 | --- | --- |
-| **PASS** | Required evidence was produced and supports the claim |
-| **FAIL** | Evidence shows the claim is false, or a confirmed issue remains |
-| **UNKNOWN / INCOMPLETE** | Evidence is missing, a tool failed, scope was not covered, or time/iteration ran out |
+| **PASS** | Required evidence was produced and supports the claim (0 blocking findings, fresh valid verification/ledger) |
+| **FAIL** | Evidence shows a required check failed, or a confirmed blocking issue remains |
+| **STUCK** | Loop failed to converge (flat/rising blockers, oscillation, no-op fix, or repeated stagnation breaker) |
+| **INCOMPLETE** (`UNKNOWN / INCOMPLETE`) | Evidence is missing, a tool failed, scope/coverage was not completed, or iteration/pass budget ran out |
+| **BLOCKED** | External/policy prerequisite, unsafe/unapproved action, or rejected `CRITICAL` waiver prevents proceeding |
 
 PASS is never inferred from silence.
 
@@ -77,7 +79,7 @@ INVESTIGATING
 | `FALSE_POSITIVE` | Investigation showed it is not a real issue |
 | `SPECULATIVE` | Too thin to confirm; parked, not blocking |
 
-`FIXED` without `VERIFIED` is not closed. `SPECULATIVE` must not be presented as `CONFIRMED`.
+`FIXED` without `VERIFIED` is not closed. `SPECULATIVE` must not be presented as `CONFIRMED`. Runtime shorthand statuses (`OPEN` = blocking `CONFIRMED` / `CONFIRMED REDUNDANCY` / hot-path `EVIDENCED RISK`, `REJECTED` = `FALSE_POSITIVE`, `ACCEPTED` = `INTENTIONAL COMPLEXITY` / out-of-scope with reason) map directly to this lifecycle ([`strategy.md`](strategy.md) §0.3).
 
 ## Finding schema (conceptual)
 
@@ -133,7 +135,7 @@ Suggested severity: `critical`, `high`, `medium`, `low`. Suggested confidence: `
 critical + low confidence
 ```
 
-must **not** automatically be treated as a confirmed critical defect. Investigate or leave `SPECULATIVE` / `INVESTIGATING`. Do not block the world on an ungounded scare, and do not ignore a high-confidence critical with evidence.
+must **not** automatically be treated as a confirmed critical defect. Investigate or leave `SPECULATIVE` / `INVESTIGATING`. Do not block the world on an ungrounded scare, and do not ignore a high-confidence critical with evidence.
 
 Avoid noisy speculative findings. A long list of guesses is a failed review, not a thorough one.
 
@@ -206,13 +208,13 @@ When consolidating, drop stale items, merge duplicates, and carry evidence and `
 
 ## Quality gate
 
-A scope passes when **critical = 0**, **high = 0**, **medium = 0**, all required units & cross-unit checks (plus coverage ledger on `L`/`XL`/`XXL`) are complete without stale contracts/receipts, and required build/tests are **PASS**. LOW/NIT may remain and must be listed. Missing tool/coverage evidence → `UNKNOWN / INCOMPLETE` or `BLOCKED`, never PASS.
+A scope passes when blocking `OPEN` items are zero (**critical = 0**, **high = 0**, **medium = 0**, **CONFIRMED REDUNDANCY = 0**, hot-path **EVIDENCED RISK = 0**), all required units & cross-unit checks (plus fail-closed coverage ledger on `L`/`XL`/`XXL`) are complete without stale contracts/receipts, and required build/tests are **PASS**. LOW/NIT and non-blocking `SPECULATIVE` items may remain and must be listed. Missing tool/coverage evidence → `INCOMPLETE` (`UNKNOWN / INCOMPLETE`) or `BLOCKED`, never `PASS`.
 
-Runtime IDs (`R001`…) and OPEN/FIXED/REJECTED/ACCEPTED/VERIFIED statuses: [`strategy.md`](strategy.md) §0.3.
+Runtime IDs (`R001`…) and `OPEN`/`FIXED`/`REJECTED`/`ACCEPTED`/`VERIFIED`/`SPECULATIVE` statuses: [`strategy.md`](strategy.md) §0.3.
 
 ## Independence
 
-Implementation and review should not be the same unchecked voice. Three slots: orchestrator (stop/PASS only), reviewer (no edits), fixer (edits + verify, no loop outcome). Optional `b3-security-reviewer` / `b3-architecture-reviewer`. Hosts may assign different models in **host agent config** only (`models.md`) — not in this spec.
+Implementation and review should not be the same unchecked voice. Three core slots: orchestrator (emits `PASS`|`FAIL`|`STUCK`|`INCOMPLETE`|`BLOCKED` alone), reviewer (fresh, read-only, no edits), fixer (edits + verify, no loop outcome). Risk-triggered specialists: `b3-security-reviewer`, `b3-architecture-reviewer`, and `b3-performance-reviewer`. When a host lacks subagent isolation, perform an explicit hat-change and record `review_independence: SINGLE_AGENT_LIMIT` in the stop report. Hosts may assign different models in optional user/project `models.md` or host agent config (`models.md`) — not in this spec.
 
 ## Verification inside the loop
 

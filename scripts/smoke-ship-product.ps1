@@ -127,7 +127,10 @@ module.exports = { greet, greetAlias };
 
     # Interrupt: uncommitted T002 work
     Set-Content README.md "# greet`n`nUse greet(name).`n"
-    git status --porcelain | Out-String | ForEach-Object { if ($_ -notmatch 'README.md') { } }
+    $interruptStatus = @(git status --porcelain | Where-Object { $_.Trim() })
+    if ($interruptStatus.Count -ne 1 -or ($interruptStatus[0] -notmatch 'README\.md$')) {
+        Fail "unexpected worktree state at interrupt:`n$($interruptStatus -join "`n")"
+    }
 
     # Resume: T001 still complete; do not duplicate
     git merge-base --is-ancestor $t1 HEAD
@@ -148,6 +151,7 @@ module.exports = { greet, greetAlias };
     # Independent review of T001 residue: greetAlias was not in the requirements. Fix, then re-verify.
     Set-Content greet.js "function greet(name) { return 'Hello, ' + name; }`nmodule.exports = { greet };`n"
     node -e "const {greet}=require('./greet'); if (greet('Ada')!=='Hello, Ada') process.exit(1)"
+    if ($LASTEXITCODE -ne 0) { Fail 'post-fix T001 verification' }
     git add greet.js
     & $guard precommit -RepoRoot $sandbox -AllowedPaths 'greet.js' | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail 'residue fix precommit guard failed' }

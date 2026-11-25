@@ -8,6 +8,6 @@ description: >
 
 # b3-verify
 
-**Action now:** treat a named claim as a verification problem; execute evidence (prefer `scripts/b3-guard.{ps1,sh} verify-run` / `verify-check` for `b3-verify-v1` receipts) and label `PASS` / `FAIL` / `UNKNOWN / INCOMPLETE`.
+**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo), treat a named claim as a verification problem, run evidence (prefer `{B3_HOME}/scripts/b3-guard.{ps1,sh} verify-run` / `verify-check` for reusable `b3-verify-v1` receipts), and label `PASS` / `FAIL` / `UNKNOWN / INCOMPLETE`.
 
-Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and open `{B3_HOME}/skills/engineering/verification/SKILL.md` (`{B3_HOME}/rules/verification.md`).
+Open `{B3_HOME}/skills/engineering/verification/SKILL.md` (`{B3_HOME}/rules/verification.md`).

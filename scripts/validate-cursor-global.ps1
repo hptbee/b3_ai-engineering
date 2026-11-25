@@ -1,6 +1,7 @@
 # Behavioral validation suite for global Cursor installation (install-global.ps1 & install-global.sh).
 # Exercises filesystem links, generated artifacts, conflicts, updates, paths with spaces, unrelated repos, manifest corruption, and uninstall in isolated sandboxes.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-cursor-global.ps1
+param([switch]$AllowIncompleteBash)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 
@@ -600,4 +601,4 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Complete-ValidationSuite
+Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash

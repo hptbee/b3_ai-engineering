@@ -158,13 +158,13 @@ Example:
 
 A workflow orchestrates skills, commands, and agents across multiple steps. It does not replace a skill; it sequences them.
 
-**Present (default sequence + full lifecycle).** See [`../workflows/README.md`](../workflows/README.md). Independent review is `review-loop/` + `commands/b3-review-loop.md`, not a separate workflow file.
+**Present (default sequence + full lifecycles).** See [`../workflows/README.md`](../workflows/README.md). Independent review is `review-loop/` + `commands/b3-review-loop.md`, not a separate workflow file.
 
 Example:
 
 > Workflow: feature implementation (`Scope → Plan → Build → Verify → Review → Fix → Verify`).
 
-The default product sequence is `workflows/feature-implementation.md`. One-shot lifecycle through commits and resume is `workflows/ship.md` (`commands/b3-ship.md`).
+The default product sequence is `workflows/feature-implementation.md`. One-shot lifecycles are `workflows/ship.md` (`commands/b3-ship.md`) for engineering delivery and `workflows/research-ship.md` (`commands/b3-research-ship.md`) for research-first delivery.
 
 ## Review Loop
 

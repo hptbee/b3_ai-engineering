@@ -31,6 +31,8 @@ esac
 [[ -n "$PRODUCT_ROOT" ]] || { echo "error: --product-root is required" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/global-common.sh
+source "${SCRIPT_DIR}/lib/global-common.sh"
 if [[ -z "$B3_HOME" ]]; then
   B3_HOME="$(cd "${SCRIPT_DIR}/.." && pwd)"
 else
@@ -50,7 +52,7 @@ CMD_SKILLS_SRC="${B3_HOME}/adapters/command-skills"
 
 [[ -f "$WORKFLOW" ]] || { echo "error: B3_HOME missing workflow: $WORKFLOW" >&2; exit 1; }
 [[ -f "$TEMPLATE" ]] || { echo "error: missing template: $TEMPLATE" >&2; exit 1; }
-[[ -n "$(find "$SKILLS_SRC" -name 'SKILL.md' -type f -print -quit 2>/dev/null || true)" ]] || {
+[[ -n "$({ find "$SKILLS_SRC" -name 'SKILL.md' -type f -print 2>/dev/null || true; } | head -n 1)" ]] || {
   echo "error: B3_HOME has no SKILL.md under skills: $SKILLS_SRC" >&2; exit 1
 }
 
@@ -64,7 +66,7 @@ AGENTS_MD_DEST="${PRODUCT_ROOT}/AGENTS.md"
 CLAUDE_MD_DEST="${PRODUCT_ROOT}/CLAUDE.md"
 CURSOR_README_DEST="${PRODUCT_ROOT}/.cursor/README.md"
 
-if [[ -d "$PRODUCT_SKILLS" ]] && [[ -n "$(find "$PRODUCT_SKILLS" -name 'SKILL.md' -type f -print -quit 2>/dev/null || true)" ]]; then
+if [[ -d "$PRODUCT_SKILLS" ]] && [[ -n "$({ find "$PRODUCT_SKILLS" -name 'SKILL.md' -type f -print 2>/dev/null || true; } | head -n 1)" ]]; then
   echo "error: product already has SKILL.md under .cursor/skills; refusing to install a duplicate skill tree" >&2
   exit 1
 fi
@@ -192,51 +194,6 @@ update_b3_gitignore() {
   echo "appended"
 }
 
-resolve_personal_model_dest() {
-  local raw="${B3_MODELS_PERSONAL:-}"
-  raw="${raw#"${raw%%[![:space:]]*}"}"
-  raw="${raw%"${raw##*[![:space:]]}"}"
-  if [[ -n "$raw" ]]; then
-    printf '%s' "$raw"
-  else
-    printf '%s' "${HOME}/.b3/models.md"
-  fi
-}
-
-print_dry_run_model_prefs() {
-  [[ "${B3_SKIP_MODEL_INIT:-}" == "1" ]] && return 0
-  local template_md="${B3_HOME}/config/models.example.md"
-  [[ -f "$template_md" ]] || return 0
-  local dest
-  dest="$(resolve_personal_model_dest)"
-  if [[ -e "$dest" || -L "$dest" ]]; then
-    echo "dry-run: keep existing personal model preferences $dest"
-  else
-    echo "dry-run: initialize personal model preferences at $dest from $template_md"
-  fi
-}
-
-init_personal_model_prefs() {
-  if [[ "${B3_SKIP_MODEL_INIT:-}" == "1" ]]; then
-    echo "skipped"
-    return 0
-  fi
-  local template_md="${B3_HOME}/config/models.example.md"
-  if [[ ! -f "$template_md" ]]; then
-    echo "no-template"
-    return 0
-  fi
-  local dest
-  dest="$(resolve_personal_model_dest)"
-  if [[ -e "$dest" || -L "$dest" ]]; then
-    echo "kept:${dest}"
-    return 0
-  fi
-  mkdir -p "$(dirname "$dest")"
-  cp "$template_md" "$dest"
-  echo "created:${dest}"
-}
-
 update_host_gitignore() {
   local lines=()
   case "$HOST_NAME" in
@@ -304,7 +261,11 @@ if $DRY_RUN; then
       [[ -f "$CURSOR_README_TEMPLATE" ]] && echo "dry-run: write $CURSOR_README_DEST"
       ;;
   esac
-  print_dry_run_model_prefs
+  MODEL_DRY_STATUS="$(init_personal_models_file "$B3_HOME" "" "true" "false")"
+  case "$MODEL_DRY_STATUS" in
+    kept:*) echo "dry-run: keep existing personal model preferences ${MODEL_DRY_STATUS#kept:}" ;;
+    dry-run:*) echo "dry-run: initialize personal model preferences at ${MODEL_DRY_STATUS#dry-run:} from ${B3_HOME}/config/models.example.md" ;;
+  esac
   exit 0
 fi
 
@@ -347,7 +308,7 @@ case "$HOST_NAME" in
     ;;
 esac
 
-MODEL_PREF_STATUS="$(init_personal_model_prefs)"
+MODEL_PREF_STATUS="$(init_personal_models_file "$B3_HOME" "" "false" "false")"
 
 echo "installed B3 pointer in $PRODUCT_ROOT"
 echo "B3_HOME=$B3_HOME"
@@ -362,6 +323,6 @@ case "$HOST_NAME" in
   codex) echo "skills=$AGENTS_DEST (flattened symlinks + \$b3-ship; gitignored, not copied)" ;;
   antigravity) echo "skills=$AGENTS_DEST (flattened symlinks + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.sh if Cursor also opens this repo)" ;;
   claude) echo "skills=$CLAUDE_SKILLS_DEST (flattened symlinks + command skills) + $CLAUDE_AGENTS_DEST -> $AGENTS_SRC (gitignored, not copied)" ;;
-  cursor) echo "skills=user-level ~/.cursor/skills/b3-ai-engineering -> $SKILLS_SRC (not copied into product)" ;;
+  cursor) echo "skills=user-level ~/.cursor/skills/<name> via adapters/cursor/install-global.sh (not copied into product)" ;;
 esac
 echo "note: this proves files were written, not host slash-command or skill discovery"

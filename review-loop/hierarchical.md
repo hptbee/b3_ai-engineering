@@ -16,8 +16,8 @@ Load **only** when `size_class` is `L`, `XL`, or `XXL` (never on `always-on` or 
 Run `scripts/b3-guard.{ps1,sh} review-inventory` (`-BaseSha`, optional `-TargetRef`, `-MaxConcurrency`):
 - Collects T-shirt `size_class`, files/LOC, `change_types`, `contract_files`, `generated_files`, `test_files`, `noise_files`, decoupled PR & per-unit `risk_level` / `risk_signals` / `recommended_specialists`, conditional Level-1 dispatch (`l1_specialists`, `l1_skip_rationale`), `split_recommended`, and bounded cohesive `unit|U01|...` slices (`L`/`XL` coalesced `<= 4`; oversized buckets subdivided without arbitrary LOC slicing; paired tests preserved). Fails `PARTITION_INCOMPLETE` (`exit 2`) if safe bounded partitioning is impossible.
 - Initialize resumable tamper-evident coverage ledger immediately:
-  `scripts/b3-guard.{ps1,sh} review-ledger -Action init -LedgerPath .b3/ship/review-loop/<slug>/ledger.md [-MaxConcurrency N] [-MaxPasses M]`
-  (Fails closed before creating objects on sensitive untracked files, dirty submodules, or unsafe partitions.)
+  `scripts/b3-guard.{ps1,sh} review-ledger -Action init -LedgerPath .b3/ship/review-loop/<slug>/ledger.md [-MaxConcurrency N] [-MaxPasses M] [-ReviewIndependence UNKNOWN|INDEPENDENT|SINGLE_AGENT_LIMIT]`
+  (Defaults to `UNKNOWN` — never assumes `INDEPENDENT`; fails closed before creating objects on sensitive untracked files, dirty submodules, or unsafe partitions.)
 - If `split_recommended=true` and units are independently mergeable, advise splitting into stacked/feature PRs; if reviewed here, execute Levels 1–4 across **all** units.
 
 ### Level 1 — Conditional Architecture & Shared Contract Review
@@ -30,12 +30,12 @@ Process active `PENDING`/`IN_PROGRESS`/`STALE` units in batches of `<= max_concu
 1. **Isolated context packet:** pass ONLY unit `files_csv` + relevant `contract_files` + Level 1 invariants (if any) + 1L `context_hint:` + unit `risk`/`specialists` + unit active findings (`<= 25L` Reviewer, `<= 20L` Fixer caps; never broadcast full PR). Optionally record immutable unit anchors via `b3-guard context-cache`: bind `contract_files` (and `read_only_deps`) via `anchor_paths` and bind recorded Level 1 invariants via `summary_ref` (SHA-256 verified under `.b3/ship/`).
 2. **Risk-based specialist dispatch per unit:**
    - `LOW`: 1 fresh `b3-reviewer` only (skip specialists; record `rationale=low-risk-doc-or-local`).
-   - `MEDIUM`: fresh `b3-reviewer`; add triggered specialist only if domain signal justifies.
-   - `HIGH`: fresh `b3-reviewer` + `recommended_specialists` (or explicit `>=5`-char skip rationale) + scoped `verify-run` receipt covering `files_csv` on code units.
+   - `MEDIUM`: fresh `b3-reviewer`; add triggered specialist if justified (or `>=5`-char skip rationale).
+   - `HIGH`: fresh `b3-reviewer` + `recommended_specialists` (or non-waiver `>=15`-char, `>=2` distinct 3+-letter word rationale) + scoped `verify-run` receipt covering `files_csv` on code units.
    - `CRITICAL`: fresh `b3-reviewer` + mandatory `recommended_specialists` + scoped `verify-run` receipt on code units (fail closed; free-form rationale rejected and self-declared `WAIVER:...` attempts rejected with `LEDGER_BLOCKED` until a trusted owner approval mechanism exists).
 3. **Bounded unit loop:** `Review -> Fix -> Verify (verify-run) -> fresh Re-review` (max 3 iter/unit, `diff-scope -PrevSha` deltas Iter 2+; reuse valid unit `context-cache`, invalidate on anchor/contract/summary/graph-SHA drift, skip full repo reload or repeat graph scans; MCP failure -> native fallback without false `PASS`; reuse `fixer_agent` per unit until Tier-1 breaker).
 4. **Update ledger after each unit:** `review-ledger -Action update -LedgerPath ... -UnitId U0N -Status REVIEWED|BLOCKED|INCOMPLETE -Specialists ... -Findings ... -ReceiptPath ...`.
-   - `passes_used` advances monotonically (`pass_chain` + append-only `## Pass Log`: +1 per unit/cross-unit `REVIEWED|INCOMPLETE|BLOCKED` or newly added specialist); resetting, reducing, bypassing consumed passes, or tampering with `passes_used` fails closed (`LEDGER_FAIL` / `LEDGER_CORRUPT`).
+   - `passes_used` advances monotonically (`pass_chain` mandatory + append-only `## Pass Log`); resetting/tampering `passes_used`, stripping `pass_chain`, raising `max_passes`, or upgrading `SINGLE_AGENT_LIMIT->INDEPENDENT` fails closed (`LEDGER_FAIL`/`LEDGER_CORRUPT`).
    - Never rely solely on file-extension exemptions for **generated code** (`*.generated.*`, `*.pb.*`, `*.Designer.cs`, `*.g.cs`): inspect generator inputs/provenance and record verification/rationale in unit notes.
 
 ### Level 3 — Cross-Unit Integration Review
@@ -43,6 +43,6 @@ After units complete (`0` blocking `OPEN`), dispatch fresh `b3-reviewer` (+ `b3-
 
 ### Level 4 — Final Fail-Closed Quality Gate
 Run `scripts/b3-guard.{ps1,sh} review-ledger -Action check -LedgerPath ...` (plus `mechanical-check` / `symbol-check` if edits occurred):
-- Verifies complete live file coverage (no uncovered `review_files`), bounded unit count/size (`L`/`XL <= 4` units; no oversized `>5000L` or `>100f && >1000L` unit), unchanged `target_ref` -> `target_sha` (branch movement or missing ref -> `LEDGER_STALE`), every unit `REVIEWED` with `0` `OPEN`/unverified `FIXED` findings, fresh `unit_tree_hash` (including `contract_files`) and fresh `cross_unit_tree_hash`, matching live `risk_level` + mandatory `CRITICAL` specialist compliance (self-declared waivers rejected), valid non-stale `verify_receipt` (mandatory for `HIGH`/`CRITICAL` code units), tamper-free monotonic `pass_chain` + minimum reviewed passes, and bounded `max_passes` (`XS/S/M: 5`, `L/XL: 12`, `XXL: 24` unless explicitly overridden with a positive integer).
+- Verifies complete live coverage, bounded units (`L`/`XL <= 4`; no oversized unit), no `size_class` escalation (`LEDGER_STALE`), unchanged `target_ref`->`target_sha`, all units `REVIEWED` with `0` `OPEN`/unverified `FIXED`, fresh `unit_tree_hash`+`cross_unit_tree_hash`, live `risk_level` + specialist compliance (`CRITICAL` waivers rejected; `SINGLE_AGENT_LIMIT` blocked on `HIGH`/`CRITICAL`), `target_sha`-bound `verify_receipt` (`HIGH`/`CRITICAL` code units), mandatory `pass_chain` + immutable `max_passes` (`XS/S/M: 5`, `L/XL: 12`, `XXL: 24`).
 - **Resume after interruption:** read `ledger.md`, run `review-ledger normalize` if legacy `SMALL|MEDIUM|LARGE|VERY_LARGE` sizes appear, run `review-ledger check` to identify `PENDING`/`INCOMPLETE`/`STALE` units invalidated by changed files, shared contracts, or risk changes, and re-run only invalidated/unreviewed units plus Level 3 when needed.
 - Budget exhaustion, missing receipt/tool failure, stale unit, or incomplete ledger -> **`INCOMPLETE` or `BLOCKED`** (never `PASS` from silence).

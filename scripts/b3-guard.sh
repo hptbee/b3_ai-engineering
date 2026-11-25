@@ -3,6 +3,8 @@
 # Subcommands: fingerprint | check-freshness | precommit | snapshot | diff-scope | mechanical-check | check-wave | new-run | resolve-run | list-runs | prune | verify-run | verify-check | symbol-check | check-worktree | review-inventory | review-ledger | evidence-check | merge-policy-check | context-cache
 set -euo pipefail
 
+_B3_GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 _CLEANUP_FILES=()
 _cleanup_tmp() {
   if [[ ${#_CLEANUP_FILES[@]} -gt 0 ]]; then
@@ -14,85 +16,73 @@ _cleanup_tmp() {
 }
 trap _cleanup_tmp EXIT
 
+_TMP_FILE=""
+make_temp_file() {
+  local _mtf_prefix="$1" _mtf_var="${2:-}" _mtf_f
+  _mtf_f="$(mktemp "${TMPDIR:-/tmp}/${_mtf_prefix}.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/${_mtf_prefix}.$$.${RANDOM}.tmp")"
+  _CLEANUP_FILES+=("$_mtf_f")
+  _TMP_FILE="$_mtf_f"
+  if [[ -n "$_mtf_var" ]]; then
+    printf -v "$_mtf_var" '%s' "$_mtf_f"
+  fi
+}
+
 _GIT_STDOUT=""
 _GIT_STDERR=""
-run_git_cmd() {
-  local root="$1"; shift
+_run_git_cmd_core() {
+  local root="$1" idx_file="$2" stdin_mode="$3" stdin_val="$4"
+  shift 4
   local errf rc=0
-  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$errf")
+  make_temp_file "b3-git-err" errf
   _GIT_STDOUT=""
   _GIT_STDERR=""
-  if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then
-    rc=0
+  if [[ "$stdin_mode" == "text" ]]; then
+    if _GIT_STDOUT="$(printf '%s' "$stdin_val" | git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then rc=0; else rc=$?; fi
+  elif [[ "$stdin_mode" == "file" ]]; then
+    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" < "$stdin_val" 2>"$errf")"; then rc=0; else rc=$?; fi
+  elif [[ -n "$idx_file" ]]; then
+    if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then rc=0; else rc=$?; fi
   else
-    rc=$?
+    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then rc=0; else rc=$?; fi
   fi
   _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
   rm -f "$errf"
   return $rc
 }
 
-run_git_cmd_with_index() {
-  local root="$1" idx_file="$2"; shift 2
-  local errf rc=0
-  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$errf")
-  _GIT_STDOUT=""
-  _GIT_STDERR=""
-  if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then
-    rc=0
-  else
-    rc=$?
-  fi
-  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
-  rm -f "$errf"
-  return $rc
-}
-
-run_git_cmd_stdin() {
-  local root="$1"
-  local stdin_text="$2"
-  shift 2
-  local errf rc=0
-  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$errf")
-  _GIT_STDOUT=""
-  _GIT_STDERR=""
-  if _GIT_STDOUT="$(printf '%s' "$stdin_text" | git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then
-    rc=0
-  else
-    rc=$?
-  fi
-  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
-  rm -f "$errf"
-  return $rc
-}
-
-run_git_cmd_stdin_file() {
-  local root="$1"
-  local stdin_file="$2"
-  shift 2
-  local errf rc=0
-  errf="$(mktemp "${TMPDIR:-/tmp}/b3-git-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-git-err.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$errf")
-  _GIT_STDOUT=""
-  _GIT_STDERR=""
-  if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" < "$stdin_file" 2>"$errf")"; then
-    rc=0
-  else
-    rc=$?
-  fi
-  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
-  rm -f "$errf"
-  return $rc
-}
+run_git_cmd() { local root="$1"; shift; _run_git_cmd_core "$root" "" "none" "" "$@"; }
+run_git_cmd_with_index() { local root="$1" idx_file="$2"; shift 2; _run_git_cmd_core "$root" "$idx_file" "none" "" "$@"; }
+run_git_cmd_stdin() { local root="$1" stdin_text="$2"; shift 2; _run_git_cmd_core "$root" "" "text" "$stdin_text" "$@"; }
+run_git_cmd_stdin_file() { local root="$1" stdin_file="$2"; shift 2; _run_git_cmd_core "$root" "" "file" "$stdin_file" "$@"; }
 
 git_err_detail() {
   local d
   d="$(trim_str "$_GIT_STDERR")"
   [[ -n "$d" ]] || d="$(trim_str "$_GIT_STDOUT")"
   printf '%s' "$d"
+}
+
+hash_git_stdin_file() {
+  local root="$1" in_file="$2" prefix="${3:-GIT_ERROR}" desc="${4:-failed}" h_out
+  if ! run_git_cmd_stdin_file "$root" "$in_file" hash-object --stdin; then
+    echo "${prefix}: git hash-object ${desc}: $(git_err_detail)"
+    return 1
+  fi
+  h_out="$(trim_str "$_GIT_STDOUT")"
+  if [[ ! "$h_out" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "${prefix}: git hash-object ${desc}: $h_out"
+    return 1
+  fi
+  printf '%s' "$h_out"
+}
+
+hash_git_text() {
+  local root="$1" text="$2" prefix="${3:-GIT_ERROR}" desc="${4:-failed}" tmp_h rc=0
+  make_temp_file "b3-txth" tmp_h
+  printf '%s' "$text" > "$tmp_h"
+  hash_git_stdin_file "$root" "$tmp_h" "$prefix" "$desc" || rc=$?
+  rm -f "$tmp_h" 2>/dev/null || true
+  return $rc
 }
 
 CMD="${1:-}"
@@ -146,17 +136,26 @@ split_csv_lines() {
     raw="${raw%]}"
   fi
   local as_paths="${2:-false}"
-  local IFS=','
-  local part trimmed
-  for part in $raw; do
-    if [[ "$as_paths" == "true" ]]; then
-      trimmed="$(norm_path "$part")"
-    else
-      trimmed="$(trim_str "$part")"
-    fi
-    [[ -z "$trimmed" || "$trimmed" == "none" ]] && continue
-    printf '%s\n' "$trimmed"
-  done
+  local _had_noglob=false
+  case "$-" in
+    *f*) _had_noglob=true ;;
+  esac
+  set -f
+  local -a parts=()
+  IFS=',' read -r -d '' -a parts < <(printf '%s\0' "$raw") || true
+  if [[ ${#parts[@]} -gt 0 ]]; then
+    local part trimmed
+    for part in "${parts[@]}"; do
+      if [[ "$as_paths" == "true" ]]; then
+        trimmed="$(norm_path "$part")"
+      else
+        trimmed="$(trim_str "$part")"
+      fi
+      [[ -z "$trimmed" || "$trimmed" == "none" ]] && continue
+      printf '%s\n' "$trimmed"
+    done
+  fi
+  if ! $_had_noglob; then set +f; fi
 }
 
 path_in_list() {
@@ -390,8 +389,7 @@ build_working_tree_oid() {
   fi
   real_idx_raw="$(trim_str "$_GIT_STDOUT")"
   real_idx="$(resolve_target_path "$root" "$real_idx_raw")"
-  tmp_idx="$(mktemp "${TMPDIR:-/tmp}/b3-snap-idx.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-snap-idx.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$tmp_idx")
+  make_temp_file "b3-snap-idx" tmp_idx
   if [[ -f "$real_idx" ]]; then
     cp -p "$real_idx" "$tmp_idx"
   else
@@ -457,11 +455,6 @@ find_leftover_tag_var() {
   fi
 }
 
-find_leftover_tag() {
-  find_leftover_tag_var "$1"
-  [[ -n "$_LO_TAG" ]] && printf '%s' "$_LO_TAG"
-}
-
 resolve_auto_base_sha() {
   local root="$1"
   shift
@@ -524,6 +517,42 @@ resolve_auto_base_for_target() {
     fi
   fi
   printf '%s' "$target_commit_sha"
+}
+
+_SCOPE_TARGET_REF=""
+_SCOPE_TARGET_SHA=""
+_SCOPE_BASE_SHA=""
+resolve_scope_target_and_base() {
+  local root="$1" target_raw="$2" base_raw="$3" prefix="$4" base_kind="${5:-object}"
+  shift 5
+  local -a ign=("$@")
+  _SCOPE_TARGET_REF="$(trim_str "$target_raw")"
+  _SCOPE_TARGET_SHA=""
+  if [[ -n "$_SCOPE_TARGET_REF" ]]; then
+    if [[ "$_SCOPE_TARGET_REF" == *$'\n'* || "$_SCOPE_TARGET_REF" == *$'\r'* ]]; then
+      echo "${prefix}: invalid --target-ref '${_SCOPE_TARGET_REF}'"
+      exit 1
+    fi
+    assert_valid_git_rev "$root" "$_SCOPE_TARGET_REF" "commit" "$prefix" "--target-ref"
+    _SCOPE_TARGET_SHA="$_VALID_REV_SHA"
+  fi
+  local b_sha
+  b_sha="$(trim_str "$base_raw")"
+  if [[ -z "$b_sha" || "$b_sha" == "auto" ]]; then
+    if [[ -n "$_SCOPE_TARGET_REF" ]]; then
+      b_sha="$(resolve_auto_base_for_target "$root" "$_SCOPE_TARGET_SHA")"
+    elif [[ ${#ign[@]} -gt 0 ]]; then
+      b_sha="$(resolve_auto_base_sha "$root" "${ign[@]}")"
+    else
+      b_sha="$(resolve_auto_base_sha "$root")"
+    fi
+  fi
+  assert_valid_git_rev "$root" "$b_sha" "$base_kind" "$prefix" "--base-sha"
+  if [[ "$base_kind" == "commit" ]]; then
+    _SCOPE_BASE_SHA="$_VALID_REV_SHA"
+  else
+    _SCOPE_BASE_SHA="$b_sha"
+  fi
 }
 
 is_checkpoint_dir() {
@@ -644,9 +673,8 @@ compute_file_sha256() {
 }
 
 parse_merge_policy_json() {
-  local pol_file="$1"
-  if command -v node >/dev/null 2>&1; then
-    node -e '
+  local pol_src="${1:--}"
+  local _node_code='
 const fs = require("fs");
 let raw;
 try { raw = fs.readFileSync(0, "utf8"); } catch (e) { process.exit(2); }
@@ -655,8 +683,13 @@ try { obj = JSON.parse(raw); } catch (e) { process.exit(2); }
 if (!obj || typeof obj !== "object" || Array.isArray(obj)) process.exit(2);
 let autoMerge = "disabled";
 if (Object.prototype.hasOwnProperty.call(obj, "auto_merge")) {
-  if (obj.auto_merge !== "disabled" && obj.auto_merge !== "authorized") process.exit(3);
-  autoMerge = obj.auto_merge;
+  if (typeof obj.auto_merge !== "string" || /[\x00-\x1F\x7F]/.test(obj.auto_merge)) process.exit(2);
+  const am = obj.auto_merge.trim();
+  if (am !== "disabled" && am !== "authorized") {
+    process.stdout.write("invalid_auto_merge=" + am + "\n");
+    process.exit(3);
+  }
+  autoMerge = am;
 }
 let allowProt = false;
 if (Object.prototype.hasOwnProperty.call(obj, "allow_protected_paths")) {
@@ -681,12 +714,29 @@ if (Object.prototype.hasOwnProperty.call(obj, "protected_paths")) {
     prot.push(x);
   }
 }
+let allowedBranches = [];
+if (Object.prototype.hasOwnProperty.call(obj, "allowed_target_branches")) {
+  if (!Array.isArray(obj.allowed_target_branches)) process.exit(2);
+  for (const bp of obj.allowed_target_branches) {
+    if (typeof bp !== "string" || /[\x00-\x1F\x7F\s]/.test(bp)) process.exit(2);
+    const bt = bp.trim();
+    if (!bt || bt.startsWith("-") || bt.includes("..")) process.exit(2);
+    allowedBranches.push(bt);
+  }
+}
 process.stdout.write("auto_merge=" + autoMerge + "\n");
 process.stdout.write("allow_protected_paths=" + (allowProt ? "true" : "false") + "\n");
 process.stdout.write("require_ci=" + (reqCi ? "true" : "false") + "\n");
 process.stdout.write("require_review=" + (reqRev ? "true" : "false") + "\n");
 for (const p of prot) process.stdout.write("protected_path=" + p + "\n");
-' < "$pol_file"
+for (const b of allowedBranches) process.stdout.write("allowed_target_branch=" + b + "\n");
+'
+  if command -v node >/dev/null 2>&1; then
+    if [[ "$pol_src" == "-" ]]; then
+      node -e "$_node_code"
+    else
+      node -e "$_node_code" < "$pol_src"
+    fi
     return $?
   fi
   local py_cmd=""
@@ -696,7 +746,7 @@ for (const p of prot) process.stdout.write("protected_path=" + p + "\n");
     py_cmd="python"
   fi
   if [[ -n "$py_cmd" ]]; then
-    "$py_cmd" -c '
+    local _py_code='
 import json, sys
 try:
     obj = json.load(sys.stdin)
@@ -705,7 +755,11 @@ except Exception:
 if not isinstance(obj, dict):
     sys.exit(2)
 auto_merge = obj.get("auto_merge", "disabled")
+if not isinstance(auto_merge, str) or any(ord(c) < 32 or ord(c) == 127 for c in auto_merge):
+    sys.exit(2)
+auto_merge = auto_merge.strip()
 if auto_merge not in ("disabled", "authorized"):
+    print("invalid_auto_merge=" + auto_merge)
     sys.exit(3)
 for bkey, default in (("allow_protected_paths", False), ("require_ci", True), ("require_review", True)):
     if bkey in obj and not isinstance(obj[bkey], bool):
@@ -716,16 +770,264 @@ if not isinstance(prot, list):
 for p in prot:
     if not isinstance(p, str) or any(c in p for c in ("\r", "\n", "\x00")):
         sys.exit(2)
+allowed_br = obj.get("allowed_target_branches", [])
+if not isinstance(allowed_br, list):
+    sys.exit(2)
+for bp in allowed_br:
+    if not isinstance(bp, str) or any(ord(c) <= 32 or ord(c) == 127 for c in bp):
+        sys.exit(2)
+    bt = bp.strip()
+    if not bt or bt.startswith("-") or ".." in bt:
+        sys.exit(2)
 print("auto_merge=" + auto_merge)
 print("allow_protected_paths=" + ("true" if obj.get("allow_protected_paths", False) else "false"))
 print("require_ci=" + ("true" if obj.get("require_ci", True) else "false"))
 print("require_review=" + ("true" if obj.get("require_review", True) else "false"))
 for p in prot:
     print("protected_path=" + p)
-' < "$pol_file"
+for b in allowed_br:
+    print("allowed_target_branch=" + b.strip())
+'
+    if [[ "$pol_src" == "-" ]]; then
+      "$py_cmd" -c "$_py_code"
+    else
+      "$py_cmd" -c "$_py_code" < "$pol_src"
+    fi
     return $?
   fi
   return 2
+}
+
+branch_pattern_match() {
+  local br="$1"
+  shift
+  local pat
+  [[ -n "$br" ]] || return 1
+  for pat in "$@"; do
+    [[ -n "$pat" ]] || continue
+    if B3_BR="$br" B3_PAT="$pat" LC_ALL=C awk '
+      BEGIN {
+        b = ENVIRON["B3_BR"]
+        p = ENVIRON["B3_PAT"]
+        rx = "^"
+        for (i = 1; i <= length(p); i++) {
+          c = substr(p, i, 1)
+          if (c == "*") rx = rx ".*"
+          else if (index(".^$+?|()[]{}\\", c) > 0) rx = rx "\\" c
+          else rx = rx c
+        }
+        rx = rx "$"
+        exit (b ~ rx ? 0 : 1)
+      }'; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+parse_github_remote_slug() {
+  local raw="$1" u slug
+  u="$(trim_str "$raw")"
+  [[ -n "$u" ]] || return 1
+  local _re_https='^[Hh][Tt][Tt][Pp][Ss]://([^/@[:space:]]+@)?[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm]/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$'
+  local _re_ssh='^([Ss][Ss][Hh]://)?[Gg][Ii][Tt]@[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm][:/]([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$'
+  u="${u%/}"
+  u="${u%.git}"
+  if [[ "$u" =~ $_re_https ]]; then
+    slug="${BASH_REMATCH[2]}"
+  elif [[ "$u" =~ $_re_ssh ]]; then
+    slug="${BASH_REMATCH[2]}"
+  else
+    return 1
+  fi
+  if [[ "$slug" == *".."* ]]; then
+    return 1
+  fi
+  printf '%s' "$slug"
+  return 0
+}
+
+_RESOLVED_GH_REPO=""
+resolve_github_repo_slug() {
+  local root="$1" exp_raw="$2" err_pfx="$3" exp_trim origin_slug="" exp_low orig_low
+  _RESOLVED_GH_REPO=""
+  exp_trim="$(trim_str "$exp_raw")"
+  if [[ -n "$exp_trim" ]]; then
+    if [[ ! "$exp_trim" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ || "$exp_trim" == *".."* ]]; then
+      echo "${err_pfx}: invalid_repo"
+      exit 1
+    fi
+  fi
+  if ! run_git_cmd "$root" remote get-url origin; then
+    echo "${err_pfx}: origin_remote_missing"
+    exit 1
+  fi
+  origin_slug="$(parse_github_remote_slug "$_GIT_STDOUT" || true)"
+  if [[ -z "$origin_slug" ]]; then
+    echo "${err_pfx}: origin_remote_not_github"
+    exit 1
+  fi
+  if [[ -n "$exp_trim" ]]; then
+    exp_low="$(printf '%s' "$exp_trim" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    orig_low="$(printf '%s' "$origin_slug" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$exp_low" != "$orig_low" ]]; then
+      echo "${err_pfx}: repo_mismatch"
+      exit 1
+    fi
+  fi
+  _RESOLVED_GH_REPO="$origin_slug"
+  return 0
+}
+
+GH_SCHEMA=""; GH_MODE=""; GH_REPO=""; GH_PR_NUMBER=""; GH_BASE_REPO=""; GH_HEAD_REPO=""
+GH_SAME_REPO=""; GH_DEFAULT_BRANCH=""; GH_PR_STATE=""; GH_PR_MERGED=""; GH_PR_DRAFT=""
+GH_PR_AUTHOR=""; GH_BASE_REF=""; GH_PR_BASE_SHA=""; GH_LIVE_TARGET_SHA=""
+GH_HEAD_REF=""; GH_HEAD_SHA=""; GH_POLICY_AUTH_REF=""; GH_POLICY_AUTH_SHA=""
+GH_MERGEABLE=""; GH_MERGEABLE_STATE=""; GH_BRANCH_PROTECTED=""; GH_BRANCH_PROT_READABLE="true"
+GH_REQ_REVIEWS="0"; GH_REQ_CODEOWNERS="false"; GH_REQ_CHECKS="none"; GH_MISSING_REQ_CHECKS="none"
+GH_CI_STATUS=""; GH_REVIEW_STATUS=""; GH_INDEP_CNT="0"; GH_STALE_CNT="0"
+GH_SELF_CNT="0"; GH_UNAUTH_CNT="0"; GH_CHANGES_REQ_CNT="0"; GH_INDEP_REVS="none"
+GH_MERGED_AT="none"; GH_MERGE_COMMIT_SHA="none"; GH_PR_COMMITS="0"
+GH_COMPARE_STATUS=""; GH_COMPARE_BEHIND="-1"
+GH_PR_CHANGED_FILES=()
+
+invoke_b3_github_verify() {
+  local mode="$1" repo_slug="$2" pr_num="$3" err_pfx="$4"
+  local adapter="${_B3_GUARD_DIR}/b3-github-verify.sh"
+  if [[ ! -f "$adapter" ]]; then
+    echo "${err_pfx}: github_adapter_missing"
+    exit 1
+  fi
+  GH_SCHEMA=""; GH_MODE=""; GH_REPO=""; GH_PR_NUMBER=""; GH_BASE_REPO=""; GH_HEAD_REPO=""
+  GH_SAME_REPO=""; GH_DEFAULT_BRANCH=""; GH_PR_STATE=""; GH_PR_MERGED=""; GH_PR_DRAFT=""
+  GH_PR_AUTHOR=""; GH_BASE_REF=""; GH_PR_BASE_SHA=""; GH_LIVE_TARGET_SHA=""
+  GH_HEAD_REF=""; GH_HEAD_SHA=""; GH_POLICY_AUTH_REF=""; GH_POLICY_AUTH_SHA=""
+  GH_MERGEABLE=""; GH_MERGEABLE_STATE=""; GH_BRANCH_PROTECTED=""; GH_BRANCH_PROT_READABLE="true"
+  GH_REQ_REVIEWS="0"; GH_REQ_CODEOWNERS="false"; GH_REQ_CHECKS="none"; GH_MISSING_REQ_CHECKS="none"
+  GH_CI_STATUS=""; GH_REVIEW_STATUS=""; GH_INDEP_CNT="0"; GH_STALE_CNT="0"
+  GH_SELF_CNT="0"; GH_UNAUTH_CNT="0"; GH_CHANGES_REQ_CNT="0"; GH_INDEP_REVS="none"
+  GH_MERGED_AT="none"; GH_MERGE_COMMIT_SHA="none"; GH_PR_COMMITS="0"
+  GH_COMPARE_STATUS=""; GH_COMPARE_BEHIND="-1"
+  GH_PR_CHANGED_FILES=()
+
+  local raw_out rc=0
+  set +e
+  raw_out="$(bash "$adapter" --mode "$mode" --repo "$repo_slug" --pr-number "$pr_num" 2>&1)"
+  rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    local first_ln detail
+    first_ln="${raw_out%%$'\n'*}"
+    first_ln="${first_ln%$'\r'}"
+    detail="${first_ln#GH_VERIFY_ERROR: }"
+    detail="$(trim_str "$detail")"
+    [[ -n "$detail" ]] || detail="unknown"
+    echo "${err_pfx}: github_verification_failed(${detail})"
+    exit 1
+  fi
+  local seen_keys="|" ln k v
+  while IFS= read -r ln; do
+    ln="${ln%$'\r'}"
+    [[ -n "$ln" ]] || continue
+    if [[ "$ln" != *"="* ]]; then
+      echo "${err_pfx}: github_verification_failed(malformed_adapter_output)"
+      exit 1
+    fi
+    k="${ln%%=*}"
+    v="${ln#*=}"
+    if [[ "$k" == "pr_changed_file" ]]; then
+      [[ -n "$v" ]] && GH_PR_CHANGED_FILES+=("$v")
+      continue
+    fi
+    case "$seen_keys" in
+      *"|${k}|"*) echo "${err_pfx}: github_verification_failed(duplicate_adapter_key)"; exit 1 ;;
+    esac
+    seen_keys+="${k}|"
+    case "$k" in
+      schema) GH_SCHEMA="$v" ;;
+      mode) GH_MODE="$v" ;;
+      repo) GH_REPO="$v" ;;
+      pr_number) GH_PR_NUMBER="$v" ;;
+      base_repo) GH_BASE_REPO="$v" ;;
+      head_repo) GH_HEAD_REPO="$v" ;;
+      same_repo) GH_SAME_REPO="$v" ;;
+      default_branch) GH_DEFAULT_BRANCH="$v" ;;
+      pr_state) GH_PR_STATE="$v" ;;
+      pr_merged) GH_PR_MERGED="$v" ;;
+      pr_draft) GH_PR_DRAFT="$v" ;;
+      pr_author) GH_PR_AUTHOR="$v" ;;
+      base_ref) GH_BASE_REF="$v" ;;
+      pr_base_sha) GH_PR_BASE_SHA="$v" ;;
+      live_target_sha) GH_LIVE_TARGET_SHA="$v" ;;
+      head_ref) GH_HEAD_REF="$v" ;;
+      head_sha) GH_HEAD_SHA="$v" ;;
+      policy_authority_ref) GH_POLICY_AUTH_REF="$v" ;;
+      policy_authority_sha) GH_POLICY_AUTH_SHA="$v" ;;
+      mergeable) GH_MERGEABLE="$v" ;;
+      mergeable_state) GH_MERGEABLE_STATE="$v" ;;
+      branch_protected) GH_BRANCH_PROTECTED="$v" ;;
+      branch_protection_readable) GH_BRANCH_PROT_READABLE="$v" ;;
+      required_approving_reviews) GH_REQ_REVIEWS="$v" ;;
+      require_codeowners) GH_REQ_CODEOWNERS="$v" ;;
+      required_checks) GH_REQ_CHECKS="$v" ;;
+      missing_required_checks) GH_MISSING_REQ_CHECKS="$v" ;;
+      gh_ci_status) GH_CI_STATUS="$v" ;;
+      gh_review_status) GH_REVIEW_STATUS="$v" ;;
+      independent_approved_count) GH_INDEP_CNT="$v" ;;
+      stale_independent_approved_count) GH_STALE_CNT="$v" ;;
+      self_approved_count) GH_SELF_CNT="$v" ;;
+      unauthorized_approved_count) GH_UNAUTH_CNT="$v" ;;
+      changes_requested_count) GH_CHANGES_REQ_CNT="$v" ;;
+      independent_reviewers) GH_INDEP_REVS="$v" ;;
+      merged_at) GH_MERGED_AT="$v" ;;
+      merge_commit_sha) GH_MERGE_COMMIT_SHA="$v" ;;
+      pr_commits) GH_PR_COMMITS="$v" ;;
+      compare_status) GH_COMPARE_STATUS="$v" ;;
+      compare_behind_by) GH_COMPARE_BEHIND="$v" ;;
+    esac
+  done <<< "$raw_out"
+  if [[ "$GH_SCHEMA" != "b3-gh-verify-v1" || "$GH_MODE" != "$mode" ]]; then
+    echo "${err_pfx}: github_verification_failed(invalid_adapter_schema)"
+    exit 1
+  fi
+}
+
+_MP_NORM_PATH=""
+normalize_merge_policy_path() {
+  local LC_ALL=C
+  local raw="$1"
+  _MP_NORM_PATH=""
+  [[ -n "$raw" ]] || return 1
+  if [[ "$raw" =~ [[:cntrl:]] ]]; then return 1; fi
+  local s="${raw//\\//}"
+  if [[ "$s" == "." || "$s" == "./" ]]; then
+    _MP_NORM_PATH="."
+    return 0
+  fi
+  if [[ "$s" == */ ]]; then
+    s="${s%/}"
+  fi
+  if ! check_safe_repo_path_segments "$s" false; then
+    return 1
+  fi
+  _MP_NORM_PATH="$s"
+  return 0
+}
+
+protected_path_match_ci() {
+  local cand="$1"
+  shift
+  [[ -n "$cand" ]] || return 1
+  local c_low p p_low
+  c_low="$(printf '%s' "$cand" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  for p in "$@"; do
+    [[ -n "$p" ]] || continue
+    p_low="$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$p_low" == "." || "$c_low" == "." || "$c_low" == "$p_low" || "$c_low" == "$p_low/"* || "$p_low" == "$c_low/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 is_secret_path() {
@@ -902,6 +1204,42 @@ _path_within_or_equal() {
   [[ "$cand_cmp" == "$root_cmp" || "$cand_cmp" == "$root_base/"* ]]
 }
 
+check_safe_repo_path_segments() {
+  local LC_ALL=C
+  local raw="$1"
+  local block_git="${2:-true}"
+  [[ -n "$raw" ]] || return 1
+  if [[ "$raw" =~ [[:cntrl:]] ]]; then
+    return 1
+  fi
+  local s="${raw//\\//}"
+  if [[ "$s" == *:* || "$s" == /* || "$s" == */ || "$s" == ~* ]]; then
+    return 1
+  fi
+  local rem="$s" seg
+  while true; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    if [[ -z "$seg" || "$seg" == "." || "$seg" == ".." || "$seg" == *. || "$seg" == *" " ]]; then
+      return 1
+    fi
+    [[ -n "$rem" ]] || break
+  done
+  if [[ "$block_git" == "true" ]]; then
+    local s_low re_git_any='(^|/)\.git(/|$)'
+    s_low="$(printf '%s' "$s" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$s_low" =~ $re_git_any ]]; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
 _SAFE_FULL=""
 _SAFE_REL=""
 validate_repo_write_path() {
@@ -910,6 +1248,10 @@ validate_repo_write_path() {
   local LC_ALL=C
   local root="$1"
   local raw_arg="$2"
+  [[ -n "$raw_arg" ]] || return 1
+  if [[ "$raw_arg" =~ [[:cntrl:]] || "$raw_arg" == *" " ]]; then
+    return 1
+  fi
   local p
   p="$(trim_str "$raw_arg")"
   [[ -n "$p" ]] || return 1
@@ -917,14 +1259,14 @@ validate_repo_write_path() {
   if [[ "$p" == "." || "$p" == ~* || "$p" == */ ]]; then
     return 1
   fi
-  if [[ "$p" =~ [[:cntrl:]] ]]; then
-    return 1
+
+  local raw_tail="$p"
+  if [[ "$_B3_IS_WINDOWS" == "true" && "$p" =~ ^[A-Za-z]:/ ]]; then
+    raw_tail="${p:3}"
+  elif [[ "$p" == /* ]]; then
+    raw_tail="${p#/}"
   fi
-  local re_dotdot='(^|/)\.\.(/|$)'
-  if [[ "$p" =~ $re_dotdot ]]; then
-    return 1
-  fi
-  if [[ "$_B3_IS_WINDOWS" == "true" ]] && [[ "$p" =~ ^[A-Za-z]: && ! "$p" =~ ^[A-Za-z]:/ ]]; then
+  if ! check_safe_repo_path_segments "$raw_tail" false; then
     return 1
   fi
 
@@ -955,24 +1297,7 @@ validate_repo_write_path() {
     rel="${full:${#prefix}}"
   fi
 
-  while [[ "$rel" == *"//"* ]]; do
-    rel="${rel//\/\///}"
-  done
-  rel="${rel#/}"
-  while [[ "$rel" == ./* ]]; do
-    rel="${rel#./}"
-  done
-  while [[ "$rel" == *"/./"* ]]; do
-    rel="${rel//\/.\///}"
-  done
-  rel="${rel%/.}"
-  [[ -n "$rel" && "$rel" != "." ]] || return 1
-  if [[ "$rel" == /* || "$rel" == ~* || "$rel" =~ ^[A-Za-z]: || "$rel" =~ $re_dotdot ]]; then
-    return 1
-  fi
-  local rel_low re_git='^\.git(/|$)'
-  rel_low="$(printf '%s' "$rel" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-  if [[ "$rel_low" =~ $re_git ]]; then
+  if ! check_safe_repo_path_segments "$rel" true; then
     return 1
   fi
 
@@ -1112,16 +1437,7 @@ resolve_symlink_oid() {
   if [[ -L "$full" ]]; then
     local tgt
     tgt="$(readlink "$full")"
-    if ! run_git_cmd_stdin "$root" "$tgt" hash-object --stdin; then
-      echo "GIT_ERROR: git hash-object symlink failed for ${rel_p}: $(git_err_detail)"
-      return 1
-    fi
-    sha="$(trim_str "$_GIT_STDOUT")"
-    if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "GIT_ERROR: git hash-object symlink failed for ${rel_p}: $sha"
-      return 1
-    fi
-    printf '%s' "$sha"
+    hash_git_text "$root" "$tgt" "GIT_ERROR" "symlink failed for ${rel_p}" || return 1
     return 0
   elif [[ -f "$full" ]]; then
     if ! run_git_cmd "$root" hash-object -- "$rel_p"; then
@@ -1253,16 +1569,8 @@ resolve_submodule_entry() {
       done < <(printf '%s\n' "${s_cands[@]}" | LC_ALL=C sort -u)
     fi
 
-    if ! run_git_cmd_stdin "$root" "$dirty_buf" hash-object --stdin; then
-      echo "GIT_ERROR: git hash-object submodule digest failed for ${rel_p}: $(git_err_detail)"
-      return 1
-    fi
     local d_sha
-    d_sha="$(trim_str "$_GIT_STDOUT")"
-    if [[ ! "$d_sha" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "GIT_ERROR: git hash-object submodule digest failed for ${rel_p}: $d_sha"
-      return 1
-    fi
+    d_sha="$(hash_git_text "$root" "$dirty_buf" "GIT_ERROR" "submodule digest failed for ${rel_p}")" || { echo "$d_sha"; return 1; }
     printf '160000 commit %s+dirty:%s' "$sub_head" "$d_sha"
     return 0
   fi
@@ -1278,26 +1586,34 @@ compute_tree_fingerprint() {
   local root="$1"
   local rel_csv="$2"
   local ign_csv="$3"
+  local target_commit_sha="${4:-}"
+  local target_trim
+  target_trim="$(trim_str "$target_commit_sha")"
   local head_sha
-  if ! run_git_cmd "$root" rev-parse HEAD; then
-    echo "GIT_ERROR: git rev-parse HEAD failed: $(git_err_detail)"
-    return 1
-  fi
-  head_sha="$(trim_str "$_GIT_STDOUT")"
-  if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"
-    return 1
-  fi
-
-  local is_win_os=false
-  case "$(uname -s 2>/dev/null || printf '')" in
-    MINGW*|MSYS*|CYGWIN*) is_win_os=true ;;
-  esac
-  local core_filemode=false
-  if run_git_cmd "$root" config --bool core.filemode; then
-    [[ "$(trim_str "$_GIT_STDOUT")" == "true" ]] && core_filemode=true
+  if [[ -n "$target_trim" ]]; then
+    if [[ "$target_trim" == -* ]]; then
+      echo "GIT_ERROR: invalid target commit sha: $target_trim"
+      return 1
+    fi
+    if ! run_git_cmd "$root" rev-parse --verify "${target_trim}^{commit}"; then
+      echo "GIT_ERROR: git rev-parse ${target_trim} failed: $(git_err_detail)"
+      return 1
+    fi
+    head_sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git rev-parse ${target_trim} failed: $head_sha"
+      return 1
+    fi
   else
-    ! $is_win_os && core_filemode=true
+    if ! run_git_cmd "$root" rev-parse HEAD; then
+      echo "GIT_ERROR: git rev-parse HEAD failed: $(git_err_detail)"
+      return 1
+    fi
+    head_sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "GIT_ERROR: git rev-parse HEAD failed: $head_sha"
+      return 1
+    fi
   fi
 
   local -a ign_arr=()
@@ -1328,208 +1644,229 @@ compute_tree_fingerprint() {
     clean_ign_csv="$(printf '%s\n' "${ign_arr[@]}" | paste -sd ',' -)"
   fi
 
-  local ls_out diff_head_raw diff_cached_raw diff_idx_wt_raw untracked
-  if [[ ${#clean_rel[@]} -gt 0 ]]; then
-    run_git_cmd "$root" ls-tree -r HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
-    ls_out="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
-    diff_head_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
-    diff_cached_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
-    diff_idx_wt_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
-    untracked="$_GIT_STDOUT"
-  else
-    run_git_cmd "$root" ls-tree -r HEAD || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
-    ls_out="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
-    diff_head_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
-    diff_cached_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
-    diff_idx_wt_raw="$_GIT_STDOUT"
-    run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
-    untracked="$_GIT_STDOUT"
+  local tree_ref="HEAD"
+  if [[ -n "$target_trim" ]]; then
+    tree_ref="$head_sha"
   fi
 
-  local tasks_raw
-  tasks_raw="$({
-    printf '__HEAD__\n%s\n' "$diff_head_raw"
-    printf '__CACHED__\n%s\n' "$diff_cached_raw"
-    printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
-    printf '__UNTRACKED__\n%s\n' "$untracked"
-  } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
-    function norm_p(s) {
-      gsub(/\r/, "", s)
-      gsub(/\\/, "/", s)
-      sub(/^[ \t]+/, "", s)
-      sub(/[ \t]+$/, "", s)
-      sub(/^\.\//, "", s)
-      while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
-      return s
-    }
-    function is_cp(s) {
-      return (s ~ /^\.b3\/(ship|research-ship|autodev)(\/|$)/)
-    }
-    function in_list(s, arr, n,    i, pat) {
-      for (i = 1; i <= n; i++) {
-        pat = arr[i]
-        if (pat == "") continue
-        if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
-      }
-      return 0
-    }
-    function accept_path(fp) {
-      if (fp == "" || is_cp(fp)) return 0
-      if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
-      if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
-      return 1
-    }
-    function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
-      if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
-      ti = index(line, "\t")
-      if (ti < 3) return
-      meta = substr(line, 2, ti - 2)
-      nmp = split(meta, mp, /[ \t]+/)
-      if (nmp < 5) return
-      nm = mp[2]; noid = mp[4]
-      if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
-      fp = norm_p(substr(line, ti + 1))
-      if (!accept_path(fp)) return
-      if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
-      out_m[fp] = nm
-      out_o[fp] = noid
-    }
-    BEGIN {
-      split("", ign_arr); split("", rel_arr)
-      split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", untr)
-      n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
-      n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
-      sec = ""
-    }
-    { gsub(/\r$/, "", $0) }
-    $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__UNTRACKED__" { sec = $0; next }
-    $0 == "" { next }
-    sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
-    sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
-    sec == "__IDXWT__" {
-      if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
-      ti = index($0, "\t")
-      if (ti < 3) next
-      fp = norm_p(substr($0, ti + 1))
-      if (accept_path(fp)) iw[fp] = 1
-      next
-    }
-    sec == "__UNTRACKED__" {
-      fp = norm_p($0)
-      if (accept_path(fp)) untr[fp] = 1
-      next
-    }
-    END {
-      z = "0000000000000000000000000000000000000000"
-      for (fp in h_m) {
-        m = h_m[fp]; oid = h_o[fp]
-        if (m == "000000") continue
-        if (m == "160000") {
-          fb = (oid != z ? oid : ((fp in c_m && c_m[fp] == "160000" && c_o[fp] != z) ? c_o[fp] : "-"))
-          printf "SUB\t%s\t%s\n", fb, fp
-          continue
-        }
-        if (m == "120000") {
-          if (oid != z) continue
-          if ((fp in c_m) && c_m[fp] == "120000" && c_o[fp] != z && !(fp in iw)) continue
-          printf "LINK\t-\t%s\n", fp
-          continue
-        }
-        if (oid != z) continue
-        if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) continue
-        printf "BLOB\t%s\t%s\n", m, fp
-      }
-      for (fp in untr) {
-        if (!(fp in h_m) || h_m[fp] == "000000") {
-          printf "UNTR\t-\t%s\n", fp
-        }
-      }
-    }
-  ')"
+  local ls_out="" diff_head_raw="" diff_cached_raw="" diff_idx_wt_raw="" untracked="" resolved_lines=""
+  if [[ ${#clean_rel[@]} -gt 0 ]]; then
+    run_git_cmd "$root" ls-tree -r "$tree_ref" -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
+    ls_out="$_GIT_STDOUT"
+  else
+    run_git_cmd "$root" ls-tree -r "$tree_ref" || { echo "GIT_ERROR: git ls-tree failed: $(git_err_detail)"; return 1; }
+    ls_out="$_GIT_STDOUT"
+  fi
 
-  local resolved_lines="" kind arg p full_p res_val rc_r=0 w_sha l_sha u_mode
-  while IFS=$'\t' read -r kind arg p; do
-    [[ -n "$kind" && -n "$p" ]] || continue
-    full_p="${root}/${p}"
-    case "$kind" in
-      SUB)
-        [[ "$arg" == "-" ]] && arg=""
-        if res_val="$(resolve_submodule_entry "$root" "$p" "$arg")"; then
-          resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
-        else
-          rc_r=$?
-          if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
-        fi
-        ;;
-      LINK)
-        if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
-          resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
-        else
-          rc_r=$?
-          if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
-        fi
-        ;;
-      BLOB)
-        if [[ -f "$full_p" ]]; then
-          if ! run_git_cmd "$root" hash-object -- "$p"; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
-            return 1
+  if [[ -z "$target_trim" ]]; then
+    local is_win_os=false
+    case "$(uname -s 2>/dev/null || printf '')" in
+      MINGW*|MSYS*|CYGWIN*) is_win_os=true ;;
+    esac
+    local core_filemode=false
+    if run_git_cmd "$root" config --bool core.filemode; then
+      [[ "$(trim_str "$_GIT_STDOUT")" == "true" ]] && core_filemode=true
+    else
+      ! $is_win_os && core_filemode=true
+    fi
+
+    if [[ ${#clean_rel[@]} -gt 0 ]]; then
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+      diff_head_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+      diff_cached_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+      diff_idx_wt_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
+      untracked="$_GIT_STDOUT"
+    else
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+      diff_head_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+      diff_cached_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+      diff_idx_wt_raw="$_GIT_STDOUT"
+      run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
+      untracked="$_GIT_STDOUT"
+    fi
+
+    local tasks_raw
+    tasks_raw="$({
+      printf '__HEAD__\n%s\n' "$diff_head_raw"
+      printf '__CACHED__\n%s\n' "$diff_cached_raw"
+      printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
+      printf '__UNTRACKED__\n%s\n' "$untracked"
+    } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
+      function norm_p(s) {
+        gsub(/\r/, "", s)
+        gsub(/\\/, "/", s)
+        sub(/^[ \t]+/, "", s)
+        sub(/[ \t]+$/, "", s)
+        sub(/^\.\//, "", s)
+        while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
+        return s
+      }
+      function is_cp(s) {
+        return (s ~ /^\.b3\/(ship|research-ship|autodev)(\/|$)/)
+      }
+      function in_list(s, arr, n,    i, pat) {
+        for (i = 1; i <= n; i++) {
+          pat = arr[i]
+          if (pat == "") continue
+          if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
+        }
+        return 0
+      }
+      function accept_path(fp) {
+        if (fp == "" || is_cp(fp)) return 0
+        if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
+        if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
+        return 1
+      }
+      function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
+        if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
+        ti = index(line, "\t")
+        if (ti < 3) return
+        meta = substr(line, 2, ti - 2)
+        nmp = split(meta, mp, /[ \t]+/)
+        if (nmp < 5) return
+        nm = mp[2]; noid = mp[4]
+        if (length(nm) != 6 || nm !~ /^[0-9]+$/ || length(noid) != 40 || noid !~ /^[0-9a-f]+$/) return
+        fp = norm_p(substr(line, ti + 1))
+        if (!accept_path(fp)) return
+        if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
+        out_m[fp] = nm
+        out_o[fp] = noid
+      }
+      BEGIN {
+        split("", ign_arr); split("", rel_arr)
+        split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", untr)
+        n_ign = (ign_csv == "" ? 0 : split(ign_csv, ign_arr, ","))
+        n_rel = (rel_csv == "" ? 0 : split(rel_csv, rel_arr, ","))
+        sec = ""
+      }
+      { gsub(/\r$/, "", $0) }
+      $0 == "__HEAD__" || $0 == "__CACHED__" || $0 == "__IDXWT__" || $0 == "__UNTRACKED__" { sec = $0; next }
+      $0 == "" { next }
+      sec == "__HEAD__" { parse_raw($0, h_m, h_o); next }
+      sec == "__CACHED__" { parse_raw($0, c_m, c_o); next }
+      sec == "__IDXWT__" {
+        if (substr($0, 1, 1) != ":" || substr($0, 1, 2) == "::") next
+        ti = index($0, "\t")
+        if (ti < 3) next
+        fp = norm_p(substr($0, ti + 1))
+        if (accept_path(fp)) iw[fp] = 1
+        next
+      }
+      sec == "__UNTRACKED__" {
+        fp = norm_p($0)
+        if (accept_path(fp)) untr[fp] = 1
+        next
+      }
+      END {
+        z = "0000000000000000000000000000000000000000"
+        for (fp in h_m) {
+          m = h_m[fp]; oid = h_o[fp]
+          if (m == "000000") continue
+          if (m == "160000") {
+            fb = (oid != z ? oid : ((fp in c_m && c_m[fp] == "160000" && c_o[fp] != z) ? c_o[fp] : "-"))
+            printf "SUB\t%s\t%s\n", fb, fp
+            continue
+          }
+          if (m == "120000") {
+            if (oid != z) continue
+            if ((fp in c_m) && c_m[fp] == "120000" && c_o[fp] != z && !(fp in iw)) continue
+            printf "LINK\t-\t%s\n", fp
+            continue
+          }
+          if (oid != z) continue
+          if ((fp in c_m) && c_m[fp] == m && c_o[fp] != z && !(fp in iw)) continue
+          printf "BLOB\t%s\t%s\n", m, fp
+        }
+        for (fp in untr) {
+          if (!(fp in h_m) || h_m[fp] == "000000") {
+            printf "UNTR\t-\t%s\n", fp
+          }
+        }
+      }
+    ')"
+
+    local kind arg p full_p res_val rc_r=0 w_sha l_sha u_mode
+    while IFS=$'\t' read -r kind arg p; do
+      [[ -n "$kind" && -n "$p" ]] || continue
+      full_p="${root}/${p}"
+      case "$kind" in
+        SUB)
+          [[ "$arg" == "-" ]] && arg=""
+          if res_val="$(resolve_submodule_entry "$root" "$p" "$arg")"; then
+            resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+          else
+            rc_r=$?
+            if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
           fi
-          w_sha="$(trim_str "$_GIT_STDOUT")"
-          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
-            return 1
-          fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"${arg} blob ${w_sha}"$'\n'
-        else
-          resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
-        fi
-        ;;
-      UNTR)
-        if [[ -L "$full_p" ]]; then
+          ;;
+        LINK)
           if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
             resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
           else
             rc_r=$?
             if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
           fi
-        elif [[ -f "$full_p" ]]; then
-          if ! run_git_cmd "$root" hash-object -- "$p"; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
-            return 1
-          fi
-          w_sha="$(trim_str "$_GIT_STDOUT")"
-          if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
-            return 1
-          fi
-          u_mode="100644"
-          if ! $is_win_os && $core_filemode && [[ -x "$full_p" ]]; then u_mode="100755"; fi
-          resolved_lines="${resolved_lines}${p}"$'\t'"${u_mode} blob ${w_sha}"$'\n'
-        elif [[ -d "$full_p" && -e "${full_p}/.git" ]]; then
-          if res_val="$(resolve_submodule_entry "$root" "$p" "")"; then
-            resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+          ;;
+        BLOB)
+          if [[ -f "$full_p" ]]; then
+            if ! run_git_cmd "$root" hash-object -- "$p"; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+              return 1
+            fi
+            w_sha="$(trim_str "$_GIT_STDOUT")"
+            if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+              return 1
+            fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"${arg} blob ${w_sha}"$'\n'
           else
-            rc_r=$?
-            if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"DELETED"$'\n'
           fi
-        fi
-        ;;
-    esac
-  done <<< "$tasks_raw"
+          ;;
+        UNTR)
+          if [[ -L "$full_p" ]]; then
+            if l_sha="$(resolve_symlink_oid "$root" "$p")"; then
+              resolved_lines="${resolved_lines}${p}"$'\t'"120000 blob ${l_sha}"$'\n'
+            else
+              rc_r=$?
+              if [[ $rc_r -eq 1 ]]; then echo "$l_sha"; return 1; fi
+            fi
+          elif [[ -f "$full_p" ]]; then
+            if ! run_git_cmd "$root" hash-object -- "$p"; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $(git_err_detail)"
+              return 1
+            fi
+            w_sha="$(trim_str "$_GIT_STDOUT")"
+            if [[ ! "$w_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "GIT_ERROR: git hash-object failed for ${p}: $w_sha"
+              return 1
+            fi
+            u_mode="100644"
+            if ! $is_win_os && $core_filemode && [[ -x "$full_p" ]]; then u_mode="100755"; fi
+            resolved_lines="${resolved_lines}${p}"$'\t'"${u_mode} blob ${w_sha}"$'\n'
+          elif [[ -d "$full_p" && -e "${full_p}/.git" ]]; then
+            if res_val="$(resolve_submodule_entry "$root" "$p" "")"; then
+              resolved_lines="${resolved_lines}${p}"$'\t'"${res_val}"$'\n'
+            else
+              rc_r=$?
+              if [[ $rc_r -eq 1 ]]; then echo "$res_val"; return 1; fi
+            fi
+          fi
+          ;;
+      esac
+    done <<< "$tasks_raw"
+  fi
 
   local tmp_fp tree_hash
-  tmp_fp="$(mktemp "${TMPDIR:-/tmp}/b3-tree-fp.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-tree-fp.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$tmp_fp")
+  make_temp_file "b3-tree-fp" tmp_fp
 
   {
     printf 'PATHS=%s\n' "$paths_csv"
@@ -1580,7 +1917,7 @@ compute_tree_fingerprint() {
         nmp = split(meta, mp, /[ \t]+/)
         if (nmp < 5) return
         nm = mp[2]; noid = mp[4]
-        if (nm !~ /^[0-9]{6}$/ || noid !~ /^[0-9a-f]{40}$/) return
+        if (length(nm) != 6 || nm !~ /^[0-9]+$/ || length(noid) != 40 || noid !~ /^[0-9a-f]+$/) return
         fp = norm_p(substr(line, ti + 1))
         if (!accept_path(fp)) return
         if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
@@ -1602,7 +1939,7 @@ compute_tree_fingerprint() {
         if (ti < 2) next
         meta = substr($0, 1, ti - 1)
         nm = split(meta, mp, /[ \t]+/)
-        if (nm < 3 || mp[1] !~ /^[0-9]{6}$/ || (mp[2] != "blob" && mp[2] != "commit") || mp[3] !~ /^[0-9a-f]{40}$/) next
+        if (nm < 3 || length(mp[1]) != 6 || mp[1] !~ /^[0-9]+$/ || (mp[2] != "blob" && mp[2] != "commit") || length(mp[3]) != 40 || mp[3] !~ /^[0-9a-f]+$/) next
         fp = norm_p(substr($0, ti + 1))
         if (!accept_path(fp)) next
         eff[fp] = mp[1] " " mp[2] " " mp[3]
@@ -1651,10 +1988,9 @@ compute_tree_fingerprint() {
         for (fp in c_m) {
           cm = c_m[fp]
           has_e = (fp in eff)
-          em = ""
-          if (has_e) { split(eff[fp], e_p, " "); em = e_p[1] }
-          if ((cm == "000000" && has_e) || (cm != "000000" && (!has_e || em != cm))) {
-            printf "I\t%s\t%s %s %s\n", fp, cm, entry_type(cm), c_o[fp]
+          c_entry = cm " " entry_type(cm) " " c_o[fp]
+          if ((cm == "000000" && has_e) || (cm != "000000" && (!has_e || eff[fp] != c_entry))) {
+            printf "I\t%s\t%s\n", fp, c_entry
           }
         }
         for (fp in eff) {
@@ -1664,17 +2000,12 @@ compute_tree_fingerprint() {
     ' | LC_ALL=C sort -t $'\t' -k1,1 -k2,2 | LC_ALL=C awk -F '\t' '{ printf "%s %s %s\n", $1, $3, $2 }'
   } > "$tmp_fp"
 
-  if ! run_git_cmd_stdin_file "$root" "$tmp_fp" hash-object --stdin; then
-    echo "GIT_ERROR: git hash-object manifest failed: $(git_err_detail)"
+  if ! tree_hash="$(hash_git_stdin_file "$root" "$tmp_fp" "GIT_ERROR" "manifest failed")"; then
     rm -f "$tmp_fp"
+    echo "$tree_hash"
     return 1
   fi
-  tree_hash="$(trim_str "$_GIT_STDOUT")"
   rm -f "$tmp_fp"
-  if [[ ! "$tree_hash" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "GIT_ERROR: git hash-object manifest failed: $tree_hash"
-    return 1
-  fi
   printf '%s\n%s\n%s\n' "$head_sha" "$tree_hash" "$paths_csv"
 }
 
@@ -1684,6 +2015,7 @@ run_verify_check() {
   local ign_csv="$3"
   local expected_cmd_arg="${4:-}"
   local req_rel_arg="${5:-}"
+  local target_commit_sha="${6:-}"
   _VR_MSG=""
   _VR_REL_PATHS=""
   local canon_r
@@ -1698,9 +2030,11 @@ run_verify_check() {
     _VR_MSG="VERIFY_MISSING: empty receipt path"
     return 1
   fi
-  local full_receipt disp_path
-  full_receipt="$(resolve_target_path "$root" "$trim_arg")"
-  disp_path="$(repo_rel_path "$root" "$full_receipt")"
+  if ! check_contained_repo_path "$root" "$trim_arg"; then
+    _VR_MSG="VERIFY_CORRUPT: invalid receipt_path"
+    return 1
+  fi
+  local full_receipt="$_CONTAINED_FULL" disp_path="$_CONTAINED_REL"
   if [[ ! -f "$full_receipt" ]]; then
     _VR_MSG="VERIFY_MISSING: $disp_path"
     return 1
@@ -1855,8 +2189,10 @@ run_verify_check() {
     fi
   fi
 
+  local target_trim
+  target_trim="$(trim_str "$target_commit_sha")"
   local fp_out cur_head cur_tree cur_paths
-  if ! fp_out="$(compute_tree_fingerprint "$root" "$rel_for_fp" "$ign_csv")"; then
+  if ! fp_out="$(compute_tree_fingerprint "$root" "$rel_for_fp" "$ign_csv" "$target_trim")"; then
     _VR_MSG="$fp_out"
     return 1
   fi
@@ -1866,7 +2202,12 @@ run_verify_check() {
     IFS= read -r cur_paths
   } <<< "$fp_out"
 
-  if [[ "$cur_head" != "$_v_head_sha" ]]; then
+  if [[ -n "$target_trim" ]]; then
+    if [[ "$cur_head" != "$_v_head_sha" ]]; then
+      _VR_MSG="VERIFY_STALE: head_sha=${_v_head_sha:0:12} target=${cur_head:0:12}"
+      return 2
+    fi
+  elif [[ "$cur_head" != "$_v_head_sha" ]]; then
     if ! run_git_cmd "$root" merge-base --is-ancestor "$_v_head_sha" "$cur_head"; then
       _VR_MSG="VERIFY_STALE: receipt=${_v_tree_hash:0:12} current=${cur_tree:0:12}"
       return 2
@@ -2081,7 +2422,6 @@ function is_contract_p(p,   lp) {
 }
 function raw_group(p,   n, s) {
   n = split(p, s, "/")
-  if (n >= 3 && s[1] ~ /^(packages|services|apps|libs|modules|crates)$/) return s[1] "/" s[2]
   if (n >= 3) return s[1] "/" s[2]
   if (n == 2) return s[1]
   return "root"
@@ -2283,25 +2623,22 @@ run_scope_engine() {
   local root="$1" base_sha="$2" target_commit="$3" ign_csv="$4" max_conc="$5" prefix="$6"
   local fsig_out_file="${7:-}" flines_out_file="${8:-}" need_units="${9:-true}"
   local ns_tmp st_tmp df_tmp unt_tmp raw_u_tmp ov_tmp imp_tmp fsig_use flines_use root_slash
-  ns_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-ns.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ns.$$.${RANDOM}.tmp")"
-  st_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-st.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-st.$$.${RANDOM}.tmp")"
-  df_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-df.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-df.$$.${RANDOM}.tmp")"
-  unt_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-unt.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-unt.$$.${RANDOM}.tmp")"
-  raw_u_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-ru.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ru.$$.${RANDOM}.tmp")"
-  ov_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-ov.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ov.$$.${RANDOM}.tmp")"
-  imp_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-imp.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-imp.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$ns_tmp" "$st_tmp" "$df_tmp" "$unt_tmp" "$raw_u_tmp" "$ov_tmp" "$imp_tmp")
+  make_temp_file "b3-ns" ns_tmp
+  make_temp_file "b3-st" st_tmp
+  make_temp_file "b3-df" df_tmp
+  make_temp_file "b3-unt" unt_tmp
+  make_temp_file "b3-ru" raw_u_tmp
+  make_temp_file "b3-ov" ov_tmp
+  make_temp_file "b3-imp" imp_tmp
   if [[ -n "$fsig_out_file" ]]; then
     fsig_use="$fsig_out_file"
   else
-    fsig_use="$(mktemp "${TMPDIR:-/tmp}/b3-fsi.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-fsi.$$.${RANDOM}.tmp")"
-    _CLEANUP_FILES+=("$fsig_use")
+    make_temp_file "b3-fsi" fsig_use
   fi
   if [[ -n "$flines_out_file" ]]; then
     flines_use="$flines_out_file"
   else
-    flines_use="$(mktemp "${TMPDIR:-/tmp}/b3-fli.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-fli.$$.${RANDOM}.tmp")"
-    _CLEANUP_FILES+=("$flines_use")
+    make_temp_file "b3-fli" flines_use
   fi
   : > "$raw_u_tmp"; : > "$ov_tmp"; : > "$imp_tmp"; : > "$fsig_use"; : > "$flines_use"
 
@@ -2433,20 +2770,28 @@ run_scope_engine() {
     }
     close(unt_f)
 
-    hdr_old = ""; cur_p = ""; cur_s = 0
+    hdr_old = ""; cur_p = ""; cur_s = 0; in_hunk = 0
     while ((getline dl < df_f) > 0) {
       sub(/\r$/, "", dl)
-      if (substr(dl, 1, 11) == "diff --git ") { hdr_old = ""; cur_p = ""; cur_s = 0; continue }
-      if (substr(dl, 1, 4) == "--- ") {
-        hdr_old = (dl != "--- /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : "")
+      if (substr(dl, 1, 11) == "diff --git ") { hdr_old = ""; cur_p = ""; cur_s = 0; in_hunk = 0; continue }
+      if (!in_hunk) {
+        if (substr(dl, 1, 4) == "--- ") {
+          hdr_old = (dl != "--- /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : "")
+          continue
+        }
+        if (substr(dl, 1, 4) == "+++ ") {
+          cur_p = (dl != "+++ /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : hdr_old)
+          cur_s = (cur_p != "" && (cur_p in scan_set) ? 1 : 0)
+          continue
+        }
+        if (substr(dl, 1, 3) == "@@ ") {
+          in_hunk = 1
+          continue
+        }
         continue
       }
-      if (substr(dl, 1, 4) == "+++ ") {
-        cur_p = (dl != "+++ /dev/null" && length(dl) > 6 ? norm_p(substr(dl, 7)) : hdr_old)
-        cur_s = (cur_p != "" && (cur_p in scan_set) ? 1 : 0)
-        continue
-      }
-      if (cur_s && ((substr(dl, 1, 1) == "+" && substr(dl, 1, 3) != "+++") || (substr(dl, 1, 1) == "-" && substr(dl, 1, 3) != "---"))) {
+      if (substr(dl, 1, 3) == "@@ ") { continue }
+      if (cur_s && (substr(dl, 1, 1) == "+" || substr(dl, 1, 1) == "-")) {
         scan_line_sigs(cur_p, tolower(substr(dl, 2)))
       }
     }
@@ -3194,6 +3539,54 @@ run_scope_engine() {
   [[ -n "$flines_out_file" ]] || rm -f "$flines_use" 2>/dev/null || true
 }
 
+parse_scope_engine_output() {
+  local raw="$1" sline
+  _SE_IS_EMPTY="true"
+  _SE_PART_ERR=""
+  _SE_SIZE_CLASS=""
+  _SE_FILES="0"
+  _SE_LINES="0"
+  _SE_RISK_LEVEL="LOW"
+  _SE_RISK_SIGNALS="none"
+  _SE_REC_SPECS="none"
+  _SE_L1_SPECS="none"
+  _SE_L1_SKIP="none"
+  _SE_REVIEW_FILES="none"
+  _SE_NOISE_FILES="none"
+  _SE_CHANGE_TYPES=""
+  _SE_CONTRACT_FILES="none"
+  _SE_GENERATED_FILES="none"
+  _SE_TEST_FILES="none"
+  _SE_SPLIT_REC="false"
+  _SE_MAX_CONC="4"
+  _SE_UNIT_COUNT="0"
+  _SE_UNITS=()
+  while IFS= read -r sline; do
+    case "$sline" in
+      IS_EMPTY=*) _SE_IS_EMPTY="${sline#IS_EMPTY=}" ;;
+      PART_ERR=*) _SE_PART_ERR="${sline#PART_ERR=}" ;;
+      SIZE_CLASS=*) _SE_SIZE_CLASS="${sline#SIZE_CLASS=}" ;;
+      FILES=*) _SE_FILES="${sline#FILES=}" ;;
+      LINES=*) _SE_LINES="${sline#LINES=}" ;;
+      RISK_LEVEL=*) _SE_RISK_LEVEL="${sline#RISK_LEVEL=}" ;;
+      RISK_SIGNALS=*) _SE_RISK_SIGNALS="${sline#RISK_SIGNALS=}" ;;
+      REC_SPECS=*) _SE_REC_SPECS="${sline#REC_SPECS=}" ;;
+      L1_SPECS=*) _SE_L1_SPECS="${sline#L1_SPECS=}" ;;
+      L1_SKIP=*) _SE_L1_SKIP="${sline#L1_SKIP=}" ;;
+      REVIEW_FILES=*) _SE_REVIEW_FILES="${sline#REVIEW_FILES=}" ;;
+      NOISE_FILES=*) _SE_NOISE_FILES="${sline#NOISE_FILES=}" ;;
+      CHANGE_TYPES=*) _SE_CHANGE_TYPES="${sline#CHANGE_TYPES=}" ;;
+      CONTRACT_FILES=*) _SE_CONTRACT_FILES="${sline#CONTRACT_FILES=}" ;;
+      GENERATED_FILES=*) _SE_GENERATED_FILES="${sline#GENERATED_FILES=}" ;;
+      TEST_FILES=*) _SE_TEST_FILES="${sline#TEST_FILES=}" ;;
+      SPLIT_REC=*) _SE_SPLIT_REC="${sline#SPLIT_REC=}" ;;
+      MAX_CONC=*) _SE_MAX_CONC="${sline#MAX_CONC=}" ;;
+      UNIT_COUNT=*) _SE_UNIT_COUNT="${sline#UNIT_COUNT=}" ;;
+      UNIT$'\t'*) _SE_UNITS+=("$sline") ;;
+    esac
+  done <<< "$raw"
+}
+
 compute_scope_paths_hash() {
   local root="$1" target_sha="$2" paths_csv="$3" ign_csv="$4"
   local -a ign_arr=() raw_p=() clean_p=()
@@ -3223,18 +3616,13 @@ compute_scope_paths_hash() {
     echo "GIT_ERROR: git ls-tree target paths failed: $(git_err_detail)" >&2
     return 1
   fi
-  local ls_sorted tmp_manifest
+  local ls_sorted h_out
   ls_sorted="$(printf '%s\n' "$_GIT_STDOUT" | LC_ALL=C awk '{ sub(/\r$/, ""); if (NF > 0) print }' | LC_ALL=C sort -u)"
-  tmp_manifest="$(mktemp "${TMPDIR:-/tmp}/b3-sph.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-sph.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$tmp_manifest")
-  printf 'PATHS=%s\n%s\n' "$sorted_csv" "$ls_sorted" > "$tmp_manifest"
-  if ! run_git_cmd_stdin_file "$root" "$tmp_manifest" hash-object --stdin; then
-    rm -f "$tmp_manifest"
-    echo "GIT_ERROR: git hash-object target paths failed" >&2
+  if ! h_out="$(hash_git_text "$root" "PATHS=${sorted_csv}"$'\n'"${ls_sorted}"$'\n' "GIT_ERROR" "target paths failed")"; then
+    printf '%s\n' "$h_out" >&2
     return 1
   fi
-  rm -f "$tmp_manifest"
-  trim_str "$_GIT_STDOUT"
+  printf '%s' "$h_out"
 }
 
 default_max_passes() {
@@ -3245,29 +3633,421 @@ default_max_passes() {
   esac
 }
 
-hash_git_text() {
-  local root="$1" text="$2" prefix="${3:-GIT_ERROR}" tmp_h h_out
-  tmp_h="$(mktemp "${TMPDIR:-/tmp}/b3-txth.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-txth.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$tmp_h")
-  printf '%s' "$text" > "$tmp_h"
-  if ! run_git_cmd_stdin_file "$root" "$tmp_h" hash-object --stdin; then
-    rm -f "$tmp_h" 2>/dev/null || true
-    echo "${prefix}: git hash-object failed: $(git_err_detail)"
-    return 1
-  fi
-  rm -f "$tmp_h" 2>/dev/null || true
-  h_out="$(trim_str "$_GIT_STDOUT")"
-  if [[ ! "$h_out" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "${prefix}: git hash-object failed: $h_out"
-    return 1
-  fi
-  printf '%s' "$h_out"
+size_rank() {
+  local norm
+  norm="$(normalize_size_class "${1:-}" 2>/dev/null || true)"
+  case "$norm" in
+    XS) echo 0 ;;
+    S) echo 1 ;;
+    M) echo 2 ;;
+    L) echo 3 ;;
+    XL) echo 4 ;;
+    XXL) echo 5 ;;
+    *) echo -1 ;;
+  esac
 }
-
 is_waiver_attempt() {
   local rat
   rat="$(printf '%s' "$(trim_str "${1:-}")" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
   [[ "$rat" == waiver:* ]]
+}
+
+is_valid_high_skip_rationale() {
+  local rat
+  rat="$(trim_str "${1:-}")"
+  [[ -n "$rat" ]] || return 1
+  local low
+  low="$(printf '%s' "$rat" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  [[ "$low" != "none" ]] || return 1
+  if is_waiver_attempt "$rat"; then return 1; fi
+  [[ ${#rat} -ge 15 ]] || return 1
+  printf '%s\n' "$low" | LC_ALL=C awk '
+  { s = (NR == 1 ? $0 : s "\n" $0) }
+  END {
+    n = length(s)
+    run = 1
+    for (i = 2; i <= n; i++) {
+      if (substr(s, i, 1) == substr(s, i - 1, 1)) {
+        run++
+        if (run >= 4) exit 1
+      } else {
+        run = 1
+      }
+    }
+    rest = s
+    cnt = 0
+    while (match(rest, /[a-z][a-z][a-z]+/)) {
+      w = substr(rest, RSTART, RLENGTH)
+      if (!(w in seen)) { seen[w] = 1; cnt++ }
+      rest = substr(rest, RSTART + RLENGTH)
+    }
+    exit (cnt >= 2 ? 0 : 1)
+  }'
+}
+
+run_review_ledger_check_sub() {
+  local _rc_root="$1"
+  local _rc_full="$2"
+  local _rc_rel="$3"
+  local _rc_ign="$4"
+  local _rc_emit_meta="${5:-false}"
+  (
+    _CLEANUP_FILES=()
+    trap _cleanup_tmp EXIT
+    [[ -f "$_rc_full" ]] || { echo "LEDGER_MISSING: $_rc_rel"; exit 1; }
+
+    L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
+    L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"; L_RIND=""
+    L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
+    L_SEEN_KEYS=""
+    U_ROWS=()
+    P_ROWS=()
+    while IFS= read -r rawln || [[ -n "$rawln" ]]; do
+      ln="$(trim_str "${rawln%$'\r'}")"
+      [[ -z "$ln" || "$ln" == \#* ]] && continue
+      if [[ "$ln" == \|* ]]; then
+        inner="${ln#|}"; inner="${inner%|}"
+        c_cnt=0; c0=""; c1=""; c2=""; c3=""; c4=""; c5=""; c6=""; c7=""; c8=""; c9=""; c10=""; c11=""
+        while IFS= read -r col; do
+          tc="$(trim_str "$col")"
+          case "$c_cnt" in
+            0) c0="$tc" ;; 1) c1="$tc" ;; 2) c2="$tc" ;; 3) c3="$tc" ;; 4) c4="$tc" ;; 5) c5="$tc" ;;
+            6) c6="$tc" ;; 7) c7="$tc" ;; 8) c8="$tc" ;; 9) c9="$tc" ;; 10) c10="$tc" ;; 11) c11="$tc" ;;
+          esac
+          c_cnt=$((c_cnt + 1))
+        done < <(printf '%s\n' "$inner" | LC_ALL=C awk -F'|' '{for(i=1;i<=NF;i++) print $i}')
+        [[ "$c_cnt" -eq 12 ]] || { echo "LEDGER_CORRUPT: malformed unit row column count"; exit 1; }
+        [[ "$c0" == "unit_id" || "$c0" == "---" ]] && continue
+        [[ "$c0" =~ ^U[0-9]{2,}$ ]] || { echo "LEDGER_CORRUPT: invalid unit_id '$c0'"; exit 1; }
+        [[ "$c2" =~ ^[0-9]+$ && "$c3" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid unit row numeric field"; exit 1; }
+        U_ROWS+=("${c0}|${c1}|${c2}|${c3}|${c4}|${c5}|${c6}|${c7}|${c8}|${c9}|${c10}|${c11}")
+        continue
+      fi
+      if [[ "$ln" == pass\|* ]]; then
+        _re_pass='^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$'
+        [[ "$ln" =~ $_re_pass ]] || { printf "LEDGER_CORRUPT: malformed pass log entry '%s'\n" "$ln"; exit 1; }
+        P_ROWS+=("$ln")
+        continue
+      fi
+      [[ "$ln" == *"="* ]] || { echo "LEDGER_CORRUPT: unexpected line '$ln'"; exit 1; }
+      lk="$(trim_str "${ln%%=*}")"; lv="$(trim_str "${ln#*=}")"
+      case "$L_SEEN_KEYS" in *"|${lk}|"*) echo "LEDGER_CORRUPT: duplicate key '$lk'"; exit 1 ;; esac
+      L_SEEN_KEYS+="|${lk}|"
+      case "$lk" in
+        schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
+        target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
+        risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
+        l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
+        review_independence) L_RIND="$lv" ;;
+        contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;; max_concurrency) L_MCONC="$lv" ;;
+        max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;; budget_status) L_BSTAT="$lv" ;;
+        cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
+      esac
+    done < "$_rc_full"
+
+    for rv in "$L_SCHEMA" "$L_BASE" "$L_HEAD" "$L_TREF" "$L_SNAP" "$L_SIZE" "$L_NLSIZE" "$L_RISK" "$L_RSIG" "$L_RSPEC" "$L_CFILES" "$L_GFILES" "$L_MCONC" "$L_MPASS" "$L_PUSED" "$L_BSTAT" "$L_CSTAT" "$L_CHASH" "$L_UCNT"; do
+      [[ -n "$rv" ]] || { echo "LEDGER_CORRUPT: missing required ledger key"; exit 1; }
+    done
+    [[ "$L_SCHEMA" == "b3-review-ledger-v1" ]] || { echo "LEDGER_CORRUPT: unsupported schema '$L_SCHEMA'"; exit 1; }
+    [[ "$L_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid base_sha"; exit 1; }
+    if [[ -z "$L_TSHA" ]]; then
+      if [[ "$L_TREF" == "working_tree" ]]; then
+        L_TSHA="none"
+      elif [[ "$L_TREF" =~ ^[0-9a-f]{40}$ ]]; then
+        L_TSHA="$L_TREF"
+      else
+        echo "LEDGER_CORRUPT: missing target_sha for symbolic target_ref"; exit 1
+      fi
+    fi
+    if [[ "$L_TREF" == "working_tree" ]]; then
+      [[ "$L_TSHA" == "none" ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
+    else
+      [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
+    fi
+    [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid pass counter"; exit 1; }
+    L_MPASS="$((10#$L_MPASS))"
+    L_PUSED="$((10#$L_PUSED))"
+    if [[ "$L_HAS_CHAIN" != "true" || -z "$L_PCHAIN" ]]; then
+      echo "LEDGER_CORRUPT: missing pass_chain"
+      exit 1
+    fi
+    [[ "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid pass_chain"; exit 1; }
+    if [[ -z "$L_RIND" ]]; then
+      echo "LEDGER_CORRUPT: missing review_independence"
+      exit 1
+    fi
+    if [[ "$L_RIND" != "UNKNOWN" && "$L_RIND" != "INDEPENDENT" && "$L_RIND" != "SINGLE_AGENT_LIMIT" ]]; then
+      echo "LEDGER_CORRUPT: invalid review_independence '$L_RIND'"
+      exit 1
+    fi
+    [[ -z "$L_L1SPEC" ]] && L_L1SPEC="none"
+    [[ -z "$L_L1SKIP" ]] && L_L1SKIP="none"
+    ORIG_RAW_SIZE="$L_SIZE"
+    NORM_SIZE="$(normalize_size_class "$ORIG_RAW_SIZE")" || { echo "LEDGER_CORRUPT: invalid size_class '$ORIG_RAW_SIZE'"; exit 1; }
+    [[ "$L_UCNT" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
+    L_UCNT="$((10#$L_UCNT))"
+    [[ "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
+    L_SIZE="$NORM_SIZE"
+    TARGET_COMMIT_SHA=""
+    [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TSHA"
+
+    # Verify pass chain
+    cur="$(init_pass_chain "$_rc_root" "$L_BASE")" || exit 1
+    sum=0; idx=0
+    if [[ ${#P_ROWS[@]} -gt 0 ]]; then
+      for row in "${P_ROWS[@]}"; do
+        IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
+        p_seq="$((10#$p_seq))"
+        p_delta="$((10#$p_delta))"
+        expect_seq=$((idx + 1))
+        if [[ "$p_seq" -ne "$expect_seq" || "$p_delta" -lt 1 ]]; then
+          printf 'LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index %s)\n' "$expect_seq"
+          exit 1
+        fi
+        sum=$((sum + p_delta))
+        cur="$(step_pass_chain "$_rc_root" "$cur" "$p_seq" "$p_scope" "$p_kind" "$p_delta" "$p_ref")" || exit 1
+        if [[ "$cur" != "$p_hash" ]]; then
+          printf 'LEDGER_CORRUPT: passes_used tamper detected (chain hash mismatch at seq %s)\n' "$p_seq"
+          exit 1
+        fi
+        idx=$((idx + 1))
+      done
+    fi
+    if [[ "$sum" -ne "$L_PUSED" || "$cur" != "$L_PCHAIN" ]]; then
+      printf 'LEDGER_CORRUPT: passes_used tamper detected (passes=%s log_sum=%s)\n' "$L_PUSED" "$sum"
+      exit 1
+    fi
+
+    if [[ "$L_MPASS" -le 0 ]]; then
+      printf 'LEDGER_INCOMPLETE: unbounded or invalid max_passes (%s)\n' "$L_MPASS"
+      exit 2
+    fi
+    if [[ "$L_BSTAT" == "EXHAUSTED" || "$L_PUSED" -gt "$L_MPASS" ]]; then
+      printf 'LEDGER_INCOMPLETE: budget exhausted (passes=%s/%s)\n' "$L_PUSED" "$L_MPASS"
+      exit 2
+    fi
+    REV_CNT_CHK=0
+    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+      for ur in "${U_ROWS[@]}"; do
+        IFS='|' read -r _0 _1 _2 _3 _4 _5 _6 ust_chk _rest <<< "$ur"
+        [[ "$ust_chk" == "REVIEWED" ]] && REV_CNT_CHK=$((REV_CNT_CHK + 1))
+      done
+    fi
+    MIN_REQ_PASSES="$REV_CNT_CHK"
+    [[ "$L_CSTAT" == "REVIEWED" ]] && MIN_REQ_PASSES=$((MIN_REQ_PASSES + 1))
+    if [[ "$L_PUSED" -lt "$MIN_REQ_PASSES" ]]; then
+      printf 'LEDGER_INCOMPLETE: passes_used (%s) below minimum reviewed passes (%s)\n' "$L_PUSED" "$MIN_REQ_PASSES"
+      exit 2
+    fi
+    if [[ ( "$L_SIZE" == "L" || "$L_SIZE" == "XL" ) && "$L_UCNT" -gt 4 ]]; then
+      printf 'LEDGER_INCOMPLETE: %s PR exceeds max 4 units (%s)\n' "$L_SIZE" "$L_UCNT"
+      exit 2
+    fi
+    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+      for ur in "${U_ROWS[@]}"; do
+        IFS='|' read -r uid_b _gb ufc_b ulc_b _rest <<< "$ur"
+        ufc_b="$((10#$ufc_b))"
+        ulc_b="$((10#$ulc_b))"
+        if [[ "$ulc_b" -gt 5000 || ( "$ufc_b" -gt 100 && "$ulc_b" -gt 1000 ) ]]; then
+          printf 'LEDGER_INCOMPLETE: oversized unit %s (%sf, %sL)\n' "$uid_b" "$ufc_b" "$ulc_b"
+          exit 2
+        fi
+      done
+    fi
+    if [[ "$L_TREF" != "working_tree" ]]; then
+      if ! run_git_cmd "$_rc_root" rev-parse --verify --quiet "${L_TREF}^{commit}"; then
+        printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
+        exit 2
+      fi
+      _CHK_TR_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$_CHK_TR_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
+        exit 2
+      fi
+      if [[ "$_CHK_TR_SHA" != "$L_TSHA" ]]; then
+        printf "LEDGER_STALE: target_ref '%s' moved (%s->%s)\n" "$L_TREF" "$L_TSHA" "$_CHK_TR_SHA"
+        exit 2
+      fi
+    fi
+
+    make_temp_file "b3-fsig" FSIG_TMP
+    make_temp_file "b3-fln" FLINES_TMP
+    : > "$FSIG_TMP"; : > "$FLINES_TMP"
+
+    LIVE_OUT=""
+    if ! LIVE_OUT="$(run_scope_engine "$_rc_root" "$L_BASE" "$TARGET_COMMIT_SHA" "$_rc_ign" "$L_MCONC" "LEDGER_FAIL" "$FSIG_TMP" "$FLINES_TMP" "false")"; then
+      printf '%s\n' "$LIVE_OUT"
+      exit 1
+    fi
+    parse_scope_engine_output "$LIVE_OUT"
+    LIVE_EMPTY="$_SE_IS_EMPTY"; LIVE_SIZE="$_SE_SIZE_CLASS"; LIVE_RISK="$_SE_RISK_LEVEL"
+    LIVE_RF="$_SE_REVIEW_FILES"; LIVE_CF="$_SE_CONTRACT_FILES"
+    if [[ "$LIVE_EMPTY" == "true" ]]; then
+      echo "LEDGER_INCOMPLETE: empty diff target"
+      exit 2
+    fi
+
+    LIVE_RANK="$(size_rank "$LIVE_SIZE")"
+    LED_RANK="$(size_rank "$L_SIZE")"
+    if [[ "$LIVE_RANK" -gt "$LED_RANK" ]]; then
+      printf 'LEDGER_STALE: size_class escalated (%s->%s)\n' "$L_SIZE" "$LIVE_SIZE"
+      exit 2
+    fi
+
+    if [[ "$L_RIND" == "SINGLE_AGENT_LIMIT" && ( "$LIVE_RISK" == "HIGH" || "$LIVE_RISK" == "CRITICAL" ) ]]; then
+      echo "LEDGER_INCOMPLETE: single_agent_limit_blocks_high_risk"
+      exit 2
+    fi
+    if [[ "$L_RIND" == "UNKNOWN" && ( "$LIVE_RISK" == "HIGH" || "$LIVE_RISK" == "CRITICAL" ) ]]; then
+      echo "LEDGER_INCOMPLETE: review_independence_unknown_blocks_high_risk"
+      exit 2
+    fi
+
+    if [[ "$LIVE_RF" != "none" ]]; then
+      ASS_CSV=""
+      if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+        for ur in "${U_ROWS[@]}"; do
+          IFS='|' read -r _0 _1 _2 _3 _4 _5 _6 _7 _8 _9 _10 fcsv <<< "$ur"
+          ASS_CSV+=",${fcsv}"
+        done
+      fi
+      UNCOV="$(LC_ALL=C awk -v lrf="$LIVE_RF" -v acsv="$ASS_CSV" '
+      BEGIN {
+        n1 = split(acsv, a, ",")
+        for (i = 1; i <= n1; i++) if (a[i] != "") seen[a[i]] = 1
+        n2 = split(lrf, b, ",")
+        nu = 0
+        for (i = 1; i <= n2; i++) if (b[i] != "" && !(b[i] in seen)) u[++nu] = b[i]
+        if (nu > 0) {
+          for (i = 2; i <= nu; i++) { t = u[i]; j = i - 1; while (j >= 1 && u[j] > t) { u[j + 1] = u[j]; j-- } u[j + 1] = t }
+          out = u[1]; for (i = 2; i <= nu; i++) out = out "," u[i]
+          print out
+        }
+      }')"
+      if [[ -n "$UNCOV" ]]; then
+        printf 'LEDGER_INCOMPLETE: uncovered files (%s)\n' "$UNCOV"
+        exit 2
+      fi
+    fi
+
+    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+      for ur in "${U_ROWS[@]}"; do
+      IFS='|' read -r uid grp ufc ulc urisk uspec urat ust ufind urec uhash ufcsv <<< "$ur"
+      [[ "$ust" == "BLOCKED" ]] && { printf 'LEDGER_BLOCKED: unit %s\n' "$uid"; exit 2; }
+      [[ "$ust" == "STALE" ]] && { printf 'LEDGER_STALE: unit %s\n' "$uid"; exit 2; }
+      [[ "$ust" == "REVIEWED" ]] || { printf 'LEDGER_INCOMPLETE: unit %s status=%s\n' "$uid" "$ust"; exit 2; }
+      if LC_ALL=C awk -v f="$ufind" 'BEGIN { exit !(f ~ /(^|[,:; ])(OPEN|FIXED)($|[,:; ])/) }'; then
+        printf 'LEDGER_INCOMPLETE: unresolved findings in %s (%s)\n' "$uid" "$ufind"
+        exit 2
+      fi
+
+      LU_RISK="$(eval_risk_for_csv_awk "$ufcsv" "$FSIG_TMP" "$FLINES_TMP")"
+      { IFS= read -r LU_LVL; IFS= read -r LU_SIG; IFS= read -r LU_SP; } <<< "$LU_RISK"
+      if [[ "$L_RIND" == "SINGLE_AGENT_LIMIT" && ( "$LU_LVL" == "HIGH" || "$LU_LVL" == "CRITICAL" ) ]]; then
+        echo "LEDGER_INCOMPLETE: single_agent_limit_blocks_high_risk"
+        exit 2
+      fi
+      if [[ "$L_RIND" == "UNKNOWN" && ( "$LU_LVL" == "HIGH" || "$LU_LVL" == "CRITICAL" ) ]]; then
+        echo "LEDGER_INCOMPLETE: review_independence_unknown_blocks_high_risk"
+        exit 2
+      fi
+      if [[ "$LU_LVL" != "$urisk" ]]; then
+        printf 'LEDGER_STALE: unit %s risk changed (%s->%s)\n' "$uid" "$urisk" "$LU_LVL"
+        exit 2
+      fi
+      if [[ "$LU_SP" != "none" ]]; then
+        MISS_SP="$(LC_ALL=C awk -v req="$LU_SP" -v got="$uspec" '
+        BEGIN {
+          n1 = split(got, a, ","); for (i = 1; i <= n1; i++) if (a[i] != "" && a[i] != "none") g[a[i]] = 1
+          n2 = split(req, b, ","); nm = 0
+          for (i = 1; i <= n2; i++) if (b[i] != "" && !(b[i] in g)) m[++nm] = b[i]
+          if (nm > 0) { out = m[1]; for (i = 2; i <= nm; i++) out = out "," m[i]; print out }
+        }')"
+        if [[ -n "$MISS_SP" ]]; then
+          if [[ "$LU_LVL" == "CRITICAL" ]]; then
+            if is_waiver_attempt "$urat"; then
+              printf 'LEDGER_BLOCKED: unverified CRITICAL specialist waiver rejected on %s (missing %s; self-declared waivers are disabled without trusted owner approval)\n' "$uid" "$MISS_SP"
+              exit 2
+            fi
+            printf 'LEDGER_INCOMPLETE: mandatory CRITICAL specialist (%s) required on %s (waivers disabled without trusted owner approval)\n' "$MISS_SP" "$uid"
+            exit 2
+          elif [[ "$LU_LVL" == "HIGH" ]]; then
+            if ! is_valid_high_skip_rationale "$urat"; then
+              printf 'LEDGER_INCOMPLETE: missing specialist (%s) or valid HIGH skip rationale on %s\n' "$MISS_SP" "$uid"
+              exit 2
+            fi
+          else
+            rat_t="$(trim_str "$urat")"
+            if [[ "$rat_t" == "none" || ${#rat_t} -lt 5 ]] || is_waiver_attempt "$rat_t"; then
+              printf 'LEDGER_INCOMPLETE: missing specialist (%s) or rationale on %s\n' "$MISS_SP" "$uid"
+              exit 2
+            fi
+          fi
+        fi
+      fi
+
+      COMB_U="$ufcsv"
+      [[ "$LIVE_CF" != "none" ]] && COMB_U="${ufcsv},${LIVE_CF}"
+      CUR_UHASH="$(compute_scope_paths_hash "$_rc_root" "$TARGET_COMMIT_SHA" "$COMB_U" "$_rc_ign")" || exit 1
+      if [[ "$CUR_UHASH" != "$uhash" ]]; then
+        printf 'LEDGER_STALE: unit %s invalidated (files or shared contracts changed)\n' "$uid"
+        exit 2
+      fi
+
+      IFS=$'\t' read -r LIVE_UFC LIVE_ULC < <(unit_counts_from_flines_awk "$ufcsv" "$FLINES_TMP")
+      if [[ "$LIVE_ULC" -gt 5000 || ( "$LIVE_UFC" -gt 100 && "$LIVE_ULC" -gt 1000 ) ]]; then
+        printf 'LEDGER_INCOMPLETE: oversized unit %s (%sf, %sL)\n' "$uid" "$LIVE_UFC" "$LIVE_ULC"
+        exit 2
+      fi
+
+      HAS_CODE="$(LC_ALL=C awk -v c="$ufcsv" "$_B3_RISK_AWK_LIB"'BEGIN{n=split(c,a,",");hc=0;for(i=1;i<=n;i++){if(a[i]!="" && !(is_doc_asset(a[i])||is_test_p(a[i]))){hc=1;break}}print hc}')"
+      if [[ "$urec" == "none" ]]; then
+        if [[ "$HAS_CODE" == "1" && ( "$urisk" == "HIGH" || "$urisk" == "CRITICAL" ) ]]; then
+          printf 'LEDGER_INCOMPLETE: missing verify_receipt for %s unit %s\n' "$urisk" "$uid"
+          exit 2
+        fi
+      else
+        if run_verify_check "$_rc_root" "$urec" "$_rc_ign" "" "$ufcsv" "$TARGET_COMMIT_SHA"; then
+          :
+        else
+          vrc=$?
+          if [[ $vrc -eq 2 ]]; then
+            printf 'LEDGER_STALE: unit %s receipt invalid (%s)\n' "$uid" "$_VR_MSG"
+          else
+            printf 'LEDGER_INCOMPLETE: unit %s receipt invalid (%s)\n' "$uid" "$_VR_MSG"
+          fi
+          exit 2
+        fi
+      fi
+    done
+    fi
+
+    if [[ ( "$L_SIZE" == "L" || "$L_SIZE" == "XL" || "$L_SIZE" == "XXL" ) && "$L_UCNT" -gt 1 ]]; then
+      [[ "$L_CSTAT" == "BLOCKED" ]] && { echo "LEDGER_BLOCKED: cross_unit blocked"; exit 2; }
+      [[ "$L_CSTAT" == "STALE" ]] && { echo "LEDGER_STALE: cross_unit stale"; exit 2; }
+      [[ "$L_CSTAT" == "REVIEWED" ]] || { printf 'LEDGER_INCOMPLETE: cross_unit_status=%s\n' "$L_CSTAT"; exit 2; }
+      CU_PATHS="$LIVE_CF"
+      [[ "$CU_PATHS" == "none" ]] && CU_PATHS="$LIVE_RF"
+      CUR_CU_HASH="$(compute_scope_paths_hash "$_rc_root" "$TARGET_COMMIT_SHA" "$CU_PATHS" "$_rc_ign")" || exit 1
+      if [[ "$CUR_CU_HASH" != "$L_CHASH" ]]; then
+        echo "LEDGER_STALE: cross_unit invalidated"
+        exit 2
+      fi
+    fi
+
+    rm -f "$FSIG_TMP" "$FLINES_TMP" 2>/dev/null || true
+    NORM_TAG=""
+    [[ "$ORIG_RAW_SIZE" != "$L_SIZE" ]] && NORM_TAG=" normalized_from=${ORIG_RAW_SIZE}"
+    printf 'LEDGER_GATE_PASS: size=%s risk=%s units=%s/%s cross_unit=%s review_independence=%s%s\n' "$L_SIZE" "$L_RISK" "$L_UCNT" "$L_UCNT" "$L_CSTAT" "$L_RIND" "$NORM_TAG"
+    if [[ "$_rc_emit_meta" == "true" ]]; then
+      printf 'META_BASE_SHA=%s\n' "$L_BASE"
+      printf 'META_HEAD_SHA=%s\n' "$L_HEAD"
+      printf 'META_TARGET_REF=%s\n' "$L_TREF"
+      printf 'META_TARGET_SHA=%s\n' "$L_TSHA"
+      printf 'META_REVIEW_INDEPENDENCE=%s\n' "$L_RIND"
+    fi
+    exit 0
+  )
 }
 
 unit_counts_from_flines_awk() {
@@ -3302,6 +4082,48 @@ init_pass_chain() {
 step_pass_chain() {
   local root="$1" prev="$2" seq="$3" scope_id="$4" kind="$5" delta="$6" ref_sha="$7"
   hash_git_text "$root" "b3-pass-v1|step|${prev}|${seq}|${scope_id}|${kind}|${delta}|${ref_sha}"$'\n' "LEDGER_FAIL"
+}
+
+_LEDGER_TXT=""
+serialize_review_ledger() {
+  local ur pr r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11
+  _LEDGER_TXT="# B3 Review Coverage Ledger"$'\n'
+  _LEDGER_TXT+="schema=b3-review-ledger-v1"$'\n'
+  _LEDGER_TXT+="base_sha=${L_BASE}"$'\n'
+  _LEDGER_TXT+="head_sha=${L_HEAD}"$'\n'
+  _LEDGER_TXT+="target_ref=${L_TREF}"$'\n'
+  _LEDGER_TXT+="target_sha=${L_TSHA}"$'\n'
+  _LEDGER_TXT+="snapshot_sha=${L_SNAP}"$'\n'
+  _LEDGER_TXT+="size_class=${L_SIZE}"$'\n'
+  _LEDGER_TXT+="normalized_legacy_size=${L_NLSIZE}"$'\n'
+  _LEDGER_TXT+="risk_level=${L_RISK}"$'\n'
+  _LEDGER_TXT+="risk_signals=${L_RSIG}"$'\n'
+  _LEDGER_TXT+="recommended_specialists=${L_RSPEC}"$'\n'
+  _LEDGER_TXT+="l1_specialists=${L_L1SPEC}"$'\n'
+  _LEDGER_TXT+="l1_skip_rationale=${L_L1SKIP}"$'\n'
+  _LEDGER_TXT+="contract_files=${L_CFILES}"$'\n'
+  _LEDGER_TXT+="generated_files=${L_GFILES}"$'\n'
+  _LEDGER_TXT+="max_concurrency=${L_MCONC}"$'\n'
+  _LEDGER_TXT+="max_passes=${L_MPASS}"$'\n'
+  _LEDGER_TXT+="passes_used=${L_PUSED}"$'\n'
+  _LEDGER_TXT+="pass_chain=${L_PCHAIN}"$'\n'
+  _LEDGER_TXT+="budget_status=${L_BSTAT}"$'\n'
+  _LEDGER_TXT+="review_independence=${L_RIND}"$'\n'
+  _LEDGER_TXT+="cross_unit_status=${L_CSTAT}"$'\n'
+  _LEDGER_TXT+="cross_unit_tree_hash=${L_CHASH}"$'\n'
+  _LEDGER_TXT+="unit_count=${L_UCNT}"$'\n\n## Units\n| unit_id | group | files_cnt | lines_cnt | risk | specialists | rationale | status | findings | verify_receipt | unit_tree_hash | files_csv |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
+  if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+    for ur in "${U_ROWS[@]}"; do
+      IFS='|' read -r r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 <<< "$ur"
+      _LEDGER_TXT+="| ${r0} | ${r1} | ${r2} | ${r3} | ${r4} | ${r5} | ${r6} | ${r7} | ${r8} | ${r9} | ${r10} | ${r11} |"$'\n'
+    done
+  fi
+  _LEDGER_TXT+=$'\n## Pass Log\n'
+  if [[ ${#P_ROWS[@]} -gt 0 ]]; then
+    for pr in "${P_ROWS[@]}"; do
+      _LEDGER_TXT+="${pr}"$'\n'
+    done
+  fi
 }
 
 has_control_chars() {
@@ -3585,9 +4407,8 @@ check_graph_index_fresh() {
   fi
 
   local st_tmp err_tmp rc=0
-  st_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-st-z.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-st-z.$$.${RANDOM}.tmp")"
-  err_tmp="$(mktemp "${TMPDIR:-/tmp}/b3-st-err.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-st-err.$$.${RANDOM}.tmp")"
-  _CLEANUP_FILES+=("$st_tmp" "$err_tmp")
+  make_temp_file "b3-st-z" st_tmp
+  make_temp_file "b3-st-err" err_tmp
   if git -C "$root" -c core.quotepath=false status --porcelain --untracked-files=all --ignore-submodules=none -z >"$st_tmp" 2>"$err_tmp"; then
     rc=0
   else
@@ -4044,57 +4865,20 @@ case "$CMD" in
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
 
-    TARGET_REF="$(trim_str "$TARGET_REF")"
-    TARGET_COMMIT_SHA=""
-    if [[ -n "$TARGET_REF" ]]; then
-      if [[ "$TARGET_REF" == -* ]]; then
-        echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}"; then
-        echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-      TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
-      if [[ -z "$TARGET_COMMIT_SHA" ]]; then
-        echo "DIFF_SCOPE_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-    fi
-
-    BASE_SHA="$(trim_str "$BASE_SHA")"
-    if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
-      if [[ -n "$TARGET_REF" ]]; then
-        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
-      elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
-      else
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
-      fi
-    fi
-    assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "object" "DIFF_SCOPE_FAIL" "--base-sha"
+    resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "DIFF_SCOPE_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
+    TARGET_REF="$_SCOPE_TARGET_REF"
+    TARGET_COMMIT_SHA="$_SCOPE_TARGET_SHA"
+    BASE_SHA="$_SCOPE_BASE_SHA"
 
     SCOPE_OUT=""
-    if ! SCOPE_OUT="$(run_scope_engine "$REPO_ROOT" "$BASE_SHA" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" 4 "DIFF_SCOPE_FAIL")"; then
+    if ! SCOPE_OUT="$(run_scope_engine "$REPO_ROOT" "$BASE_SHA" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" 4 "DIFF_SCOPE_FAIL" "" "" "false")"; then
       printf '%s\n' "$SCOPE_OUT"
       exit 1
     fi
 
-    IS_EMPTY="true"; SIZE_CLASS=""; FILE_COUNT="0"; TOTAL_LINES="0"
-    RF_OUT="none"; NF_OUT="none"; RISK_LEVEL="LOW"; RISK_SIGNALS="none"; REC_SPECS="none"
-    while IFS= read -r sline; do
-      case "$sline" in
-        IS_EMPTY=*) IS_EMPTY="${sline#IS_EMPTY=}" ;;
-        SIZE_CLASS=*) SIZE_CLASS="${sline#SIZE_CLASS=}" ;;
-        FILES=*) FILE_COUNT="${sline#FILES=}" ;;
-        LINES=*) TOTAL_LINES="${sline#LINES=}" ;;
-        RISK_LEVEL=*) RISK_LEVEL="${sline#RISK_LEVEL=}" ;;
-        RISK_SIGNALS=*) RISK_SIGNALS="${sline#RISK_SIGNALS=}" ;;
-        REC_SPECS=*) REC_SPECS="${sline#REC_SPECS=}" ;;
-        REVIEW_FILES=*) RF_OUT="${sline#REVIEW_FILES=}" ;;
-        NOISE_FILES=*) NF_OUT="${sline#NOISE_FILES=}" ;;
-      esac
-    done <<< "$SCOPE_OUT"
+    parse_scope_engine_output "$SCOPE_OUT"
+    IS_EMPTY="$_SE_IS_EMPTY"; SIZE_CLASS="$_SE_SIZE_CLASS"; FILE_COUNT="$_SE_FILES"; TOTAL_LINES="$_SE_LINES"
+    RF_OUT="$_SE_REVIEW_FILES"; NF_OUT="$_SE_NOISE_FILES"; RISK_LEVEL="$_SE_RISK_LEVEL"; RISK_SIGNALS="$_SE_RISK_SIGNALS"; REC_SPECS="$_SE_REC_SPECS"
 
     PREV_SHA="$(trim_str "$PREV_SHA")"
     HAS_PREV=false
@@ -4169,36 +4953,10 @@ case "$CMD" in
     OBS_ARR=()
     while IFS= read -r tok; do [[ -n "$tok" ]] && OBS_ARR+=("$tok"); done < <(split_csv_lines "$OBSOLETES" false)
 
-    TARGET_REF="$(trim_str "$TARGET_REF")"
-    TARGET_COMMIT_SHA=""
-    if [[ -n "$TARGET_REF" ]]; then
-      if [[ "$TARGET_REF" == -* ]]; then
-        echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}"; then
-        echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-      TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
-      if [[ -z "$TARGET_COMMIT_SHA" ]]; then
-        echo "MECHANICAL_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-    fi
-
-    BASE_SHA="$(trim_str "$BASE_SHA")"
-    if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
-      if [[ -n "$TARGET_REF" ]]; then
-        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
-      elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
-      else
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
-      fi
-    fi
-
-    assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "object" "MECHANICAL_FAIL" "--base-sha"
+    resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "MECHANICAL_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
+    TARGET_REF="$_SCOPE_TARGET_REF"
+    TARGET_COMMIT_SHA="$_SCOPE_TARGET_SHA"
+    BASE_SHA="$_SCOPE_BASE_SHA"
 
     if [[ -n "$TARGET_REF" ]]; then
       run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
@@ -4936,8 +5694,7 @@ case "$CMD" in
 
     mkdir -p "$(dirname "$FULL_RECEIPT")"
 
-    OUT_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-verify-out.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-verify-out.$$.${RANDOM}.tmp")"
-    _CLEANUP_FILES+=("$OUT_TMP")
+    make_temp_file "b3-verify-out" OUT_TMP
     set +e
     (cd "$REPO_ROOT" && sh -c "$VERIFY_CMD") >"$OUT_TMP" 2>&1
     CMD_EXIT=$?
@@ -5043,36 +5800,10 @@ timestamp_utc=${TS_UTC}
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
 
-    TARGET_REF="$(trim_str "$TARGET_REF")"
-    TARGET_COMMIT_SHA=""
-    if [[ -n "$TARGET_REF" ]]; then
-      if [[ "$TARGET_REF" == -* ]]; then
-        echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}"; then
-        echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-      TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
-      if [[ -z "$TARGET_COMMIT_SHA" ]]; then
-        echo "SYMBOL_FAIL: invalid --target-ref '$TARGET_REF'"
-        exit 1
-      fi
-    fi
-
-    BASE_SHA="$(trim_str "$BASE_SHA")"
-    if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
-      if [[ -n "$TARGET_REF" ]]; then
-        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
-      elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
-      else
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
-      fi
-    fi
-
-    assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "object" "SYMBOL_FAIL" "--base-sha"
+    resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "SYMBOL_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
+    TARGET_REF="$_SCOPE_TARGET_REF"
+    TARGET_COMMIT_SHA="$_SCOPE_TARGET_SHA"
+    BASE_SHA="$_SCOPE_BASE_SHA"
 
     if [[ -n "$TARGET_REF" ]]; then
       run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
@@ -5112,18 +5843,6 @@ timestamp_utc=${TS_UTC}
         ADD_KEYS+=("${f}|${s}")
         ADD_EXPS+=("$e")
       fi
-    }
-
-    _sym_exists() {
-      local kind="$1" f="$2" s="$3" k
-      if [[ "$kind" == "rem" ]]; then
-        [[ ${#REM_KEYS[@]} -gt 0 ]] || return 1
-        for k in "${REM_KEYS[@]}"; do [[ "$k" == "${f}|${s}" ]] && return 0; done
-      else
-        [[ ${#ADD_KEYS[@]} -gt 0 ]] || return 1
-        for k in "${ADD_KEYS[@]}"; do [[ "$k" == "${f}|${s}" ]] && return 0; done
-      fi
-      return 1
     }
 
     OLD_FILE=""
@@ -5175,7 +5894,7 @@ timestamp_utc=${TS_UTC}
         fi
         continue
       fi
-      if [[ "$ln" =~ ^@@\ -[0-9,]+\ \+[0-9,]+\ @@ ]] || [[ "$ln" =~ ^@@\ -[0-9]+\ \+[0-9]+\ @@ ]] || [[ "$ln" =~ ^@@\ -[0-9,]+\ \+[0-9]+\ @@ ]] || [[ "$ln" =~ ^@@\ -[0-9]+\ \+[0-9,]+\ @@ ]]; then
+      if [[ "$ln" =~ ^@@\ -[0-9,]+\ \+[0-9,]+\ @@ ]]; then
         IN_HUNK=true
         continue
       fi
@@ -5488,26 +6207,10 @@ timestamp_utc=${TS_UTC}
     IGNORE_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
 
-    TARGET_REF="$(trim_str "$TARGET_REF")"
-    TARGET_COMMIT_SHA=""
-    if [[ -n "$TARGET_REF" ]]; then
-      if [[ "$TARGET_REF" == -* ]]; then echo "INVENTORY_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; fi
-      run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" || { echo "INVENTORY_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; }
-      TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
-      [[ -n "$TARGET_COMMIT_SHA" ]] || { echo "INVENTORY_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; }
-    fi
-
-    BASE_SHA="$(trim_str "$BASE_SHA")"
-    if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
-      if [[ -n "$TARGET_REF" ]]; then
-        BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
-      elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
-      else
-        BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
-      fi
-    fi
-    assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "object" "INVENTORY_FAIL" "--base-sha"
+    resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "INVENTORY_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
+    TARGET_REF="$_SCOPE_TARGET_REF"
+    TARGET_COMMIT_SHA="$_SCOPE_TARGET_SHA"
+    BASE_SHA="$_SCOPE_BASE_SHA"
 
     INV_OUT=""
     if ! INV_OUT="$(run_scope_engine "$REPO_ROOT" "$BASE_SHA" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$MAX_CONC" "INVENTORY_FAIL")"; then
@@ -5515,32 +6218,13 @@ timestamp_utc=${TS_UTC}
       exit 1
     fi
 
-    IS_EMPTY="true"; PART_ERR=""; SIZE_CLASS=""; FILE_COUNT="0"; TOTAL_LINES="0"; RISK_LEVEL="LOW"; RISK_SIGNALS="none"; REC_SPECS="none"; L1_SPECS="none"; L1_SKIP="none"
-    CHANGE_TYPES=""; CONTRACT_FILES="none"; GENERATED_FILES="none"; TEST_FILES="none"; NF_OUT="none"; SPLIT_REC="false"; MC_OUT="4"; UNIT_CNT="0"
+    parse_scope_engine_output "$INV_OUT"
+    IS_EMPTY="$_SE_IS_EMPTY"; PART_ERR="$_SE_PART_ERR"; SIZE_CLASS="$_SE_SIZE_CLASS"; FILE_COUNT="$_SE_FILES"; TOTAL_LINES="$_SE_LINES"
+    RISK_LEVEL="$_SE_RISK_LEVEL"; RISK_SIGNALS="$_SE_RISK_SIGNALS"; REC_SPECS="$_SE_REC_SPECS"; L1_SPECS="$_SE_L1_SPECS"; L1_SKIP="$_SE_L1_SKIP"
+    CHANGE_TYPES="$_SE_CHANGE_TYPES"; CONTRACT_FILES="$_SE_CONTRACT_FILES"; GENERATED_FILES="$_SE_GENERATED_FILES"; TEST_FILES="$_SE_TEST_FILES"
+    NF_OUT="$_SE_NOISE_FILES"; SPLIT_REC="$_SE_SPLIT_REC"; MC_OUT="$_SE_MAX_CONC"; UNIT_CNT="$_SE_UNIT_COUNT"
     UNITS_LINES=()
-    while IFS= read -r sline; do
-      case "$sline" in
-        IS_EMPTY=*) IS_EMPTY="${sline#IS_EMPTY=}" ;;
-        PART_ERR=*) PART_ERR="${sline#PART_ERR=}" ;;
-        SIZE_CLASS=*) SIZE_CLASS="${sline#SIZE_CLASS=}" ;;
-        FILES=*) FILE_COUNT="${sline#FILES=}" ;;
-        LINES=*) TOTAL_LINES="${sline#LINES=}" ;;
-        RISK_LEVEL=*) RISK_LEVEL="${sline#RISK_LEVEL=}" ;;
-        RISK_SIGNALS=*) RISK_SIGNALS="${sline#RISK_SIGNALS=}" ;;
-        REC_SPECS=*) REC_SPECS="${sline#REC_SPECS=}" ;;
-        L1_SPECS=*) L1_SPECS="${sline#L1_SPECS=}" ;;
-        L1_SKIP=*) L1_SKIP="${sline#L1_SKIP=}" ;;
-        NOISE_FILES=*) NF_OUT="${sline#NOISE_FILES=}" ;;
-        CHANGE_TYPES=*) CHANGE_TYPES="${sline#CHANGE_TYPES=}" ;;
-        CONTRACT_FILES=*) CONTRACT_FILES="${sline#CONTRACT_FILES=}" ;;
-        GENERATED_FILES=*) GENERATED_FILES="${sline#GENERATED_FILES=}" ;;
-        TEST_FILES=*) TEST_FILES="${sline#TEST_FILES=}" ;;
-        SPLIT_REC=*) SPLIT_REC="${sline#SPLIT_REC=}" ;;
-        MAX_CONC=*) MC_OUT="${sline#MAX_CONC=}" ;;
-        UNIT_COUNT=*) UNIT_CNT="${sline#UNIT_COUNT=}" ;;
-        UNIT$'\t'*) UNITS_LINES+=("$sline") ;;
-      esac
-    done <<< "$INV_OUT"
+    if [[ ${#_SE_UNITS[@]} -gt 0 ]]; then UNITS_LINES=("${_SE_UNITS[@]}"); fi
 
     if [[ "$IS_EMPTY" == "true" ]]; then
       echo "EMPTY_DIFF"
@@ -5580,6 +6264,7 @@ timestamp_utc=${TS_UTC}
     RECEIPT_PATH=""
     CROSS_UNIT_STATUS=""
     BUDGET_STATUS=""
+    REVIEW_INDEPENDENCE=""
     PASSES_USED=-1
     PASSES_USED_SET="false"
     SCOPE=""
@@ -5601,6 +6286,7 @@ timestamp_utc=${TS_UTC}
         --receipt-path) RECEIPT_PATH="${2:-}"; shift 2 ;;
         --cross-unit-status) CROSS_UNIT_STATUS="${2:-}"; shift 2 ;;
         --budget-status) BUDGET_STATUS="${2:-}"; shift 2 ;;
+        --review-independence) REVIEW_INDEPENDENCE="${2:-}"; shift 2 ;;
         --passes-used) PASSES_USED="${2:--1}"; PASSES_USED_SET="true"; shift 2 ;;
         --scope) SCOPE="${2:-}"; shift 2 ;;
         *) echo "LEDGER_FAIL: unknown option $1" >&2; exit 1 ;;
@@ -5636,12 +6322,13 @@ timestamp_utc=${TS_UTC}
 
     if [[ "$ACT_LOW" == "normalize" ]]; then
       [[ -f "$LEDGER_FULL" ]] || { echo "LEDGER_MISSING: $LEDGER_REL"; exit 1; }
-      NORM_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-norm.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-norm.$$.${RANDOM}.tmp")"
-      _CLEANUP_FILES+=("$NORM_TMP")
+      make_temp_file "b3-norm" NORM_TMP
       NORM_CNT="$(LC_ALL=C awk -v out_f="$NORM_TMP" '
-      BEGIN { ch = 0 }
+      BEGIN { ch = 0; has_schema = 0; has_ri = 0; n = 0 }
       {
         sub(/\r$/, "", $0)
+        if ($0 == "schema=b3-review-ledger-v1") has_schema = 1
+        if ($0 ~ /^review_independence=/) has_ri = 1
         low = tolower($0)
         if (match(low, /^-?[ \t]*size_class[ \t]*[:=][ \t]*(small|medium|large|very_large)([^a-z0-9_]|$)/)) {
           # Split preserving exact prefix & suffix spacing
@@ -5657,12 +6344,24 @@ timestamp_utc=${TS_UTC}
               ln = pref rep tail
             }
           }
-          print ln > out_f
+          lines[++n] = ln
         } else {
-          print $0 > out_f
+          lines[++n] = $0
         }
       }
-      END { close(out_f); printf "%d", ch }' "$LEDGER_FULL")"
+      END {
+        inserted = 0
+        for (i = 1; i <= n; i++) {
+          print lines[i] > out_f
+          if (has_schema && !has_ri && !inserted && lines[i] ~ /^budget_status=/) {
+            print "review_independence=UNKNOWN" > out_f
+            ch++
+            inserted = 1
+          }
+        }
+        close(out_f)
+        printf "%d", ch
+      }' "$LEDGER_FULL")"
       if [[ "${NORM_CNT:-0}" -gt 0 ]]; then
         write_atomic_lf_file "$LEDGER_FULL" "$(cat "$NORM_TMP")"$'\n'
       fi
@@ -5674,28 +6373,22 @@ timestamp_utc=${TS_UTC}
     if [[ "$ACT_LOW" == "init" ]]; then
       [[ ! -d "$LEDGER_FULL" ]] || { echo "LEDGER_FAIL: --ledger-path is a directory"; exit 1; }
       if [[ "$MAX_PASSES_SET" == "true" ]]; then
-        [[ "$MAX_PASSES" =~ ^[0-9]+$ && "$MAX_PASSES" -gt 0 ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+        [[ "$MAX_PASSES" =~ ^[0-9]+$ ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+        MAX_PASSES="$((10#$MAX_PASSES))"
+        [[ "$MAX_PASSES" -gt 0 ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
       fi
-      TARGET_REF="$(trim_str "$TARGET_REF")"
-      TARGET_COMMIT_SHA=""
-      if [[ -n "$TARGET_REF" ]]; then
-        if [[ "$TARGET_REF" == -* || "$TARGET_REF" == *$'\n'* || "$TARGET_REF" == *$'\r'* ]]; then echo "LEDGER_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; fi
-        run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_REF}^{commit}" || { echo "LEDGER_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; }
-        TARGET_COMMIT_SHA="$(trim_str "$_GIT_STDOUT")"
-        [[ -n "$TARGET_COMMIT_SHA" ]] || { echo "LEDGER_FAIL: invalid --target-ref '$TARGET_REF'"; exit 1; }
+      RI_INIT="UNKNOWN"
+      if [[ -n "$(trim_str "$REVIEW_INDEPENDENCE")" ]]; then
+        RI_INIT="$(printf '%s' "$(trim_str "$REVIEW_INDEPENDENCE")" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+        case "$RI_INIT" in
+          UNKNOWN|INDEPENDENT|SINGLE_AGENT_LIMIT) ;;
+          *) echo "LEDGER_FAIL: invalid --review-independence '$RI_INIT'"; exit 1 ;;
+        esac
       fi
-      BASE_SHA="$(trim_str "$BASE_SHA")"
-      if [[ -z "$BASE_SHA" || "$BASE_SHA" == "auto" ]]; then
-        if [[ -n "$TARGET_REF" ]]; then
-          BASE_SHA="$(resolve_auto_base_for_target "$REPO_ROOT" "$TARGET_COMMIT_SHA")"
-        elif [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
-          BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT" "${IGNORE_ARR[@]}")"
-        else
-          BASE_SHA="$(resolve_auto_base_sha "$REPO_ROOT")"
-        fi
-      fi
-      assert_valid_git_rev "$REPO_ROOT" "$BASE_SHA" "commit" "LEDGER_FAIL" "--base-sha"
-      BASE_SHA="$_VALID_REV_SHA"
+      resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "LEDGER_FAIL" "commit" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
+      TARGET_REF="$_SCOPE_TARGET_REF"
+      TARGET_COMMIT_SHA="$_SCOPE_TARGET_SHA"
+      BASE_SHA="$_SCOPE_BASE_SHA"
       if [[ -n "$TARGET_COMMIT_SHA" ]]; then
         HEAD_SHA="$TARGET_COMMIT_SHA"
       else
@@ -5708,27 +6401,13 @@ timestamp_utc=${TS_UTC}
         printf '%s\n' "$INV_OUT"
         exit 1
       fi
-      IS_EMPTY="true"; PART_ERR=""; SIZE_CLASS=""; RISK_LEVEL="LOW"; RISK_SIGNALS="none"; REC_SPECS="none"; L1_SPECS="none"; L1_SKIP="none"
-      CONTRACT_FILES="none"; GENERATED_FILES="none"; RF_OUT="none"; MC_OUT="4"; UNIT_CNT="0"
+      parse_scope_engine_output "$INV_OUT"
+      IS_EMPTY="$_SE_IS_EMPTY"; PART_ERR="$_SE_PART_ERR"; SIZE_CLASS="$_SE_SIZE_CLASS"
+      RISK_LEVEL="$_SE_RISK_LEVEL"; RISK_SIGNALS="$_SE_RISK_SIGNALS"; REC_SPECS="$_SE_REC_SPECS"
+      L1_SPECS="$_SE_L1_SPECS"; L1_SKIP="$_SE_L1_SKIP"; CONTRACT_FILES="$_SE_CONTRACT_FILES"
+      GENERATED_FILES="$_SE_GENERATED_FILES"; RF_OUT="$_SE_REVIEW_FILES"; MC_OUT="$_SE_MAX_CONC"; UNIT_CNT="$_SE_UNIT_COUNT"
       UNITS_LINES=()
-      while IFS= read -r sline; do
-        case "$sline" in
-          IS_EMPTY=*) IS_EMPTY="${sline#IS_EMPTY=}" ;;
-          PART_ERR=*) PART_ERR="${sline#PART_ERR=}" ;;
-          SIZE_CLASS=*) SIZE_CLASS="${sline#SIZE_CLASS=}" ;;
-          RISK_LEVEL=*) RISK_LEVEL="${sline#RISK_LEVEL=}" ;;
-          RISK_SIGNALS=*) RISK_SIGNALS="${sline#RISK_SIGNALS=}" ;;
-          REC_SPECS=*) REC_SPECS="${sline#REC_SPECS=}" ;;
-          L1_SPECS=*) L1_SPECS="${sline#L1_SPECS=}" ;;
-          L1_SKIP=*) L1_SKIP="${sline#L1_SKIP=}" ;;
-          CONTRACT_FILES=*) CONTRACT_FILES="${sline#CONTRACT_FILES=}" ;;
-          GENERATED_FILES=*) GENERATED_FILES="${sline#GENERATED_FILES=}" ;;
-          REVIEW_FILES=*) RF_OUT="${sline#REVIEW_FILES=}" ;;
-          MAX_CONC=*) MC_OUT="${sline#MAX_CONC=}" ;;
-          UNIT_COUNT=*) UNIT_CNT="${sline#UNIT_COUNT=}" ;;
-          UNIT$'\t'*) UNITS_LINES+=("$sline") ;;
-        esac
-      done <<< "$INV_OUT"
+      if [[ ${#_SE_UNITS[@]} -gt 0 ]]; then UNITS_LINES=("${_SE_UNITS[@]}"); fi
       if [[ "$IS_EMPTY" == "true" ]]; then
         echo "LEDGER_FAIL: EMPTY_DIFF"
         exit 2
@@ -5777,50 +6456,38 @@ timestamp_utc=${TS_UTC}
         TREF_VAL="$TARGET_REF"
         TSHA_VAL="$TARGET_COMMIT_SHA"
       fi
-      LED_TXT="# B3 Review Coverage Ledger"$'\n'
-      LED_TXT+="schema=b3-review-ledger-v1"$'\n'
-      LED_TXT+="base_sha=${BASE_SHA}"$'\n'
-      LED_TXT+="head_sha=${HEAD_SHA}"$'\n'
-      LED_TXT+="target_ref=${TREF_VAL}"$'\n'
-      LED_TXT+="target_sha=${TSHA_VAL}"$'\n'
-      LED_TXT+="snapshot_sha=${SNAP_SHA}"$'\n'
-      LED_TXT+="size_class=${SIZE_CLASS}"$'\n'
-      LED_TXT+="normalized_legacy_size=none"$'\n'
-      LED_TXT+="risk_level=${RISK_LEVEL}"$'\n'
-      LED_TXT+="risk_signals=${RISK_SIGNALS}"$'\n'
-      LED_TXT+="recommended_specialists=${REC_SPECS}"$'\n'
-      LED_TXT+="l1_specialists=${L1_SPECS}"$'\n'
-      LED_TXT+="l1_skip_rationale=${L1_SKIP}"$'\n'
-      LED_TXT+="contract_files=${CONTRACT_FILES}"$'\n'
-      LED_TXT+="generated_files=${GENERATED_FILES}"$'\n'
-      LED_TXT+="max_concurrency=${MC_OUT}"$'\n'
-      LED_TXT+="max_passes=${MAX_PASSES}"$'\n'
-      LED_TXT+="passes_used=0"$'\n'
-      LED_TXT+="pass_chain=${INIT_CHAIN}"$'\n'
-      LED_TXT+="budget_status=OK"$'\n'
-      LED_TXT+="cross_unit_status=${CROSS_STATUS}"$'\n'
-      LED_TXT+="cross_unit_tree_hash=${CROSS_HASH}"$'\n'
-      LED_TXT+="unit_count=${UNIT_CNT}"$'\n\n## Units\n| unit_id | group | files_cnt | lines_cnt | risk | specialists | rationale | status | findings | verify_receipt | unit_tree_hash | files_csv |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
+      L_BASE="$BASE_SHA"; L_HEAD="$HEAD_SHA"; L_TREF="$TREF_VAL"; L_TSHA="$TSHA_VAL"; L_SNAP="$SNAP_SHA"
+      L_SIZE="$SIZE_CLASS"; L_NLSIZE="none"; L_RISK="$RISK_LEVEL"; L_RSIG="$RISK_SIGNALS"; L_RSPEC="$REC_SPECS"
+      L_L1SPEC="$L1_SPECS"; L_L1SKIP="$L1_SKIP"; L_CFILES="$CONTRACT_FILES"; L_GFILES="$GENERATED_FILES"
+      L_MCONC="$MC_OUT"; L_MPASS="$MAX_PASSES"; L_PUSED="0"; L_PCHAIN="$INIT_CHAIN"; L_BSTAT="OK"
+      L_RIND="$RI_INIT"; L_CSTAT="$CROSS_STATUS"; L_CHASH="$CROSS_HASH"; L_UCNT="$UNIT_CNT"
+      U_ROWS=()
+      P_ROWS=()
       if [[ ${#UNITS_LINES[@]} -gt 0 ]]; then
         for ul in "${UNITS_LINES[@]}"; do
           IFS=$'\t' read -r _tag uid grp ufc ulc urk usp usig ucsv <<< "$ul"
           COMB_PATHS="$ucsv"
           [[ "$CONTRACT_FILES" != "none" ]] && COMB_PATHS="${ucsv},${CONTRACT_FILES}"
           UHASH="$(compute_scope_paths_hash "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$COMB_PATHS" "$IGNORE_DIRTY")" || exit 1
-          LED_TXT+="| ${uid} | ${grp} | ${ufc} | ${ulc} | ${urk} | none | none | PENDING | none | none | ${UHASH} | ${ucsv} |"$'\n'
+          U_ROWS+=("${uid}|${grp}|${ufc}|${ulc}|${urk}|none|none|PENDING|none|none|${UHASH}|${ucsv}")
         done
       fi
-      LED_TXT+=$'\n## Pass Log\n'
-      write_atomic_lf_file "$LEDGER_FULL" "$LED_TXT"
+      serialize_review_ledger
+      write_atomic_lf_file "$LEDGER_FULL" "$_LEDGER_TXT"
       printf 'LEDGER_INIT: path=%s size=%s risk=%s units=%s max_passes=%s snapshot=%s\n' "$LEDGER_REL" "$SIZE_CLASS" "$RISK_LEVEL" "$UNIT_CNT" "$MAX_PASSES" "$SNAP_SHA"
       exit 0
     fi
 
+    if [[ "$ACT_LOW" == "check" ]]; then
+      run_review_ledger_check_sub "$REPO_ROOT" "$LEDGER_FULL" "$LEDGER_REL" "$IGNORE_DIRTY" "false"
+      exit $?
+    fi
+
     [[ -f "$LEDGER_FULL" ]] || { echo "LEDGER_MISSING: $LEDGER_REL"; exit 1; }
 
-    # Parse ledger metadata + unit rows + pass log
+    # Parse ledger metadata + unit rows + pass log (update)
     L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
-    L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"
+    L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"; L_RIND=""
     L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
     L_SEEN_KEYS=""
     U_ROWS=()
@@ -5847,7 +6514,8 @@ timestamp_utc=${TS_UTC}
         continue
       fi
       if [[ "$ln" == pass\|* ]]; then
-        [[ "$ln" =~ ^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$ ]] || { printf "LEDGER_CORRUPT: malformed pass log entry '%s'\n" "$ln"; exit 1; }
+        _re_pass='^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$'
+        [[ "$ln" =~ $_re_pass ]] || { printf "LEDGER_CORRUPT: malformed pass log entry '%s'\n" "$ln"; exit 1; }
         P_ROWS+=("$ln")
         continue
       fi
@@ -5860,6 +6528,7 @@ timestamp_utc=${TS_UTC}
         target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
         risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
         l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
+        review_independence) L_RIND="$lv" ;;
         contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;; max_concurrency) L_MCONC="$lv" ;;
         max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;; budget_status) L_BSTAT="$lv" ;;
         cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
@@ -5886,17 +6555,28 @@ timestamp_utc=${TS_UTC}
       [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
     fi
     [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid pass counter"; exit 1; }
-    if [[ "$L_HAS_CHAIN" == "true" ]]; then
-      [[ "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid pass_chain"; exit 1; }
-    elif [[ ${#P_ROWS[@]} -gt 0 ]]; then
-      echo "LEDGER_CORRUPT: pass_chain missing with non-empty pass log"
+    L_MPASS="$((10#$L_MPASS))"
+    L_PUSED="$((10#$L_PUSED))"
+    if [[ "$L_HAS_CHAIN" != "true" || -z "$L_PCHAIN" ]]; then
+      echo "LEDGER_CORRUPT: missing pass_chain"
+      exit 1
+    fi
+    [[ "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid pass_chain"; exit 1; }
+    if [[ -z "$L_RIND" ]]; then
+      echo "LEDGER_CORRUPT: missing review_independence"
+      exit 1
+    fi
+    if [[ "$L_RIND" != "UNKNOWN" && "$L_RIND" != "INDEPENDENT" && "$L_RIND" != "SINGLE_AGENT_LIMIT" ]]; then
+      echo "LEDGER_CORRUPT: invalid review_independence '$L_RIND'"
       exit 1
     fi
     [[ -z "$L_L1SPEC" ]] && L_L1SPEC="none"
     [[ -z "$L_L1SKIP" ]] && L_L1SKIP="none"
     ORIG_RAW_SIZE="$L_SIZE"
     NORM_SIZE="$(normalize_size_class "$ORIG_RAW_SIZE")" || { echo "LEDGER_CORRUPT: invalid size_class '$ORIG_RAW_SIZE'"; exit 1; }
-    [[ "$L_UCNT" =~ ^[0-9]+$ && "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
+    [[ "$L_UCNT" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
+    L_UCNT="$((10#$L_UCNT))"
+    [[ "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
     if [[ "$ORIG_RAW_SIZE" != "$NORM_SIZE" ]]; then
       L_NLSIZE="${ORIG_RAW_SIZE}:${NORM_SIZE}"
     fi
@@ -5905,13 +6585,14 @@ timestamp_utc=${TS_UTC}
     [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TSHA"
 
     verify_ledger_pass_chain() {
-      [[ "$L_HAS_CHAIN" == "true" ]] || return 0
       local cur sum idx row _pt p_seq p_scope p_kind p_delta p_ref p_hash expect_seq
       cur="$(init_pass_chain "$REPO_ROOT" "$L_BASE")" || exit 1
       sum=0; idx=0
       if [[ ${#P_ROWS[@]} -gt 0 ]]; then
         for row in "${P_ROWS[@]}"; do
           IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
+          p_seq="$((10#$p_seq))"
+          p_delta="$((10#$p_delta))"
           expect_seq=$((idx + 1))
           if [[ "$p_seq" -ne "$expect_seq" || "$p_delta" -lt 1 ]]; then
             printf 'LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index %s)\n' "$expect_seq"
@@ -5935,10 +6616,37 @@ timestamp_utc=${TS_UTC}
     if [[ "$ACT_LOW" == "update" ]]; then
       verify_ledger_pass_chain
       if [[ "$MAX_PASSES_SET" == "true" ]]; then
-        [[ "$MAX_PASSES" =~ ^[0-9]+$ && "$MAX_PASSES" -gt 0 ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+        [[ "$MAX_PASSES" =~ ^[0-9]+$ ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+        MAX_PASSES="$((10#$MAX_PASSES))"
+        [[ "$MAX_PASSES" -gt 0 ]] || { echo "LEDGER_FAIL: --max-passes must be a positive integer"; exit 1; }
+        if [[ "$MAX_PASSES" -gt "$L_MPASS" ]]; then
+          printf 'LEDGER_CORRUPT: cannot raise max_passes (%s->%s)\n' "$L_MPASS" "$MAX_PASSES"
+          exit 1
+        fi
       fi
       if [[ "$PASSES_USED_SET" == "true" ]]; then
         [[ "$PASSES_USED" =~ ^[0-9]+$ ]] || { echo "LEDGER_FAIL: --passes-used must be non-negative"; exit 1; }
+        PASSES_USED="$((10#$PASSES_USED))"
+      fi
+      ORIG_HEAD_SHA="$L_HEAD"
+      RI_EXPLICIT=false
+      if [[ -n "$(trim_str "$REVIEW_INDEPENDENCE")" ]]; then
+        RI_EXPLICIT=true
+        RI_UPD="$(printf '%s' "$(trim_str "$REVIEW_INDEPENDENCE")" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+        case "$RI_UPD" in
+          UNKNOWN|INDEPENDENT|SINGLE_AGENT_LIMIT)
+            if [[ "$L_RIND" == "SINGLE_AGENT_LIMIT" && "$RI_UPD" == "INDEPENDENT" ]]; then
+              echo "LEDGER_FAIL: cannot upgrade SINGLE_AGENT_LIMIT to INDEPENDENT"
+              exit 1
+            fi
+            if [[ "$L_RIND" == "SINGLE_AGENT_LIMIT" && "$RI_UPD" == "UNKNOWN" ]]; then
+              echo "LEDGER_FAIL: cannot clear SINGLE_AGENT_LIMIT"
+              exit 1
+            fi
+            L_RIND="$RI_UPD"
+            ;;
+          *) echo "LEDGER_FAIL: invalid --review-independence '$RI_UPD'"; exit 1 ;;
+        esac
       fi
       UNIT_ID="$(trim_str "$UNIT_ID")"
       FOUND_IDX=-1
@@ -6006,22 +6714,16 @@ timestamp_utc=${TS_UTC}
           L_HEAD="$_UPD_TR_SHA"
           L_SNAP="$_UPD_TR_SHA"
         fi
-        UPD_FSIG_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-ufsig.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ufsig.$$.${RANDOM}.tmp")"
-        UPD_FLINES_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-ufln.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-ufln.$$.${RANDOM}.tmp")"
-        _CLEANUP_FILES+=("$UPD_FSIG_TMP" "$UPD_FLINES_TMP")
+        make_temp_file "b3-ufsig" UPD_FSIG_TMP
+        make_temp_file "b3-ufln" UPD_FLINES_TMP
         : > "$UPD_FSIG_TMP"; : > "$UPD_FLINES_TMP"
         UPD_OUT=""
         if ! UPD_OUT="$(run_scope_engine "$REPO_ROOT" "$L_BASE" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$L_MCONC" "LEDGER_FAIL" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP" "false")"; then
           printf '%s\n' "$UPD_OUT"
           exit 1
         fi
-        UPD_RF="none"; UPD_CF="none"
-        while IFS= read -r uline; do
-          case "$uline" in
-            REVIEW_FILES=*) UPD_RF="${uline#REVIEW_FILES=}" ;;
-            CONTRACT_FILES=*) UPD_CF="${uline#CONTRACT_FILES=}" ;;
-          esac
-        done <<< "$UPD_OUT"
+        parse_scope_engine_output "$UPD_OUT"
+        UPD_RF="$_SE_REVIEW_FILES"; UPD_CF="$_SE_CONTRACT_FILES"
         L_CFILES="$UPD_CF"
         if [[ -n "$UPD_RF" && "$UPD_RF" != "none" ]]; then
           ALL_RISK_OUT="$(eval_risk_for_csv_awk "$UPD_RF" "$UPD_FSIG_TMP" "$UPD_FLINES_TMP")"
@@ -6067,6 +6769,9 @@ timestamp_utc=${TS_UTC}
         fi
         L_CHASH="$(compute_scope_paths_hash "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$CU_PATHS" "$IGNORE_DIRTY")" || exit 1
       fi
+      if [[ "$L_HEAD" != "$ORIG_HEAD_SHA" && "$RI_EXPLICIT" != "true" && "$L_RIND" == "INDEPENDENT" ]]; then
+        L_RIND="UNKNOWN"
+      fi
 
       PASS_EVT_ROWS=()
       AUTO_DELTA=0
@@ -6101,16 +6806,6 @@ timestamp_utc=${TS_UTC}
         NEW_PASSES="$MIN_NEXT_PASSES"
       fi
 
-      if [[ "$L_HAS_CHAIN" != "true" ]]; then
-        L_PCHAIN="$(init_pass_chain "$REPO_ROOT" "$L_BASE")" || exit 1
-        P_ROWS=()
-        if [[ "$CUR_PASSES" -gt 0 ]]; then
-          L_PCHAIN="$(step_pass_chain "$REPO_ROOT" "$L_PCHAIN" 1 "legacy" "bootstrap" "$CUR_PASSES" "none")" || exit 1
-          P_ROWS+=("pass|1|legacy|bootstrap|${CUR_PASSES}|none|${L_PCHAIN}")
-        fi
-        L_HAS_CHAIN="true"
-      fi
-
       EVT_REF_SHA="none"
       if [[ -n "$TARGET_COMMIT_SHA" ]]; then
         EVT_REF_SHA="$TARGET_COMMIT_SHA"
@@ -6140,250 +6835,13 @@ timestamp_utc=${TS_UTC}
         L_BSTAT="$BS_VAL"
       elif [[ "$L_MPASS" -gt 0 && "$L_PUSED" -gt "$L_MPASS" ]]; then
         L_BSTAT="EXHAUSTED"
-      elif [[ "$MAX_PASSES_SET" == "true" && "$L_BSTAT" == "EXHAUSTED" && "$L_PUSED" -le "$L_MPASS" ]]; then
-        L_BSTAT="OK"
       fi
 
-      LED_TXT="# B3 Review Coverage Ledger"$'\n'
-      LED_TXT+="schema=b3-review-ledger-v1"$'\n'
-      LED_TXT+="base_sha=${L_BASE}"$'\n'
-      LED_TXT+="head_sha=${L_HEAD}"$'\n'
-      LED_TXT+="target_ref=${L_TREF}"$'\n'
-      LED_TXT+="target_sha=${L_TSHA}"$'\n'
-      LED_TXT+="snapshot_sha=${L_SNAP}"$'\n'
-      LED_TXT+="size_class=${L_SIZE}"$'\n'
-      LED_TXT+="normalized_legacy_size=${L_NLSIZE}"$'\n'
-      LED_TXT+="risk_level=${L_RISK}"$'\n'
-      LED_TXT+="risk_signals=${L_RSIG}"$'\n'
-      LED_TXT+="recommended_specialists=${L_RSPEC}"$'\n'
-      LED_TXT+="l1_specialists=${L_L1SPEC}"$'\n'
-      LED_TXT+="l1_skip_rationale=${L_L1SKIP}"$'\n'
-      LED_TXT+="contract_files=${L_CFILES}"$'\n'
-      LED_TXT+="generated_files=${L_GFILES}"$'\n'
-      LED_TXT+="max_concurrency=${L_MCONC}"$'\n'
-      LED_TXT+="max_passes=${L_MPASS}"$'\n'
-      LED_TXT+="passes_used=${L_PUSED}"$'\n'
-      LED_TXT+="pass_chain=${L_PCHAIN}"$'\n'
-      LED_TXT+="budget_status=${L_BSTAT}"$'\n'
-      LED_TXT+="cross_unit_status=${L_CSTAT}"$'\n'
-      LED_TXT+="cross_unit_tree_hash=${L_CHASH}"$'\n'
-      LED_TXT+="unit_count=${L_UCNT}"$'\n\n## Units\n| unit_id | group | files_cnt | lines_cnt | risk | specialists | rationale | status | findings | verify_receipt | unit_tree_hash | files_csv |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n'
-      if [[ ${#U_ROWS[@]} -gt 0 ]]; then
-        for ur in "${U_ROWS[@]}"; do
-          IFS='|' read -r r0 r1 r2 r3 r4 r5 r6 r7 r8 r9 r10 r11 <<< "$ur"
-          LED_TXT+="| ${r0} | ${r1} | ${r2} | ${r3} | ${r4} | ${r5} | ${r6} | ${r7} | ${r8} | ${r9} | ${r10} | ${r11} |"$'\n'
-        done
-      fi
-      LED_TXT+=$'\n## Pass Log\n'
-      if [[ ${#P_ROWS[@]} -gt 0 ]]; then
-        for pr in "${P_ROWS[@]}"; do
-          LED_TXT+="${pr}"$'\n'
-        done
-      fi
-      write_atomic_lf_file "$LEDGER_FULL" "$LED_TXT"
+      serialize_review_ledger
+      write_atomic_lf_file "$LEDGER_FULL" "$_LEDGER_TXT"
       printf 'LEDGER_UPDATED: path=%s\n' "$LEDGER_REL"
       exit 0
     fi
-
-    # check
-    verify_ledger_pass_chain
-    if [[ "$L_MPASS" -le 0 ]]; then
-      printf 'LEDGER_INCOMPLETE: unbounded or invalid max_passes (%s)\n' "$L_MPASS"
-      exit 2
-    fi
-    if [[ "$L_BSTAT" == "EXHAUSTED" || "$L_PUSED" -gt "$L_MPASS" ]]; then
-      printf 'LEDGER_INCOMPLETE: budget exhausted (passes=%s/%s)\n' "$L_PUSED" "$L_MPASS"
-      exit 2
-    fi
-    REV_CNT_CHK=0
-    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
-      for ur in "${U_ROWS[@]}"; do
-        IFS='|' read -r _0 _1 _2 _3 _4 _5 _6 ust_chk _rest <<< "$ur"
-        [[ "$ust_chk" == "REVIEWED" ]] && REV_CNT_CHK=$((REV_CNT_CHK + 1))
-      done
-    fi
-    MIN_REQ_PASSES="$REV_CNT_CHK"
-    [[ "$L_CSTAT" == "REVIEWED" ]] && MIN_REQ_PASSES=$((MIN_REQ_PASSES + 1))
-    if [[ "$L_PUSED" -lt "$MIN_REQ_PASSES" ]]; then
-      printf 'LEDGER_INCOMPLETE: passes_used (%s) below minimum reviewed passes (%s)\n' "$L_PUSED" "$MIN_REQ_PASSES"
-      exit 2
-    fi
-    if [[ ( "$L_SIZE" == "L" || "$L_SIZE" == "XL" ) && "$L_UCNT" -gt 4 ]]; then
-      printf 'LEDGER_INCOMPLETE: %s PR exceeds max 4 units (%s)\n' "$L_SIZE" "$L_UCNT"
-      exit 2
-    fi
-    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
-      for ur in "${U_ROWS[@]}"; do
-        IFS='|' read -r uid_b _gb ufc_b ulc_b _rest <<< "$ur"
-        if [[ "$ulc_b" -gt 5000 || ( "$ufc_b" -gt 100 && "$ulc_b" -gt 1000 ) ]]; then
-          printf 'LEDGER_INCOMPLETE: oversized unit %s (%sf, %sL)\n' "$uid_b" "$ufc_b" "$ulc_b"
-          exit 2
-        fi
-      done
-    fi
-    if [[ "$L_TREF" != "working_tree" ]]; then
-      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${L_TREF}^{commit}"; then
-        printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
-        exit 2
-      fi
-      _CHK_TR_SHA="$(trim_str "$_GIT_STDOUT")"
-      if [[ ! "$_CHK_TR_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-        printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
-        exit 2
-      fi
-      if [[ "$_CHK_TR_SHA" != "$L_TSHA" ]]; then
-        printf "LEDGER_STALE: target_ref '%s' moved (%s->%s)\n" "$L_TREF" "$L_TSHA" "$_CHK_TR_SHA"
-        exit 2
-      fi
-    fi
-
-    FSIG_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-fsig.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-fsig.$$.${RANDOM}.tmp")"
-    FLINES_TMP="$(mktemp "${TMPDIR:-/tmp}/b3-fln.XXXXXX" 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/b3-fln.$$.${RANDOM}.tmp")"
-    _CLEANUP_FILES+=("$FSIG_TMP" "$FLINES_TMP")
-    : > "$FSIG_TMP"; : > "$FLINES_TMP"
-
-    LIVE_OUT=""
-    if ! LIVE_OUT="$(run_scope_engine "$REPO_ROOT" "$L_BASE" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$L_MCONC" "LEDGER_FAIL" "$FSIG_TMP" "$FLINES_TMP" "false")"; then
-      printf '%s\n' "$LIVE_OUT"
-      exit 1
-    fi
-    LIVE_EMPTY="true"; LIVE_RF="none"; LIVE_CF="none"
-    while IFS= read -r sline; do
-      case "$sline" in
-        IS_EMPTY=*) LIVE_EMPTY="${sline#IS_EMPTY=}" ;;
-        REVIEW_FILES=*) LIVE_RF="${sline#REVIEW_FILES=}" ;;
-        CONTRACT_FILES=*) LIVE_CF="${sline#CONTRACT_FILES=}" ;;
-      esac
-    done <<< "$LIVE_OUT"
-    if [[ "$LIVE_EMPTY" == "true" ]]; then
-      echo "LEDGER_INCOMPLETE: empty diff target"
-      exit 2
-    fi
-
-    if [[ "$LIVE_RF" != "none" ]]; then
-      ASS_CSV=""
-      if [[ ${#U_ROWS[@]} -gt 0 ]]; then
-        for ur in "${U_ROWS[@]}"; do
-          IFS='|' read -r _0 _1 _2 _3 _4 _5 _6 _7 _8 _9 _10 fcsv <<< "$ur"
-          ASS_CSV+=",${fcsv}"
-        done
-      fi
-      UNCOV="$(LC_ALL=C awk -v lrf="$LIVE_RF" -v acsv="$ASS_CSV" '
-      BEGIN {
-        n1 = split(acsv, a, ",")
-        for (i = 1; i <= n1; i++) if (a[i] != "") seen[a[i]] = 1
-        n2 = split(lrf, b, ",")
-        nu = 0
-        for (i = 1; i <= n2; i++) if (b[i] != "" && !(b[i] in seen)) u[++nu] = b[i]
-        if (nu > 0) {
-          for (i = 2; i <= nu; i++) { t = u[i]; j = i - 1; while (j >= 1 && u[j] > t) { u[j + 1] = u[j]; j-- } u[j + 1] = t }
-          out = u[1]; for (i = 2; i <= nu; i++) out = out "," u[i]
-          print out
-        }
-      }')"
-      if [[ -n "$UNCOV" ]]; then
-        printf 'LEDGER_INCOMPLETE: uncovered files (%s)\n' "$UNCOV"
-        exit 2
-      fi
-    fi
-
-    if [[ ${#U_ROWS[@]} -gt 0 ]]; then
-      for ur in "${U_ROWS[@]}"; do
-      IFS='|' read -r uid grp ufc ulc urisk uspec urat ust ufind urec uhash ufcsv <<< "$ur"
-      [[ "$ust" == "BLOCKED" ]] && { printf 'LEDGER_BLOCKED: unit %s\n' "$uid"; exit 2; }
-      [[ "$ust" == "STALE" ]] && { printf 'LEDGER_STALE: unit %s\n' "$uid"; exit 2; }
-      [[ "$ust" == "REVIEWED" ]] || { printf 'LEDGER_INCOMPLETE: unit %s status=%s\n' "$uid" "$ust"; exit 2; }
-      if LC_ALL=C awk -v f="$ufind" 'BEGIN { exit !(f ~ /(^|[,:; ])(OPEN|FIXED)($|[,:; ])/) }'; then
-        printf 'LEDGER_INCOMPLETE: unresolved findings in %s (%s)\n' "$uid" "$ufind"
-        exit 2
-      fi
-
-      LU_RISK="$(eval_risk_for_csv_awk "$ufcsv" "$FSIG_TMP" "$FLINES_TMP")"
-      { IFS= read -r LU_LVL; IFS= read -r LU_SIG; IFS= read -r LU_SP; } <<< "$LU_RISK"
-      if [[ "$LU_LVL" != "$urisk" ]]; then
-        printf 'LEDGER_STALE: unit %s risk changed (%s->%s)\n' "$uid" "$urisk" "$LU_LVL"
-        exit 2
-      fi
-      if [[ "$LU_SP" != "none" ]]; then
-        MISS_SP="$(LC_ALL=C awk -v req="$LU_SP" -v got="$uspec" '
-        BEGIN {
-          n1 = split(got, a, ","); for (i = 1; i <= n1; i++) if (a[i] != "" && a[i] != "none") g[a[i]] = 1
-          n2 = split(req, b, ","); nm = 0
-          for (i = 1; i <= n2; i++) if (b[i] != "" && !(b[i] in g)) m[++nm] = b[i]
-          if (nm > 0) { out = m[1]; for (i = 2; i <= nm; i++) out = out "," m[i]; print out }
-        }')"
-        if [[ -n "$MISS_SP" ]]; then
-          if [[ "$LU_LVL" == "CRITICAL" ]]; then
-            if is_waiver_attempt "$urat"; then
-              printf 'LEDGER_BLOCKED: unverified CRITICAL specialist waiver rejected on %s (missing %s; self-declared waivers are disabled without trusted owner approval)\n' "$uid" "$MISS_SP"
-              exit 2
-            fi
-            printf 'LEDGER_INCOMPLETE: mandatory CRITICAL specialist (%s) required on %s (waivers disabled without trusted owner approval)\n' "$MISS_SP" "$uid"
-            exit 2
-          else
-            rat_t="$(trim_str "$urat")"
-            if [[ "$rat_t" == "none" || ${#rat_t} -lt 5 ]]; then
-              printf 'LEDGER_INCOMPLETE: missing specialist (%s) or rationale on %s\n' "$MISS_SP" "$uid"
-              exit 2
-            fi
-          fi
-        fi
-      fi
-
-      COMB_U="$ufcsv"
-      [[ "$LIVE_CF" != "none" ]] && COMB_U="${ufcsv},${LIVE_CF}"
-      CUR_UHASH="$(compute_scope_paths_hash "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$COMB_U" "$IGNORE_DIRTY")" || exit 1
-      if [[ "$CUR_UHASH" != "$uhash" ]]; then
-        printf 'LEDGER_STALE: unit %s invalidated (files or shared contracts changed)\n' "$uid"
-        exit 2
-      fi
-
-      IFS=$'\t' read -r LIVE_UFC LIVE_ULC < <(unit_counts_from_flines_awk "$ufcsv" "$FLINES_TMP")
-      if [[ "$LIVE_ULC" -gt 5000 || ( "$LIVE_UFC" -gt 100 && "$LIVE_ULC" -gt 1000 ) ]]; then
-        printf 'LEDGER_INCOMPLETE: oversized unit %s (%sf, %sL)\n' "$uid" "$LIVE_UFC" "$LIVE_ULC"
-        exit 2
-      fi
-
-      HAS_CODE="$(LC_ALL=C awk -v c="$ufcsv" "$_B3_RISK_AWK_LIB"'BEGIN{n=split(c,a,",");hc=0;for(i=1;i<=n;i++){if(a[i]!="" && !(is_doc_asset(a[i])||is_test_p(a[i]))){hc=1;break}}print hc}')"
-      if [[ "$urec" == "none" ]]; then
-        if [[ "$HAS_CODE" == "1" && ( "$urisk" == "HIGH" || "$urisk" == "CRITICAL" ) ]]; then
-          printf 'LEDGER_INCOMPLETE: missing verify_receipt for %s unit %s\n' "$urisk" "$uid"
-          exit 2
-        fi
-      else
-        if run_verify_check "$REPO_ROOT" "$urec" "$IGNORE_DIRTY" "" "$ufcsv"; then
-          :
-        else
-          vrc=$?
-          if [[ $vrc -eq 2 ]]; then
-            printf 'LEDGER_STALE: unit %s receipt invalid (%s)\n' "$uid" "$_VR_MSG"
-          else
-            printf 'LEDGER_INCOMPLETE: unit %s receipt invalid (%s)\n' "$uid" "$_VR_MSG"
-          fi
-          exit 2
-        fi
-      fi
-    done
-    fi
-
-    if [[ ( "$L_SIZE" == "L" || "$L_SIZE" == "XL" || "$L_SIZE" == "XXL" ) && "$L_UCNT" -gt 1 ]]; then
-      [[ "$L_CSTAT" == "BLOCKED" ]] && { echo "LEDGER_BLOCKED: cross_unit blocked"; exit 2; }
-      [[ "$L_CSTAT" == "STALE" ]] && { echo "LEDGER_STALE: cross_unit stale"; exit 2; }
-      [[ "$L_CSTAT" == "REVIEWED" ]] || { printf 'LEDGER_INCOMPLETE: cross_unit_status=%s\n' "$L_CSTAT"; exit 2; }
-      CU_PATHS="$LIVE_CF"
-      [[ "$CU_PATHS" == "none" ]] && CU_PATHS="$LIVE_RF"
-      CUR_CU_HASH="$(compute_scope_paths_hash "$REPO_ROOT" "$TARGET_COMMIT_SHA" "$CU_PATHS" "$IGNORE_DIRTY")" || exit 1
-      if [[ "$CUR_CU_HASH" != "$L_CHASH" ]]; then
-        echo "LEDGER_STALE: cross_unit invalidated"
-        exit 2
-      fi
-    fi
-
-    rm -f "$FSIG_TMP" "$FLINES_TMP" 2>/dev/null || true
-    NORM_TAG=""
-    [[ "$ORIG_RAW_SIZE" != "$L_SIZE" ]] && NORM_TAG=" normalized_from=${ORIG_RAW_SIZE}"
-    printf 'LEDGER_GATE_PASS: size=%s risk=%s units=%s/%s cross_unit=%s%s\n' "$L_SIZE" "$L_RISK" "$L_UCNT" "$L_UCNT" "$L_CSTAT" "$NORM_TAG"
-    exit 0
     ;;
 
   evidence-check)
@@ -6568,27 +7026,44 @@ ${el}"
     REPO_ROOT="."
     POLICY_PATH=""
     PR_STATE="NONE"
+    PR_STATE_SET=false
     CI_STATUS="UNKNOWN"
+    CI_STATUS_SET=false
     REVIEW_STATUS="UNKNOWN"
+    REVIEW_STATUS_SET=false
     BLOCKING_FINDINGS="0"
     GOV_STATUS="CLEAR"
     CHANGED_PATHS=""
     POST_MERGE=false
     MERGED_SHA=""
-    MAIN_REF="HEAD"
+    MAIN_REF=""
+    BASE_SHA=""
+    LEDGER_PATH=""
+    IGNORE_DIRTY=""
+    PR_NUMBER=""
+    REPO_ARG=""
+    TARGET_BRANCH=""
+    LOCAL_ONLY=false
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
         --policy-path) POLICY_PATH="${2:-}"; shift 2 ;;
-        --pr-state) PR_STATE="${2:-}"; shift 2 ;;
-        --ci-status) CI_STATUS="${2:-}"; shift 2 ;;
-        --review-status) REVIEW_STATUS="${2:-}"; shift 2 ;;
+        --pr-state) PR_STATE="${2:-}"; PR_STATE_SET=true; shift 2 ;;
+        --ci-status) CI_STATUS="${2:-}"; CI_STATUS_SET=true; shift 2 ;;
+        --review-status) REVIEW_STATUS="${2:-}"; REVIEW_STATUS_SET=true; shift 2 ;;
         --blocking-findings) BLOCKING_FINDINGS="${2:-}"; shift 2 ;;
         --governance-status) GOV_STATUS="${2:-}"; shift 2 ;;
         --changed-paths) CHANGED_PATHS="${2:-}"; shift 2 ;;
         --post-merge) POST_MERGE=true; shift ;;
         --merged-sha) MERGED_SHA="${2:-}"; shift 2 ;;
         --main-ref) MAIN_REF="${2:-}"; shift 2 ;;
+        --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
+        --ledger-path) LEDGER_PATH="${2:-}"; shift 2 ;;
+        --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
+        --pr-number) PR_NUMBER="${2:-}"; shift 2 ;;
+        --repo) REPO_ARG="${2:-}"; shift 2 ;;
+        --target-branch) TARGET_BRANCH="${2:-}"; shift 2 ;;
+        --local-only) LOCAL_ONLY=true; shift ;;
         *) echo "MERGE_BLOCKED: unknown option $1" >&2; exit 1 ;;
       esac
     done
@@ -6598,6 +7073,8 @@ ${el}"
     REVIEW_STATUS="$(trim_str "$REVIEW_STATUS")"; [[ -n "$REVIEW_STATUS" ]] || REVIEW_STATUS="UNKNOWN"
     GOV_STATUS="$(trim_str "$GOV_STATUS")"; [[ -n "$GOV_STATUS" ]] || GOV_STATUS="CLEAR"
     BLOCKING_FINDINGS="$(trim_str "$BLOCKING_FINDINGS")"; [[ -n "$BLOCKING_FINDINGS" ]] || BLOCKING_FINDINGS="0"
+    PR_NUM_TRIM="$(trim_str "$PR_NUMBER")"
+    TARGET_BR_TRIM="$(trim_str "$TARGET_BRANCH")"
 
     case "$PR_STATE" in OPEN|MERGED|CLOSED|NONE) ;; *) echo "MERGE_BLOCKED: invalid_pr_state=$PR_STATE"; exit 1 ;; esac
     case "$CI_STATUS" in PASS|FAIL|PENDING|UNKNOWN) ;; *) echo "MERGE_BLOCKED: invalid_ci_status=$CI_STATUS"; exit 1 ;; esac
@@ -6611,21 +7088,117 @@ ${el}"
       exit 1
     fi
     BLOCKING_FINDINGS="$((10#$BLOCKING_FINDINGS))"
+    if [[ -n "$TARGET_BR_TRIM" ]]; then
+      if [[ "$TARGET_BR_TRIM" == -* || "$TARGET_BR_TRIM" =~ [[:space:][:cntrl:]] || "$TARGET_BR_TRIM" == *".."* ]]; then
+        if $POST_MERGE; then
+          echo "POST_MERGE_FAILED: invalid_target_branch"
+        else
+          echo "MERGE_BLOCKED: invalid_target_branch"
+        fi
+        exit 1
+      fi
+    fi
 
     if $POST_MERGE; then
-      if [[ "$PR_STATE" != "MERGED" ]]; then
+      if $PR_STATE_SET && [[ "$PR_STATE" != "MERGED" ]]; then
         echo "POST_MERGE_FAILED: pr_state=$PR_STATE"
         exit 1
       fi
+      MAIN_REF="$(trim_str "$MAIN_REF")"
+      if [[ -z "$MAIN_REF" ]]; then
+        echo "POST_MERGE_FAILED: missing_main_ref"
+        exit 1
+      fi
+      MAIN_REF_UP="$(printf '%s' "$MAIN_REF" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+      _re_head='^(HEAD([~^].*)?|@([~^{].*)?)$'
+      if [[ "$MAIN_REF" == -* || "$MAIN_REF" =~ [[:space:][:cntrl:]] || "$MAIN_REF_UP" =~ $_re_head ]]; then
+        echo "POST_MERGE_FAILED: invalid_main_ref"
+        exit 1
+      fi
+      SYM_FULL=""
+      if run_git_cmd "$REPO_ROOT" rev-parse --symbolic-full-name "$MAIN_REF"; then
+        SYM_FULL="$(trim_str "$_GIT_STDOUT")"
+      fi
+      if [[ "$SYM_FULL" != refs/heads/* && "$SYM_FULL" != refs/remotes/* ]]; then
+        echo "POST_MERGE_FAILED: invalid_main_ref"
+        exit 1
+      fi
+      LOCAL_TARGET_BRANCH=""
+      if [[ "$SYM_FULL" == refs/heads/* ]]; then
+        LOCAL_TARGET_BRANCH="${SYM_FULL#refs/heads/}"
+      elif [[ "$SYM_FULL" =~ ^refs/remotes/[^/]+/(.+)$ ]]; then
+        LOCAL_TARGET_BRANCH="${BASH_REMATCH[1]}"
+      fi
+      if [[ -z "$LOCAL_TARGET_BRANCH" ]]; then
+        echo "POST_MERGE_FAILED: invalid_main_ref"
+        exit 1
+      fi
+      if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$LOCAL_TARGET_BRANCH" ]]; then
+        echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${TARGET_BR_TRIM},got=${LOCAL_TARGET_BRANCH})"
+        exit 1
+      fi
+      if [[ -z "$PR_NUM_TRIM" ]]; then
+        echo "POST_MERGE_FAILED: missing_pr_number"
+        exit 1
+      fi
+      if [[ ! "$PR_NUM_TRIM" =~ ^[1-9][0-9]*$ ]]; then
+        echo "POST_MERGE_FAILED: invalid_pr_number"
+        exit 1
+      fi
       MERGED_SHA="$(trim_str "$MERGED_SHA")"
-      MAIN_REF="$(trim_str "$MAIN_REF")"; [[ -n "$MAIN_REF" ]] || MAIN_REF="HEAD"
-      if [[ -z "$MERGED_SHA" || "$MERGED_SHA" == -* || -z "$MAIN_REF" || "$MAIN_REF" == -* ]]; then
+      if [[ -n "$MERGED_SHA" && "$MERGED_SHA" == -* ]]; then
         echo "POST_MERGE_FAILED: invalid_ref"
         exit 1
       fi
+
+      resolve_github_repo_slug "$REPO_ROOT" "$REPO_ARG" "POST_MERGE_FAILED"
+      REPO_SLUG="$_RESOLVED_GH_REPO"
+      invoke_b3_github_verify "post-merge" "$REPO_SLUG" "$PR_NUM_TRIM" "POST_MERGE_FAILED"
+
+      _gh_br_low="$(printf '%s' "$GH_BASE_REPO" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      _rs_low="$(printf '%s' "$REPO_SLUG" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      if [[ "$GH_PR_NUMBER" != "$PR_NUM_TRIM" || "$_gh_br_low" != "$_rs_low" ]]; then
+        echo "POST_MERGE_FAILED: pr_identity_mismatch"
+        exit 1
+      fi
+      if [[ "$GH_PR_MERGED" != "true" || "$GH_PR_STATE" != "CLOSED" ]]; then
+        echo "POST_MERGE_FAILED: pr_not_merged(state=${GH_PR_STATE},merged=${GH_PR_MERGED})"
+        exit 1
+      fi
+      if [[ ! "$GH_MERGE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "POST_MERGE_FAILED: missing_merge_commit_sha"
+        exit 1
+      fi
+      if [[ "$LOCAL_TARGET_BRANCH" != "$GH_BASE_REF" ]]; then
+        echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${GH_BASE_REF},got=${LOCAL_TARGET_BRANCH})"
+        exit 1
+      fi
+      if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$GH_BASE_REF" ]]; then
+        echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${GH_BASE_REF},got=${TARGET_BR_TRIM})"
+        exit 1
+      fi
+      if [[ -n "$MERGED_SHA" ]]; then
+        CALLER_M_SHA=""
+        if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${MERGED_SHA}^{commit}"; then
+          CALLER_M_SHA="$(trim_str "$_GIT_STDOUT")"
+        fi
+        if [[ ! "$CALLER_M_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "POST_MERGE_FAILED: unresolvable_commit"
+          exit 1
+        fi
+        if [[ "$CALLER_M_SHA" != "$GH_MERGE_COMMIT_SHA" ]]; then
+          echo "POST_MERGE_FAILED: merge_commit_sha_mismatch(expected=${GH_MERGE_COMMIT_SHA},got=${CALLER_M_SHA})"
+          exit 1
+        fi
+      fi
+      if [[ ( "$GH_COMPARE_STATUS" != "identical" && "$GH_COMPARE_STATUS" != "ahead" ) || "$GH_COMPARE_BEHIND" != "0" ]]; then
+        echo "POST_MERGE_FAILED: merge_commit_not_in_remote_target(status=${GH_COMPARE_STATUS},target_ref=${GH_BASE_REF})"
+        exit 1
+      fi
+
       RES_MERGED=""
       RES_MAIN=""
-      if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${MERGED_SHA}^{commit}"; then
+      if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${GH_MERGE_COMMIT_SHA}^{commit}"; then
         RES_MERGED="$(trim_str "$_GIT_STDOUT")"
       fi
       if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${MAIN_REF}^{commit}"; then
@@ -6636,10 +7209,30 @@ ${el}"
         exit 1
       fi
       if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$RES_MAIN"; then
-        echo "POST_MERGE_FAILED: sha_not_in_main(sha=${RES_MERGED},main_ref=${MAIN_REF})"
+        echo "POST_MERGE_FAILED: sha_not_in_target(sha=${RES_MERGED},target_ref=${GH_BASE_REF},main_ref=${MAIN_REF})"
         exit 1
       fi
-      printf 'POST_MERGE_VERIFIED: sha=%s main_ref=%s runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED\n' "$RES_MERGED" "$MAIN_REF"
+
+      if ! run_git_cmd "$REPO_ROOT" rev-list --parents -n 1 "$RES_MERGED"; then
+        echo "POST_MERGE_FAILED: unresolvable_commit"
+        exit 1
+      fi
+      PAR_LINE="$(trim_str "$_GIT_STDOUT")"
+      read -r -a PAR_TOKS <<< "$PAR_LINE"
+      PAR_CNT=$((${#PAR_TOKS[@]} - 1))
+      MERGE_KIND="squash_or_rebase"
+      if [[ "$PAR_CNT" -ge 2 ]]; then
+        MERGE_KIND="merge_commit"
+        if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$GH_HEAD_SHA" "$RES_MERGED"; then
+          echo "POST_MERGE_FAILED: merge_commit_head_mismatch"
+          exit 1
+        fi
+      elif [[ "$RES_MERGED" == "$GH_HEAD_SHA" ]]; then
+        MERGE_KIND="fast_forward"
+      fi
+
+      printf 'POST_MERGE_VERIFIED: pr=%s#%s pr_status=PR_MERGED sha=%s target_ref=%s main_ref=%s merge_kind=%s runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED\n' \
+        "$GH_BASE_REPO" "$PR_NUM_TRIM" "$RES_MERGED" "$GH_BASE_REF" "$MAIN_REF" "$MERGE_KIND"
       exit 0
     fi
 
@@ -6648,15 +7241,20 @@ ${el}"
     REQ_CI="true"
     REQ_REV="true"
     PROT_ARR=()
+    ALLOWED_BRANCHES=()
 
     POL_FULL=""
+    POL_REL=""
+    POL_EXPLICIT=false
     POLICY_PATH="$(trim_str "$POLICY_PATH")"
     if [[ -n "$POLICY_PATH" ]]; then
+      POL_EXPLICIT=true
       if ! check_contained_repo_path "$REPO_ROOT" "$POLICY_PATH"; then
         echo "MERGE_BLOCKED: invalid_policy_path"
         exit 1
       fi
       POL_FULL="$_CONTAINED_FULL"
+      POL_REL="$_CONTAINED_REL"
       if [[ ! -f "$POL_FULL" ]]; then
         echo "MERGE_BLOCKED: missing_policy"
         exit 1
@@ -6667,6 +7265,7 @@ ${el}"
         exit 1
       fi
       POL_FULL="$_CONTAINED_FULL"
+      POL_REL="$_CONTAINED_REL"
       if [[ ! -f "$POL_FULL" ]]; then
         echo "MERGE_BLOCKED: invalid_policy_path"
         exit 1
@@ -6679,21 +7278,32 @@ ${el}"
       POL_RC=$?
       set -e
       if [[ $POL_RC -eq 3 ]]; then
-        echo "MERGE_BLOCKED: invalid_auto_merge"
+        _bad_am="${PARSED_POL#invalid_auto_merge=}"
+        _bad_am="${_bad_am%%$'\n'*}"
+        _bad_am="${_bad_am%$'\r'}"
+        echo "MERGE_BLOCKED: invalid_auto_merge=${_bad_am}"
         exit 1
       elif [[ $POL_RC -ne 0 ]]; then
         echo "MERGE_BLOCKED: invalid_policy_json"
         exit 1
       fi
       while IFS= read -r pline; do
+        pline="${pline%$'\r'}"
         case "$pline" in
           auto_merge=*) AUTO_MERGE="${pline#auto_merge=}" ;;
           allow_protected_paths=*) ALLOW_PROT="${pline#allow_protected_paths=}" ;;
           require_ci=*) REQ_CI="${pline#require_ci=}" ;;
           require_review=*) REQ_REV="${pline#require_review=}" ;;
           protected_path=*)
-            np="$(norm_path "${pline#protected_path=}")"
-            [[ -n "$np" ]] && PROT_ARR+=("$np")
+            raw_pp="${pline#protected_path=}"
+            if ! normalize_merge_policy_path "$raw_pp"; then
+              echo "MERGE_BLOCKED: invalid_policy_json"
+              exit 1
+            fi
+            PROT_ARR+=("$_MP_NORM_PATH")
+            ;;
+          allowed_target_branch=*)
+            ALLOWED_BRANCHES+=("${pline#allowed_target_branch=}")
             ;;
         esac
       done <<< "$PARSED_POL"
@@ -6705,20 +7315,411 @@ ${el}"
     fi
 
     CHANGED_ARR=()
-    while IFS= read -r cp; do [[ -n "$cp" ]] && CHANGED_ARR+=("$cp"); done < <(split_csv_lines "$CHANGED_PATHS" true)
+    TRIM_CP="$(trim_str "$CHANGED_PATHS")"
+    if [[ -n "$TRIM_CP" && "$TRIM_CP" != "[]" && "$TRIM_CP" != "none" ]]; then
+      RAW_CP="$CHANGED_PATHS"
+      while [[ "$RAW_CP" == " "* ]]; do RAW_CP="${RAW_CP# }"; done
+      if [[ "$RAW_CP" == "["* && "$RAW_CP" == *"]" ]]; then
+        RAW_CP="${RAW_CP#\[}"
+        RAW_CP="${RAW_CP%\]}"
+      fi
+      _cp_rem="$RAW_CP"
+      while true; do
+        if [[ "$_cp_rem" == *,* ]]; then
+          _cp_tok="${_cp_rem%%,*}"
+          _cp_rem="${_cp_rem#*,}"
+          _cp_more=true
+        else
+          _cp_tok="$_cp_rem"
+          _cp_rem=""
+          _cp_more=false
+        fi
+        while [[ "$_cp_tok" == " "* ]]; do _cp_tok="${_cp_tok# }"; done
+        if ! normalize_merge_policy_path "$_cp_tok"; then
+          echo "MERGE_BLOCKED: invalid_changed_path"
+          exit 1
+        fi
+        CHANGED_ARR+=("$_MP_NORM_PATH")
+        $_cp_more || break
+      done
+    fi
+
+    EFFECTIVE_POL_REL="${POL_REL:-.b3/research-policy.json}"
+    POL_PROT_ARR=(".b3/research-policy.json")
+    _pr_low="$(printf '%s' "$EFFECTIVE_POL_REL" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$_pr_low" != ".b3/research-policy.json" ]]; then
+      POL_PROT_ARR+=("$EFFECTIVE_POL_REL")
+    fi
+
     if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#CHANGED_ARR[@]} -gt 0 ]]; then
       PROT_HITS=()
       for cp in "${CHANGED_ARR[@]}"; do
-        if path_in_list "$cp" "${PROT_ARR[@]}"; then
+        if protected_path_match_ci "$cp" "${PROT_ARR[@]}"; then
           PROT_HITS+=("$cp")
-          continue
         fi
-        for pp in "${PROT_ARR[@]}"; do
-          if [[ "$cp" == "." || "$pp" == "$cp/"* ]]; then
-            PROT_HITS+=("$cp")
-            break
+      done
+      if [[ ${#PROT_HITS[@]} -gt 0 ]]; then
+        echo "MERGE_BLOCKED: protected_paths=$(printf '%s\n' "${PROT_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        exit 1
+      fi
+    fi
+    if [[ ${#CHANGED_ARR[@]} -gt 0 ]]; then
+      for cp in "${CHANGED_ARR[@]}"; do
+        if protected_path_match_ci "$cp" "${POL_PROT_ARR[@]}"; then
+          echo "MERGE_BLOCKED: policy_modified_in_pr"
+          exit 1
+        fi
+      done
+    fi
+
+    if [[ "$BLOCKING_FINDINGS" -gt 0 ]]; then
+      echo "MERGE_BLOCKED: blocking_findings=$BLOCKING_FINDINGS"
+      exit 1
+    fi
+
+    # Caller-supplied negative signals always tighten (can block, never authorize)
+    if $CI_STATUS_SET && [[ "$CI_STATUS" == "FAIL" || "$CI_STATUS" == "PENDING" ]]; then
+      echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
+      exit 1
+    fi
+    if $REVIEW_STATUS_SET && [[ "$REVIEW_STATUS" == "BLOCKED" || "$REVIEW_STATUS" == "PENDING" ]]; then
+      echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
+      exit 1
+    fi
+    if $PR_STATE_SET && [[ "$PR_STATE" == "CLOSED" || "$PR_STATE" == "MERGED" ]]; then
+      echo "MERGE_BLOCKED: pr_state=$PR_STATE"
+      exit 1
+    fi
+
+    # Offline / deterministic local mode (when --pr-number is omitted or --local-only is set)
+    if [[ -z "$PR_NUM_TRIM" ]] || $LOCAL_ONLY; then
+      if [[ "$REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
+        echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
+        exit 1
+      fi
+      if [[ "$REQ_REV" == "true" && "$REVIEW_STATUS" != "PASS" ]]; then
+        echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
+        exit 1
+      fi
+      if [[ "$PR_STATE" != "OPEN" ]]; then
+        echo "MERGE_BLOCKED: pr_state=$PR_STATE"
+        exit 1
+      fi
+
+      if [[ "$AUTO_MERGE" != "authorized" ]]; then
+        if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#CHANGED_ARR[@]} -eq 0 ]]; then
+          echo "MERGE_BLOCKED: missing_changed_paths"
+          exit 1
+        fi
+        BASE_TRIM="$(trim_str "$BASE_SHA")"
+        if [[ -n "$BASE_TRIM" ]]; then
+          if [[ "$BASE_TRIM" == -* ]] || ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM}^{commit}" || [[ ! "$(trim_str "$_GIT_STDOUT")" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MERGE_BLOCKED: invalid_base_sha"
+            exit 1
           fi
-        done
+        fi
+        LED_TRIM="$(trim_str "$LEDGER_PATH")"
+        if [[ -n "$LED_TRIM" ]]; then
+          if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM"; then
+            echo "MERGE_BLOCKED: invalid_ledger_path"
+            exit 1
+          fi
+        fi
+        echo "PR_READY: auto_merge=disabled"
+        exit 2
+      fi
+
+      if ! $LOCAL_ONLY; then
+        echo "MERGE_BLOCKED: missing_pr_number"
+        exit 1
+      fi
+
+      # Explicit --local-only deterministic check (NEVER returns MERGE_AUTHORIZED / exit 0)
+      BASE_TRIM_LOC="$(trim_str "$BASE_SHA")"
+      if [[ -z "$BASE_TRIM_LOC" ]]; then echo "MERGE_BLOCKED: missing_base_sha"; exit 1; fi
+      if [[ "$BASE_TRIM_LOC" == -* ]] || ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM_LOC}^{commit}"; then
+        echo "MERGE_BLOCKED: invalid_base_sha"; exit 1
+      fi
+      RES_BASE_LOC="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$RES_BASE_LOC" =~ ^[0-9a-f]{40}$ ]]; then echo "MERGE_BLOCKED: invalid_base_sha"; exit 1; fi
+      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "HEAD^{commit}"; then echo "MERGE_BLOCKED: invalid_head"; exit 1; fi
+      LIVE_HEAD_LOC="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$LIVE_HEAD_LOC" =~ ^[0-9a-f]{40}$ ]]; then echo "MERGE_BLOCKED: invalid_head"; exit 1; fi
+      if [[ "$RES_BASE_LOC" == "$LIVE_HEAD_LOC" ]]; then echo "MERGE_BLOCKED: base_sha_equals_head"; exit 1; fi
+      LED_TRIM_LOC="$(trim_str "$LEDGER_PATH")"
+      if [[ -z "$LED_TRIM_LOC" ]]; then echo "MERGE_BLOCKED: missing_ledger_path"; exit 1; fi
+      if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM_LOC"; then echo "MERGE_BLOCKED: invalid_ledger_path"; exit 1; fi
+      LED_FULL_LOC="$_CONTAINED_FULL"; LED_REL_LOC="$_CONTAINED_REL"
+      if [[ ! -f "$LED_FULL_LOC" ]]; then echo "MERGE_BLOCKED: missing_ledger_path"; exit 1; fi
+      set +e
+      LED_LOC_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL_LOC" "$LED_REL_LOC" "" "true")"
+      LED_LOC_RC=$?
+      set -e
+      if [[ $LED_LOC_RC -ne 0 ]]; then
+        _first_err="${LED_LOC_OUT%%$'\n'*}"
+        echo "MERGE_BLOCKED: ledger_check_failed (${_first_err:-unknown})"
+        exit 1
+      fi
+      M_RIND_LOC=""
+      while IFS= read -r mline; do
+        case "$mline" in META_REVIEW_INDEPENDENCE=*) M_RIND_LOC="${mline#META_REVIEW_INDEPENDENCE=}" ;; esac
+      done <<< "$LED_LOC_OUT"
+      if [[ "$M_RIND_LOC" == "SINGLE_AGENT_LIMIT" ]]; then echo "MERGE_BLOCKED: single_agent_limit"; exit 1; fi
+      if [[ "$M_RIND_LOC" != "INDEPENDENT" ]]; then echo "MERGE_BLOCKED: review_independence_unknown"; exit 1; fi
+      echo "LOCAL_ELIGIBLE_ONLY: remote_provider_required"
+      exit 2
+    fi
+
+    # --- Trusted Remote Authorization Path (R001 + R002) ---
+    if [[ "$EFFECTIVE_POL_REL" != ".b3/research-policy.json" ]]; then
+      echo "MERGE_BLOCKED: policy_path_override_not_allowed"
+      exit 1
+    fi
+    if [[ ! "$PR_NUM_TRIM" =~ ^[1-9][0-9]*$ ]]; then
+      echo "MERGE_BLOCKED: invalid_pr_number"
+      exit 1
+    fi
+    resolve_github_repo_slug "$REPO_ROOT" "$REPO_ARG" "MERGE_BLOCKED"
+    REPO_SLUG="$_RESOLVED_GH_REPO"
+    invoke_b3_github_verify "pre-merge" "$REPO_SLUG" "$PR_NUM_TRIM" "MERGE_BLOCKED"
+
+    if [[ "$GH_PR_NUMBER" != "$PR_NUM_TRIM" ]]; then echo "MERGE_BLOCKED: pr_identity_mismatch"; exit 1; fi
+    _gh_br_low="$(printf '%s' "$GH_BASE_REPO" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    _rs_low="$(printf '%s' "$REPO_SLUG" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    if [[ "$_gh_br_low" != "$_rs_low" ]]; then echo "MERGE_BLOCKED: cross_repo_mismatch"; exit 1; fi
+    if [[ "$GH_SAME_REPO" != "true" ]]; then echo "MERGE_BLOCKED: cross_repo_head_pr"; exit 1; fi
+    if [[ "$GH_PR_STATE" != "OPEN" || "$GH_PR_MERGED" == "true" ]]; then echo "MERGE_BLOCKED: pr_state=$GH_PR_STATE"; exit 1; fi
+    if [[ "$GH_PR_DRAFT" == "true" ]]; then echo "MERGE_BLOCKED: pr_is_draft"; exit 1; fi
+
+    if [[ -z "$GH_BASE_REF" || -z "$GH_POLICY_AUTH_REF" || ! "$GH_PR_BASE_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_LIVE_TARGET_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_HEAD_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_POLICY_AUTH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "MERGE_BLOCKED: incomplete_pr_metadata"
+      exit 1
+    fi
+
+    # Detect remote target branch movement between PR snapshot and live branch ref
+    if [[ "$GH_LIVE_TARGET_SHA" != "$GH_PR_BASE_SHA" ]]; then
+      echo "MERGE_BLOCKED: target_branch_moved"
+      exit 1
+    fi
+    if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$GH_BASE_REF" ]]; then
+      echo "MERGE_BLOCKED: target_ref_mismatch"
+      exit 1
+    fi
+
+    # Never trust caller-supplied --base-sha; if provided, it MUST match trusted live target SHA
+    BASE_TRIM="$(trim_str "$BASE_SHA")"
+    if [[ -n "$BASE_TRIM" ]]; then
+      if [[ "$BASE_TRIM" == -* ]] || ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM}^{commit}"; then
+        echo "MERGE_BLOCKED: invalid_base_sha"
+        exit 1
+      fi
+      CALLER_BASE_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$CALLER_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "MERGE_BLOCKED: invalid_base_sha"
+        exit 1
+      fi
+      if [[ "$CALLER_BASE_SHA" != "$GH_LIVE_TARGET_SHA" ]]; then
+        if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "HEAD^{commit}" && [[ "$CALLER_BASE_SHA" == "$(trim_str "$_GIT_STDOUT")" ]]; then
+          echo "MERGE_BLOCKED: base_sha_equals_head"
+          exit 1
+        fi
+        echo "MERGE_BLOCKED: base_sha_mismatch"
+        exit 1
+      fi
+    fi
+    RES_BASE_SHA="$GH_LIVE_TARGET_SHA"
+
+    # Bind local Git HEAD, target SHA, and policy authority SHA
+    if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "HEAD^{commit}"; then
+      echo "MERGE_BLOCKED: invalid_head"
+      exit 1
+    fi
+    LIVE_HEAD_SHA="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$LIVE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "MERGE_BLOCKED: invalid_head"
+      exit 1
+    fi
+    if [[ "$LIVE_HEAD_SHA" != "$GH_HEAD_SHA" ]]; then
+      echo "MERGE_BLOCKED: head_sha_mismatch"
+      exit 1
+    fi
+    if [[ "$RES_BASE_SHA" == "$LIVE_HEAD_SHA" ]]; then
+      echo "MERGE_BLOCKED: base_sha_equals_head"
+      exit 1
+    fi
+
+    if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${RES_BASE_SHA}^{commit}" || [[ "$(trim_str "$_GIT_STDOUT")" != "$RES_BASE_SHA" ]]; then
+      echo "MERGE_BLOCKED: target_sha_not_fetched"
+      exit 1
+    fi
+    if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${GH_POLICY_AUTH_SHA}^{commit}" || [[ "$(trim_str "$_GIT_STDOUT")" != "$GH_POLICY_AUTH_SHA" ]]; then
+      echo "MERGE_BLOCKED: policy_authority_not_fetched"
+      exit 1
+    fi
+
+    # Check local remote-tracking ref staleness if present
+    if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/origin/${GH_BASE_REF}^{commit}"; then
+      REM_TRACK_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ "$REM_TRACK_SHA" =~ ^[0-9a-f]{40}$ && "$REM_TRACK_SHA" != "$RES_BASE_SHA" ]]; then
+        echo "MERGE_BLOCKED: target_branch_moved"
+        exit 1
+      fi
+    fi
+    # PR head must incorporate the current live target commit
+    if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$RES_BASE_SHA" "$LIVE_HEAD_SHA"; then
+      echo "MERGE_BLOCKED: target_branch_moved"
+      exit 1
+    fi
+
+    # Load merge policy STRICTLY from trusted policy authority (default_branch), NEVER from feature branch/PR
+    AUTH_HAS_POLICY=false
+    _re_ls_blob=$'^(100644|100755) blob ([0-9a-f]{40})\t(.+)$'
+    if run_git_cmd "$REPO_ROOT" -c core.quotepath=false ls-tree "$GH_POLICY_AUTH_SHA" -- "$EFFECTIVE_POL_REL"; then
+      AUTH_LS_LINE="$(trim_str "$_GIT_STDOUT")"
+      if [[ "$AUTH_LS_LINE" =~ $_re_ls_blob && "${BASH_REMATCH[3]}" == "$EFFECTIVE_POL_REL" ]]; then
+        AUTH_HAS_POLICY=true
+      fi
+    fi
+    if ! $AUTH_HAS_POLICY; then
+      if $POL_EXPLICIT || [[ -n "$POL_FULL" ]]; then
+        echo "MERGE_BLOCKED: policy_not_in_authority"
+        exit 1
+      fi
+      echo "PR_READY: auto_merge=disabled"
+      exit 2
+    fi
+    if ! run_git_cmd "$REPO_ROOT" show "${GH_POLICY_AUTH_SHA}:${EFFECTIVE_POL_REL}"; then
+      echo "MERGE_BLOCKED: policy_not_in_authority"
+      exit 1
+    fi
+    AUTH_POL_RAW="$_GIT_STDOUT"
+    set +e
+    PARSED_AUTH_POL="$(printf '%s' "$AUTH_POL_RAW" | parse_merge_policy_json "-")"
+    APOL_RC=$?
+    set -e
+    if [[ $APOL_RC -eq 3 ]]; then
+      _bad_am="${PARSED_AUTH_POL#invalid_auto_merge=}"
+      _bad_am="${_bad_am%%$'\n'*}"
+      _bad_am="${_bad_am%$'\r'}"
+      echo "MERGE_BLOCKED: invalid_auto_merge=${_bad_am}"
+      exit 1
+    elif [[ $APOL_RC -ne 0 ]]; then
+      echo "MERGE_BLOCKED: invalid_policy_json"
+      exit 1
+    fi
+    AUTH_AUTO_MERGE="disabled"; AUTH_ALLOW_PROT="false"; AUTH_REQ_CI="true"; AUTH_REQ_REV="true"
+    AUTH_PROT_ARR=()
+    AUTH_ALLOWED_BR=()
+    while IFS= read -r pline; do
+      pline="${pline%$'\r'}"
+      case "$pline" in
+        auto_merge=*) AUTH_AUTO_MERGE="${pline#auto_merge=}" ;;
+        allow_protected_paths=*) AUTH_ALLOW_PROT="${pline#allow_protected_paths=}" ;;
+        require_ci=*) AUTH_REQ_CI="${pline#require_ci=}" ;;
+        require_review=*) AUTH_REQ_REV="${pline#require_review=}" ;;
+        protected_path=*)
+          raw_pp="${pline#protected_path=}"
+          if ! normalize_merge_policy_path "$raw_pp"; then
+            echo "MERGE_BLOCKED: invalid_policy_json"
+            exit 1
+          fi
+          AUTH_PROT_ARR+=("$_MP_NORM_PATH")
+          ;;
+        allowed_target_branch=*)
+          AUTH_ALLOWED_BR+=("${pline#allowed_target_branch=}")
+          ;;
+      esac
+    done <<< "$PARSED_AUTH_POL"
+
+    # Prevent non-default target branches (e.g. stacked parent feature branch) from modifying policy relative to authority
+    if [[ "$GH_BASE_REF" != "$GH_POLICY_AUTH_REF" ]]; then
+      if ! run_git_cmd "$REPO_ROOT" merge-base "$GH_POLICY_AUTH_SHA" "$RES_BASE_SHA"; then
+        echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
+        exit 1
+      fi
+      MB_AUTH_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$MB_AUTH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
+        exit 1
+      fi
+      run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --no-renames --name-only "${MB_AUTH_SHA}..${RES_BASE_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
+      while IFS= read -r tln; do
+        tp="$(trim_str "${tln%$'\r'}")"
+        tp="${tp//\\//}"
+        [[ -n "$tp" ]] || continue
+        if protected_path_match_ci "$tp" "${POL_PROT_ARR[@]}"; then
+          echo "MERGE_BLOCKED: target_branch_modified_policy"
+          exit 1
+        fi
+      done <<< "$_GIT_STDOUT"
+    fi
+
+    # Require clean working tree & index outside checkpoint dirs (.b3/ship, .b3/research-ship)
+    HAS_DIRTY_WT=false
+    for _dkind in staged wt untracked; do
+      case "$_dkind" in
+        staged) run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --cached --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+        wt) run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+        untracked) run_git_cmd "$REPO_ROOT" -c core.quotepath=false ls-files --others --exclude-standard || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+      esac
+      while IFS= read -r dln; do
+        dp="$(trim_str "${dln%$'\r'}")"
+        dp="${dp//\\//}"
+        [[ -n "$dp" ]] || continue
+        is_checkpoint_dir "$dp" && continue
+        if protected_path_match_ci "$dp" "${POL_PROT_ARR[@]}"; then
+          echo "MERGE_BLOCKED: policy_modified_in_pr"
+          exit 1
+        fi
+        HAS_DIRTY_WT=true
+      done <<< "$_GIT_STDOUT"
+    done
+    if $HAS_DIRTY_WT; then
+      echo "MERGE_BLOCKED: dirty_worktree"
+      exit 1
+    fi
+
+    # Compute authoritative changed paths: local Git diff (target..HEAD) U GitHub PR files U validated caller --changed-paths
+    ALL_CHANGED=()
+    if [[ ${#CHANGED_ARR[@]} -gt 0 ]]; then
+      for cp in "${CHANGED_ARR[@]}"; do ALL_CHANGED+=("$cp"); done
+    fi
+    if [[ ${#GH_PR_CHANGED_FILES[@]} -gt 0 ]]; then
+      for ghf in "${GH_PR_CHANGED_FILES[@]}"; do
+        if ! normalize_merge_policy_path "$ghf"; then
+          echo "MERGE_BLOCKED: invalid_pr_changed_path"
+          exit 1
+        fi
+        ALL_CHANGED+=("$_MP_NORM_PATH")
+      done
+    fi
+    run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --no-renames --name-only "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
+    while IFS= read -r gln; do
+      gp="$(trim_str "${gln%$'\r'}")"
+      gp="${gp//\\//}"
+      [[ -n "$gp" ]] || continue
+      is_checkpoint_dir "$gp" && continue
+      ALL_CHANGED+=("$gp")
+    done <<< "$_GIT_STDOUT"
+
+    if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
+      for cp in "${ALL_CHANGED[@]}"; do
+        if protected_path_match_ci "$cp" "${POL_PROT_ARR[@]}"; then
+          echo "MERGE_BLOCKED: policy_modified_in_pr"
+          exit 1
+        fi
+      done
+    fi
+    if [[ ${#AUTH_PROT_ARR[@]} -gt 0 && "$AUTH_ALLOW_PROT" != "true" ]]; then
+      if [[ ${#ALL_CHANGED[@]} -eq 0 ]]; then
+        echo "MERGE_BLOCKED: missing_changed_paths"
+        exit 1
+      fi
+      PROT_HITS=()
+      for cp in "${ALL_CHANGED[@]}"; do
+        if protected_path_match_ci "$cp" "${AUTH_PROT_ARR[@]}"; then
+          PROT_HITS+=("$cp")
+        fi
       done
       if [[ ${#PROT_HITS[@]} -gt 0 ]]; then
         echo "MERGE_BLOCKED: protected_paths=$(printf '%s\n' "${PROT_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
@@ -6726,32 +7727,138 @@ ${el}"
       fi
     fi
 
-    if [[ "$BLOCKING_FINDINGS" -gt 0 ]]; then
-      echo "MERGE_BLOCKED: blocking_findings=$BLOCKING_FINDINGS"
-      exit 1
-    fi
-    if [[ "$REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
-      echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
-      exit 1
-    fi
-    if [[ "$REQ_REV" == "true" && "$REVIEW_STATUS" != "PASS" ]]; then
-      echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
-      exit 1
-    fi
-    if [[ "$PR_STATE" != "OPEN" ]]; then
-      echo "MERGE_BLOCKED: pr_state=$PR_STATE"
-      exit 1
-    fi
-    if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#CHANGED_ARR[@]} -eq 0 ]]; then
-      echo "MERGE_BLOCKED: missing_changed_paths"
-      exit 1
-    fi
-    if [[ "$AUTO_MERGE" != "authorized" ]]; then
+    if [[ "$AUTH_AUTO_MERGE" != "authorized" ]]; then
       echo "PR_READY: auto_merge=disabled"
       exit 2
     fi
+    if [[ ${#AUTH_ALLOWED_BR[@]} -gt 0 ]]; then
+      if ! branch_pattern_match "$GH_BASE_REF" "${AUTH_ALLOWED_BR[@]}"; then
+        echo "MERGE_BLOCKED: target_branch_not_allowed(${GH_BASE_REF})"
+        exit 1
+      fi
+    fi
 
-    echo "MERGE_AUTHORIZED: auto_merge=authorized ci=PASS review=PASS governance=CLEAR"
+    # Validate GitHub mergeability & branch protection state
+    if [[ "$GH_MERGEABLE" != "true" ]]; then
+      echo "MERGE_BLOCKED: pr_not_mergeable(mergeable=${GH_MERGEABLE},state=${GH_MERGEABLE_STATE})"
+      exit 1
+    fi
+    if [[ "$GH_MERGEABLE_STATE" != "clean" && "$GH_MERGEABLE_STATE" != "has_hooks" ]]; then
+      echo "MERGE_BLOCKED: mergeable_state=$GH_MERGEABLE_STATE"
+      exit 1
+    fi
+
+    # Verify CI status strictly from trusted GitHub provider on exact PR head_sha
+    EFF_REQ_CI=false
+    if [[ "$AUTH_REQ_CI" == "true" || ( -n "$GH_REQ_CHECKS" && "$GH_REQ_CHECKS" != "none" ) ]]; then
+      EFF_REQ_CI=true
+    fi
+    if $EFF_REQ_CI; then
+      if [[ "$GH_CI_STATUS" == "MISSING_REQUIRED" ]]; then
+        echo "MERGE_BLOCKED: missing_required_checks=$GH_MISSING_REQ_CHECKS"
+        exit 1
+      fi
+      if [[ "$GH_CI_STATUS" != "PASS" ]]; then
+        echo "MERGE_BLOCKED: ci_status=$GH_CI_STATUS"
+        exit 1
+      fi
+    elif [[ "$GH_CI_STATUS" == "FAIL" || "$GH_CI_STATUS" == "PENDING" ]]; then
+      echo "MERGE_BLOCKED: ci_status=$GH_CI_STATUS"
+      exit 1
+    fi
+
+    # Verify independent non-author review status strictly from trusted GitHub provider on exact PR head_sha
+    GH_CHANGES_REQ_INT="$((10#${GH_CHANGES_REQ_CNT:-0}))"
+    GH_INDEP_INT="$((10#${GH_INDEP_CNT:-0}))"
+    GH_STALE_INT="$((10#${GH_STALE_CNT:-0}))"
+    GH_SELF_INT="$((10#${GH_SELF_CNT:-0}))"
+    GH_UNAUTH_INT="$((10#${GH_UNAUTH_CNT:-0}))"
+    GH_REQ_REV_INT="$((10#${GH_REQ_REVIEWS:-0}))"
+    if [[ "$GH_CHANGES_REQ_INT" -gt 0 ]]; then
+      echo "MERGE_BLOCKED: changes_requested"
+      exit 1
+    fi
+    MIN_REQ_REV="$GH_REQ_REV_INT"
+    if [[ "$AUTH_REQ_REV" == "true" && "$MIN_REQ_REV" -lt 1 ]]; then
+      MIN_REQ_REV=1
+    fi
+    if [[ "$GH_REQ_CODEOWNERS" == "true" && "$MIN_REQ_REV" -lt 1 ]]; then
+      MIN_REQ_REV=1
+    fi
+    if [[ "$GH_BRANCH_PROTECTED" == "true" && "$GH_BRANCH_PROT_READABLE" != "true" && "$MIN_REQ_REV" -lt 1 ]]; then
+      MIN_REQ_REV=1
+    fi
+    if [[ "$MIN_REQ_REV" -gt 0 && "$GH_INDEP_INT" -lt "$MIN_REQ_REV" ]]; then
+      if [[ "$GH_INDEP_INT" -eq 0 && "$GH_SELF_INT" -gt 0 ]]; then
+        echo "MERGE_BLOCKED: self_review_not_independent"
+        exit 1
+      fi
+      if [[ "$GH_INDEP_INT" -eq 0 && "$GH_UNAUTH_INT" -gt 0 ]]; then
+        echo "MERGE_BLOCKED: unauthorized_reviewer_not_independent"
+        exit 1
+      fi
+      if [[ "$GH_INDEP_INT" -eq 0 && "$GH_STALE_INT" -gt 0 ]]; then
+        echo "MERGE_BLOCKED: stale_independent_review"
+        exit 1
+      fi
+      echo "MERGE_BLOCKED: insufficient_independent_reviews(have=${GH_INDEP_INT},need=${MIN_REQ_REV})"
+      exit 1
+    fi
+
+    # Require and verify local review ledger + exact target/head binding + review_independence (empty ignore list!)
+    LED_TRIM="$(trim_str "$LEDGER_PATH")"
+    if [[ -z "$LED_TRIM" ]]; then
+      echo "MERGE_BLOCKED: missing_ledger_path"
+      exit 1
+    fi
+    if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM"; then
+      echo "MERGE_BLOCKED: invalid_ledger_path"
+      exit 1
+    fi
+    LED_FULL="$_CONTAINED_FULL"
+    LED_REL="$_CONTAINED_REL"
+    if [[ ! -f "$LED_FULL" ]]; then
+      echo "MERGE_BLOCKED: missing_ledger_path"
+      exit 1
+    fi
+    set +e
+    LED_CHK_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL" "$LED_REL" "" "true")"
+    LED_CHK_RC=$?
+    set -e
+    if [[ $LED_CHK_RC -ne 0 ]]; then
+      _first_err="${LED_CHK_OUT%%$'\n'*}"
+      echo "MERGE_BLOCKED: ledger_check_failed (${_first_err:-unknown})"
+      exit 1
+    fi
+    M_BASE=""; M_HEAD=""; M_TREF=""; M_TSHA=""; M_RIND=""
+    while IFS= read -r mline; do
+      case "$mline" in
+        META_BASE_SHA=*) M_BASE="${mline#META_BASE_SHA=}" ;;
+        META_HEAD_SHA=*) M_HEAD="${mline#META_HEAD_SHA=}" ;;
+        META_TARGET_REF=*) M_TREF="${mline#META_TARGET_REF=}" ;;
+        META_TARGET_SHA=*) M_TSHA="${mline#META_TARGET_SHA=}" ;;
+        META_REVIEW_INDEPENDENCE=*) M_RIND="${mline#META_REVIEW_INDEPENDENCE=}" ;;
+      esac
+    done <<< "$LED_CHK_OUT"
+    if [[ "$M_BASE" != "$RES_BASE_SHA" ]]; then
+      echo "MERGE_BLOCKED: ledger_target_mismatch"
+      exit 1
+    fi
+    if [[ "$M_HEAD" != "$LIVE_HEAD_SHA" || ( "$M_TREF" != "working_tree" && "$M_TSHA" != "$LIVE_HEAD_SHA" ) ]]; then
+      echo "MERGE_BLOCKED: ledger_head_mismatch"
+      exit 1
+    fi
+    if [[ "$M_RIND" == "SINGLE_AGENT_LIMIT" ]]; then
+      echo "MERGE_BLOCKED: single_agent_limit"
+      exit 1
+    fi
+    if [[ "$M_RIND" != "INDEPENDENT" ]]; then
+      echo "MERGE_BLOCKED: review_independence_unknown"
+      exit 1
+    fi
+
+    printf 'MERGE_AUTHORIZED: pr=%s#%s target_ref=%s target_sha=%s head_sha=%s policy_authority=%s@%s auto_merge=authorized ci=%s review=%s independent_reviews=%s governance=CLEAR\n' \
+      "$GH_BASE_REPO" "$PR_NUM_TRIM" "$GH_BASE_REF" "$RES_BASE_SHA" "$LIVE_HEAD_SHA" "$GH_POLICY_AUTH_REF" "$GH_POLICY_AUTH_SHA" "$GH_CI_STATUS" "$GH_REVIEW_STATUS" "$GH_INDEP_INT"
     exit 0
     ;;
 
@@ -6869,6 +7976,11 @@ ${el}"
           exit 1
         fi
         GRAPH_VAL="$_COMMIT_SHA"
+      fi
+
+      if [[ ${#ANC_ARR[@]} -eq 0 && "$GRAPH_VAL" == "none" ]]; then
+        echo "CONTEXT_ERROR: empty cache (anchor_paths or graph_index_sha required)"
+        exit 1
       fi
 
       SUM_TRIM="$(trim_str "$SUMMARY_REF")"
@@ -7134,6 +8246,10 @@ timestamp_utc=${TS_UTC}
       echo "CONTEXT_CORRUPT: invalid graph_index_sha"
       exit 1
     fi
+    if [[ "$REC_ANCHOR_PATHS" == "none" && "$REC_GRAPH_INDEX_SHA" == "none" ]]; then
+      echo "CONTEXT_CORRUPT: empty cache (anchor_paths or graph_index_sha required)"
+      exit 1
+    fi
 
     REC_SUM_FULL=""
     if [[ "$REC_SUMMARY_REF" == "none" ]]; then
@@ -7269,6 +8385,9 @@ timestamp_utc=${TS_UTC}
     fi
 
     ANCHOR_STATUS="FRESH"
+    if [[ "$REC_ANCHOR_PATHS" == "none" ]]; then
+      ANCHOR_STATUS="NOT_RECORDED"
+    fi
     if [[ ${#REASONS[@]} -gt 0 ]]; then
       for r in "${REASONS[@]}"; do
         if [[ "$r" == "head_diverged" || "$r" == "anchor_scope_changed" || "$r" == "anchor_changed" ]]; then
@@ -7281,7 +8400,7 @@ timestamp_utc=${TS_UTC}
       exit 2
     fi
 
-    printf 'CONTEXT_FRESH: scope=%s head=%s anchor_status=FRESH graph_index=%s live_lsp_eligible=true\n' "$REC_SCOPE_ID" "$LIVE_HEAD_SHA" "$GRAPH_INDEX_STATUS"
+    printf 'CONTEXT_FRESH: scope=%s head=%s anchor_status=%s graph_index=%s live_lsp_eligible=true\n' "$REC_SCOPE_ID" "$LIVE_HEAD_SHA" "$ANCHOR_STATUS" "$GRAPH_INDEX_STATUS"
     exit 0
     ;;
 

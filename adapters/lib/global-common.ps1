@@ -406,3 +406,45 @@ function Get-SkillOverlaps([string]$RootDir, [string[]]$SkillNames) {
     }
     return @($overlaps)
 }
+
+function Initialize-PersonalModelsFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$B3Home,
+        [string]$UserHome = '',
+        [switch]$DryRun,
+        [switch]$NonFatal
+    )
+    if ($env:B3_SKIP_MODEL_INIT -eq '1') { return 'skipped' }
+    $templateMd = Join-Path $B3Home 'config\models.example.md'
+    if (-not (Test-Path -LiteralPath $templateMd -PathType Leaf)) { return 'no-template' }
+    $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
+        $env:B3_MODELS_PERSONAL.Trim()
+    } else {
+        $homeDir = if ($UserHome) { $UserHome } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+        Join-Path $homeDir '.b3\models.md'
+    }
+    if ((Test-Path -LiteralPath $dest) -or (Test-IsReparseLink $dest)) {
+        return "kept:$dest"
+    }
+    if ($DryRun) {
+        return "dry-run:$dest"
+    }
+    try {
+        $parent = Split-Path -Parent $dest
+        if ($parent) {
+            [void][System.IO.Directory]::CreateDirectory($parent)
+        }
+        [System.IO.File]::Copy($templateMd, $dest, $false)
+        return "created:$dest"
+    } catch {
+        if ((Test-Path -LiteralPath $dest) -or (Test-IsReparseLink $dest)) {
+            return "kept:$dest"
+        }
+        if ($NonFatal) {
+            Write-Warning "optional model preferences could not be initialized at $dest : $($_.Exception.Message)"
+            return "error:$dest"
+        }
+        throw
+    }
+}

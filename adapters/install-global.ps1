@@ -18,10 +18,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Fail([string]$Message) {
-    Write-Error $Message
-    exit 1
-}
+. (Join-Path $PSScriptRoot 'lib\global-common.ps1')
 
 function Trim-ChildPathArg([string]$PathValue) {
     if (-not $PathValue) { return $PathValue }
@@ -131,30 +128,14 @@ if ($overallExit -ne 0) {
 }
 
 # Optional advisory preferences; do not manage this personal file in the global manifest.
-if (($Action -in @('install', 'update')) -and $env:B3_SKIP_MODEL_INIT -ne '1') {
-    $example = Join-Path $B3Home 'config\models.example.md'
-    if (Test-Path -LiteralPath $example -PathType Leaf) {
-        $homeDir = if ($UserHome) { $UserHome } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-        $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
-            $env:B3_MODELS_PERSONAL.Trim()
-        } else { Join-Path $homeDir '.b3\models.md' }
-        if (Test-Path -LiteralPath $dest) {
-            Write-Output "model_preferences=$dest (kept existing)"
-        } elseif ($DryRun) {
-            Write-Output "dry-run: initialize model_preferences=$dest from $example"
-        } else {
-            try {
-                [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $dest))
-                [System.IO.File]::Copy($example, $dest, $false)
-                Write-Output "model_preferences=$dest (created from example)"
-            } catch {
-                if (Test-Path -LiteralPath $dest) {
-                    Write-Output "model_preferences=$dest (kept existing)"
-                } else {
-                    Write-Warning "optional model preferences could not be initialized at $dest : $($_.Exception.Message)"
-                }
-            }
-        }
+if ($Action -in @('install', 'update')) {
+    $modelPrefStatus = Initialize-PersonalModelsFile -B3Home $B3Home -UserHome $UserHome -DryRun:$DryRun -NonFatal
+    if ($modelPrefStatus -like 'kept:*') {
+        Write-Output "model_preferences=$($modelPrefStatus.Substring(5)) (kept existing)"
+    } elseif ($modelPrefStatus -like 'dry-run:*') {
+        Write-Output "dry-run: initialize model_preferences=$($modelPrefStatus.Substring(8)) from $(Join-Path $B3Home 'config\models.example.md')"
+    } elseif ($modelPrefStatus -like 'created:*') {
+        Write-Output "model_preferences=$($modelPrefStatus.Substring(8)) (created from example)"
     }
 }
 Write-Output "GLOBAL_OK: host=$HostName action=$Action"

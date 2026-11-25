@@ -29,4 +29,4 @@ Do not treat this folder as historical Phase 1 research. It is evidence for the 
 - New domain skills beyond the synthesized catalog (no Dapper skill)
 - Architecture redesign
 - Inferring Tùng’s preferences into `profiles/tung/`
-- Product-repo `/review-loop` run and host subagent isolation (still NOT VERIFIED)
+- Product-repo `/b3-review-loop` run and host subagent isolation (still NOT VERIFIED)

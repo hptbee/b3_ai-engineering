@@ -569,3 +569,49 @@ count_skill_overlaps() {
     fi
   done
 }
+
+init_personal_models_file() {
+  local b3_home="$1"
+  local user_home="${2:-}"
+  local dry_run="${3:-false}"
+  local non_fatal="${4:-false}"
+
+  if [[ "${B3_SKIP_MODEL_INIT:-}" == "1" ]]; then
+    printf '%s\n' "skipped"
+    return 0
+  fi
+  local template_md="${b3_home}/config/models.example.md"
+  if [[ ! -f "$template_md" ]]; then
+    printf '%s\n' "no-template"
+    return 0
+  fi
+  local dest="${B3_MODELS_PERSONAL:-}"
+  dest="${dest#"${dest%%[![:space:]]*}"}"
+  dest="${dest%"${dest##*[![:space:]]}"}"
+  if [[ -z "$dest" ]]; then
+    dest="${user_home:-$HOME}/.b3/models.md"
+  fi
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    printf 'kept:%s\n' "$dest"
+    return 0
+  fi
+  if [[ "$dry_run" == "true" ]]; then
+    printf 'dry-run:%s\n' "$dest"
+    return 0
+  fi
+  if mkdir -p "$(dirname "$dest")" && (umask 077; set -C; cat "$template_md" > "$dest"); then
+    printf 'created:%s\n' "$dest"
+    return 0
+  fi
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    printf 'kept:%s\n' "$dest"
+    return 0
+  fi
+  if [[ "$non_fatal" == "true" ]]; then
+    echo "MODEL_PREFERENCES_WARNING: optional initialization failed at $dest" >&2
+    printf 'error:%s\n' "$dest"
+    return 0
+  fi
+  echo "error: could not initialize personal model preferences at $dest" >&2
+  return 1
+}
