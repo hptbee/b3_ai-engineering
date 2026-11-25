@@ -14,6 +14,7 @@ Reusable methods. Standard: [`docs/skill-standard.md`](../docs/skill-standard.md
 | `engineering/testing-strategy` | Honest tests for the risk (not TDD iron law) |
 | `engineering/planning` | Executable multi-step plan |
 | `engineering/refactoring` | Behavior-preserving structure change |
+| `engineering/pr-feedback` | PR feedback lifecycle: resolve threads, reply, publish verified reviews |
 
 ## Frontend
 

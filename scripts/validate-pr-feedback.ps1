@@ -454,6 +454,9 @@ process.exit(1);
     $inlineBadPath = Join-Path $workDir 'inline-bad-path.json'
     [IO.File]::WriteAllText($inlineBadPath, '[{"status":"CONFIRMED","severity":"HIGH","path":"src/not-in-pr.ts","line":10,"side":"RIGHT","title":"Wrong file","body":"Outside PR.","suggested_fix":"None."}]', $utf8NoBom)
 
+    $inlineBomPath = Join-Path $workDir 'inline-bom.json'
+    [IO.File]::WriteAllText($inlineBomPath, '[{"status":"CONFIRMED","severity":"LOW","path":"src/auth.ts","line":42,"side":"RIGHT","title":"BOM input","body":"UTF-8 BOM JSON parses cleanly.","suggested_fix":"Strip BOM."}]', (New-Object System.Text.UTF8Encoding($true)))
+
     Write-Output "=== B3 PR Feedback Lifecycle Validation Suite ==="
     Write-Output "[SIMULATED: mocked gh CLI across shells: $($shells -join ', ')]"
     Write-Output "[LIVE EXTERNAL WRITES: NOT_VERIFIED (no remote PR mutations executed)]"
@@ -585,16 +588,22 @@ process.exit(1);
         $rWrongThread = Invoke-Adapter $sh $s9 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_other_pr', '--body-file', $replyBodyPath, '--authorize-write')
         $rBadInline = Invoke-Adapter $sh $s9 @('comment', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--mode', 'inline', '--inline-json', $inlineBadPath, '--authorize-write')
         $rTravState = Invoke-Adapter $sh $s9 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--state-file', '../escape.json', '--draft')
+        $rDriveState = Invoke-Adapter $sh $s9 @('reply', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--target-kind', 'review_thread', '--target-id', 'PRRT_t1', '--body-file', $replyBodyPath, '--state-file', 'C:escape.json', '--draft')
+        $rCrossCmdFlag = Invoke-Adapter $sh $s9 @('resolve', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--thread-id', 'PRRT_t1', '--fix-commit', $fixSha, '--verify-status', 'PASS', '--draft', '--authorize-write')
+        $rBomDraft = Invoke-Adapter $sh $s9 @('comment', '--repo', 'acme/demo', '--pr', '42', '--expected-head', $headSha, '--mode', 'inline', '--inline-json', $inlineBomPath, '--draft')
         $rUnknownFlag = Invoke-Adapter $sh $s9 @('fetch', '--repo', 'acme/demo', '--pr', '42', '--bogus-flag')
         if ($rBadRepo.Code -eq 1 -and $rBadRepo.Json.status -eq 'PR_INVALID_ARGS' -and
             $rWrongPr.Code -eq 1 -and $rWrongPr.Json.status -eq 'PR_TARGET_MISMATCH' -and
             $rWrongThread.Code -eq 1 -and $rWrongThread.Json.status -eq 'PR_TARGET_MISMATCH' -and
             $rBadInline.Code -eq 1 -and $rBadInline.Json.status -eq 'PR_TARGET_MISMATCH' -and
             $rTravState.Code -eq 1 -and $rTravState.Json.status -eq 'PR_FILE_GUARD' -and
+            $rDriveState.Code -eq 1 -and $rDriveState.Json.status -eq 'PR_FILE_GUARD' -and
+            $rCrossCmdFlag.Code -eq 1 -and $rCrossCmdFlag.Json.status -eq 'PR_INVALID_ARGS' -and
+            $rBomDraft.Code -eq 0 -and $rBomDraft.Json.status -eq 'PR_DRAFT_OK' -and
             $rUnknownFlag.Code -eq 1 -and $rUnknownFlag.Json.status -eq 'PR_INVALID_ARGS') {
             Pass-Case "S09-invalid-identity-and-file-guards [$sh]"
         } else {
-            Fail-Case "S09-invalid-identity-and-file-guards [$sh]" "repo=$($rBadRepo.Code) pr=$($rWrongPr.Code) th=$($rWrongThread.Code) inl=$($rBadInline.Code) trav=$($rTravState.Code) unk=$($rUnknownFlag.Code)"
+            Fail-Case "S09-invalid-identity-and-file-guards [$sh]" "repo=$($rBadRepo.Code) pr=$($rWrongPr.Code) th=$($rWrongThread.Code) inl=$($rBadInline.Code) trav=$($rTravState.Code) drv=$($rDriveState.Code) xcmd=$($rCrossCmdFlag.Code) bom=$($rBomDraft.Code) unk=$($rUnknownFlag.Code)"
         }
 
         # Scenario 10: Unauthorized external mutations & bound review-event escalation guard
@@ -653,9 +662,11 @@ process.exit(1);
         $framedTitle = [string]$rInjMeta.Json.pull_request.title
         $framedBody = [string]$rInjFull.Json.review_threads[0].comments[0].body
         $hasStartEndTitle = $framedTitle.StartsWith('BEGIN_UNTRUSTED_PR_DATA') -and $framedTitle.EndsWith('END_UNTRUSTED_PR_DATA')
-        $escapedTitleBreakout = $framedTitle.Contains('END_UNTRUSTED_PR_DATA_ESCAPED') -and (-not $framedTitle.Contains($bidi))
+        $innerTitle = $framedTitle.Substring('BEGIN_UNTRUSTED_PR_DATA'.Length, $framedTitle.Length - 'BEGIN_UNTRUSTED_PR_DATA'.Length - 'END_UNTRUSTED_PR_DATA'.Length)
+        $escapedTitleBreakout = $innerTitle.Contains('END-UNTRUSTED-PR-DATA-ESCAPED') -and (-not $innerTitle.Contains('END_UNTRUSTED_PR_DATA')) -and (-not $framedTitle.Contains($bidi))
         $hasStartEndBody = $framedBody.StartsWith('BEGIN_UNTRUSTED_PR_DATA') -and $framedBody.EndsWith('END_UNTRUSTED_PR_DATA')
-        $sanitizedBody = $framedBody.Contains('END_UNTRUSTED_PR_DATA_ESCAPED') -and (-not $framedBody.Contains($ctrlBell)) -and (-not $framedBody.Contains($tagA))
+        $innerBody = $framedBody.Substring('BEGIN_UNTRUSTED_PR_DATA'.Length, $framedBody.Length - 'BEGIN_UNTRUSTED_PR_DATA'.Length - 'END_UNTRUSTED_PR_DATA'.Length)
+        $sanitizedBody = $innerBody.Contains('END-UNTRUSTED-PR-DATA-ESCAPED') -and (-not $innerBody.Contains('END_UNTRUSTED_PR_DATA')) -and (-not $framedBody.Contains($ctrlBell)) -and (-not $framedBody.Contains($tagA))
         if ($rInjMeta.Code -eq 0 -and $rInjFull.Code -eq 0 -and $hasStartEndTitle -and $escapedTitleBreakout -and $hasStartEndBody -and $sanitizedBody) {
             Pass-Case "S12-prompt-injection-sanitization-and-framing [$sh]"
         } else {

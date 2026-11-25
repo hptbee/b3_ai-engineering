@@ -157,6 +157,7 @@ function Update-B3Gitignore([string]$Root) {
 # B3: commit .b3/home; keep run checkpoints and local model preferences private
 .b3/ship/
 .b3/research-ship/
+.b3/pr-feedback/
 .b3/models.md
 "@
     if (-not (Test-Path -LiteralPath $gi)) {
@@ -166,12 +167,14 @@ function Update-B3Gitignore([string]$Root) {
     $text = Get-Content -LiteralPath $gi -Raw
     $hasShip = ($text -match '(?m)^\s*\.b3/ship/\s*$')
     $hasResearch = ($text -match '(?m)^\s*\.b3/research-ship/\s*$')
+    $hasPrFb = ($text -match '(?m)^\s*\.b3/pr-feedback/\s*$')
     $hasModels = ($text -match '(?m)^\s*\.b3/models\.md\s*$')
-    if ($hasShip -and $hasResearch -and $hasModels) { return 'present' }
+    if ($hasShip -and $hasResearch -and $hasPrFb -and $hasModels) { return 'present' }
 
     $missing = @()
     if (-not $hasShip) { $missing += '.b3/ship/' }
     if (-not $hasResearch) { $missing += '.b3/research-ship/' }
+    if (-not $hasPrFb) { $missing += '.b3/pr-feedback/' }
     if (-not $hasModels) { $missing += '.b3/models.md' }
 
     if ($text -match '(?m)^\s*\.b3/\s*$') {
@@ -180,7 +183,7 @@ function Update-B3Gitignore([string]$Root) {
         Set-Content -LiteralPath $gi -Value $text -NoNewline
         return 'upgraded'
     }
-    if ($hasShip -or $hasResearch -or $hasModels) {
+    if ($hasShip -or $hasResearch -or $hasPrFb -or $hasModels) {
         Add-Content -LiteralPath $gi -Value ("`n" + ($missing -join "`n"))
         return 'upgraded'
     }

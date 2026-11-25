@@ -50,9 +50,9 @@ function sanitizeUntrustedText(val) {
   s = s.replace(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '');
   // Strip Unicode Tag characters (U+E0000..U+E007F).
   s = s.replace(/[\u{E0000}-\u{E007F}]/gu, '');
-  // Neutralize delimiter breakout attempts.
-  s = s.replace(/BEGIN_UNTRUSTED_PR_DATA/gi, 'BEGIN_UNTRUSTED_PR_DATA_ESCAPED');
-  s = s.replace(/END_UNTRUSTED_PR_DATA/gi, 'END_UNTRUSTED_PR_DATA_ESCAPED');
+  // Neutralize delimiter breakout attempts (break literal delimiter substrings completely).
+  s = s.replace(/BEGIN_UNTRUSTED_PR_DATA/gi, 'BEGIN-UNTRUSTED-PR-DATA-ESCAPED');
+  s = s.replace(/END_UNTRUSTED_PR_DATA/gi, 'END-UNTRUSTED-PR-DATA-ESCAPED');
   return s;
 }
 
@@ -92,6 +92,16 @@ function parseArgs(argv) {
     'inline-json',
     'authorize-review-event'
   ]);
+  const allowedByCmd = {
+    fetch: new Set(['repo', 'pr', 'include-resolved', 'include-bodies', 'max-pages']),
+    reply: new Set(['repo', 'pr', 'expected-head', 'target-kind', 'target-id', 'body-file', 'idempotency-key', 'authorize-write', 'draft', 'state-file', 'max-pages']),
+    resolve: new Set(['repo', 'pr', 'expected-head', 'thread-id', 'fix-commit', 'verify-status', 'authorize-resolve', 'draft', 'state-file', 'max-pages']),
+    comment: new Set(['repo', 'pr', 'expected-head', 'mode', 'event', 'summary-file', 'inline-json', 'idempotency-key', 'authorize-write', 'authorize-review-event', 'draft', 'state-file', 'max-pages'])
+  };
+  const cmdAllowed = allowedByCmd[cmd];
+  if (!cmdAllowed) {
+    fail('PR_INVALID_ARGS', `Unknown subcommand: ${cmd} (expected: fetch, reply, resolve, comment)`, EXIT_ERROR);
+  }
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i];
     if (!arg.startsWith('--')) {
@@ -100,6 +110,9 @@ function parseArgs(argv) {
     const name = arg.slice(2);
     if (!name) {
       fail('PR_INVALID_ARGS', 'Empty flag name', EXIT_ERROR);
+    }
+    if (!cmdAllowed.has(name)) {
+      fail('PR_INVALID_ARGS', `Flag --${name} is not allowed for subcommand ${cmd}`, EXIT_ERROR);
     }
     if (booleanFlags.has(name)) {
       flags[name] = true;
@@ -195,7 +208,7 @@ function readSafeInputFile(filePath, flagName, maxBytes = MAX_FILE_BYTES) {
   if (st.size > maxBytes) {
     fail('PR_FILE_GUARD', `${flagName} exceeds ${maxBytes} bytes`, EXIT_ERROR);
   }
-  return fs.readFileSync(filePath, 'utf8');
+  return fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '');
 }
 
 function validateStateFilePath(stateFile) {
@@ -203,45 +216,70 @@ function validateStateFilePath(stateFile) {
   if (hasControlChars(stateFile)) {
     fail('PR_INVALID_ARGS', 'Invalid --state-file', EXIT_ERROR);
   }
+  if (/^[A-Za-z]:(?![\\/])/.test(stateFile)) {
+    fail('PR_FILE_GUARD', 'Drive-relative path rejected for --state-file', EXIT_ERROR);
+  }
   const parts = stateFile.split(/[\\/]+/);
   if (parts.includes('..')) {
     fail('PR_FILE_GUARD', 'Path traversal rejected for --state-file', EXIT_ERROR);
   }
-  if (fs.existsSync(stateFile)) {
+  try {
     const st = fs.lstatSync(stateFile);
     if (st.isSymbolicLink() || !st.isFile()) {
       fail('PR_FILE_GUARD', 'Symlink or non-file rejected for --state-file', EXIT_ERROR);
     }
-  }
-  const parent = path.dirname(path.resolve(stateFile));
-  if (fs.existsSync(parent)) {
-    const pst = fs.lstatSync(parent);
-    if (pst.isSymbolicLink()) {
-      fail('PR_FILE_GUARD', 'Symlink parent directory rejected for --state-file', EXIT_ERROR);
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') {
+      fail('PR_FILE_GUARD', `Cannot inspect --state-file: ${err?.code || 'ERR'}`, EXIT_ERROR);
     }
+  }
+  let cur = path.dirname(path.resolve(stateFile));
+  const visited = new Set();
+  while (cur && !visited.has(cur)) {
+    visited.add(cur);
+    if (process.platform === 'darwin' && (cur === '/var' || cur === '/tmp' || cur === '/etc')) {
+      break;
+    }
+    try {
+      const pst = fs.lstatSync(cur);
+      if (pst.isSymbolicLink()) {
+        fail('PR_FILE_GUARD', 'Symlink ancestor directory rejected for --state-file', EXIT_ERROR);
+      }
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') {
+        fail('PR_FILE_GUARD', `Cannot inspect --state-file ancestor: ${err?.code || 'ERR'}`, EXIT_ERROR);
+      }
+    }
+    const next = path.dirname(cur);
+    if (next === cur) break;
+    cur = next;
   }
   return stateFile;
 }
 
 function recordAuditState(stateFile, entry) {
   if (!stateFile) return;
-  const dir = path.dirname(path.resolve(stateFile));
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  let records = [];
-  if (fs.existsSync(stateFile)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-      if (Array.isArray(parsed)) records = parsed;
-    } catch {
-      records = [];
+  try {
+    const dir = path.dirname(path.resolve(stateFile));
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
+    let records = [];
+    if (fs.existsSync(stateFile)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        if (Array.isArray(parsed)) records = parsed;
+      } catch {
+        records = [];
+      }
+    }
+    records.push({ ...entry, recorded_at_utc: new Date().toISOString() });
+    const tmpPath = `${stateFile}.tmp.${process.pid}.${Date.now()}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(records, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    fs.renameSync(tmpPath, stateFile);
+  } catch {
+    // Best-effort secondary audit log; remote SCM state remains authoritative.
   }
-  records.push({ ...entry, recorded_at_utc: new Date().toISOString() });
-  const tmpPath = `${stateFile}.tmp.${process.pid}.${Date.now()}`;
-  fs.writeFileSync(tmpPath, JSON.stringify(records, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  fs.renameSync(tmpPath, stateFile);
 }
 
 let cachedGhPath = null;
@@ -290,6 +328,9 @@ function invokeGh(args, stdinStr = null, options = {}) {
 
   let res;
   if (isWinBatch) {
+    if (/[%"!&|<>^\x00-\x1F\x7F]/.test(ghBin)) {
+      fail('PR_API_ERROR', 'Unsafe Windows batch path for gh CLI rejected', EXIT_ERROR);
+    }
     const comspec = process.env.ComSpec || 'cmd.exe';
     const cmdLine = `"${ghBin}" ${args.map((a) => `"${a}"`).join(' ')}`;
     res = spawnSync(comspec, ['/d', '/s', '/c', `"${cmdLine}"`], { ...spawnOpts, windowsVerbatimArguments: true });

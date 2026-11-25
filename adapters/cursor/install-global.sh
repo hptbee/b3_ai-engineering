@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Global Cursor installer for B3 AI Engineering (macOS / Linux / Git Bash).
-# Installs/updates/verifies/uninstalls flattened 1-level skills, 8 commands, 5 subagents, global b3-home, and plain-text User Rules template under ~/.cursor.
+# Installs/updates/verifies/uninstalls flattened 1-level skills, 11 commands, 5 subagents, global b3-home, and plain-text User Rules template under ~/.cursor.
 # Usage: ./adapters/cursor/install-global.sh [install|update|verify|uninstall] [--cursor-home DIR] [--b3-home DIR] [--user-home DIR] [--dry-run] [--force]
 
 set -euo pipefail

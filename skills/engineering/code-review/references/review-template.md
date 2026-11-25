@@ -48,8 +48,12 @@ When posting to a GitHub PR after user confirmation, include **only `CONFIRMED` 
 
 ## Inline GitHub PR comment format (`Files changed` tab)
 
-For line-level comments via `gh api .../pulls/<id>/reviews --input <tmp.json>`, use the exact fixed severity prefix:
+Publish inline PR findings via [`skills/engineering/pr-feedback/SKILL.md`](../../pr-feedback/SKILL.md) (`scripts/b3-pr-github.{ps1,sh} comment`, `CONFIRMED` only) using the exact fixed severity format from [`reply-template.md`](../../pr-feedback/references/reply-template.md):
 
 ```text
-**[CRITICAL|HIGH|MEDIUM|LOW] (`R00N`, `<category>`)** <issue + violated invariant + evidence>. **Fix:** <recommended fix>.
+**[CRITICAL|HIGH|MEDIUM|LOW] — <Short issue title>**
+
+<Problem, violated invariant, and practical impact.>
+
+**Suggested fix:** <Minimal actionable recommendation.>
 ```

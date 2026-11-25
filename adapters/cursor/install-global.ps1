@@ -1,5 +1,5 @@
 # Global Cursor installer for B3 AI Engineering (Windows PowerShell / pwsh).
-# Installs/updates/verifies/uninstalls flattened 1-level skills, 8 commands, 5 subagents, global b3-home, and plain-text User Rules template under ~/.cursor.
+# Installs/updates/verifies/uninstalls flattened 1-level skills, 11 commands, 5 subagents, global b3-home, and plain-text User Rules template under ~/.cursor.
 # Usage: .\adapters\cursor\install-global.ps1 [-Action install|update|verify|uninstall] [-CursorHome <dir>] [-B3Home <dir>] [-UserHome <dir>] [-DryRun] [-Force]
 param(
     [Parameter(Position = 0)]

@@ -32,7 +32,7 @@ reply --repo <owner/repo> --pr <N> --expected-head <sha> \
 - Verifies remote PR `state == OPEN`, `headRefOid == expected_head`, and `target_id` belongs to `<repo>#<pr>`.
 - Scans authenticated actor (`viewer.login`) comments on the exact target for `<!-- b3-pr-key:<key> -->`; skips cleanly with `PR_IDEMPOTENT_SKIP` (exit `0`) if already posted.
 - Uses GraphQL `addPullRequestReviewThreadReply` for `review_thread` and REST `POST repos/<repo>/issues/<pr>/comments` for `general_comment`. Never resolves threads.
-- Re-queries remote state post-write to verify comment creation and `headRefOid == expected_head`.
+- Confirms non-empty created comment ID from the API response, then re-queries remote state post-write to verify `headRefOid == expected_head` (and created node presence on GraphQL replies).
 
 ### 3. `resolve`
 ```text
@@ -59,7 +59,7 @@ comment --repo <owner/repo> --pr <N> --expected-head <sha> \
 - Verifies remote PR `state == OPEN` and `headRefOid == expected_head` before posting.
 - Validates `--inline-json` entries strictly: `status == "CONFIRMED"`, `severity` in `CRITICAL|HIGH|MEDIUM|LOW`, non-empty `title`/`body`/`suggested_fix`, `line >= 1`, `side` in `RIGHT|LEFT`, and `path` present in paginated live PR changed files (`pulls/<pr>/files`).
 - Scans authenticated actor's existing reviews and issue comments (paginated) for `<!-- b3-pr-key:<key> -->` before posting.
-- Posts via `POST repos/<repo>/issues/<pr>/comments` (`summary` with `COMMENT`) or `POST repos/<repo>/pulls/<pr>/reviews` (`inline`, `both`, or non-`COMMENT` event) bound to `commit_id = expected_head`, then re-queries remote state to confirm created review/comment ID and `headRefOid == expected_head`.
+- Posts via `POST repos/<repo>/issues/<pr>/comments` (`summary` with `COMMENT`) or `POST repos/<repo>/pulls/<pr>/reviews` (`inline`, `both`, or non-`COMMENT` event) bound to `commit_id = expected_head`, confirms returned review/comment ID, then re-queries remote `headRefOid == expected_head`.
 
 ## File Guards & Exit Codes
 
