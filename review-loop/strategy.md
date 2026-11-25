@@ -36,4 +36,4 @@
 
 ## 3. Stop & report
 
-Compact: `size_class`+`risk_level`, units/ledger, iters, active/closed findings, receipts, skipped-specialist rationale, `review_independence` (`SINGLE_AGENT_LIMIT` caps `HIGH`/`CRITICAL` to `INCOMPLETE`, blocks `auto_merge`), outcome (`PASS|FAIL|STUCK|INCOMPLETE|BLOCKED`).
+Compact: `size_class`+`risk_level`, units/ledger, iters, active/closed findings, receipts, skipped-specialist rationale, `review_independence` (`SINGLE_AGENT_LIMIT` caps `HIGH`/`CRITICAL` to `INCOMPLETE`, blocks `auto_merge`), outcome (`PASS|FAIL|STUCK|INCOMPLETE|BLOCKED`). PR post (when authorized): publish only final verified result via `skills/engineering/pr-feedback/SKILL.md` (never per-iteration spam).

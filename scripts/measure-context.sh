@@ -111,6 +111,9 @@ DEBUG_CMD_B=$(($(file_bytes "commands/b3-debug.md") + $(file_bytes "skills/engin
 REVIEW_CMD_B=$(($(file_bytes "commands/b3-review.md") + CR_SKILL_B))
 STANDALONE_REV_ALL=$((REVIEW_CMD_B + REV_TPL_B))
 VERIFY_CMD_B=$(($(file_bytes "commands/b3-verify.md") + $(file_bytes "skills/engineering/verification/SKILL.md")))
+PR_FB_SKILL_B="$(file_bytes "skills/engineering/pr-feedback/SKILL.md")"
+PR_FB_REFS_B=$(($(file_bytes "skills/engineering/pr-feedback/references/reply-template.md") + $(file_bytes "skills/engineering/pr-feedback/references/thread-lifecycle.md") + $(file_bytes "skills/engineering/pr-feedback/references/github-adapter.md")))
+PR_FB_ALL=$((PR_FB_SKILL_B + PR_FB_REFS_B))
 RL_OP=$((RL_STRAT_B + $(file_bytes "commands/b3-review-loop.md") + REV_AGENT_B))
 RL_HIER=$((RL_OP + $(file_bytes "review-loop/hierarchical.md")))
 RL_ALL=$(($(file_bytes "review-loop/spec.md") + RL_STRAT_B + $(file_bytes "review-loop/sizing.md") + $(file_bytes "review-loop/models.md") + $(file_bytes "review-loop/hierarchical.md")))
@@ -139,6 +142,7 @@ printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md (self-contained)]\
 printf "review_iter_subag : %6d B (~%4d tok)  [b3-reviewer.md + b3-fixer.md (self-contained loop iter)]\n" "$REV_ITER_SUBAG" "$(est_tok "$REV_ITER_SUBAG")"
 printf "standalone_cmds   : plan=%d B, impl=%d B, debug=%d B, review=%d B, verify=%d B\n" "$PLAN_CMD_B" "$IMPL_CMD_B" "$DEBUG_CMD_B" "$REVIEW_CMD_B" "$VERIFY_CMD_B"
 printf "standalone_rev_all: %6d B (~%4d tok)  [cmd + code-review/SKILL.md + review-template.md]\n" "$STANDALONE_REV_ALL" "$(est_tok "$STANDALONE_REV_ALL")"
+printf "pr_feedback_load  : %6d B (~%4d tok)  [pr-feedback/SKILL.md=%d B + refs=%d B (on-demand)]\n" "$PR_FB_ALL" "$(est_tok "$PR_FB_ALL")" "$PR_FB_SKILL_B" "$PR_FB_REFS_B"
 printf "review_loop_all   : %6d B (~%4d tok)  [spec+strategy+sizing+models+hierarchical (reference-only)]\n" "$RL_ALL" "$(est_tok "$RL_ALL")"
 printf "agents_roles_total: %6d B (~%4d tok)  [%d runtime subagent roles excl. README.md]\n" "$AGENT_ROLES_B" "$(est_tok "$AGENT_ROLES_B")" "$AGENT_COUNT"
 printf "max_skill_file    : %6d B  (%s)\n" "$MAX_SKILL" "$MAX_SKILL_FILE"

@@ -78,7 +78,7 @@ $b3HomeFile = Join-Path $CursorHome 'b3-home'
 $userRulesFile = Join-Path $CursorHome 'b3-user-rules.txt'
 $manifestFile = Join-Path $CursorHome '.b3-global-manifest'
 
-$expectedCommands = @('b3-plan.md', 'b3-implement.md', 'b3-debug.md', 'b3-review.md', 'b3-verify.md', 'b3-review-loop.md', 'b3-ship.md', 'b3-research-ship.md')
+$expectedCommands = @('b3-plan.md', 'b3-implement.md', 'b3-debug.md', 'b3-review.md', 'b3-verify.md', 'b3-review-loop.md', 'b3-ship.md', 'b3-research-ship.md', 'b3-pr-resolve.md', 'b3-pr-reply.md', 'b3-pr-comment.md')
 $expectedAgents = @('b3-reviewer.md', 'b3-fixer.md', 'b3-security-reviewer.md', 'b3-architecture-reviewer.md', 'b3-performance-reviewer.md')
 
 # --- Uninstall ---

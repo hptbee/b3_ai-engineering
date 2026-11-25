@@ -56,11 +56,11 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 
 ### H. Technical Verification & Independent Review / Editorial Gates
 - **In:** diff/evidence/policy. **Out:** separate **Research** (sources/attribution/conditions/disputes) & **Engineering** (tests/security/runtime) verdicts + Editorial (`b3-reviewer.md`, specialists, digest gate, [gates](references/research-ship-gates.md)).
-- **Failure / Recovery:** passing tests never override source failure; unauthorized reviewer, bad digest, or `CONFIRMED` blocker → fix pre-PR.
+- **Failure / Recovery:** green tests != source pass; bad reviewer/digest or `CONFIRMED` blocker → fix pre-PR.
 
-### I. PR Lifecycle (When publishing via PR)
+### I. PR Lifecycle (PR publishing)
 - **In:** green verified branch. **Out:** 1 up-to-date PR vs target (`main`, `develop`, `release/*`, `feature/*`, stacked).
-- **Readiness:** reconcile `origin/<target>`; final checks; 0 blockers; reuse open PR (`gh pr list --head <branch>`); push; create/update PR; fix CI/review blockers.
+- **Readiness:** reconcile `origin/<target>`; final checks; 0 blockers; reuse open PR (`gh pr list --head <branch>`); push; create/update PR; authorized feedback via `pr-feedback/SKILL.md` (thread resolve != editorial/release approval).
 
 ### J. Merge Eligibility Evaluation
 - **In:** `-PrNumber <N>`, `-LedgerPath`, governance, trusted `default_branch` `.b3/research-policy.json`.

@@ -14,6 +14,9 @@ In Cursor these files are slash-invocable. Each file selects skills; it does not
 | [`b3-review-loop.md`](b3-review-loop.md) | One-shot independent loop to gate/stuck/limit (standalone `.b3/ship/review-loop/<slug>/` state + `SINGLE_AGENT_LIMIT` honesty) |
 | [`b3-ship.md`](b3-ship.md) | Full lifecycle until completion, blocker, or `status` |
 | [`b3-research-ship.md`](b3-research-ship.md) | Research-first autonomous delivery (`Preflight → Research → Verification → Formalization → [Impl/Review] → PR → Merge Policy`, `status`, `resume`) |
+| [`b3-pr-resolve.md`](b3-pr-resolve.md) | End-to-end PR feedback lifecycle: validate, fix confirmed root causes, verify, reply, and resolve eligible review threads |
+| [`b3-pr-reply.md`](b3-pr-reply.md) | Reply to selected PR review threads or comments with verified evidence (never edits code or auto-resolves threads) |
+| [`b3-pr-comment.md`](b3-pr-comment.md) | Publish an existing verified B3 review result to a PR (`summary`, `inline`, `both`, or `--draft`) with SHA freshness checks |
 
 Canonical commands live here (`commands/`). Cursor exposes them via `.cursor/commands` (`sync-skills cursor`); Codex, Claude Code, and Antigravity invoke the same procedures through `adapters/command-skills/` or prompt intent. Runtime host slash UX is **NOT VERIFIED** here.
 

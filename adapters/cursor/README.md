@@ -6,7 +6,7 @@ B3 keeps canonical rules, skills, commands, and agents in host-neutral root dire
 
 Installs under `~/.cursor/` via [`install-global.ps1`](install-global.ps1) / [`install-global.sh`](install-global.sh) (idempotent, dry-run safe, manifest-tracked `.b3-global-manifest`):
 - **Skills (`~/.cursor/skills/<skill-name>`):** 1-level flattened junctions/symlinks to canonical `skills/*` (supports both Cursor IDE and Cursor CLI; excludes `adapters/command-skills/` to avoid duplicate `/` entries).
-- **Commands (`~/.cursor/commands/b3-*.md`):** 8 thin generated entrypoints (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`) resolving `B3_HOME` globally via `~/.cursor/b3-home`.
+- **Commands (`~/.cursor/commands/b3-*.md`):** 11 thin generated entrypoints (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`) resolving `B3_HOME` globally via `~/.cursor/b3-home`.
 - **Subagents (`~/.cursor/agents/b3-*.md`):** 5 generated role definitions (`b3-reviewer`, `b3-fixer`, `b3-security-reviewer`, `b3-architecture-reviewer`, `b3-performance-reviewer`) keeping `model: inherit` (no vendor model IDs).
 - **Global Rules fallback (`~/.cursor/b3-user-rules.txt`):** compact plain-text baseline (`<= 1,200 B`) for **Cursor Settings > Rules > User Rules** (manual paste required — Cursor has no documented `~/.cursor/rules/*.mdc` directory).
 
@@ -38,7 +38,7 @@ To manage Cursor together with Antigravity from one shared canonical `B3_HOME`, 
 ### Arbitrary-project usage examples
 
 In any Git repo that has never run `install-product`:
-- Type `/b3-plan`, `/b3-review`, `/b3-verify`, `/b3-debug`, `/b3-implement`, `/b3-review-loop`, `/b3-ship`, or `/b3-research-ship`.
+- Type `/b3-plan`, `/b3-review`, `/b3-verify`, `/b3-debug`, `/b3-implement`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, or `/b3-pr-comment`.
 - Let B3 resolve `B3_HOME` in order: `B3_HOME` env -> project `.b3/home` -> `~/.cursor/b3-home`.
 
 ## 2. Global vs. project-specific overrides
