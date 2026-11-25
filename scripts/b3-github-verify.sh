@@ -283,7 +283,7 @@ if (rulesRes.code === 0) {
       }
     }
   }
-} else if (!hasHttp(rulesRes, 404)) {
+} else if (!hasHttp(rulesRes, 404) && !hasHttp(rulesRes, 403)) {
   fail("branch_rules_unavailable");
 }
 
@@ -746,7 +746,7 @@ if rc_r == 0:
             for rc_item in (p.get("required_status_checks") or []):
                 if isinstance(rc_item, dict) and isinstance(rc_item.get("context"), str) and rc_item["context"].strip():
                     req_checks.append(safe_text(rc_item["context"].strip(), "ruleset_check"))
-elif not has_http(rc_r, out_r, err_r, 404):
+elif not has_http(rc_r, out_r, err_r, 404) and not has_http(rc_r, out_r, err_r, 403):
     fail("branch_rules_unavailable")
 
 branch_protection_readable = True
