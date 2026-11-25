@@ -1,9 +1,10 @@
 id: research-ship-parallel-wave-001
 artifact: workflows/research-ship.md
-intent: Independent research units reading shared evidence manifests partition into concurrent waves while conflicting or blocked units isolate cleanly
+intent: Independent research units run in adaptive isolation modes while protecting single-writer paths and reconciling dirty/resume state
 scenario: |
-  Disjoint research units U001 and U002 write separate unit outputs while sharing read-only evidence-index.md and sources.manifest via -WaveReads.
-  b3-guard check-wave -Partition emits WAVE_OK for wave 1 in PARALLEL; when U003 conflicts on a shared write or read-write path, it partitions U001 and U002 into wave 1 and serializes U003 into wave 2, while protected paths fail closed.
+  Disjoint SHARED_READ_ONLY analysis units write separate outputs (research/r1.md, research/r2.md) with zero worktrees while reading shared sources via -WaveReads -> check-wave -Partition returns WAVE_OK (wave|1|PARALLEL|agents=2).
+  -ProtectedPaths blocks worker ownership of single-writer ledgers/manifests/authority paths (exit 1); pre-existing user_dirty paths in -IgnoreDirtyPaths isolate only overlapping units into blocked_tasks while continuing eligible units, and unexpected dirty files fail closed (exit 2).
+  Resume reconciles extended progress.md Units fields (exec_mode, worker_root, base_sha, scope, integration, initial_dirty_paths, last_wave) via resolve-run and evidence-check without duplicating active workers.
 expected_outcome: PASS
 failure_mode: serial-bottleneck-or-unisolated-blocked-unit
-notes: Verifies automatic wave partitioning, blocked unit isolation, last_wave checkpointing, and single-writer ledger serialization
+notes: Verifies SHARED_READ_ONLY no-worktree concurrency, -ProtectedPaths single-writer guard, dirty-scope partitioning, and resume reconciliation

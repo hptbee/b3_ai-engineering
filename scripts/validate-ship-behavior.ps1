@@ -2488,6 +2488,337 @@ try {
         FailCheck 'guard-wave-partition-orchestration' ($pwErrs -join '; ')
     }
 
+    # --- guard-adaptive-isolation-and-dirty-scope (PR #31 R001-R005: adaptive modes, dirty scope, '.' & junction containment, singleton->parallel, check-worktree -PeerRoots) ---
+    $aiErrs = New-Object System.Collections.Generic.List[string]
+    $aiRepo = Join-Path $sandbox 'adaptive-iso-repo'
+    $aiRepoPosix = To-PosixPath $aiRepo
+    $utf8NoBomAi = New-Object System.Text.UTF8Encoding($false)
+    Init-B3TestRepo -RepoPath $aiRepo -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'ai-base'
+    New-Item -ItemType Directory -Path (Join-Path $aiRepo 'api'), (Join-Path $aiRepo 'ui'), (Join-Path $aiRepo 'src\shared'), (Join-Path $aiRepo 'src\api'), (Join-Path $aiRepo 'docs\authority') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'api\a.ts'), "export const a = 1;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'ui\b.tsx'), "export const B = () => null;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\c.ts'), "export const c = 1;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\x.ts'), "export const x = 1;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\y.ts'), "export const y = 1;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\z.ts'), "export const z = 1;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\shared\types.ts'), "export type Id = string;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'docs\scratch.md'), "# scratch`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'docs\authority\pin.md'), "pin: v1`n", $utf8NoBomAi)
+    & git -C $aiRepo add . | Out-Null
+    & git -C $aiRepo commit -qm 'seed adaptive isolation files' | Out-Null
+    $aiHead = (& git -C $aiRepo rev-parse HEAD).Trim()
+
+    $checkAiParity = {
+        param(
+            [string]$CaseName,
+            [string[]]$PsArgs,
+            [string[]]$ShArgs,
+            [int]$ExpectedExit,
+            [string[]]$Patterns,
+            [switch]$RequireExactTextParity
+        )
+        $psRes = Invoke-PsGuard $PsArgs
+        if ($psRes.Code -ne $ExpectedExit) {
+            $aiErrs.Add("$CaseName PS exit=$($psRes.Code) expected=$ExpectedExit out=$($psRes.Text)")
+            return
+        }
+        foreach ($pat in $Patterns) {
+            if ($psRes.Text -notmatch $pat) {
+                $aiErrs.Add("$CaseName PS missing /$pat/ in: $($psRes.Text)")
+            }
+        }
+        if ($script:HasBash) {
+            $shRes = Invoke-ShGuard $ShArgs
+            if ($shRes.Code -ne $ExpectedExit) {
+                $aiErrs.Add("$CaseName SH exit=$($shRes.Code) expected=$ExpectedExit out=$($shRes.Text)")
+                return
+            }
+            foreach ($pat in $Patterns) {
+                if ($shRes.Text -notmatch $pat) {
+                    $aiErrs.Add("$CaseName SH missing /$pat/ in: $($shRes.Text)")
+                }
+            }
+            if ($RequireExactTextParity -and ($psRes.Text -cne $shRes.Text)) {
+                $aiErrs.Add("$CaseName PS/SH stdout mismatch:`nPS=$($psRes.Text)`nSH=$($shRes.Text)")
+            }
+        }
+    }
+
+    # 1a. Shared disjoint writes with pre-existing user_dirty + mechanical-check unexpected side-effect detection + precommit + MERGE_HEAD
+    $userScratchContent = "# user-dirty-preserve`n"
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'docs\scratch.md'), $userScratchContent, $utf8NoBomAi)
+    & $checkAiParity 'ai-shared-disjoint-user-only' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md', '--expected-base-sha', $aiHead) `
+        0 @('(?m)^dirty_scope=user_only$', '(?m)^user_dirty=docs/scratch\.md$', '(?m)^unexpected_dirty=none$', '(?m)^blocked_tasks=none$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T001,T002\|reason=independent_ready_tasks$', 'WAVE_OK: disjoint \(2 tasks, 2 paths\)') -RequireExactTextParity
+
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'api\a.ts'), "export const a = 2;`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'ui\b.tsx'), "export const B = () => 'ok';`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-shared-disjoint-mech-ok' `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md') `
+        0 @('(?m)^scope_creep=none$', '(?m)^MECHANICAL_OK$') -RequireExactTextParity
+    if ([IO.File]::ReadAllText((Join-Path $aiRepo 'docs\scratch.md')) -cne $userScratchContent) {
+        $aiErrs.Add('ai-shared-disjoint modified pre-existing user_dirty docs/scratch.md')
+    }
+
+    New-Item -ItemType Directory -Path (Join-Path $aiRepo 'coverage') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'coverage\out.json'), "{}`n", $utf8NoBomAi)
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\c.ts'), "export const c = 99;`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-shared-disjoint-mech-creep' `
+        @('mechanical-check', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts,ui/b.tsx', '-IgnoreDirtyPaths', 'docs/scratch.md') `
+        @('mechanical-check', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts,ui/b.tsx', '--ignore-dirty-paths', 'docs/scratch.md') `
+        2 @('(?m)^scope_creep=coverage/out\.json,src/c\.ts$', '(?m)^MECHANICAL_FINDINGS$') -RequireExactTextParity
+    if ([IO.File]::ReadAllText((Join-Path $aiRepo 'docs\scratch.md')) -cne $userScratchContent) {
+        $aiErrs.Add('ai-shared-disjoint-creep modified pre-existing user_dirty docs/scratch.md')
+    }
+    Remove-Item -LiteralPath (Join-Path $aiRepo 'coverage') -Recurse -Force -ErrorAction SilentlyContinue
+
+    & git -C $aiRepo add api/a.ts src/c.ts | Out-Null
+    & $checkAiParity 'ai-precommit-undeclared-staged' `
+        @('precommit', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts') `
+        @('precommit', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts') `
+        1 @('PRECOMMIT_FAIL: undeclared staged path \(src/c\.ts\)')
+
+    $aiMergeHead = Join-Path $aiRepo '.git\MERGE_HEAD'
+    [IO.File]::WriteAllText($aiMergeHead, "$aiHead`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-precommit-merge-head' `
+        @('precommit', '-RepoRoot', $aiRepo, '-AllowedPaths', 'api/a.ts') `
+        @('precommit', '--repo-root', $aiRepoPosix, '--allowed-paths', 'api/a.ts') `
+        1 @('PRECOMMIT_FAIL: git operation in progress \(MERGE_HEAD\)') -RequireExactTextParity
+    & $checkAiParity 'ai-check-wave-merge-head' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx', '--expected-base-sha', $aiHead) `
+        2 @('WAVE_BASE_MISMATCH: git_op_in_progress\(MERGE_HEAD\)') -RequireExactTextParity
+    Remove-Item -LiteralPath $aiMergeHead -Force
+    & git -C $aiRepo reset -q HEAD -- api/a.ts src/c.ts | Out-Null
+    & git -C $aiRepo checkout -- api/a.ts ui/b.tsx src/c.ts docs/scratch.md | Out-Null
+
+    # 1b. Dirty scope classification: USER_DIRTY partial isolate (modified, staged, untracked) + all-blocked vs UNEXPECTED_DIRTY fail-closed + IgnoreDirtyPaths '.'
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'api\a.ts'), "export const a = 3;`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-user-dirty-modified-partial' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx;T003=src/c.ts', '-IgnoreDirtyPaths', 'api/a.ts', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx;T003=src/c.ts', '--ignore-dirty-paths', 'api/a.ts', '--expected-base-sha', $aiHead) `
+        0 @('(?m)^dirty_scope=user_only$', '(?m)^user_dirty=api/a\.ts$', '(?m)^unexpected_dirty=none$', '(?m)^blocked_tasks=T001$', '(?m)^conflicts=dirty:api/a\.ts\(USER_DIRTY->T001\)$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T002,T003\|reason=independent_ready_tasks$', 'WAVE_PARTITIONED: waves=1 max_parallel=2 reason=dirty_scope_partial_split') -RequireExactTextParity
+    & git -C $aiRepo add api/a.ts | Out-Null
+    & $checkAiParity 'ai-user-dirty-staged-partial' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx;T003=src/c.ts', '-IgnoreDirtyPaths', 'api/a.ts', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx;T003=src/c.ts', '--ignore-dirty-paths', 'api/a.ts', '--expected-base-sha', $aiHead) `
+        0 @('(?m)^dirty_scope=user_only$', '(?m)^blocked_tasks=T001$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T002,T003\|reason=independent_ready_tasks$', 'WAVE_PARTITIONED: waves=1 max_parallel=2 reason=dirty_scope_partial_split') -RequireExactTextParity
+    & git -C $aiRepo reset -q HEAD -- api/a.ts | Out-Null
+    & git -C $aiRepo checkout -- api/a.ts | Out-Null
+
+    $aiUntrackedUser = Join-Path $aiRepo 'api\new_user.ts'
+    [IO.File]::WriteAllText($aiUntrackedUser, "export const nu = 1;`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-user-dirty-untracked-partial' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/new_user.ts;T002=ui/b.tsx;T003=src/c.ts', '-IgnoreDirtyPaths', 'api/new_user.ts', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/new_user.ts;T002=ui/b.tsx;T003=src/c.ts', '--ignore-dirty-paths', 'api/new_user.ts', '--expected-base-sha', $aiHead) `
+        0 @('(?m)^dirty_scope=user_only$', '(?m)^user_dirty=api/new_user\.ts$', '(?m)^blocked_tasks=T001$', '(?m)^conflicts=dirty:api/new_user\.ts\(USER_DIRTY->T001\)$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T002,T003\|reason=independent_ready_tasks$', 'WAVE_PARTITIONED: waves=1 max_parallel=2 reason=dirty_scope_partial_split') -RequireExactTextParity
+    & $checkAiParity 'ai-user-dirty-all-blocked' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/new_user.ts', '-IgnoreDirtyPaths', 'api/new_user.ts', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/new_user.ts', '--ignore-dirty-paths', 'api/new_user.ts', '--expected-base-sha', $aiHead) `
+        2 @('(?m)^dirty_scope=user_only$', '(?m)^blocked_tasks=T001$', '(?m)^wave_count=0$', '(?m)^max_parallel=0$', 'WAVE_SEQUENTIAL: waves=0 max_parallel=0 reason=dirty_scope_conflict') -RequireExactTextParity
+    Remove-Item -LiteralPath $aiUntrackedUser -Force
+
+    $aiUnexpectedUntracked = Join-Path $aiRepo 'src\unexpected_untracked.ts'
+    [IO.File]::WriteAllText($aiUnexpectedUntracked, "export const uu = 1;`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-unexpected-dirty-untracked' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx', '--expected-base-sha', $aiHead) `
+        2 @('(?m)^dirty_scope=unexpected$', '(?m)^unexpected_dirty=src/unexpected_untracked\.ts$', 'WAVE_BASE_MISMATCH: unexpected_dirty\(src/unexpected_untracked\.ts\)') -RequireExactTextParity
+    Remove-Item -LiteralPath $aiUnexpectedUntracked -Force
+
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\c.ts'), "export const c = 42;`n", $utf8NoBomAi)
+    & git -C $aiRepo add src/c.ts | Out-Null
+    & $checkAiParity 'ai-unexpected-dirty-staged' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx', '--expected-base-sha', $aiHead) `
+        2 @('(?m)^dirty_scope=unexpected$', '(?m)^unexpected_dirty=src/c\.ts$', 'WAVE_BASE_MISMATCH: unexpected_dirty\(src/c\.ts\)') -RequireExactTextParity
+    & git -C $aiRepo reset -q HEAD -- src/c.ts | Out-Null
+    & git -C $aiRepo checkout -- src/c.ts | Out-Null
+
+    New-Item -ItemType Directory -Path (Join-Path $aiRepo '.b3') -Force | Out-Null
+    $aiPolicyFile = Join-Path $aiRepo '.b3\research-policy.json'
+    [IO.File]::WriteAllText($aiPolicyFile, "{}`n", $utf8NoBomAi)
+    & $checkAiParity 'ai-unexpected-dirty-research-policy' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-CheckDirtyScope', '-WaveSpecs', 'T001=api/a.ts;T002=ui/b.tsx', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--check-dirty-scope', '--wave-specs', 'T001=api/a.ts;T002=ui/b.tsx', '--expected-base-sha', $aiHead) `
+        2 @('(?m)^dirty_scope=unexpected$', '(?m)^unexpected_dirty=\.b3/research-policy\.json$', 'WAVE_BASE_MISMATCH: unexpected_dirty\(\.b3/research-policy\.json\)') -RequireExactTextParity
+    Remove-Item -LiteralPath (Join-Path $aiRepo '.b3') -Recurse -Force
+
+    & $checkAiParity 'ai-ignore-dirty-dot-rejected' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts', '-IgnoreDirtyPaths', '.') `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts', '--ignore-dirty-paths', '.') `
+        1 @("WAVE_FAIL: invalid ignore-dirty path '\.'") -RequireExactTextParity
+
+    # 1c. R004: '.' root rejection in -Partition vs legacy/WaveReads, -ProtectedPaths, .b3/research-policy.json/.gitmodules, and junction containment
+    & $checkAiParity 'ai-legacy-nonpartition-dot-conflict' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-WaveSpecs', 'T001=.;T002=ui/b.tsx') `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--wave-specs', 'T001=.;T002=ui/b.tsx') `
+        2 @('WAVE_CONFLICT: \.<->ui/b\.tsx\(T001,T002\)') -RequireExactTextParity
+    & $checkAiParity 'ai-partition-dot-rejected' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T001=.;T002=ui/b.tsx') `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T001=.;T002=ui/b.tsx') `
+        1 @("WAVE_FAIL: protected path '\.' cannot be worker-owned in parallel partition") -RequireExactTextParity
+    & $checkAiParity 'ai-wave-reads-dot-allowed' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts', '-WaveReads', 'T001=.') `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts', '--wave-reads', 'T001=.') `
+        0 @('(?m)^wave\|1\|SEQUENTIAL\|agents=1\|tasks=T001\|reason=single_ready_task$', 'WAVE_OK: disjoint \(1 tasks, 1 paths\)') -RequireExactTextParity
+
+    foreach ($protSpec in @(
+        @{ Name = 'exact-file'; Spec = 'T001=src/shared/types.ts'; Boundary = 'src/shared/types.ts' },
+        @{ Name = 'child-file'; Spec = 'T001=docs/authority/pin.md'; Boundary = 'docs/authority' },
+        @{ Name = 'ancestor-dir'; Spec = 'T001=docs'; Boundary = 'docs/authority' }
+    )) {
+        & $checkAiParity "ai-protected-paths-$($protSpec.Name)" `
+            @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', $protSpec.Spec, '-ProtectedPaths', 'docs/authority,src/shared/types.ts') `
+            @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', $protSpec.Spec, '--protected-paths', 'docs/authority,src/shared/types.ts') `
+            1 @("overlaps single-writer boundary '$([regex]::Escape($protSpec.Boundary))'") -RequireExactTextParity
+    }
+
+    foreach ($pOwn in @('.b3/research-policy.json', '.gitmodules')) {
+        & $checkAiParity "ai-protected-builtin-$pOwn" `
+            @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', "T001=$pOwn;T002=ui/b.tsx") `
+            @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', "T001=$pOwn;T002=ui/b.tsx") `
+            1 @("WAVE_FAIL: protected path '$([regex]::Escape($pOwn))' cannot be worker-owned") -RequireExactTextParity
+    }
+
+    $aiChildJunc = Join-Path $aiRepo 'src\api\junc_child'
+    $aiJuncRepo = Join-Path $sandbox 'junc_repo'
+    $aiJuncRepoPosix = To-PosixPath $aiJuncRepo
+    New-Item -ItemType Junction -Path $aiChildJunc -Target (Join-Path $aiRepo 'ui') | Out-Null
+    New-Item -ItemType Junction -Path $aiJuncRepo -Target $aiRepo | Out-Null
+    try {
+        & $checkAiParity 'ai-junc-child-wavespecs' `
+            @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T001=src/api;T002=src/c.ts') `
+            @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T001=src/api;T002=src/c.ts') `
+            1 @("WAVE_FAIL: unsafe symlink or junction alias in path 'src/api'") -RequireExactTextParity
+        & $checkAiParity 'ai-junc-child-wavereads' `
+            @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts;T002=src/c.ts', '-WaveReads', 'T002=src/api') `
+            @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts;T002=src/c.ts', '--wave-reads', 'T002=src/api') `
+            1 @("WAVE_FAIL: unsafe symlink or junction alias in path 'src/api'") -RequireExactTextParity
+        & $checkAiParity 'ai-junc-child-protected' `
+            @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts', '-ProtectedPaths', 'src/api') `
+            @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts', '--protected-paths', 'src/api') `
+            1 @("WAVE_FAIL: unsafe symlink or junction alias in path 'src/api'") -RequireExactTextParity
+        & $checkAiParity 'ai-junc-child-ignoredirty' `
+            @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts', '-IgnoreDirtyPaths', 'src/api') `
+            @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts', '--ignore-dirty-paths', 'src/api') `
+            1 @("WAVE_FAIL: unsafe symlink or junction alias in path 'src/api'") -RequireExactTextParity
+        & $checkAiParity 'ai-junc-repo-root' `
+            @('check-wave', '-RepoRoot', $aiJuncRepo, '-Partition', '-WaveSpecs', 'T001=api/a.ts') `
+            @('check-wave', '--repo-root', $aiJuncRepoPosix, '--partition', '--wave-specs', 'T001=api/a.ts') `
+            1 @("WAVE_FAIL: unsafe symlink or junction alias in path '\.'") -RequireExactTextParity
+    } finally {
+        if (Test-Path -LiteralPath $aiChildJunc) { [System.IO.Directory]::Delete($aiChildJunc, $false) }
+        if (Test-Path -LiteralPath $aiJuncRepo) { [System.IO.Directory]::Delete($aiJuncRepo, $false) }
+    }
+
+    # 1d. R003: Singleton wave 1 -> parallel wave 2 + recompute after wave 1 commit
+    & $checkAiParity 'ai-singleton-w1-parallel-w2' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T1=src/x.ts,src/y.ts;T2=src/x.ts,src/z.ts;T3=src/y.ts', '-ExpectedBaseSha', $aiHead) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T1=src/x.ts,src/y.ts;T2=src/x.ts,src/z.ts;T3=src/y.ts', '--expected-base-sha', $aiHead) `
+        0 @('(?m)^wave_count=2$', '(?m)^max_parallel=2$', '(?m)^wave\|1\|SEQUENTIAL\|agents=1\|tasks=T1\|reason=shared_write_conflict$', '(?m)^wave\|2\|PARALLEL\|agents=2\|tasks=T2,T3\|reason=independent_ready_tasks$', 'WAVE_PARTITIONED: waves=2 max_parallel=2 reason=conflicting_wave_split') -RequireExactTextParity
+    [IO.File]::WriteAllText((Join-Path $aiRepo 'src\x.ts'), "export const x = 2;`n", $utf8NoBomAi)
+    & git -C $aiRepo add src/x.ts | Out-Null
+    & git -C $aiRepo commit -qm 'T1 integrated' | Out-Null
+    $aiAfterT1 = (& git -C $aiRepo rev-parse HEAD).Trim()
+    & $checkAiParity 'ai-recompute-after-w1' `
+        @('check-wave', '-RepoRoot', $aiRepo, '-Partition', '-WaveSpecs', 'T2=src/x.ts,src/z.ts;T3=src/y.ts', '-ExpectedBaseSha', $aiAfterT1) `
+        @('check-wave', '--repo-root', $aiRepoPosix, '--partition', '--wave-specs', 'T2=src/x.ts,src/z.ts;T3=src/y.ts', '--expected-base-sha', $aiAfterT1) `
+        0 @('(?m)^wave_count=1$', '(?m)^max_parallel=2$', '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=T2,T3\|reason=independent_ready_tasks$', 'WAVE_OK: disjoint \(2 tasks, 3 paths\)') -RequireExactTextParity
+
+    # 1e. R001: check-worktree identity & -PeerRoots (ISOLATED_WRITES)
+    $wt2Parent = Join-Path $sandbox 'wt2-parent'
+    $wt2Main = Join-Path $sandbox 'wt2-main'
+    $wt2One = Join-Path $wt2Parent 'wt1'
+    $wt2Two = Join-Path $wt2Parent 'wt2'
+    $wt2Other = Join-Path $sandbox 'wt2-other'
+    $wt2Junc = Join-Path $sandbox 'junc_wt'
+    $wt2OuterJunc = Join-Path $sandbox 'outer_junc'
+    $wt2MainPosix = To-PosixPath $wt2Main
+    $wt2OnePosix = To-PosixPath $wt2One
+    $wt2TwoPosix = To-PosixPath $wt2Two
+    $wt2OtherPosix = To-PosixPath $wt2Other
+    $wt2JuncPosix = To-PosixPath $wt2Junc
+    $wt2OuterJuncPosix = To-PosixPath $wt2OuterJunc
+
+    New-Item -ItemType Directory -Path $wt2Parent | Out-Null
+    Init-B3TestRepo -RepoPath $wt2Main -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'wt2-main'
+    $wt2Head = (& git -C $wt2Main rev-parse HEAD).Trim()
+    & git -C $wt2Main worktree add -q -b wt2-b1 $wt2One $wt2Head 2>$null
+    & git -C $wt2Main worktree add -q -b wt2-b2 $wt2Two $wt2Head 2>$null
+    Init-B3TestRepo -RepoPath $wt2Other -InitialCommit -InitialFileName 'other.txt' -InitialFileContent 'other'
+    New-Item -ItemType Junction -Path $wt2Junc -Target $wt2One | Out-Null
+    New-Item -ItemType Junction -Path $wt2OuterJunc -Target $wt2Parent | Out-Null
+    try {
+        & $checkAiParity 'ai-wt-linked-peer-ok' `
+            @('check-worktree', '-RepoRoot', $wt2One, '-ExpectedRoot', $wt2Main, '-ExpectedBaseSha', $wt2Head, '-PeerRoots', $wt2Two) `
+            @('check-worktree', '--repo-root', $wt2OnePosix, '--expected-root', $wt2MainPosix, '--expected-base-sha', $wt2Head, '--peer-roots', $wt2TwoPosix) `
+            0 @("WORKTREE_OK: root=.* head=$wt2Head common_dir=.* linked=true")
+        & $checkAiParity 'ai-wt-main-linked-false' `
+            @('check-worktree', '-RepoRoot', $wt2Main, '-ExpectedRoot', $wt2Main, '-ExpectedBaseSha', $wt2Head, '-PeerRoots', "$wt2One,$wt2Two") `
+            @('check-worktree', '--repo-root', $wt2MainPosix, '--expected-root', $wt2MainPosix, '--expected-base-sha', $wt2Head, '--peer-roots', "$wt2OnePosix,$wt2TwoPosix") `
+            0 @("WORKTREE_OK: root=.* head=$wt2Head common_dir=.* linked=false")
+        & $checkAiParity 'ai-wt-dup-peer' `
+            @('check-worktree', '-RepoRoot', $wt2One, '-PeerRoots', $wt2One) `
+            @('check-worktree', '--repo-root', $wt2OnePosix, '--peer-roots', $wt2OnePosix) `
+            2 @('WORKTREE_UNSAFE: duplicate_or_nested_worktree')
+        & $checkAiParity 'ai-wt-peer-other-repo' `
+            @('check-worktree', '-RepoRoot', $wt2One, '-PeerRoots', $wt2Other) `
+            @('check-worktree', '--repo-root', $wt2OnePosix, '--peer-roots', $wt2OtherPosix) `
+            2 @('WORKTREE_UNSAFE: peer_repo_mismatch')
+        $wt2MissingPeer = Join-Path $sandbox 'missing-peer'
+        & $checkAiParity 'ai-wt-missing-peer' `
+            @('check-worktree', '-RepoRoot', $wt2One, '-PeerRoots', $wt2MissingPeer) `
+            @('check-worktree', '--repo-root', $wt2OnePosix, '--peer-roots', (To-PosixPath $wt2MissingPeer)) `
+            2 @('WORKTREE_UNSAFE: missing_peer_root')
+
+        # Junction '.' inside Push-Location, trailing '/.' & '\', and outer_junc/wt1
+        $prevProcCd = [Environment]::CurrentDirectory
+        Push-Location $wt2Junc
+        try {
+            [Environment]::CurrentDirectory = $wt2Junc
+            $psDotJunc = Invoke-PsGuard @('check-worktree', '-RepoRoot', '.')
+            if ($psDotJunc.Code -ne 2 -or ($psDotJunc.Text -notmatch 'WORKTREE_UNSAFE: unsafe_reparse_root')) {
+                $aiErrs.Add("ai-wt-dot-junc PS exit=$($psDotJunc.Code) out=$($psDotJunc.Text)")
+            }
+            if ($script:HasBash) {
+                $guardShPosix = To-PosixPath (Join-Path $root 'scripts\b3-guard.sh')
+                $shDotJunc = Invoke-ShCmd "cd '$wt2JuncPosix' && '$guardShPosix' check-worktree --repo-root '.'"
+                if ($shDotJunc.Code -ne 2 -or ($shDotJunc.Text -notmatch 'WORKTREE_UNSAFE: unsafe_reparse_root')) {
+                    $aiErrs.Add("ai-wt-dot-junc SH exit=$($shDotJunc.Code) out=$($shDotJunc.Text)")
+                }
+            }
+        } finally {
+            [Environment]::CurrentDirectory = $prevProcCd
+            Pop-Location
+        }
+        & $checkAiParity 'ai-wt-trailing-dot-slash' `
+            @('check-worktree', '-RepoRoot', "$wt2Junc/.") `
+            @('check-worktree', '--repo-root', "$wt2JuncPosix/.") `
+            2 @('WORKTREE_UNSAFE: unsafe_reparse_root')
+        & $checkAiParity 'ai-wt-trailing-slash' `
+            @('check-worktree', '-RepoRoot', "$wt2Junc\") `
+            @('check-worktree', '--repo-root', "$wt2JuncPosix/") `
+            2 @('WORKTREE_UNSAFE: unsafe_reparse_root')
+        & $checkAiParity 'ai-wt-outer-junc-parent' `
+            @('check-worktree', '-RepoRoot', (Join-Path $wt2OuterJunc 'wt1')) `
+            @('check-worktree', '--repo-root', "$wt2OuterJuncPosix/wt1") `
+            2 @('WORKTREE_UNSAFE: unsafe_reparse_root')
+    } finally {
+        if (Test-Path -LiteralPath $wt2Junc) { [System.IO.Directory]::Delete($wt2Junc, $false) }
+        if (Test-Path -LiteralPath $wt2OuterJunc) { [System.IO.Directory]::Delete($wt2OuterJunc, $false) }
+        & git -C $wt2Main worktree remove -f $wt2One 2>$null | Out-Null
+        & git -C $wt2Main worktree remove -f $wt2Two 2>$null | Out-Null
+    }
+
+    if ($aiErrs.Count -eq 0) {
+        Pass 'guard-adaptive-isolation-and-dirty-scope'
+    } else {
+        FailCheck 'guard-adaptive-isolation-and-dirty-scope' ($aiErrs -join '; ')
+    }
+
     # --- ship-parallel-wave-contracts-and-recovery (Scenarios 6-9, 11-13) ---
     $crErrs = New-Object System.Collections.Generic.List[string]
     $dispatchText = Get-Content -LiteralPath (Join-Path $root 'workflows\references\dispatch-naming.md') -Raw
@@ -2496,22 +2827,25 @@ try {
     $shipResText = Get-Content -LiteralPath (Join-Path $root 'workflows\references\ship-resume.md') -Raw
     $strategyText = Get-Content -LiteralPath (Join-Path $root 'review-loop\strategy.md') -Raw
 
-    # Scenarios 6, 7 & 13: Sequential fallback, no-false-PARALLEL, and 4-host adapter contract
-    foreach ($tok in @('single_ready_task', 'trivial_overhead', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'Cursor', 'Claude Code', 'Codex', 'Antigravity', 'check-wave -Partition', 'last_wave:')) {
+    # Scenarios 6, 7 & 13: Sequential fallback, no-false-PARALLEL, adaptive isolation modes, honesty notes, and 4-host adapter contract
+    foreach ($tok in @('single_ready_task', 'trivial_overhead', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'Cursor', 'Claude Code', 'Codex', 'Antigravity', 'check-wave -Partition', 'last_wave:', 'SHARED_READ_ONLY', 'SHARED_DISJOINT_WRITES', 'ISOLATED_WRITES', 'SEQUENTIAL', 'Declared path ownership != OS filesystem isolation', '`WORKTREE_OK` verifies worktree identity, not full isolation', 'malformed_wave_output', 'unsafe_shared_side_effects', 'workers **never** stage, commit')) {
         if (-not $dispatchText.Contains($tok)) {
             $crErrs.Add("dispatch-naming.md missing '$tok'")
         }
     }
-    foreach ($tok in @('check-wave -Partition', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'last_wave:', 'single-writer', 'post-integration', 'Cursor', 'Claude', 'Codex', 'Antigravity')) {
+    foreach ($tok in @('check-wave -Partition', 'no_host_isolation', 'sequential_host_fallback', 'never report `PARALLEL`', 'last_wave:', 'single-writer', 'post-integration', 'Cursor', 'Claude', 'Codex', 'Antigravity', 'SHARED_READ_ONLY', 'SHARED_DISJOINT_WRITES', 'ISOLATED_WRITES', 'SEQUENTIAL', 'ownership != OS isolation', '`WORKTREE_OK` = identity only', 'malformed_wave_output')) {
         if (-not $shipText.Contains($tok)) {
             $crErrs.Add("workflows/ship.md missing '$tok'")
         }
     }
-    # Scenarios 8 & 9 contract: last_wave in templates + partial wave resume in ship-resume.md
+    # Scenarios 8 & 9 contract: last_wave + extended Tasks columns in templates + partial wave / active-agent resume in ship-resume.md
     if ($shipTplText -notmatch '(?m)^- last_wave:') {
         $crErrs.Add('ship-templates.md missing "- last_wave:" field')
     }
-    foreach ($tok in @('partial waves', 'never `git reset`', 'reconcile `last_wave:`', 'check-wave -Partition')) {
+    if ($shipTplText -notmatch '(?m)^\|\s*id\s*\|\s*status\s*\|\s*mode\s*\|\s*worker_root\s*\|\s*task_base\s*\|\s*scope\s*\|\s*commit\s*\|\s*verification\s*\|\s*review\s*\|\s*integration\s*\|\s*impl_agent\s*\|$') {
+        $crErrs.Add('ship-templates.md missing extended Tasks columns (mode, worker_root, scope, integration)')
+    }
+    foreach ($tok in @('partial waves', 'never `git reset`', 'reconcile `last_wave:`', 'check-wave -Partition', 'impl_agent', 'never duplicate active work', '`mode`', '`worker_root`', '`scope`', 'integration')) {
         if (-not $shipResText.Contains($tok)) {
             $crErrs.Add("ship-resume.md missing '$tok'")
         }
