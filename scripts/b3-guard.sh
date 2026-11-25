@@ -29,31 +29,39 @@ make_temp_file() {
 
 _GIT_STDOUT=""
 _GIT_STDERR=""
+_B3_GIT_ERR_FILE=""
+make_temp_file "b3-git-err" _B3_GIT_ERR_FILE
+
 _run_git_cmd_core() {
   local root="$1" idx_file="$2" stdin_mode="$3" stdin_val="$4"
   shift 4
-  local errf rc=0
-  make_temp_file "b3-git-err" errf
+  local rc=0
   _GIT_STDOUT=""
   _GIT_STDERR=""
-  if [[ "$stdin_mode" == "text" ]]; then
-    if _GIT_STDOUT="$(printf '%s' "$stdin_val" | git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then rc=0; else rc=$?; fi
+  if [[ "$stdin_mode" == "quiet" ]]; then
+    if [[ -n "$idx_file" ]]; then
+      if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>/dev/null)"; then rc=0; else rc=$?; fi
+    else
+      if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>/dev/null)"; then rc=0; else rc=$?; fi
+    fi
+    return $rc
   elif [[ "$stdin_mode" == "file" ]]; then
-    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" < "$stdin_val" 2>"$errf")"; then rc=0; else rc=$?; fi
+    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" < "$stdin_val" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
   elif [[ -n "$idx_file" ]]; then
-    if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then rc=0; else rc=$?; fi
+    if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
   else
-    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false "$@" 2>"$errf")"; then rc=0; else rc=$?; fi
+    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
   fi
-  _GIT_STDERR="$(cat "$errf" 2>/dev/null || true)"
-  rm -f "$errf"
+  if [[ $rc -ne 0 && -f "$_B3_GIT_ERR_FILE" ]]; then
+    _GIT_STDERR="$(< "$_B3_GIT_ERR_FILE")"
+  fi
   return $rc
 }
 
 run_git_cmd() { local root="$1"; shift; _run_git_cmd_core "$root" "" "none" "" "$@"; }
+run_git_cmd_quiet() { local root="$1"; shift; _run_git_cmd_core "$root" "" "quiet" "" "$@"; }
 run_git_cmd_with_index() { local root="$1" idx_file="$2"; shift 2; _run_git_cmd_core "$root" "$idx_file" "none" "" "$@"; }
-run_git_cmd_stdin() { local root="$1" stdin_text="$2"; shift 2; _run_git_cmd_core "$root" "" "text" "$stdin_text" "$@"; }
-run_git_cmd_stdin_file() { local root="$1" stdin_file="$2"; shift 2; _run_git_cmd_core "$root" "" "file" "$stdin_file" "$@"; }
+run_git_cmd_from_file() { local root="$1" stdin_file="$2"; shift 2; _run_git_cmd_core "$root" "" "file" "$stdin_file" "$@"; }
 
 git_err_detail() {
   local d
@@ -64,7 +72,7 @@ git_err_detail() {
 
 hash_git_stdin_file() {
   local root="$1" in_file="$2" prefix="${3:-GIT_ERROR}" desc="${4:-failed}" h_out
-  if ! run_git_cmd_stdin_file "$root" "$in_file" hash-object --stdin; then
+  if ! run_git_cmd_from_file "$root" "$in_file" hash-object --stdin; then
     echo "${prefix}: git hash-object ${desc}: $(git_err_detail)"
     return 1
   fi
@@ -167,6 +175,96 @@ split_csv_lines() {
   if ! $_had_noglob; then set +f; fi
 }
 
+now_epoch_ms() {
+  local rt="${EPOCHREALTIME:-}"
+  if [[ -n "$rt" && "$rt" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+    local sec="${BASH_REMATCH[1]}" frac="${BASH_REMATCH[2]}000"
+    printf '%s' "$(( 10#$sec * 1000 + 10#${frac:0:3} ))"
+    return 0
+  fi
+  local dms
+  dms="$(date +%s%3N 2>/dev/null || true)"
+  if [[ "$dms" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$dms"
+    return 0
+  fi
+  printf '%s' "$(( $(date +%s) * 1000 ))"
+}
+
+_CHECKED_CSV_PATHS=()
+split_path_csv_checked() {
+  local raw_csv="$1"
+  local err_prefix="$2"
+  local reject_dot="${3:-false}"
+  local dot_msg="${4:-}"
+  _CHECKED_CSV_PATHS=()
+  [[ -n "$raw_csv" ]] || return 0
+  local LC_ALL=C
+  if [[ "$raw_csv" =~ [[:cntrl:]] ]]; then
+    echo "${err_prefix}: invalid path control character"
+    exit 1
+  fi
+  local cleaned
+  cleaned="$(trim_str "$raw_csv")"
+  if [[ -z "$cleaned" || "$cleaned" == "[]" || "$cleaned" == "none" ]]; then
+    return 0
+  fi
+  if [[ "$cleaned" == \[*\] ]]; then
+    cleaned="${cleaned#[}"
+    cleaned="${cleaned%]}"
+  fi
+  local _had_ng=false
+  case "$-" in *f*) _had_ng=true ;; esac
+  set -f
+  local -a parts=()
+  IFS=',' read -r -d '' -a parts < <(printf '%s\0' "$cleaned") || true
+  if ! $_had_ng; then set +f; fi
+  local part tok slash item prev seen re_dotdot='(^|/)\.\.(/|$)'
+  local -a raw_items=()
+  if [[ ${#parts[@]} -gt 0 ]]; then
+    for part in "${parts[@]}"; do
+      tok="$(trim_str "$part")"
+      [[ -z "$tok" || "$tok" == "none" ]] && continue
+      if [[ "$tok" == *'*'* || "$tok" == *'?'* || "$tok" == *'['* ]]; then
+        echo "${err_prefix}: invalid glob in path '$tok'"
+        exit 1
+      fi
+      slash="${tok//\\//}"
+      if [[ "$slash" == *:* || "$slash" == /* || "$slash" =~ $re_dotdot ]]; then
+        echo "${err_prefix}: invalid path '$tok'"
+        exit 1
+      fi
+      if [[ "$slash" == "." || "$slash" == "./" ]]; then
+        item="."
+      else
+        item="$(norm_path "$tok")"
+      fi
+      [[ -n "$item" ]] || continue
+      if [[ "$reject_dot" == "true" && "$item" == "." ]]; then
+        if [[ -n "$dot_msg" ]]; then
+          echo "$dot_msg"
+        else
+          echo "${err_prefix}: invalid ignore-dirty path '.'"
+        fi
+        exit 1
+      fi
+      seen="false"
+      if [[ ${#raw_items[@]} -gt 0 ]]; then
+        for prev in "${raw_items[@]}"; do
+          if [[ "$prev" == "$item" ]]; then seen="true"; break; fi
+        done
+      fi
+      [[ "$seen" == "true" ]] || raw_items+=("$item")
+    done
+  fi
+  if [[ ${#raw_items[@]} -gt 0 ]]; then
+    local srt
+    while IFS= read -r srt; do
+      [[ -n "$srt" ]] && _CHECKED_CSV_PATHS+=("$srt")
+    done < <(printf '%s\n' "${raw_items[@]}" | LC_ALL=C sort -u)
+  fi
+}
+
 path_in_list() {
   local candidate="$1"
   shift
@@ -253,7 +351,7 @@ parse_wave_paths() {
     tok="$(trim_str "$part")"
     [[ -z "$tok" || "$tok" == "none" ]] && continue
     slash="${tok//\\//}"
-    if [[ "$slash" == *"|"* || "$slash" == *:* || "$slash" == /* || "$slash" == *"//"* || "$slash" =~ $re_dotdot ]]; then
+    if [[ "$slash" == *"|"* || "$slash" == *:* || "$slash" == /* || "$slash" == *"//"* || "$slash" =~ $re_dotdot || "$slash" == *'*'* || "$slash" == *'?'* || "$slash" == *'['* ]]; then
       echo "${error_prefix}: invalid path '$tok'"
       exit 1
     fi
@@ -551,7 +649,7 @@ assert_valid_git_rev() {
     echo "${prefix}: invalid ${opt} '${rev}'"
     exit 1
   fi
-  if ! run_git_cmd "$root" rev-parse --verify --quiet "${rev}^{${kind}}"; then
+  if ! run_git_cmd_quiet "$root" rev-parse --verify --quiet "${rev}^{${kind}}"; then
     echo "${prefix}: invalid ${opt} '${rev}'"
     exit 1
   fi
@@ -565,7 +663,7 @@ assert_valid_git_rev() {
 
 snapshot_preflight() {
   local root="$1" prefix="$2" changed untracked links p line sub state
-  if ! run_git_cmd "$root" diff --no-renames --diff-filter=d --name-only HEAD --; then
+  if ! run_git_cmd "$root" diff --no-ext-diff --no-renames --diff-filter=d --name-only HEAD --; then
     echo "${prefix}: unable to inspect snapshot paths"; return 1
   fi
   changed="$_GIT_STDOUT"
@@ -635,7 +733,7 @@ run_snapshot_chunked_cmd() {
 stage_non_secret_tracked() {
   local root="$1" tmp_idx="$2" line="" p="" ts="" skip="false"
   shift 2
-  run_git_cmd_with_index "$root" "$tmp_idx" diff --no-renames --name-only -- || return 1
+  run_git_cmd_with_index "$root" "$tmp_idx" diff --no-ext-diff --no-renames --name-only -- || return 1
   local -a non_secret_tracked=()
   while IFS= read -r line; do
     p="$(norm_path "$line")"
@@ -663,12 +761,12 @@ build_working_tree_oid() {
   local -a tracked_secrets=()
   local -a unborn_staged_secrets=()
   local -a untracked_to_add=()
-  if run_git_cmd "$root" rev-parse --verify --quiet HEAD; then
+  if run_git_cmd_quiet "$root" rev-parse --verify --quiet HEAD; then
     has_head="true"
   fi
   if [[ "$exclude_sensitive" == "true" ]]; then
     if [[ "$has_head" == "true" ]]; then
-      if run_git_cmd "$root" diff --no-renames --diff-filter=d --name-only HEAD --; then
+      if run_git_cmd "$root" diff --no-ext-diff --no-renames --diff-filter=d --name-only HEAD --; then
         ch="$_GIT_STDOUT"
         while IFS= read -r line; do
           p="$(norm_path "$line")"
@@ -784,8 +882,8 @@ resolve_auto_base_sha() {
   shift
   local -a ignored=("$@")
   local diff_out="" un_out="" line p
-  if run_git_cmd "$root" diff --no-renames --name-only HEAD; then diff_out="$_GIT_STDOUT"; fi
-  if run_git_cmd "$root" ls-files --others --exclude-standard; then un_out="$_GIT_STDOUT"; fi
+  if run_git_cmd_quiet "$root" diff --no-ext-diff --no-renames --name-only HEAD --; then diff_out="$_GIT_STDOUT"; fi
+  if run_git_cmd_quiet "$root" ls-files --others --exclude-standard; then un_out="$_GIT_STDOUT"; fi
   while IFS= read -r line; do
     p="$(norm_path "$line")"
     [[ -z "$p" ]] && continue
@@ -796,11 +894,11 @@ resolve_auto_base_sha() {
   done < <(printf '%s\n%s\n' "$diff_out" "$un_out")
 
   local head_sha="" ref mb=""
-  if run_git_cmd "$root" rev-parse HEAD; then head_sha="$(trim_str "$_GIT_STDOUT")"; fi
+  if run_git_cmd_quiet "$root" rev-parse HEAD; then head_sha="$(trim_str "$_GIT_STDOUT")"; fi
   if [[ -n "$head_sha" ]]; then
     for ref in origin/HEAD origin/main origin/master main master; do
-      if run_git_cmd "$root" rev-parse --verify --quiet "$ref"; then
-        if run_git_cmd "$root" merge-base "$ref" HEAD; then
+      if run_git_cmd_quiet "$root" rev-parse --verify --quiet "$ref"; then
+        if run_git_cmd_quiet "$root" merge-base "$ref" HEAD; then
           mb="$(trim_str "$_GIT_STDOUT")"
         else
           mb=""
@@ -820,8 +918,8 @@ resolve_auto_base_for_target() {
   local target_commit_sha="$2"
   local ref mb=""
   for ref in origin/HEAD origin/main origin/master main master HEAD; do
-    if run_git_cmd "$root" rev-parse --verify --quiet "$ref"; then
-      if run_git_cmd "$root" merge-base "$ref" "$target_commit_sha"; then
+    if run_git_cmd_quiet "$root" rev-parse --verify --quiet "$ref"; then
+      if run_git_cmd_quiet "$root" merge-base "$ref" "$target_commit_sha"; then
         mb="$(trim_str "$_GIT_STDOUT")"
       else
         mb=""
@@ -832,7 +930,7 @@ resolve_auto_base_for_target() {
       fi
     fi
   done
-  if run_git_cmd "$root" rev-parse --verify --quiet "${target_commit_sha}^"; then
+  if run_git_cmd_quiet "$root" rev-parse --verify --quiet "${target_commit_sha}^"; then
     local par=""
     par="$(trim_str "$_GIT_STDOUT")"
     if [[ -n "$par" ]]; then
@@ -919,7 +1017,7 @@ check_contained_repo_path() {
   local p
   p="$(norm_path "$trimmed")"
   local re_dotdot='(^|/)\.\.(/|$)'
-  if [[ -z "$p" || "$p" == "." || "$p" == /* || "$p" == ~* || "$p" == *:* || "$p" =~ $re_dotdot ]]; then
+  if [[ -z "$p" || "$p" == "." || "$p" == /* || "$p" == ~* || "$p" == *:* || "$p" =~ $re_dotdot || "$p" == *'*'* || "$p" == *'?'* || "$p" == *'['* ]]; then
     return 1
   fi
   local check_rem="$p" check_seg
@@ -942,7 +1040,7 @@ check_contained_repo_path() {
     return 1
   fi
   canon_root="$(canon_repo_root "$root")" || return 1
-  local rem="${p#./}" seg_cur="${canon_root%/}" seg
+  local rem="${p#./}" seg_cur="${canon_root%/}" seg canon_seg seg_cur_cmp canon_seg_cmp
   while [[ -n "$rem" ]]; do
     if [[ "$rem" == */* ]]; then
       seg="${rem%%/*}"
@@ -954,8 +1052,25 @@ check_contained_repo_path() {
     [[ -z "$seg" || "$seg" == "." ]] && continue
     if [[ "$seg" == ".." ]]; then return 1; fi
     seg_cur="${seg_cur}/${seg}"
+    seg_cur="${seg_cur%/}"
     if [[ -L "$seg_cur" ]]; then
       return 1
+    fi
+    if [[ -d "$seg_cur" ]]; then
+      canon_seg="$(cd -P "$seg_cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+      canon_seg="$(normalize_abs_for_repo "$canon_seg")"
+      if ! _path_within_or_equal "$canon_seg" "$canon_root"; then
+        return 1
+      fi
+      seg_cur_cmp="$seg_cur"
+      canon_seg_cmp="$canon_seg"
+      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+        seg_cur_cmp="$(printf '%s' "$seg_cur_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        canon_seg_cmp="$(printf '%s' "$canon_seg_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      fi
+      if [[ "$canon_seg_cmp" != "$seg_cur_cmp" ]]; then
+        return 1
+      fi
     fi
   done
   local full canon_dir probe next_probe re_winroot='^[A-Za-z]:/$'
@@ -1001,7 +1116,7 @@ parse_merge_policy_json() {
   local _node_code='
 const fs = require("fs");
 let raw;
-try { raw = fs.readFileSync(0, "utf8"); } catch (e) { process.exit(2); }
+try { raw = fs.readFileSync(0, "utf8").replace(/^\uFEFF/, ""); } catch (e) { process.exit(2); }
 let obj;
 try { obj = JSON.parse(raw); } catch (e) { process.exit(2); }
 if (!obj || typeof obj !== "object" || Array.isArray(obj)) process.exit(2);
@@ -1073,7 +1188,8 @@ for (const b of allowedBranches) process.stdout.write("allowed_target_branch=" +
     local _py_code='
 import json, sys
 try:
-    obj = json.load(sys.stdin)
+    raw = sys.stdin.read().lstrip("\ufeff")
+    obj = json.loads(raw)
 except Exception:
     sys.exit(2)
 if not isinstance(obj, dict):
@@ -1122,6 +1238,69 @@ for b in allowed_br:
   return 2
 }
 
+_POL_AUTO_MERGE="disabled"
+_POL_ALLOW_PROT="false"
+_POL_REQ_CI="true"
+_POL_REQ_REV="true"
+_POL_PROT_ARR=()
+_POL_ALLOWED_BR=()
+load_merge_policy_from_source() {
+  local src="$1" raw_txt="${2:-}" err_pfx="${3:-MERGE_BLOCKED}"
+  local parsed_pol="" pol_rc=0 pline raw_pp _bad_am _seen_pp="|" _seen_br="|" _br_v
+  _POL_AUTO_MERGE="disabled"
+  _POL_ALLOW_PROT="false"
+  _POL_REQ_CI="true"
+  _POL_REQ_REV="true"
+  _POL_PROT_ARR=()
+  _POL_ALLOWED_BR=()
+  set +e
+  if [[ "$src" == "-" ]]; then
+    parsed_pol="$(printf '%s' "$raw_txt" | parse_merge_policy_json "-")"
+    pol_rc=$?
+  else
+    parsed_pol="$(parse_merge_policy_json "$src")"
+    pol_rc=$?
+  fi
+  set -e
+  if [[ $pol_rc -eq 3 ]]; then
+    _bad_am="${parsed_pol#invalid_auto_merge=}"
+    _bad_am="${_bad_am%%$'\n'*}"
+    _bad_am="${_bad_am%$'\r'}"
+    echo "${err_pfx}: invalid_auto_merge=${_bad_am}"
+    exit 1
+  elif [[ $pol_rc -ne 0 ]]; then
+    echo "${err_pfx}: invalid_policy_json"
+    exit 1
+  fi
+  while IFS= read -r pline; do
+    pline="${pline%$'\r'}"
+    case "$pline" in
+      auto_merge=*) _POL_AUTO_MERGE="${pline#auto_merge=}" ;;
+      allow_protected_paths=*) _POL_ALLOW_PROT="${pline#allow_protected_paths=}" ;;
+      require_ci=*) _POL_REQ_CI="${pline#require_ci=}" ;;
+      require_review=*) _POL_REQ_REV="${pline#require_review=}" ;;
+      protected_path=*)
+        raw_pp="${pline#protected_path=}"
+        if ! normalize_merge_policy_path "$raw_pp"; then
+          echo "${err_pfx}: invalid_policy_json"
+          exit 1
+        fi
+        if [[ "$_seen_pp" != *"|${_MP_NORM_PATH}|"* ]]; then
+          _seen_pp+="${_MP_NORM_PATH}|"
+          _POL_PROT_ARR+=("$_MP_NORM_PATH")
+        fi
+        ;;
+      allowed_target_branch=*)
+        _br_v="${pline#allowed_target_branch=}"
+        if [[ "$_seen_br" != *"|${_br_v}|"* ]]; then
+          _seen_br+="${_br_v}|"
+          _POL_ALLOWED_BR+=("$_br_v")
+        fi
+        ;;
+    esac
+  done <<< "$parsed_pol"
+}
+
 branch_pattern_match() {
   local br="$1"
   shift
@@ -1149,74 +1328,17 @@ branch_pattern_match() {
   return 1
 }
 
-parse_github_remote_slug() {
-  local raw="$1" u slug
-  u="$(trim_str "$raw")"
-  [[ -n "$u" ]] || return 1
-  local _re_https='^[Hh][Tt][Tt][Pp][Ss]://([^/@[:space:]]+@)?[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm]/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$'
-  local _re_ssh='^([Ss][Ss][Hh]://)?[Gg][Ii][Tt]@[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm][:/]([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)$'
-  u="${u%/}"
-  u="${u%.git}"
-  if [[ "$u" =~ $_re_https ]]; then
-    slug="${BASH_REMATCH[2]}"
-  elif [[ "$u" =~ $_re_ssh ]]; then
-    slug="${BASH_REMATCH[2]}"
-  else
-    return 1
-  fi
-  if [[ "$slug" == *".."* ]]; then
-    return 1
-  fi
-  printf '%s' "$slug"
-  return 0
-}
-
-_RESOLVED_GH_REPO=""
-resolve_github_repo_slug() {
-  local root="$1" exp_raw="$2" err_pfx="$3" exp_trim origin_slug="" exp_low orig_low
-  _RESOLVED_GH_REPO=""
-  exp_trim="$(trim_str "$exp_raw")"
-  if [[ -n "$exp_trim" ]]; then
-    if [[ ! "$exp_trim" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ || "$exp_trim" == *".."* ]]; then
-      echo "${err_pfx}: invalid_repo"
-      exit 1
-    fi
-  fi
-  if ! run_git_cmd "$root" remote get-url origin; then
-    echo "${err_pfx}: origin_remote_missing"
-    exit 1
-  fi
-  origin_slug="$(parse_github_remote_slug "$_GIT_STDOUT" || true)"
-  if [[ -z "$origin_slug" ]]; then
-    echo "${err_pfx}: origin_remote_not_github"
-    exit 1
-  fi
-  if [[ -n "$exp_trim" ]]; then
-    exp_low="$(printf '%s' "$exp_trim" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    orig_low="$(printf '%s' "$origin_slug" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    if [[ "$exp_low" != "$orig_low" ]]; then
-      echo "${err_pfx}: repo_mismatch"
-      exit 1
-    fi
-  fi
-  _RESOLVED_GH_REPO="$origin_slug"
-  return 0
-}
-
 GH_SCHEMA=""; GH_MODE=""; GH_REPO=""; GH_PR_NUMBER=""; GH_BASE_REPO=""; GH_HEAD_REPO=""
 GH_SAME_REPO=""; GH_DEFAULT_BRANCH=""; GH_PR_STATE=""; GH_PR_MERGED=""; GH_PR_DRAFT=""
-GH_PR_AUTHOR=""; GH_BASE_REF=""; GH_PR_BASE_SHA=""; GH_LIVE_TARGET_SHA=""
+GH_BASE_REF=""; GH_PR_BASE_SHA=""; GH_LIVE_TARGET_SHA=""
 GH_HEAD_REF=""; GH_HEAD_SHA=""; GH_POLICY_AUTH_REF=""; GH_POLICY_AUTH_SHA=""
-GH_MERGEABLE=""; GH_MERGEABLE_STATE=""; GH_BRANCH_PROTECTED=""; GH_BRANCH_PROT_READABLE="true"
-GH_REQ_REVIEWS="0"; GH_REQ_CODEOWNERS="false"; GH_REQ_CHECKS="none"; GH_MISSING_REQ_CHECKS="none"
-GH_CI_STATUS=""; GH_REVIEW_STATUS=""; GH_INDEP_CNT="0"; GH_STALE_CNT="0"
-GH_SELF_CNT="0"; GH_UNAUTH_CNT="0"; GH_CHANGES_REQ_CNT="0"; GH_INDEP_REVS="none"
+GH_MERGEABLE=""; GH_MERGEABLE_STATE=""; GH_CI_STATUS=""
 GH_MERGED_AT="none"; GH_MERGE_COMMIT_SHA="none"; GH_PR_COMMITS="0"
 GH_COMPARE_STATUS=""; GH_COMPARE_BEHIND="-1"
 GH_PR_CHANGED_FILES=()
 
 invoke_b3_github_verify() {
-  local mode="$1" repo_slug="$2" pr_num="$3" err_pfx="$4"
+  local mode="$1" root_dir="$2" explicit_repo="$3" pr_num="$4" err_pfx="$5"
   local adapter="${_B3_GUARD_DIR}/b3-github-verify.sh"
   if [[ ! -f "$adapter" ]]; then
     echo "${err_pfx}: github_adapter_missing"
@@ -1224,28 +1346,41 @@ invoke_b3_github_verify() {
   fi
   GH_SCHEMA=""; GH_MODE=""; GH_REPO=""; GH_PR_NUMBER=""; GH_BASE_REPO=""; GH_HEAD_REPO=""
   GH_SAME_REPO=""; GH_DEFAULT_BRANCH=""; GH_PR_STATE=""; GH_PR_MERGED=""; GH_PR_DRAFT=""
-  GH_PR_AUTHOR=""; GH_BASE_REF=""; GH_PR_BASE_SHA=""; GH_LIVE_TARGET_SHA=""
+  GH_BASE_REF=""; GH_PR_BASE_SHA=""; GH_LIVE_TARGET_SHA=""
   GH_HEAD_REF=""; GH_HEAD_SHA=""; GH_POLICY_AUTH_REF=""; GH_POLICY_AUTH_SHA=""
-  GH_MERGEABLE=""; GH_MERGEABLE_STATE=""; GH_BRANCH_PROTECTED=""; GH_BRANCH_PROT_READABLE="true"
-  GH_REQ_REVIEWS="0"; GH_REQ_CODEOWNERS="false"; GH_REQ_CHECKS="none"; GH_MISSING_REQ_CHECKS="none"
-  GH_CI_STATUS=""; GH_REVIEW_STATUS=""; GH_INDEP_CNT="0"; GH_STALE_CNT="0"
-  GH_SELF_CNT="0"; GH_UNAUTH_CNT="0"; GH_CHANGES_REQ_CNT="0"; GH_INDEP_REVS="none"
+  GH_MERGEABLE=""; GH_MERGEABLE_STATE=""; GH_CI_STATUS=""
   GH_MERGED_AT="none"; GH_MERGE_COMMIT_SHA="none"; GH_PR_COMMITS="0"
   GH_COMPARE_STATUS=""; GH_COMPARE_BEHIND="-1"
   GH_PR_CHANGED_FILES=()
 
-  local raw_out rc=0
+  local exp_trim raw_out rc=0
+  exp_trim="$(trim_str "$explicit_repo")"
   set +e
-  raw_out="$(bash "$adapter" --mode "$mode" --repo "$repo_slug" --pr-number "$pr_num" 2>&1)"
+  if [[ -n "$exp_trim" ]]; then
+    raw_out="$(bash "$adapter" --mode "$mode" --repo-root "$root_dir" --repo "$exp_trim" --pr-number "$pr_num" 2>&1)"
+  else
+    raw_out="$(bash "$adapter" --mode "$mode" --repo-root "$root_dir" --pr-number "$pr_num" 2>&1)"
+  fi
   rc=$?
   set -e
   if [[ $rc -ne 0 ]]; then
     local first_ln detail
     first_ln="${raw_out%%$'\n'*}"
     first_ln="${first_ln%$'\r'}"
-    detail="${first_ln#GH_VERIFY_ERROR: }"
+    detail="${first_ln#GH_VERIFY_UNAVAILABLE: }"
+    detail="${detail#GH_VERIFY_ERROR: }"
     detail="$(trim_str "$detail")"
     [[ -n "$detail" ]] || detail="unknown"
+    if [[ $rc -eq 2 ]]; then
+      echo "PROVIDER_UNAVAILABLE: github_verification_failed(${detail})"
+      exit 2
+    fi
+    case "$detail" in
+      origin_remote_missing|origin_remote_not_github|repo_mismatch|invalid_repo)
+        echo "${err_pfx}: ${detail}"
+        exit 1
+        ;;
+    esac
     echo "${err_pfx}: github_verification_failed(${detail})"
     exit 1
   fi
@@ -1279,7 +1414,6 @@ invoke_b3_github_verify() {
       pr_state) GH_PR_STATE="$v" ;;
       pr_merged) GH_PR_MERGED="$v" ;;
       pr_draft) GH_PR_DRAFT="$v" ;;
-      pr_author) GH_PR_AUTHOR="$v" ;;
       base_ref) GH_BASE_REF="$v" ;;
       pr_base_sha) GH_PR_BASE_SHA="$v" ;;
       live_target_sha) GH_LIVE_TARGET_SHA="$v" ;;
@@ -1289,20 +1423,7 @@ invoke_b3_github_verify() {
       policy_authority_sha) GH_POLICY_AUTH_SHA="$v" ;;
       mergeable) GH_MERGEABLE="$v" ;;
       mergeable_state) GH_MERGEABLE_STATE="$v" ;;
-      branch_protected) GH_BRANCH_PROTECTED="$v" ;;
-      branch_protection_readable) GH_BRANCH_PROT_READABLE="$v" ;;
-      required_approving_reviews) GH_REQ_REVIEWS="$v" ;;
-      require_codeowners) GH_REQ_CODEOWNERS="$v" ;;
-      required_checks) GH_REQ_CHECKS="$v" ;;
-      missing_required_checks) GH_MISSING_REQ_CHECKS="$v" ;;
       gh_ci_status) GH_CI_STATUS="$v" ;;
-      gh_review_status) GH_REVIEW_STATUS="$v" ;;
-      independent_approved_count) GH_INDEP_CNT="$v" ;;
-      stale_independent_approved_count) GH_STALE_CNT="$v" ;;
-      self_approved_count) GH_SELF_CNT="$v" ;;
-      unauthorized_approved_count) GH_UNAUTH_CNT="$v" ;;
-      changes_requested_count) GH_CHANGES_REQ_CNT="$v" ;;
-      independent_reviewers) GH_INDEP_REVS="$v" ;;
       merged_at) GH_MERGED_AT="$v" ;;
       merge_commit_sha) GH_MERGE_COMMIT_SHA="$v" ;;
       pr_commits) GH_PR_COMMITS="$v" ;;
@@ -1310,7 +1431,7 @@ invoke_b3_github_verify() {
       compare_behind_by) GH_COMPARE_BEHIND="$v" ;;
     esac
   done <<< "$raw_out"
-  if [[ "$GH_SCHEMA" != "b3-gh-verify-v1" || "$GH_MODE" != "$mode" ]]; then
+  if [[ ( "$GH_SCHEMA" != "b3-gh-verify-v2" && "$GH_SCHEMA" != "b3-gh-verify-v1" ) || "$GH_MODE" != "$mode" ]]; then
     echo "${err_pfx}: github_verification_failed(invalid_adapter_schema)"
     exit 1
   fi
@@ -1469,48 +1590,6 @@ resolve_target_path() {
   fi
 }
 
-repo_rel_path() {
-  local root="$1"
-  local full="$2"
-  local rn fn
-  rn="$(norm_path "$root")"
-  fn="$(norm_path "$full")"
-  if [[ "$rn" == "." ]]; then
-    printf '%s' "$fn"
-    return 0
-  fi
-  if [[ "$rn" == "/" ]]; then
-    if [[ "$fn" == "/" ]]; then
-      printf '.'
-    elif [[ "$fn" == /* ]]; then
-      printf '%s' "${fn:1}"
-    else
-      printf '%s' "$fn"
-    fi
-    return 0
-  fi
-  if [[ "$_B3_IS_WINDOWS" == "true" ]]; then
-    local rn_low fn_low
-    rn_low="$(printf '%s' "$rn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    fn_low="$(printf '%s' "$fn" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    if [[ "$fn_low" == "$rn_low/"* ]]; then
-      printf '%s' "${fn:${#rn}+1}"
-    elif [[ "$fn_low" == "$rn_low" ]]; then
-      printf '.'
-    else
-      printf '%s' "$fn"
-    fi
-  else
-    if [[ "$fn" == "$rn/"* ]]; then
-      printf '%s' "${fn:${#rn}+1}"
-    elif [[ "$fn" == "$rn" ]]; then
-      printf '.'
-    else
-      printf '%s' "$fn"
-    fi
-  fi
-}
-
 _path_within_or_equal() {
   local cand="$1"
   local root="$2"
@@ -1528,6 +1607,28 @@ _path_within_or_equal() {
   [[ "$cand_cmp" == "$root_cmp" || "$cand_cmp" == "$root_base/"* ]]
 }
 
+is_dir_link_or_junction() {
+  local root="$1"
+  local sub_rel="$2"
+  local canon_root
+  canon_root="$(canon_repo_root "$root")" || return 1
+  local target="${canon_root%/}/${sub_rel}"
+  [[ -L "$target" ]] && return 0
+  if [[ -d "$target" ]]; then
+    local canon_sub t_cmp c_cmp
+    canon_sub="$(cd -P "$target" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 0
+    canon_sub="$(normalize_abs_for_repo "$canon_sub")"
+    t_cmp="$target"
+    c_cmp="$canon_sub"
+    if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+      t_cmp="$(printf '%s' "$t_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      c_cmp="$(printf '%s' "$c_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    fi
+    [[ "$c_cmp" != "$t_cmp" ]] && return 0
+  fi
+  return 1
+}
+
 check_safe_repo_path_segments() {
   local LC_ALL=C
   local raw="$1"
@@ -1537,7 +1638,7 @@ check_safe_repo_path_segments() {
     return 1
   fi
   local s="${raw//\\//}"
-  if [[ "$s" == *:* || "$s" == /* || "$s" == */ || "$s" == ~* ]]; then
+  if [[ "$s" == *:* || "$s" == /* || "$s" == */ || "$s" == ~* || "$s" == *'*'* || "$s" == *'?'* || "$s" == *'['* ]]; then
     return 1
   fi
   local rem="$s" seg
@@ -1570,12 +1671,14 @@ validate_repo_write_path() {
   _SAFE_FULL=""
   _SAFE_REL=""
   local LC_ALL=C
-  local root="$1"
+  local raw_root="$1"
   local raw_arg="$2"
   [[ -n "$raw_arg" ]] || return 1
   if [[ "$raw_arg" =~ [[:cntrl:]] || "$raw_arg" == *" " ]]; then
     return 1
   fi
+  local root
+  root="$(canon_repo_root "$raw_root")" || return 1
   local p
   p="$(trim_str "$raw_arg")"
   [[ -n "$p" ]] || return 1
@@ -1625,7 +1728,7 @@ validate_repo_write_path() {
     return 1
   fi
 
-  local rem="$rel" seg_cur="${root%/}" seg
+  local rem="$rel" seg_cur="${root%/}" seg canon_seg seg_cur_cmp canon_seg_cmp
   while [[ -n "$rem" ]]; do
     if [[ "$rem" == */* ]]; then
       seg="${rem%%/*}"
@@ -1639,8 +1742,25 @@ validate_repo_write_path() {
       return 1
     fi
     seg_cur="${seg_cur}/${seg}"
+    seg_cur="${seg_cur%/}"
     if [[ -L "$seg_cur" ]]; then
       return 1
+    fi
+    if [[ -d "$seg_cur" ]]; then
+      canon_seg="$(cd -P "$seg_cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+      canon_seg="$(normalize_abs_for_repo "$canon_seg")"
+      if ! _path_within_or_equal "$canon_seg" "$root"; then
+        return 1
+      fi
+      seg_cur_cmp="$seg_cur"
+      canon_seg_cmp="$canon_seg"
+      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+        seg_cur_cmp="$(printf '%s' "$seg_cur_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        canon_seg_cmp="$(printf '%s' "$canon_seg_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      fi
+      if [[ "$canon_seg_cmp" != "$seg_cur_cmp" ]]; then
+        return 1
+      fi
     fi
   done
 
@@ -1829,10 +1949,10 @@ resolve_submodule_entry() {
 
     local s_wt="" s_ca="" s_un=""
     if $has_head; then
-      run_git_cmd "$sub_full" diff --no-renames --name-only --ignore-submodules=none HEAD || { echo "GIT_ERROR: submodule diff failed for ${rel_p}: $(git_err_detail)"; return 1; }
+      run_git_cmd "$sub_full" diff --no-ext-diff --no-renames --name-only --ignore-submodules=none HEAD -- || { echo "GIT_ERROR: submodule diff failed for ${rel_p}: $(git_err_detail)"; return 1; }
       s_wt="$_GIT_STDOUT"
     fi
-    run_git_cmd "$sub_full" diff --no-renames --cached --name-only || { echo "GIT_ERROR: submodule diff cached failed for ${rel_p}: $(git_err_detail)"; return 1; }
+    run_git_cmd "$sub_full" diff --no-ext-diff --no-renames --cached --name-only -- || { echo "GIT_ERROR: submodule diff cached failed for ${rel_p}: $(git_err_detail)"; return 1; }
     s_ca="$_GIT_STDOUT"
     run_git_cmd "$sub_full" ls-files --others --exclude-standard || { echo "GIT_ERROR: submodule ls-files failed for ${rel_p}: $(git_err_detail)"; return 1; }
     s_un="$_GIT_STDOUT"
@@ -1988,27 +2108,27 @@ compute_tree_fingerprint() {
       MINGW*|MSYS*|CYGWIN*) is_win_os=true ;;
     esac
     local core_filemode=false
-    if run_git_cmd "$root" config --bool core.filemode; then
+    if run_git_cmd_quiet "$root" config --bool core.filemode; then
       [[ "$(trim_str "$_GIT_STDOUT")" == "true" ]] && core_filemode=true
     else
       ! $is_win_os && core_filemode=true
     fi
 
     if [[ ${#clean_rel[@]} -gt 0 ]]; then
-      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+      run_git_cmd "$root" diff --no-ext-diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
       diff_head_raw="$_GIT_STDOUT"
-      run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+      run_git_cmd "$root" diff --no-ext-diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
       diff_cached_raw="$_GIT_STDOUT"
-      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+      run_git_cmd "$root" diff --no-ext-diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
       diff_idx_wt_raw="$_GIT_STDOUT"
       run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
       untracked="$_GIT_STDOUT"
     else
-      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
+      run_git_cmd "$root" diff --no-ext-diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
       diff_head_raw="$_GIT_STDOUT"
-      run_git_cmd "$root" diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
+      run_git_cmd "$root" diff --no-ext-diff --cached --raw --no-renames --no-abbrev --ignore-submodules=none -- || { echo "GIT_ERROR: git diff --cached --raw failed: $(git_err_detail)"; return 1; }
       diff_cached_raw="$_GIT_STDOUT"
-      run_git_cmd "$root" diff --raw --no-renames --no-abbrev --ignore-submodules=none || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
+      run_git_cmd "$root" diff --no-ext-diff --raw --no-renames --no-abbrev --ignore-submodules=none -- || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
       diff_idx_wt_raw="$_GIT_STDOUT"
       run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
       untracked="$_GIT_STDOUT"
@@ -2364,7 +2484,7 @@ run_verify_check() {
     return 1
   fi
 
-  local _v_schema="" _v_task_id="" _v_scope="" _v_head_sha="" _v_tree_hash="" _v_relevant_paths="" _v_exit_code="" _v_status="" _v_command="" _v_log_path="" _v_timestamp_utc=""
+  local _v_schema="" _v_task_id="" _v_scope="" _v_head_sha="" _v_tree_hash="" _v_relevant_paths="" _v_exit_code="" _v_status="" _v_command="" _v_log_path="" _v_timestamp_utc="" _v_duration_ms="" _has_duration_ms="false"
   local _seen_keys="|"
   local raw_line ln k v
   while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
@@ -2391,6 +2511,7 @@ run_verify_check() {
       relevant_paths) _v_relevant_paths="$v" ;;
       exit_code) _v_exit_code="$v" ;;
       status) _v_status="$v" ;;
+      duration_ms) _v_duration_ms="$v"; _has_duration_ms="true" ;;
       command) _v_command="$v" ;;
       log_path) _v_log_path="$v" ;;
       timestamp_utc) _v_timestamp_utc="$v" ;;
@@ -2434,6 +2555,10 @@ run_verify_check() {
     _VR_MSG="VERIFY_CORRUPT: invalid timestamp_utc"
     return 1
   fi
+  if [[ "$_has_duration_ms" == "true" && ! "$_v_duration_ms" =~ ^[0-9]+$ ]]; then
+    _VR_MSG="VERIFY_CORRUPT: invalid duration_ms"
+    return 1
+  fi
 
   if [[ "$_v_log_path" != "none" ]]; then
     local lp_slash
@@ -2461,14 +2586,23 @@ run_verify_check() {
   local rel_for_fp=""
   local -a rp_arr=()
   if [[ "$_v_relevant_paths" != "ALL" ]]; then
-    local rp
+    local _raw_vrel
+    _raw_vrel="$(trim_str "$_v_relevant_paths")"
+    if [[ "$_raw_vrel" == \[*\] ]]; then
+      _raw_vrel="${_raw_vrel#[}"; _raw_vrel="${_raw_vrel%]}"
+    fi
+    if [[ "$_raw_vrel" == *'*'* || "$_raw_vrel" == *'?'* || "$_raw_vrel" == *'['* ]]; then
+      _VR_MSG="VERIFY_CORRUPT: invalid relevant_paths"
+      return 1
+    fi
+    local rp re_dotdot_vr='(^|/)\.\.(/|$)'
     while IFS= read -r rp; do [[ -n "$rp" ]] && rp_arr+=("$rp"); done < <(split_csv_lines "$_v_relevant_paths" true)
     if [[ ${#rp_arr[@]} -lt 1 ]]; then
       _VR_MSG="VERIFY_CORRUPT: invalid relevant_paths"
       return 1
     fi
     for rp in "${rp_arr[@]}"; do
-      if is_checkpoint_dir "$rp"; then
+      if is_checkpoint_dir "$rp" || [[ "$rp" == *:* || "$rp" == /* || "$rp" =~ $re_dotdot_vr ]]; then
         _VR_MSG="VERIFY_CORRUPT: invalid relevant_paths"
         return 1
       fi
@@ -2486,11 +2620,23 @@ run_verify_check() {
   fi
 
   if [[ -n "$(trim_str "$req_rel_arg")" ]]; then
+    local _raw_rrel re_dotdot_rq='(^|/)\.\.(/|$)'
+    _raw_rrel="$(trim_str "$req_rel_arg")"
+    if [[ "$_raw_rrel" == \[*\] ]]; then
+      _raw_rrel="${_raw_rrel#[}"; _raw_rrel="${_raw_rrel%]}"
+    fi
+    if [[ "$_raw_rrel" == *'*'* || "$_raw_rrel" == *'?'* || "$_raw_rrel" == *'['* ]]; then
+      _VR_MSG="VERIFY_CHECK_FAIL: invalid relevant_paths"
+      return 1
+    fi
     local -a req_arr=()
     local rq
     while IFS= read -r rq; do
       [[ -n "$rq" ]] || continue
-      is_checkpoint_dir "$rq" && continue
+      if is_checkpoint_dir "$rq" || [[ "$rq" == *:* || "$rq" == /* || "$rq" =~ $re_dotdot_rq ]]; then
+        _VR_MSG="VERIFY_CHECK_FAIL: invalid relevant_paths"
+        return 1
+      fi
       req_arr+=("$rq")
     done < <(split_csv_lines "$req_rel_arg" true)
     if [[ ${#req_arr[@]} -lt 1 ]]; then
@@ -2813,6 +2959,25 @@ find_symlink_in_hierarchy() {
       printf '%s' "$cur"
       return 0
     fi
+    if [[ "$_B3_IS_WINDOWS" == "true" && -d "$cur" && "$seg" != *"~"* ]]; then
+      local _par_dir _par_c _cur_c _exp_c _got_c
+      _par_dir="$(dirname "$cur")"
+      [[ "$_par_dir" =~ ^[A-Za-z]:$ ]] && _par_dir="${_par_dir}/"
+      if [[ -d "$_par_dir" ]]; then
+        _par_c="$(cd -P "$_par_dir" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || _par_c=""
+        _cur_c="$(cd -P "$cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || _cur_c=""
+        if [[ -n "$_par_c" && -n "$_cur_c" ]]; then
+          _par_c="$(normalize_abs_for_repo "$_par_c")"
+          _cur_c="$(normalize_abs_for_repo "$_cur_c")"
+          _exp_c="$(printf '%s' "${_par_c%/}/${seg}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          _got_c="$(printf '%s' "$_cur_c" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          if [[ "$_exp_c" != "$_got_c" ]]; then
+            printf '%s' "$cur"
+            return 0
+          fi
+        fi
+      fi
+    fi
   done
   return 1
 }
@@ -2848,7 +3013,7 @@ check_worktree_identity() {
     exit 2
   fi
   local dot_git="${logical%/}/.git"
-  if [[ -L "$dot_git" ]]; then
+  if [[ -L "$dot_git" ]] || { [[ -d "$dot_git" ]] && is_dir_link_or_junction "$logical" ".git"; }; then
     echo "WORKTREE_UNSAFE: unsafe_reparse_root(${dot_git})"
     exit 2
   fi
@@ -2882,7 +3047,7 @@ check_worktree_identity() {
     exit 2
   fi
   top_dot_git="${top_logical%/}/.git"
-  if [[ -L "$top_dot_git" ]]; then
+  if [[ -L "$top_dot_git" ]] || { [[ -d "$top_dot_git" ]] && is_dir_link_or_junction "$top_logical" ".git"; }; then
     echo "WORKTREE_UNSAFE: unsafe_reparse_root(${top_dot_git})"
     exit 2
   fi
@@ -2996,7 +3161,10 @@ function scan_line_sigs(p, ll) {
     if (ll ~ /(^|[^a-z0-9_])(drop[ \t]+table|drop[ \t]+database|truncate[ \t]+table)([^a-z0-9_]|$)/) add_sig(p, "_db_destructive")
   }
   if (ll ~ /(^|[^a-z0-9_])(mutex|semaphore|concurrentdictionary|channel<|promise\.all|abortcontroller|imemorycache|distributedcache)/) add_sig(p, "concurrency_state_cache")
-  if (ll ~ /(^|[^a-z0-9_])(useframe|requestanimationframe|instancedmesh|webglrenderer|asnotracking|json\.stringify|json\.parse)/) add_sig(p, "perf_hot_path")
+  if (ll ~ /(^|[^a-z0-9_])(useframe|requestanimationframe|instancedmesh|webglrenderer|asnotracking)/) add_sig(p, "perf_hot_path")
+  if (ll ~ /(^|[^a-z0-9_])(json\.stringify|json\.parse)/) add_sig(p, "_json_serde")
+  if (ll ~ /(^|[^a-z0-9_])(for[ \t]*\(|while[ \t]*\(|foreach|readline|createreadstream|createwritestream|readable|writable|transform|stream|buffer|uint8array|arraybuffer|chunk|ndjson|jsonl|batch|bulk|maxbuffer)|\.map\(|\.flatmap\(|\.reduce\(|1024[ \t]*\*/) add_sig(p, "_serde_hot_ctx")
+  if ((p SUBSEP "_json_serde" in fsig_seen) && (p SUBSEP "_serde_hot_ctx" in fsig_seen)) add_sig(p, "perf_hot_path")
 }
 function eval_subset(paths_arr, np,   i, p, k, ns, parts, s, has_destr, has_csig, code_fc, code_lc, n_cg, cg_seen, sig_seen, sig_arr, n_sig, max_sev, sp_seen, sp_arr, n_sp, cross_hi, grp, r_lbl, r_sigs, r_sp, db_s, c_s) {
   split("", cg_seen); split("", sig_seen); split("", sig_arr); split("", sp_seen); split("", sp_arr)
@@ -3010,6 +3178,7 @@ function eval_subset(paths_arr, np,   i, p, k, ns, parts, s, has_destr, has_csig
       for (k = 1; k <= ns; k++) {
         s = parts[k]
         if (s == "_db_destructive") { has_destr = 1; continue }
+        if (substr(s, 1, 1) == "_") continue
         if (s != "" && !(s in sig_seen)) { sig_seen[s] = 1; sig_arr[++n_sig] = s }
         if (s == "public_api_contract" || s == "db_migration_tx") has_csig = 1
       }
@@ -3187,19 +3356,19 @@ run_scope_engine() {
   : > "$raw_u_tmp"; : > "$ov_tmp"; : > "$imp_tmp"; : > "$fsig_use"; : > "$flines_use"
 
   if [[ -n "$target_commit" ]]; then
-    run_git_cmd "$root" diff --no-renames --numstat "$base_sha" "$target_commit" -- || { echo "${prefix}: git diff --numstat failed: $(git_err_detail)"; return 1; }
+    run_git_cmd "$root" diff --no-ext-diff --no-renames --numstat "$base_sha" "$target_commit" -- || { echo "${prefix}: git diff --numstat failed: $(git_err_detail)"; return 1; }
     printf '%s\n' "$_GIT_STDOUT" > "$ns_tmp"
-    run_git_cmd "$root" diff --no-renames --name-status "$base_sha" "$target_commit" -- || { echo "${prefix}: git diff --name-status failed: $(git_err_detail)"; return 1; }
+    run_git_cmd "$root" diff --no-ext-diff --no-renames --name-status "$base_sha" "$target_commit" -- || { echo "${prefix}: git diff --name-status failed: $(git_err_detail)"; return 1; }
     printf '%s\n' "$_GIT_STDOUT" > "$st_tmp"
-    run_git_cmd "$root" diff --no-renames -U0 "$base_sha" "$target_commit" -- || { echo "${prefix}: git diff -U0 failed: $(git_err_detail)"; return 1; }
+    run_git_cmd "$root" diff --no-ext-diff --no-renames -U0 "$base_sha" "$target_commit" -- || { echo "${prefix}: git diff -U0 failed: $(git_err_detail)"; return 1; }
     printf '%s\n' "$_GIT_STDOUT" > "$df_tmp"
     : > "$unt_tmp"
   else
-    run_git_cmd "$root" diff --no-renames --numstat "$base_sha" -- || { echo "${prefix}: git diff --numstat failed: $(git_err_detail)"; return 1; }
+    run_git_cmd "$root" diff --no-ext-diff --no-renames --numstat "$base_sha" -- || { echo "${prefix}: git diff --numstat failed: $(git_err_detail)"; return 1; }
     printf '%s\n' "$_GIT_STDOUT" > "$ns_tmp"
-    run_git_cmd "$root" diff --no-renames --name-status "$base_sha" -- || { echo "${prefix}: git diff --name-status failed: $(git_err_detail)"; return 1; }
+    run_git_cmd "$root" diff --no-ext-diff --no-renames --name-status "$base_sha" -- || { echo "${prefix}: git diff --name-status failed: $(git_err_detail)"; return 1; }
     printf '%s\n' "$_GIT_STDOUT" > "$st_tmp"
-    run_git_cmd "$root" diff --no-renames -U0 "$base_sha" -- || { echo "${prefix}: git diff -U0 failed: $(git_err_detail)"; return 1; }
+    run_git_cmd "$root" diff --no-ext-diff --no-renames -U0 "$base_sha" -- || { echo "${prefix}: git diff -U0 failed: $(git_err_detail)"; return 1; }
     printf '%s\n' "$_GIT_STDOUT" > "$df_tmp"
     run_git_cmd "$root" ls-files --others --exclude-standard || { echo "${prefix}: git ls-files failed: $(git_err_detail)"; return 1; }
     local u_raw="$_GIT_STDOUT" line p
@@ -4170,9 +4339,18 @@ compute_scope_paths_hash() {
 }
 
 default_max_passes() {
-  case "$(normalize_size_class "$1" 2>/dev/null || printf '%s' "$1")" in
+  local sz_norm u="${2:-1}" scaled
+  sz_norm="$(normalize_size_class "$1" 2>/dev/null || printf '%s' "$1")"
+  case "$sz_norm" in
     L|XL) printf '12' ;;
-    XXL) printf '24' ;;
+    XXL)
+      [[ "$u" =~ ^[0-9]+$ ]] || u=1
+      u="$((10#$u))"
+      [[ "$u" -lt 1 ]] && u=1
+      scaled="$(( (5 * u + 1) / 2 + 2 ))"
+      if [[ "$scaled" -lt 24 ]]; then scaled=24; fi
+      printf '%s' "$scaled"
+      ;;
     *) printf '5' ;;
   esac
 }
@@ -4238,6 +4416,7 @@ run_review_ledger_check_sub() {
   (
     _CLEANUP_FILES=()
     trap _cleanup_tmp EXIT
+    make_temp_file "b3-git-err-sub" _B3_GIT_ERR_FILE
     [[ -f "$_rc_full" ]] || { echo "LEDGER_MISSING: $_rc_rel"; exit 1; }
 
     L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
@@ -4294,6 +4473,7 @@ run_review_ledger_check_sub() {
     done
     [[ "$L_SCHEMA" == "b3-review-ledger-v1" ]] || { echo "LEDGER_CORRUPT: unsupported schema '$L_SCHEMA'"; exit 1; }
     [[ "$L_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid base_sha"; exit 1; }
+    [[ "$L_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid head_sha"; exit 1; }
     if [[ -z "$L_TSHA" ]]; then
       if [[ "$L_TREF" == "working_tree" ]]; then
         L_TSHA="none"
@@ -4399,7 +4579,7 @@ run_review_ledger_check_sub() {
       done
     fi
     if [[ "$L_TREF" != "working_tree" ]]; then
-      if ! run_git_cmd "$_rc_root" rev-parse --verify --quiet "${L_TREF}^{commit}"; then
+      if ! run_git_cmd_quiet "$_rc_root" rev-parse --verify --quiet "${L_TREF}^{commit}"; then
         printf "LEDGER_STALE: target_ref '%s' cannot be resolved\n" "$L_TREF"
         exit 2
       fi
@@ -4410,6 +4590,24 @@ run_review_ledger_check_sub() {
       fi
       if [[ "$_CHK_TR_SHA" != "$L_TSHA" ]]; then
         printf "LEDGER_STALE: target_ref '%s' moved (%s->%s)\n" "$L_TREF" "$L_TSHA" "$_CHK_TR_SHA"
+        exit 2
+      fi
+      if [[ "$L_HEAD" != "$_CHK_TR_SHA" ]]; then
+        printf "LEDGER_STALE: head_sha moved (%s->%s)\n" "$L_HEAD" "$_CHK_TR_SHA"
+        exit 2
+      fi
+    else
+      if ! run_git_cmd_quiet "$_rc_root" rev-parse --verify --quiet "HEAD^{commit}"; then
+        echo "LEDGER_STALE: HEAD cannot be resolved"
+        exit 2
+      fi
+      _CHK_HD_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$_CHK_HD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "LEDGER_STALE: HEAD cannot be resolved"
+        exit 2
+      fi
+      if [[ "$_CHK_HD_SHA" != "$L_HEAD" ]]; then
+        printf "LEDGER_STALE: head_sha moved (%s->%s)\n" "$L_HEAD" "$_CHK_HD_SHA"
         exit 2
       fi
     fi
@@ -4480,7 +4678,7 @@ run_review_ledger_check_sub() {
       [[ "$ust" == "BLOCKED" ]] && { printf 'LEDGER_BLOCKED: unit %s\n' "$uid"; exit 2; }
       [[ "$ust" == "STALE" ]] && { printf 'LEDGER_STALE: unit %s\n' "$uid"; exit 2; }
       [[ "$ust" == "REVIEWED" ]] || { printf 'LEDGER_INCOMPLETE: unit %s status=%s\n' "$uid" "$ust"; exit 2; }
-      if LC_ALL=C awk -v f="$ufind" 'BEGIN { exit !(f ~ /(^|[,:; ])(OPEN|FIXED)($|[,:; ])/) }'; then
+      if LC_ALL=C awk -v f="$ufind" 'BEGIN { exit !(f ~ /(^|[^A-Za-z0-9_])(OPEN|FIXED|CONFIRMED|NEW|INVESTIGATING)([^A-Za-z0-9_]|$)/) }'; then
         printf 'LEDGER_INCOMPLETE: unresolved findings in %s (%s)\n' "$uid" "$ufind"
         exit 2
       fi
@@ -4925,12 +5123,12 @@ check_graph_index_fresh() {
   fi
   if [[ $# -gt 0 ]]; then
     local w_out c_out u_out line p
-    if ! run_git_cmd "$root" diff --no-renames --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
+    if ! run_git_cmd "$root" diff --no-ext-diff --no-renames --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
       echo "CONTEXT_ERROR: git diff failed"
       exit 1
     fi
     w_out="$_GIT_STDOUT"
-    if ! run_git_cmd "$root" diff --no-renames --cached --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
+    if ! run_git_cmd "$root" diff --no-ext-diff --no-renames --cached --name-only --ignore-submodules=none "$graph_sha" -- "$@"; then
       echo "CONTEXT_ERROR: git diff --cached failed"
       exit 1
     fi
@@ -4950,15 +5148,13 @@ check_graph_index_fresh() {
     return 0
   fi
 
-  local st_tmp err_tmp rc=0
+  local st_tmp rc=0
   make_temp_file "b3-st-z" st_tmp
-  make_temp_file "b3-st-err" err_tmp
-  if git -C "$root" -c core.quotepath=false status --porcelain --untracked-files=all --ignore-submodules=none -z >"$st_tmp" 2>"$err_tmp"; then
+  if git -C "$root" -c core.quotepath=false status --porcelain --untracked-files=all --ignore-submodules=none -z >"$st_tmp" 2>/dev/null; then
     rc=0
   else
     rc=$?
   fi
-  rm -f "$err_tmp"
   if [[ $rc -ne 0 ]]; then
     rm -f "$st_tmp"
     echo "CONTEXT_ERROR: git status failed"
@@ -5010,6 +5206,82 @@ check_graph_index_fresh() {
   done < "$st_tmp"
   rm -f "$st_tmp"
   return $fresh_rc
+}
+
+get_effective_repo_path_state() {
+  local root="$1" rel_p="$2" fail_pfx="${3:-MECHANICAL_FAIL}"
+  local canon_r full l_sha h_sha sub_val
+  if ! canon_r="$(canon_repo_root "$root")"; then
+    printf 'UNSAFE_REPARSE'
+    return 0
+  fi
+  if ! check_wave_path_containment "$canon_r" "$rel_p"; then
+    full="${canon_r%/}/${rel_p}"
+    if [[ -L "$full" ]]; then
+      local parent_rel
+      parent_rel="$(dirname "$rel_p")"
+      if [[ "$parent_rel" == "." ]] || check_wave_path_containment "$canon_r" "$parent_rel"; then
+        if l_sha="$(resolve_symlink_oid "$canon_r" "$rel_p")"; then
+          printf '120000:%s' "$l_sha"
+          return 0
+        fi
+      fi
+    fi
+    printf 'UNSAFE_REPARSE'
+    return 0
+  fi
+  full="${canon_r%/}/${rel_p}"
+  if run_git_cmd_quiet "$canon_r" diff --no-ext-diff --cached --no-renames --name-only HEAD -- "$rel_p" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+    local _iw_hit=false _cadel_hit=false _ex_now=false
+    if run_git_cmd_quiet "$canon_r" diff --no-ext-diff --no-renames --name-only -- "$rel_p" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+      _iw_hit=true
+    fi
+    if run_git_cmd_quiet "$canon_r" diff --no-ext-diff --cached --no-renames --diff-filter=D --name-only -- "$rel_p" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+      _cadel_hit=true
+    fi
+    [[ -e "$full" || -L "$full" ]] && _ex_now=true
+    if $_iw_hit || ( $_cadel_hit && $_ex_now ); then
+      printf 'INDEX_WT_DIVERGED'
+      return 0
+    fi
+  fi
+  if [[ ! -e "$full" && ! -L "$full" ]]; then
+    printf 'DELETED'
+    return 0
+  fi
+  if [[ -L "$full" ]]; then
+    if l_sha="$(resolve_symlink_oid "$canon_r" "$rel_p")"; then
+      printf '120000:%s' "$l_sha"
+      return 0
+    fi
+    printf 'UNSAFE_REPARSE'
+    return 0
+  fi
+  if [[ -f "$full" ]]; then
+    if ! run_git_cmd "$canon_r" hash-object -- "$rel_p"; then
+      echo "${fail_pfx}: git hash-object failed for ${rel_p}: $(git_err_detail)" >&2
+      return 1
+    fi
+    h_sha="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$h_sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "${fail_pfx}: git hash-object failed for ${rel_p}: $h_sha" >&2
+      return 1
+    fi
+    printf 'blob:%s' "$h_sha"
+    return 0
+  fi
+  if [[ -d "$full" ]]; then
+    if [[ -e "${full}/.git" ]]; then
+      if sub_val="$(resolve_submodule_entry "$canon_r" "$rel_p" "")"; then
+        printf 'sub:%s' "$sub_val"
+        return 0
+      fi
+    fi
+    printf 'DIR'
+    return 0
+  fi
+  printf 'DELETED'
+  return 0
 }
 
 case "$CMD" in
@@ -5092,22 +5364,47 @@ case "$CMD" in
     [[ -n "$APPROACH_AT" ]] || { echo "FRESHNESS_FAIL: missing --approach-at-sha"; exit 1; }
     [[ -n "$TASK_BASE" ]] || { echo "FRESHNESS_FAIL: missing --task-base-sha"; exit 1; }
 
+    split_path_csv_checked "$WATCHED" "FRESHNESS_FAIL" "false"
     WATCHED_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && WATCHED_ARR+=("$p"); done < <(split_csv_lines "$WATCHED" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && WATCHED_ARR=("${_CHECKED_CSV_PATHS[@]}")
     [[ ${#WATCHED_ARR[@]} -gt 0 ]] || { echo "FRESHNESS_FAIL: missing --watched-paths"; exit 1; }
 
+    split_path_csv_checked "$OWNED" "FRESHNESS_FAIL" "false"
     OWNED_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && OWNED_ARR+=("$p"); done < <(split_csv_lines "$OWNED" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && OWNED_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
+    split_path_csv_checked "$IGNORE_DIRTY" "FRESHNESS_FAIL" "true"
     IGNORE_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGNORE_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
-    if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$TASK_BASE" HEAD; then
+    assert_valid_git_rev "$REPO_ROOT" "$(trim_str "$APPROACH_AT")" "commit" "FRESHNESS_FAIL" "--approach-at-sha"
+    RES_APPROACH_SHA="$_VALID_REV_SHA"
+    assert_valid_git_rev "$REPO_ROOT" "$(trim_str "$TASK_BASE")" "commit" "FRESHNESS_FAIL" "--task-base-sha"
+    RES_TASK_BASE_SHA="$_VALID_REV_SHA"
+    assert_valid_git_rev "$REPO_ROOT" "HEAD" "commit" "FRESHNESS_FAIL" "HEAD"
+    RES_HEAD_SHA="$_VALID_REV_SHA"
+
+    MB_RC=0
+    if run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$RES_TASK_BASE_SHA" "$RES_HEAD_SHA"; then MB_RC=0; else MB_RC=$?; fi
+    if [[ $MB_RC -eq 1 ]]; then
       echo "STALE: HEAD is not a descendant of task_base"
       exit 2
+    elif [[ $MB_RC -ne 0 ]]; then
+      echo "FRESHNESS_FAIL: git merge-base failed: $(git_err_detail)"
+      exit 1
     fi
 
-    run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT" HEAD || { echo "GIT_ERROR: git diff failed: $(git_err_detail)"; exit 1; }
+    MB_APP_RC=0
+    if run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$RES_APPROACH_SHA" "$RES_HEAD_SHA"; then MB_APP_RC=0; else MB_APP_RC=$?; fi
+    if [[ $MB_APP_RC -eq 1 ]]; then
+      echo "STALE: HEAD is not a descendant of approach_at_sha"
+      exit 2
+    elif [[ $MB_APP_RC -ne 0 ]]; then
+      echo "FRESHNESS_FAIL: git merge-base failed: $(git_err_detail)"
+      exit 1
+    fi
+
+    run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$RES_APPROACH_SHA" "$RES_HEAD_SHA" -- || { echo "GIT_ERROR: git diff failed: $(git_err_detail)"; exit 1; }
     COMMITTED_OUT="$_GIT_STDOUT"
     COMMITTED_HITS=()
     while IFS= read -r line; do
@@ -5133,9 +5430,9 @@ case "$CMD" in
     done
 
     if [[ ${#RO_ARR[@]} -gt 0 ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$APPROACH_AT" || { echo "GIT_ERROR: git diff working tree failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$RES_APPROACH_SHA" -- || { echo "GIT_ERROR: git diff working tree failed: $(git_err_detail)"; exit 1; }
       WT_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-renames --cached --name-only || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only -- || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
       CA_OUT="$_GIT_STDOUT"
       run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
       UN_OUT="$_GIT_STDOUT"
@@ -5186,10 +5483,15 @@ case "$CMD" in
       exit 1
     fi
 
+    split_path_csv_checked "$ALLOWED" "PRECOMMIT_FAIL" "false"
     ALLOWED_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && ALLOWED_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
-    run_git_cmd "$REPO_ROOT" diff --no-renames --cached --name-only || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
+    split_path_csv_checked "$IGNORE_DIRTY" "PRECOMMIT_FAIL" "true"
+    IGN_ARR=()
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGN_ARR=("${_CHECKED_CSV_PATHS[@]}")
+
+    run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only -- || { echo "GIT_ERROR: git diff cached failed: $(git_err_detail)"; exit 1; }
     STAGED_OUT="$_GIT_STDOUT"
     STAGED_ARR=()
     while IFS= read -r line; do
@@ -5204,9 +5506,10 @@ case "$CMD" in
 
     CP_HITS=()
     for p in "${STAGED_ARR[@]}"; do
+      p_low="$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
       if is_checkpoint_dir "$p"; then
         CP_HITS+=("$p")
-      elif [[ "$p" == ".b3" || "$p" == ".b3/"* ]]; then
+      elif [[ "$p_low" == ".b3" || "$p_low" == ".b3/"* ]]; then
         if [[ ${#ALLOWED_ARR[@]} -eq 0 ]] || ! path_in_list "$p" "${ALLOWED_ARR[@]}"; then
           CP_HITS+=("$p")
         fi
@@ -5250,9 +5553,9 @@ case "$CMD" in
 
     REQUIRE_RECEIPT="$(trim_str "$REQUIRE_RECEIPT")"
     if [[ -n "$REQUIRE_RECEIPT" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only -- "${STAGED_ARR[@]}" || { echo "GIT_ERROR: git diff index-vs-wt failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -- "${STAGED_ARR[@]}" || { echo "GIT_ERROR: git diff index-vs-wt failed: $(git_err_detail)"; exit 1; }
       IDX_VS_WT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-renames --cached --diff-filter=D --name-only || { echo "GIT_ERROR: git diff cached delete failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --diff-filter=D --name-only -- || { echo "GIT_ERROR: git diff cached delete failed: $(git_err_detail)"; exit 1; }
       STAGED_DEL="$_GIT_STDOUT"
       WT_MM=()
       while IFS= read -r line; do
@@ -5272,8 +5575,6 @@ case "$CMD" in
         exit 1
       fi
 
-      IGN_ARR=()
-      while IFS= read -r ip; do [[ -n "$ip" ]] && IGN_ARR+=("$ip"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
       if [[ ${#IGN_ARR[@]} -gt 0 ]]; then
         STAGED_IGN=()
         for p in "${STAGED_ARR[@]}"; do
@@ -5325,12 +5626,12 @@ case "$CMD" in
         done < <(split_csv_lines "$_VR_REL_PATHS" true | LC_ALL=C sort -u)
       fi
       if $SCOPE_ALL; then
-        run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
+        run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -- || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
         UNSTAGED_RAW="$_GIT_STDOUT"
         run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
         UNTRACKED_RAW="$_GIT_STDOUT"
       else
-        run_git_cmd "$REPO_ROOT" diff --no-renames --ignore-submodules=none --name-only -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
+        run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --ignore-submodules=none --name-only -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git diff unstaged failed: $(git_err_detail)"; exit 1; }
         UNSTAGED_RAW="$_GIT_STDOUT"
         run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard -- "${SCOPE_ARR[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; exit 1; }
         UNTRACKED_RAW="$_GIT_STDOUT"
@@ -5406,8 +5707,9 @@ case "$CMD" in
         *) echo "DIFF_SCOPE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
+    split_path_csv_checked "$IGNORE_DIRTY" "DIFF_SCOPE_FAIL" "true"
     IGNORE_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGNORE_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
     resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "DIFF_SCOPE_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
     TARGET_REF="$_SCOPE_TARGET_REF"
@@ -5436,7 +5738,7 @@ case "$CMD" in
         build_working_tree_oid "$REPO_ROOT" "DIFF_SCOPE_FAIL"
         DELTA_END="$_WT_TREE_OID"
       fi
-      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$PREV_SHA" "$DELTA_END" -- || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$PREV_SHA" "$DELTA_END" -- || { echo "DIFF_SCOPE_FAIL: git diff --prev-sha failed: $(git_err_detail)"; exit 1; }
       DELTA_OUT="$_GIT_STDOUT"
       DELTA_ARR=()
       while IFS= read -r line; do
@@ -5480,6 +5782,10 @@ case "$CMD" in
     ALLOW_MASS_DELETE=false
     WAVE_SPECS=""
     WORKER_CHANGES=""
+    WORKER_ROOTS=""
+    PROTECTED_PATHS=""
+    DIRTY_DIGESTS=""
+    HAS_DIRTY_DIGESTS_ARG="false"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
@@ -5491,80 +5797,407 @@ case "$CMD" in
         --allow-mass-delete) ALLOW_MASS_DELETE=true; shift ;;
         --wave-specs) [[ $# -ge 2 ]] || { echo "MECHANICAL_FAIL: missing value for $1"; exit 1; }; WAVE_SPECS="$2"; shift 2 ;;
         --worker-changes) [[ $# -ge 2 ]] || { echo "MECHANICAL_FAIL: missing value for $1"; exit 1; }; WORKER_CHANGES="$2"; shift 2 ;;
+        --worker-roots) [[ $# -ge 2 ]] || { echo "MECHANICAL_FAIL: missing value for $1"; exit 1; }; WORKER_ROOTS="$2"; shift 2 ;;
+        --protected-paths) [[ $# -ge 2 ]] || { echo "MECHANICAL_FAIL: missing value for $1"; exit 1; }; PROTECTED_PATHS="$2"; shift 2 ;;
+        --dirty-digests) [[ $# -ge 2 ]] || { echo "MECHANICAL_FAIL: missing value for $1"; exit 1; }; DIRTY_DIGESTS="$2"; HAS_DIRTY_DIGESTS_ARG="true"; shift 2 ;;
         *) echo "MECHANICAL_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
+
+    REPO_EXISTS_MC="false"
+    [[ -n "$REPO_ROOT" && -d "$REPO_ROOT" ]] && REPO_EXISTS_MC="true"
+
     HAS_WAVE_SPECS="false"
-    if [[ -n "$(trim_str "$WAVE_SPECS")" ]]; then
-      HAS_WAVE_SPECS="true"
-    fi
+    [[ -n "$(trim_str "$WAVE_SPECS")" ]] && HAS_WAVE_SPECS="true"
     HAS_WORKER_CHANGES="false"
-    if [[ -n "$(trim_str "$WORKER_CHANGES")" ]]; then
-      HAS_WORKER_CHANGES="true"
+    [[ -n "$(trim_str "$WORKER_CHANGES")" ]] && HAS_WORKER_CHANGES="true"
+    HAS_WORKER_ROOTS="false"
+    [[ -n "$(trim_str "$WORKER_ROOTS")" ]] && HAS_WORKER_ROOTS="true"
+    HAS_PROTECTED_ARG="false"
+    [[ -n "$(trim_str "$PROTECTED_PATHS")" ]] && HAS_PROTECTED_ARG="true"
+
+    if [[ "$HAS_WORKER_CHANGES" == "true" && "$HAS_WORKER_ROOTS" == "true" ]]; then
+      echo "MECHANICAL_FAIL: cannot specify both -WorkerChanges and -WorkerRoots"
+      exit 1
     fi
     if [[ "$HAS_WORKER_CHANGES" == "true" && "$HAS_WAVE_SPECS" != "true" ]]; then
       echo "MECHANICAL_FAIL: -WorkerChanges requires -WaveSpecs"
       exit 1
     fi
+    if [[ "$HAS_WORKER_ROOTS" == "true" && "$HAS_WAVE_SPECS" != "true" ]]; then
+      echo "MECHANICAL_FAIL: -WorkerRoots requires -WaveSpecs"
+      exit 1
+    fi
+    if [[ "$HAS_WORKER_ROOTS" == "true" && -n "$(trim_str "$TARGET_REF")" ]]; then
+      echo "MECHANICAL_FAIL: -WorkerRoots cannot be combined with -TargetRef"
+      exit 1
+    fi
+
+    MC_PROT_LIST=()
+    MC_PROT_LOW_LIST=()
+    if [[ "$HAS_PROTECTED_ARG" == "true" ]]; then
+      parse_wave_paths "$PROTECTED_PATHS" false false "MECHANICAL_FAIL"
+      if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+        for prot in "${_WAVE_PARSED_PATHS[@]}"; do
+          if [[ "$prot" == "." ]]; then
+            echo "MECHANICAL_FAIL: invalid protected path '.'"
+            exit 1
+          fi
+          if [[ "$REPO_EXISTS_MC" == "true" ]] && ! check_wave_path_containment "$REPO_ROOT" "$prot"; then
+            echo "MECHANICAL_FAIL: unsafe symlink or junction alias in path '$prot'"
+            exit 1
+          fi
+          MC_PROT_LIST+=("$prot")
+          MC_PROT_LOW_LIST+=("$(printf '%s' "$prot" | LC_ALL=C tr '[:upper:]' '[:lower:]')")
+        done
+      fi
+    fi
+
+    _mc_prot_match_ci() {
+      local cand="$1" c_low p_low
+      [[ ${#MC_PROT_LOW_LIST[@]} -gt 0 && -n "$cand" ]] || return 1
+      c_low="$(printf '%s' "$cand" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      for p_low in "${MC_PROT_LOW_LIST[@]}"; do
+        if [[ "$p_low" == "." || "$c_low" == "$p_low" || "$c_low" == "${p_low}/"* ]]; then
+          return 0
+        fi
+      done
+      return 1
+    }
+
+    DD_PATHS=()
+    DD_DIGESTS=()
+    DD_KEYS_SEEN="|"
+    if [[ "$HAS_DIRTY_DIGESTS_ARG" == "true" ]]; then
+      if has_control_chars "$DIRTY_DIGESTS"; then
+        echo "MECHANICAL_FAIL: invalid -DirtyDigests"
+        exit 1
+      fi
+      DD_TRIM="$(trim_str "$DIRTY_DIGESTS")"
+      if [[ -n "$DD_TRIM" && "$DD_TRIM" != "none" && "$DD_TRIM" != "[]" ]]; then
+        _had_ng_dd=false
+        case "$-" in *f*) _had_ng_dd=true ;; esac
+        set -f
+        DD_ENTRIES=()
+        IFS=';' read -r -d '' -a DD_ENTRIES < <(printf '%s\0' "$DD_TRIM") || true
+        if ! $_had_ng_dd; then set +f; fi
+        if [[ ${#DD_ENTRIES[@]} -gt 0 ]]; then
+          for dd_ent in "${DD_ENTRIES[@]}"; do
+            dd_part="$(trim_str "$dd_ent")"
+            [[ -z "$dd_part" ]] && continue
+            if [[ "$dd_part" != *"="* ]]; then
+              echo "MECHANICAL_FAIL: invalid DirtyDigests entry '$dd_part'"
+              exit 1
+            fi
+            raw_dp="$(trim_str "${dd_part%%=*}")"
+            raw_dig="$(trim_str "${dd_part#*=}")"
+            if [[ -z "$raw_dp" || "$raw_dp" == *","* ]]; then
+              echo "MECHANICAL_FAIL: invalid DirtyDigests path '$raw_dp'"
+              exit 1
+            fi
+            parse_wave_paths "$raw_dp" false true "MECHANICAL_FAIL"
+            if [[ ${#_WAVE_PARSED_PATHS[@]} -ne 1 ]]; then
+              echo "MECHANICAL_FAIL: invalid DirtyDigests path '$raw_dp'"
+              exit 1
+            fi
+            dp_norm="${_WAVE_PARSED_PATHS[0]}"
+            if is_checkpoint_dir "$dp_norm"; then
+              echo "MECHANICAL_FAIL: invalid DirtyDigests path '$dp_norm'"
+              exit 1
+            fi
+            if [[ "$REPO_EXISTS_MC" == "true" ]] && ! check_wave_path_containment "$REPO_ROOT" "$dp_norm"; then
+              echo "MECHANICAL_FAIL: unsafe symlink or junction alias in path '$dp_norm'"
+              exit 1
+            fi
+            if [[ "$raw_dig" != "DELETED" && ! "$raw_dig" =~ ^[0-9a-fA-F]{64}$ ]]; then
+              echo "MECHANICAL_FAIL: invalid DirtyDigests digest for '$dp_norm'"
+              exit 1
+            fi
+            if [[ "$raw_dig" == "DELETED" ]]; then
+              norm_dig="DELETED"
+            else
+              norm_dig="$(printf '%s' "$raw_dig" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            fi
+            if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+              dd_key="$(printf '%s' "$dp_norm" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            else
+              dd_key="$dp_norm"
+            fi
+            if [[ "$DD_KEYS_SEEN" == *"|${dd_key}|"* ]]; then
+              echo "MECHANICAL_FAIL: duplicate DirtyDigests path '$dp_norm'"
+              exit 1
+            fi
+            DD_KEYS_SEEN+="${dd_key}|"
+            DD_PATHS+=("$dp_norm")
+            DD_DIGESTS+=("$norm_dig")
+          done
+        fi
+      fi
+    fi
+
+    IS_ATTRIBUTING="false"
+    [[ "$HAS_WORKER_CHANGES" == "true" || "$HAS_WORKER_ROOTS" == "true" ]] && IS_ATTRIBUTING="true"
+
     WS_IDS=()
     WS_PACKED=()
+    WS_LOW_PACKED=()
     WC_IDS=()
     WC_PACKED=()
+    WR_IDS=()
+    WR_ROOTS=()
     if [[ "$HAS_WAVE_SPECS" == "true" ]]; then
       parse_wave_task_map "$WAVE_SPECS" "$REPO_ROOT" "MECHANICAL_FAIL" "WaveSpecs" "--wave-specs" true true true ""
       WS_IDS=("${_WTM_IDS[@]}")
       WS_PACKED=("${_WTM_PACKED[@]}")
+      WS_LOW_PACKED=("${_WTM_LOW_PACKED[@]}")
+      if [[ ${#MC_PROT_LIST[@]} -gt 0 ]]; then
+        for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+          [[ -n "${WS_PACKED[$wsi]}" ]] || continue
+          IFS='|' read -ra wpi_arr <<< "${WS_PACKED[$wsi]}"
+          IFS='|' read -ra wpi_low_arr <<< "${WS_LOW_PACKED[$wsi]}"
+          for ((pk_i = 0; pk_i < ${#wpi_arr[@]}; pk_i++)); do
+            for ((pk_j = 0; pk_j < ${#MC_PROT_LIST[@]}; pk_j++)); do
+              if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+                wave_paths_overlap_cmp "${wpi_low_arr[$pk_i]}" "${MC_PROT_LOW_LIST[$pk_j]}"
+              else
+                wave_paths_overlap_cmp "${wpi_arr[$pk_i]}" "${MC_PROT_LIST[$pk_j]}"
+              fi
+              if [[ "$_WAVE_OV" == "equal" || "$_WAVE_OV" == "prefix" ]]; then
+                echo "MECHANICAL_FAIL: protected path '${wpi_arr[$pk_i]}' overlaps single-writer boundary '${MC_PROT_LIST[$pk_j]}'"
+                exit 1
+              fi
+            done
+          done
+        done
+      fi
+      if [[ "$IS_ATTRIBUTING" == "true" ]]; then
+        BASE_RAW_ATTR="$(trim_str "$BASE_SHA")"
+        if [[ ! "$BASE_RAW_ATTR" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          echo "MECHANICAL_FAIL: worker attribution requires explicit 40-hex -BaseSha"
+          exit 1
+        fi
+        MID_OP_MC="$(check_git_mid_operation "$REPO_ROOT")"
+        if [[ -n "$MID_OP_MC" ]]; then
+          echo "MECHANICAL_FAIL: git operation in progress ($MID_OP_MC)"
+          exit 1
+        fi
+        for ((wsi_a = 0; wsi_a < ${#WS_IDS[@]}; wsi_a++)); do
+          [[ -n "${WS_PACKED[$wsi_a]}" ]] || continue
+          for ((wsi_b = wsi_a + 1; wsi_b < ${#WS_IDS[@]}; wsi_b++)); do
+            [[ -n "${WS_PACKED[$wsi_b]}" ]] || continue
+            IFS='|' read -ra pa_arr <<< "${WS_PACKED[$wsi_a]}"
+            IFS='|' read -ra pb_arr <<< "${WS_PACKED[$wsi_b]}"
+            IFS='|' read -ra pa_low <<< "${WS_LOW_PACKED[$wsi_a]}"
+            IFS='|' read -ra pb_low <<< "${WS_LOW_PACKED[$wsi_b]}"
+            for ((ka = 0; ka < ${#pa_arr[@]}; ka++)); do
+              for ((kb = 0; kb < ${#pb_arr[@]}; kb++)); do
+                wave_paths_overlap_cmp "${pa_low[$ka]}" "${pb_low[$kb]}"
+                if [[ "$_WAVE_OV" != "none" ]]; then
+                  echo "MECHANICAL_FAIL: overlapping WaveSpecs '${pa_arr[$ka]}' and '${pb_arr[$kb]}' (${WS_IDS[$wsi_a]},${WS_IDS[$wsi_b]})"
+                  exit 1
+                fi
+              done
+            done
+          done
+        done
+      fi
+      WS_ALLOWED_PACKED="|$(IFS='|'; printf '%s' "${WS_IDS[*]}")|"
       if [[ "$HAS_WORKER_CHANGES" == "true" ]]; then
-        WS_ALLOWED_PACKED="|$(IFS='|'; printf '%s' "${WS_IDS[*]}")|"
         parse_wave_task_map "$WORKER_CHANGES" "$REPO_ROOT" "MECHANICAL_FAIL" "WorkerChanges" "--worker-changes" false true true "$WS_ALLOWED_PACKED"
         WC_IDS=("${_WTM_IDS[@]}")
         WC_PACKED=("${_WTM_PACKED[@]}")
       fi
+      if [[ "$HAS_WORKER_ROOTS" == "true" ]]; then
+        if has_control_chars "$WORKER_ROOTS"; then
+          echo "MECHANICAL_FAIL: invalid -WorkerRoots"
+          exit 1
+        fi
+        _had_ng_wr=false
+        case "$-" in *f*) _had_ng_wr=true ;; esac
+        set -f
+        WR_ENTRIES=()
+        IFS=';' read -r -d '' -a WR_ENTRIES < <(printf '%s\0' "$WORKER_ROOTS") || true
+        if ! $_had_ng_wr; then set +f; fi
+        WR_SEEN_IDS="|"
+        if [[ ${#WR_ENTRIES[@]} -gt 0 ]]; then
+          for wr_ent in "${WR_ENTRIES[@]}"; do
+            wr_trim="$(trim_str "$wr_ent")"
+            [[ -z "$wr_trim" ]] && continue
+            if [[ "$wr_trim" != *"="* ]]; then
+              echo "MECHANICAL_FAIL: invalid WorkerRoots entry '$wr_trim' (expected TaskId=worktree_path)"
+              exit 1
+            fi
+            tid="$(trim_str "${wr_trim%%=*}")"
+            wt_val="$(trim_str "${wr_trim#*=}")"
+            if [[ -z "$tid" ]] || ! is_valid_wave_task_id "$tid"; then
+              echo "MECHANICAL_FAIL: invalid task id '$tid' in WorkerRoots"
+              exit 1
+            fi
+            if [[ "$WR_SEEN_IDS" == *"|${tid}|"* ]]; then
+              echo "MECHANICAL_FAIL: duplicate task id '$tid' in WorkerRoots"
+              exit 1
+            fi
+            if [[ "$WS_ALLOWED_PACKED" != *"|${tid}|"* ]]; then
+              echo "MECHANICAL_FAIL: unknown task id '$tid' in WorkerRoots"
+              exit 1
+            fi
+            if [[ -z "$wt_val" ]]; then
+              echo "MECHANICAL_FAIL: empty worktree root for task '$tid' in WorkerRoots"
+              exit 1
+            fi
+            WR_SEEN_IDS+="${tid}|"
+            WR_IDS+=("$tid")
+            if [[ "$wt_val" == "none" || "$wt_val" == "[]" ]]; then
+              WR_ROOTS+=("")
+            else
+              WR_ROOTS+=("$wt_val")
+            fi
+          done
+        fi
+        if [[ ${#WR_IDS[@]} -lt 1 ]]; then
+          echo "MECHANICAL_FAIL: no tasks in -WorkerRoots"
+          exit 1
+        fi
+      fi
     fi
+
+    split_path_csv_checked "$ALLOWED" "MECHANICAL_FAIL" "false"
     ALLOWED_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && ALLOWED_ARR=("${_CHECKED_CSV_PATHS[@]}")
+
+    split_path_csv_checked "$IGNORE_DIRTY" "MECHANICAL_FAIL" "true"
     IGNORE_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGNORE_ARR=("${_CHECKED_CSV_PATHS[@]}")
+
     OBS_ARR=()
     while IFS= read -r tok; do [[ -n "$tok" ]] && OBS_ARR+=("$tok"); done < <(split_csv_lines "$OBSOLETES" false)
 
-    resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "MECHANICAL_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
+    BASE_KIND_MC="object"
+    [[ "$IS_ATTRIBUTING" == "true" ]] && BASE_KIND_MC="commit"
+    resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "MECHANICAL_FAIL" "$BASE_KIND_MC" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
     TARGET_REF="$_SCOPE_TARGET_REF"
     TARGET_COMMIT_SHA="$_SCOPE_TARGET_SHA"
     BASE_SHA="$_SCOPE_BASE_SHA"
 
+    CA_BASE_CH_OUT=""
+    CA_BASE_NONDEL_OUT=""
     if [[ -n "$TARGET_REF" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
       CH_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=d --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --diff-filter=d --name-only "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
       NONDEL_OUT="$_GIT_STDOUT"
       UN_OUT=""
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --name-only failed: $(git_err_detail)"; exit 1; }
       CH_OUT="$_GIT_STDOUT"
-      run_git_cmd "$REPO_ROOT" diff --no-renames --diff-filter=d --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --diff-filter=d --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=d failed: $(git_err_detail)"; exit 1; }
       NONDEL_OUT="$_GIT_STDOUT"
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --cached --name-only failed: $(git_err_detail)"; exit 1; }
+      CA_BASE_CH_OUT="$_GIT_STDOUT"
+      if [[ -n "$(trim_str "$CA_BASE_CH_OUT")" ]]; then
+        run_git_cmd "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --diff-filter=d --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --cached --diff-filter=d failed: $(git_err_detail)"; exit 1; }
+        CA_BASE_NONDEL_OUT="$_GIT_STDOUT"
+      fi
       run_git_cmd "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MECHANICAL_FAIL: git ls-files failed: $(git_err_detail)"; exit 1; }
       UN_OUT="$_GIT_STDOUT"
     fi
 
+    RAW_BEFORE_IGN=()
+    if [[ "$HAS_PROTECTED_ARG" == "true" || "$HAS_DIRTY_DIGESTS_ARG" == "true" ]]; then
+      EXTRA_DIRTY_OUT=""
+      if [[ -z "$TARGET_REF" ]]; then
+        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only HEAD --; then EXTRA_DIRTY_OUT+="$_GIT_STDOUT"$'\n'; fi
+        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only --; then EXTRA_DIRTY_OUT+="$_GIT_STDOUT"$'\n'; fi
+        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only --; then EXTRA_DIRTY_OUT+="$_GIT_STDOUT"$'\n'; fi
+      fi
+      while IFS= read -r rline; do
+        [[ -n "$rline" ]] && RAW_BEFORE_IGN+=("$rline")
+      done < <(printf '%s\n%s\n%s\n%s\n' "$CH_OUT" "$CA_BASE_CH_OUT" "$UN_OUT" "$EXTRA_DIRTY_OUT" | while IFS= read -r x; do
+        xp="$(norm_path "$x")"
+        [[ -n "$xp" ]] && ! is_checkpoint_dir "$xp" && printf '%s\n' "$xp"
+      done | LC_ALL=C sort -u)
+    fi
+
+    PROTECTED_VIOLATIONS=()
+    if [[ ${#MC_PROT_LIST[@]} -gt 0 && ${#RAW_BEFORE_IGN[@]} -gt 0 ]]; then
+      for rp in "${RAW_BEFORE_IGN[@]}"; do
+        if _mc_prot_match_ci "$rp"; then
+          PROTECTED_VIOLATIONS+=("$rp")
+        fi
+      done
+    fi
+
+    DIRTY_TAMPER_LIST=()
+    if [[ "$HAS_DIRTY_DIGESTS_ARG" == "true" ]]; then
+      CANON_REPO_MC=""
+      [[ "$REPO_EXISTS_MC" == "true" ]] && CANON_REPO_MC="$(canon_repo_root "$REPO_ROOT" 2>/dev/null || printf '%s' "$REPO_ROOT")"
+      if [[ ${#DD_PATHS[@]} -gt 0 ]]; then
+        for ((ddi = 0; ddi < ${#DD_PATHS[@]}; ddi++)); do
+          dp="${DD_PATHS[$ddi]}"
+          exp_dig="${DD_DIGESTS[$ddi]}"
+          full_dp="${CANON_REPO_MC:-$REPO_ROOT}/${dp}"
+          if [[ "$exp_dig" == "DELETED" ]]; then
+            if [[ -e "$full_dp" || -L "$full_dp" ]]; then
+              DIRTY_TAMPER_LIST+=("$dp")
+            fi
+          else
+            if [[ ! -f "$full_dp" || -L "$full_dp" ]] || ! check_wave_path_containment "${CANON_REPO_MC:-$REPO_ROOT}" "$dp"; then
+              DIRTY_TAMPER_LIST+=("$dp")
+            else
+              act_dig="$(compute_file_sha256 "$full_dp" || true)"
+              if [[ "$act_dig" != "$exp_dig" ]]; then
+                DIRTY_TAMPER_LIST+=("$dp")
+              fi
+            fi
+          fi
+        done
+      fi
+      if [[ ${#IGNORE_ARR[@]} -gt 0 && ${#RAW_BEFORE_IGN[@]} -gt 0 ]]; then
+        IGN_PACKED_DD="$(IFS='|'; printf '%s' "${IGNORE_ARR[*]}")"
+        for rp in "${RAW_BEFORE_IGN[@]}"; do
+          if ownership_path_match "$rp" "$IGN_PACKED_DD"; then
+            if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+              rp_key="$(printf '%s' "$rp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            else
+              rp_key="$rp"
+            fi
+            if [[ "$DD_KEYS_SEEN" != *"|${rp_key}|"* ]]; then
+              DIRTY_TAMPER_LIST+=("$rp")
+            fi
+          fi
+        done
+      fi
+    fi
+
     ALL_CHANGED=()
+    ALL_CHANGED_DEDUP="|"
     while IFS= read -r line; do
       p="$(norm_path "$line")"
       [[ -z "$p" ]] && continue
       is_checkpoint_dir "$p" && continue
+      p_key="$p"
+      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+        p_key="$(printf '%s' "$p" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      fi
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
-      ALL_CHANGED+=("$p")
-    done < <(printf '%s\n%s\n' "$CH_OUT" "$UN_OUT")
+      if [[ "$ALL_CHANGED_DEDUP" != *"|${p_key}|"* ]]; then
+        ALL_CHANGED_DEDUP+="${p_key}|"
+        ALL_CHANGED+=("$p")
+      fi
+    done < <(printf '%s\n%s\n%s\n' "$CH_OUT" "$UN_OUT" "$CA_BASE_CH_OUT")
 
     NON_DEL_CHANGED=()
+    NON_DEL_DEDUP="|"
     while IFS= read -r line; do
       p="$(norm_path "$line")"
       [[ -z "$p" ]] && continue
       is_checkpoint_dir "$p" && continue
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$p" "${IGNORE_ARR[@]}"; then continue; fi
-      NON_DEL_CHANGED+=("$p")
-    done < <(printf '%s\n%s\n' "$NONDEL_OUT" "$UN_OUT")
+      if [[ "$NON_DEL_DEDUP" != *"|${p}|"* ]]; then
+        NON_DEL_DEDUP+="${p}|"
+        NON_DEL_CHANGED+=("$p")
+      fi
+    done < <(printf '%s\n%s\n%s\n' "$NONDEL_OUT" "$UN_OUT" "$CA_BASE_NONDEL_OUT")
 
     SCOPE_CREEP=()
     if [[ ${#ALLOWED_ARR[@]} -gt 0 && ${#ALL_CHANGED[@]} -gt 0 ]]; then
@@ -5576,81 +6209,100 @@ case "$CMD" in
     fi
 
     SAFETY_HITS=()
+    SAFETY_SEEN="|"
     if [[ ${#NON_DEL_CHANGED[@]} -gt 0 ]]; then
       for p in "${NON_DEL_CHANGED[@]}"; do
         if is_secret_path "$p"; then
+          SAFETY_SEEN+="secret_path:${p}|"
           SAFETY_HITS+=("secret_path:${p}")
         fi
       done
     fi
     SQL_HIT_COUNT=0
 
+    DIFF_CA_U0=""
     if [[ -n "$TARGET_REF" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames -U0 "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
+      if [[ -n "$(trim_str "$CA_BASE_CH_OUT")" ]]; then
+        run_git_cmd "$REPO_ROOT" diff --no-ext-diff --cached --no-renames -U0 "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: git diff --cached -U0 failed: $(git_err_detail)"; exit 1; }
+        DIFF_CA_U0="$_GIT_STDOUT"
+      fi
     fi
     LEFTOVER_HITS=()
-    CUR_FILE=""
-    CUR_LINE=0
-    SKIP_FILE=true
-    CUR_IS_TEST=false
-    IN_HUNK=false
-    while IFS= read -r ln; do
-      ln="${ln%$'\r'}"
-      if [[ "$ln" == "diff --git "* ]]; then
-        CUR_FILE=""
-        SKIP_FILE=true
-        CUR_IS_TEST=false
-        IN_HUNK=false
-        continue
-      fi
-      if ! $IN_HUNK && [[ "$ln" == "+++ "* ]]; then
-        if [[ "$ln" == "+++ /dev/null" ]]; then
+    LEFTOVER_SEEN="|"
+    for _u0_blob in "$DIFF_U0" "$DIFF_CA_U0"; do
+      [[ -n "$_u0_blob" ]] || continue
+      CUR_FILE=""
+      CUR_LINE=0
+      SKIP_FILE=true
+      CUR_IS_TEST=false
+      IN_HUNK=false
+      while IFS= read -r ln; do
+        ln="${ln%$'\r'}"
+        if [[ "$ln" == "diff --git "* ]]; then
           CUR_FILE=""
           SKIP_FILE=true
           CUR_IS_TEST=false
-        else
-          cand="${ln#+++ }"
-          cand="${cand#b/}"
-          CUR_FILE="$(norm_path "$cand")"
-          SKIP_FILE=false
-          if [[ -z "$CUR_FILE" ]] || is_checkpoint_dir "$CUR_FILE" || is_md_file "$CUR_FILE"; then
+          IN_HUNK=false
+          continue
+        fi
+        if ! $IN_HUNK && [[ "$ln" == "+++ "* ]]; then
+          if [[ "$ln" == "+++ /dev/null" ]]; then
+            CUR_FILE=""
             SKIP_FILE=true
-          elif is_noise_file "$CUR_FILE"; then
-            SKIP_FILE=true
-          elif [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$CUR_FILE" "${IGNORE_ARR[@]}"; then
-            SKIP_FILE=true
-          fi
-          if ! $SKIP_FILE && is_test_path "$CUR_FILE"; then
-            CUR_IS_TEST=true
-          else
             CUR_IS_TEST=false
+          else
+            cand="${ln#+++ }"
+            cand="${cand#b/}"
+            CUR_FILE="$(norm_path "$cand")"
+            SKIP_FILE=false
+            if [[ -z "$CUR_FILE" ]] || is_checkpoint_dir "$CUR_FILE" || is_md_file "$CUR_FILE"; then
+              SKIP_FILE=true
+            elif is_noise_file "$CUR_FILE"; then
+              SKIP_FILE=true
+            elif [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$CUR_FILE" "${IGNORE_ARR[@]}"; then
+              SKIP_FILE=true
+            fi
+            if ! $SKIP_FILE && is_test_path "$CUR_FILE"; then
+              CUR_IS_TEST=true
+            else
+              CUR_IS_TEST=false
+            fi
           fi
+          continue
         fi
-        continue
-      fi
-      if [[ "$ln" =~ ^@@\ -[0-9,]+\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
-        CUR_LINE="${BASH_REMATCH[1]}"
-        IN_HUNK=true
-        continue
-      fi
-      if ! $IN_HUNK || $SKIP_FILE; then continue; fi
-      if [[ "$ln" == "+"* ]]; then
-        body="${ln#+}"
-        find_leftover_tag_var "$body"
-        if [[ -n "$_LO_TAG" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
-          LEFTOVER_HITS+=("${CUR_FILE}:${CUR_LINE}:${_LO_TAG}")
+        if [[ "$ln" =~ ^@@\ -[0-9,]+\ \+([0-9]+)(,[0-9]+)?\ @@ ]]; then
+          CUR_LINE="${BASH_REMATCH[1]}"
+          IN_HUNK=true
+          continue
         fi
-        if ! $CUR_IS_TEST && has_destructive_sql "$body" && [[ $SQL_HIT_COUNT -lt 10 ]]; then
-          SAFETY_HITS+=("destructive_sql:${CUR_FILE}:${CUR_LINE}")
-          SQL_HIT_COUNT=$((SQL_HIT_COUNT + 1))
+        if ! $IN_HUNK || $SKIP_FILE; then continue; fi
+        if [[ "$ln" == "+"* ]]; then
+          body="${ln#+}"
+          find_leftover_tag_var "$body"
+          if [[ -n "$_LO_TAG" && ${#LEFTOVER_HITS[@]} -lt 10 ]]; then
+            _lo_ent="${CUR_FILE}:${CUR_LINE}:${_LO_TAG}"
+            if [[ "$LEFTOVER_SEEN" != *"|${_lo_ent}|"* ]]; then
+              LEFTOVER_SEEN+="${_lo_ent}|"
+              LEFTOVER_HITS+=("$_lo_ent")
+            fi
+          fi
+          if ! $CUR_IS_TEST && has_destructive_sql "$body" && [[ $SQL_HIT_COUNT -lt 10 ]]; then
+            _sh_ent="destructive_sql:${CUR_FILE}:${CUR_LINE}"
+            if [[ "$SAFETY_SEEN" != *"|${_sh_ent}|"* ]]; then
+              SAFETY_SEEN+="${_sh_ent}|"
+              SAFETY_HITS+=("$_sh_ent")
+              SQL_HIT_COUNT=$((SQL_HIT_COUNT + 1))
+            fi
+          fi
+          CUR_LINE=$((CUR_LINE + 1))
         fi
-        CUR_LINE=$((CUR_LINE + 1))
-      fi
-    done <<< "$DIFF_U0"
+      done <<< "$_u0_blob"
+    done
 
     UN_SORTED=()
     while IFS= read -r line; do
@@ -5684,70 +6336,154 @@ case "$CMD" in
       done
     fi
 
-    if [[ -n "$TARGET_REF" ]]; then
-      DEL_TARGET="$TARGET_COMMIT_SHA"
-    else
-      build_working_tree_oid "$REPO_ROOT" "MECHANICAL_FAIL" "true"
-      DEL_TARGET="$_WT_TREE_OID"
-    fi
-    run_git_cmd "$REPO_ROOT" diff -M --diff-filter=D --name-only "$BASE_SHA" "$DEL_TARGET" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
-    DEL_OUT="$_GIT_STDOUT"
-    DEL_ARR=()
+    CAND_DEL_SEEN="|"
+    CAND_DEL_COUNT=0
     while IFS= read -r line; do
       dp="$(norm_path "$line")"
       [[ -n "$dp" ]] || continue
       is_checkpoint_dir "$dp" && continue
       if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$dp" "${IGNORE_ARR[@]}"; then continue; fi
       is_noise_file "$dp" && continue
-      DEL_ARR+=("$dp")
-    done <<< "$DEL_OUT"
-    DEL_COUNT=0
-    if [[ ${#DEL_ARR[@]} -gt 0 ]]; then
-      DEL_COUNT="$(printf '%s\n' "${DEL_ARR[@]}" | LC_ALL=C sort -u | wc -l | tr -d ' ')"
-    fi
-    if [[ $DEL_COUNT -ge 10 ]] && ! $ALLOW_MASS_DELETE; then
-      SAFETY_HITS+=("mass_delete:${DEL_COUNT}f")
+      if [[ "$NON_DEL_DEDUP" != *"|${dp}|"* && "$CAND_DEL_SEEN" != *"|${dp}|"* ]]; then
+        CAND_DEL_SEEN+="${dp}|"
+        CAND_DEL_COUNT=$((CAND_DEL_COUNT + 1))
+      fi
+    done <<< "$CH_OUT"
+
+    if ! $ALLOW_MASS_DELETE && [[ $CAND_DEL_COUNT -ge 10 ]]; then
+      if [[ -n "$TARGET_REF" ]]; then
+        DEL_TARGET="$TARGET_COMMIT_SHA"
+      else
+        build_working_tree_oid "$REPO_ROOT" "MECHANICAL_FAIL" "true"
+        DEL_TARGET="$_WT_TREE_OID"
+      fi
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff -M --diff-filter=D --name-only "$BASE_SHA" "$DEL_TARGET" -- || { echo "MECHANICAL_FAIL: git diff --diff-filter=D failed: $(git_err_detail)"; exit 1; }
+      DEL_OUT="$_GIT_STDOUT"
+      DEL_ARR=()
+      while IFS= read -r line; do
+        dp="$(norm_path "$line")"
+        [[ -n "$dp" ]] || continue
+        is_checkpoint_dir "$dp" && continue
+        if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$dp" "${IGNORE_ARR[@]}"; then continue; fi
+        is_noise_file "$dp" && continue
+        DEL_ARR+=("$dp")
+      done <<< "$DEL_OUT"
+      DEL_COUNT=0
+      if [[ ${#DEL_ARR[@]} -gt 0 ]]; then
+        DEL_COUNT="$(printf '%s\n' "${DEL_ARR[@]}" | LC_ALL=C sort -u | wc -l | tr -d ' ')"
+      fi
+      if [[ $DEL_COUNT -ge 10 ]]; then
+        SAFETY_HITS+=("mass_delete:${DEL_COUNT}f")
+      fi
     fi
 
     OBS_HITS=()
     if [[ ${#OBS_ARR[@]} -gt 0 ]]; then
+      OBS_EXISTING_PACKED="|"
+      if [[ -n "$TARGET_REF" ]]; then
+        OBS_LS_PATHS=()
+        re_obs_dd='(^|/)\.\.(/|$)'
+        for tok in "${OBS_ARR[@]}"; do
+          nt="$(norm_path "$tok")"
+          if [[ -n "$nt" && "$nt" != -* && "$nt" != *:* && ! "$nt" =~ $re_obs_dd ]]; then
+            OBS_LS_PATHS+=("$nt")
+          fi
+        done
+        if [[ ${#OBS_LS_PATHS[@]} -gt 0 ]]; then
+          if run_git_cmd_quiet "$REPO_ROOT" ls-tree "$TARGET_COMMIT_SHA" -- "${OBS_LS_PATHS[@]}"; then
+            while IFS= read -r lrow; do
+              if [[ "$lrow" == *$'\t'* ]]; then
+                lp="$(norm_path "${lrow#*$'\t'}")"
+                [[ -n "$lp" ]] && OBS_EXISTING_PACKED+="${lp}|"
+              fi
+            done <<< "$_GIT_STDOUT"
+          fi
+        fi
+      fi
+
+      BATCH_GREP_ARGS=(grep)
+      [[ -z "$TARGET_REF" ]] && BATCH_GREP_ARGS+=(--untracked)
+      BATCH_GREP_ARGS+=(-l -F)
+      for tok in "${OBS_ARR[@]}"; do
+        BATCH_GREP_ARGS+=(-e "$tok")
+      done
+      [[ -n "$TARGET_REF" ]] && BATCH_GREP_ARGS+=("$TARGET_COMMIT_SHA")
+      BATCH_GREP_ARGS+=(-- . ':(exclude).b3/ship' ':(exclude).b3/research-ship' ':(exclude).b3/autodev')
+
+      if run_git_cmd "$REPO_ROOT" "${BATCH_GREP_ARGS[@]}"; then batch_code=0; else batch_code=$?; fi
+      if [[ "$batch_code" -gt 1 ]]; then
+        echo "MECHANICAL_FAIL: git grep failed for obsoletes: $(git_err_detail)"
+        exit 1
+      fi
+      BATCH_HIT_FILES=()
+      BATCH_HIT_SEEN="|"
+      if [[ "$batch_code" -eq 0 && -n "$_GIT_STDOUT" ]]; then
+        obs_cprefix="${TARGET_COMMIT_SHA}:"
+        while IFS= read -r g_row; do
+          g_row="$(trim_str "$g_row")"
+          [[ -n "$g_row" ]] || continue
+          if [[ -n "$TARGET_REF" && "$g_row" == "${obs_cprefix}"* ]]; then
+            g_row="${g_row#${obs_cprefix}}"
+          fi
+          g_row="$(norm_path "$g_row")"
+          [[ -n "$g_row" ]] || continue
+          is_checkpoint_dir "$g_row" && continue
+          if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$g_row" "${IGNORE_ARR[@]}"; then continue; fi
+          if [[ "$BATCH_HIT_SEEN" != *"|${g_row}|"* ]]; then
+            BATCH_HIT_SEEN+="${g_row}|"
+            BATCH_HIT_FILES+=("$g_row")
+          fi
+        done <<< "$_GIT_STDOUT"
+      fi
+
+      re_obs_dd2='(^|/)\.\.(/|$)'
       for tok in "${OBS_ARR[@]}"; do
         norm_tok="$(norm_path "$tok")"
         exists_path=false
         if [[ -n "$norm_tok" ]]; then
           if [[ -n "$TARGET_REF" ]]; then
-            if run_git_cmd "$REPO_ROOT" cat-file -e "${TARGET_COMMIT_SHA}:${norm_tok}"; then
+            if [[ "$norm_tok" == -* || "$norm_tok" == *:* || "$norm_tok" =~ $re_obs_dd2 ]]; then
+              if run_git_cmd_quiet "$REPO_ROOT" cat-file -e "${TARGET_COMMIT_SHA}:${norm_tok}"; then
+                exists_path=true
+              fi
+            elif [[ "$OBS_EXISTING_PACKED" == *"|${norm_tok}|"* ]]; then
               exists_path=true
             fi
           elif [[ -e "${REPO_ROOT}/${norm_tok}" ]]; then
             exists_path=true
           fi
         fi
-        if [[ -n "$TARGET_REF" ]]; then
-          if run_git_cmd "$REPO_ROOT" grep -l -F -e "$tok" "$TARGET_COMMIT_SHA" -- . ':(exclude).b3/ship' ':(exclude).b3/research-ship' ':(exclude).b3/autodev'; then grep_code=0; else grep_code=$?; fi
-        else
-          if run_git_cmd "$REPO_ROOT" grep --untracked -l -F -e "$tok" -- . ':(exclude).b3/ship' ':(exclude).b3/research-ship' ':(exclude).b3/autodev'; then grep_code=0; else grep_code=$?; fi
-        fi
-        grep_out="$_GIT_STDOUT"
-        if [[ "$grep_code" -gt 1 ]]; then
-          echo "MECHANICAL_FAIL: git grep failed for obsolete '$tok': $(git_err_detail)"
-          exit 1
-        fi
         grep_count=0
-        if [[ "$grep_code" -eq 0 && -n "$grep_out" ]]; then
-          obs_cprefix="${TARGET_COMMIT_SHA}:"
-          while IFS= read -r g_row; do
-            g_row="$(trim_str "$g_row")"
-            [[ -n "$g_row" ]] || continue
-            if [[ -n "$TARGET_REF" && "$g_row" == "${obs_cprefix}"* ]]; then
-              g_row="${g_row#${obs_cprefix}}"
+        if [[ ${#BATCH_HIT_FILES[@]} -gt 0 ]]; then
+          if [[ ${#OBS_ARR[@]} -eq 1 ]]; then
+            grep_count=${#BATCH_HIT_FILES[@]}
+          else
+            SINGLE_GREP_ARGS=(grep)
+            [[ -z "$TARGET_REF" ]] && SINGLE_GREP_ARGS+=(--untracked)
+            SINGLE_GREP_ARGS+=(-l -F -e "$tok")
+            [[ -n "$TARGET_REF" ]] && SINGLE_GREP_ARGS+=("$TARGET_COMMIT_SHA")
+            SINGLE_GREP_ARGS+=(-- "${BATCH_HIT_FILES[@]}")
+            if run_git_cmd "$REPO_ROOT" "${SINGLE_GREP_ARGS[@]}"; then s_code=0; else s_code=$?; fi
+            if [[ "$s_code" -gt 1 ]]; then
+              echo "MECHANICAL_FAIL: git grep failed for obsolete '$tok': $(git_err_detail)"
+              exit 1
             fi
-            g_row="$(norm_path "$g_row")"
-            [[ -n "$g_row" ]] || continue
-            is_checkpoint_dir "$g_row" && continue
-            if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$g_row" "${IGNORE_ARR[@]}"; then continue; fi
-            grep_count=$((grep_count + 1))
-          done <<< "$grep_out"
+            if [[ "$s_code" -eq 0 && -n "$_GIT_STDOUT" ]]; then
+              obs_cprefix="${TARGET_COMMIT_SHA}:"
+              while IFS= read -r g_row; do
+                g_row="$(trim_str "$g_row")"
+                [[ -n "$g_row" ]] || continue
+                if [[ -n "$TARGET_REF" && "$g_row" == "${obs_cprefix}"* ]]; then
+                  g_row="${g_row#${obs_cprefix}}"
+                fi
+                g_row="$(norm_path "$g_row")"
+                [[ -n "$g_row" ]] || continue
+                is_checkpoint_dir "$g_row" && continue
+                if [[ ${#IGNORE_ARR[@]} -gt 0 ]] && path_in_list "$g_row" "${IGNORE_ARR[@]}"; then continue; fi
+                grep_count=$((grep_count + 1))
+              done <<< "$_GIT_STDOUT"
+            fi
+          fi
         fi
         if $exists_path && [[ "$grep_count" -gt 0 ]]; then
           OBS_HITS+=("${tok}(exists+${grep_count}f)")
@@ -5759,24 +6495,37 @@ case "$CMD" in
       done
     fi
 
+    _in_all_changed_fs() {
+      local cand="$1" gp
+      [[ ${#ALL_CHANGED[@]} -gt 0 ]] || return 1
+      for gp in "${ALL_CHANGED[@]}"; do
+        if paths_equal_fs "$gp" "$cand"; then
+          return 0
+        fi
+      done
+      return 1
+    }
+
     OV_STATUS=""
     OV_VIOLATIONS_OUT=""
     if [[ "$HAS_WAVE_SPECS" == "true" ]]; then
-      if [[ "$HAS_WORKER_CHANGES" != "true" ]]; then
+      if [[ "$IS_ATTRIBUTING" != "true" ]]; then
         OV_STATUS="UNVERIFIED_COMBINED_ONLY"
         OV_VIOLATIONS_OUT="unverified"
-      else
+      elif [[ "$HAS_WORKER_CHANGES" == "true" ]]; then
         IGNORE_PACKED=""
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
           IGNORE_PACKED="$(IFS='|'; printf '%s' "${IGNORE_ARR[*]}")"
         fi
         OV_VIOLATIONS=()
         ATTRIBUTED_PATHS=()
+        WC_PRESENT_IDS="|"
         re_mc_b3='^\.b3(/|$)'
         re_mc_git='(^|/)\.git(/|$)'
         re_mc_gitmodules='(^|/)\.gitmodules$'
         for ((wci = 0; wci < ${#WC_IDS[@]}; wci++)); do
           tid="${WC_IDS[$wci]}"
+          WC_PRESENT_IDS+="${tid}|"
           wc_packed="${WC_PACKED[$wci]}"
           [[ -n "$wc_packed" ]] || continue
           tid_owned=""
@@ -5791,7 +6540,7 @@ case "$CMD" in
             [[ -n "$wp" ]] || continue
             ATTRIBUTED_PATHS+=("$wp")
             wp_low="$(printf '%s' "$wp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-            if [[ "$wp_low" =~ $re_mc_b3 || "$wp_low" =~ $re_mc_git || "$wp_low" =~ $re_mc_gitmodules ]]; then
+            if [[ "$wp_low" =~ $re_mc_b3 || "$wp_low" =~ $re_mc_git || "$wp_low" =~ $re_mc_gitmodules ]] || _mc_prot_match_ci "$wp"; then
               OV_VIOLATIONS+=("${wp}(${tid}->protected)")
               continue
             fi
@@ -5800,6 +6549,9 @@ case "$CMD" in
               continue
             fi
             if [[ -n "$tid_owned" ]] && ownership_path_match "$wp" "$tid_owned"; then
+              if ! _in_all_changed_fs "$wp"; then
+                OV_VIOLATIONS+=("${wp}(${tid}->phantom)")
+              fi
               continue
             fi
             OTHER_OWNERS=()
@@ -5834,9 +6586,188 @@ case "$CMD" in
             fi
           done
         fi
+        if [[ ${#PROTECTED_VIOLATIONS[@]} -gt 0 ]]; then
+          for pv in "${PROTECTED_VIOLATIONS[@]}"; do OV_VIOLATIONS+=("${pv}(protected)"); done
+        fi
+        if [[ ${#DIRTY_TAMPER_LIST[@]} -gt 0 ]]; then
+          for dt in "${DIRTY_TAMPER_LIST[@]}"; do OV_VIOLATIONS+=("${dt}(dirty_tamper)"); done
+        fi
+        MISSING_WORKERS=()
+        for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+          if [[ "$WC_PRESENT_IDS" != *"|${WS_IDS[$wsi]}|"* ]]; then
+            MISSING_WORKERS+=("${WS_IDS[$wsi]}(missing_worker)")
+          fi
+        done
         if [[ ${#OV_VIOLATIONS[@]} -gt 0 ]]; then
           OV_STATUS="VIOLATION"
           OV_VIOLATIONS_OUT="$(printf '%s\n' "${OV_VIOLATIONS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        elif [[ ${#MISSING_WORKERS[@]} -gt 0 ]]; then
+          OV_STATUS="PARTIAL_ATTRIBUTION"
+          OV_VIOLATIONS_OUT="$(printf '%s\n' "${MISSING_WORKERS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        else
+          OV_STATUS="CALLER_ATTRIBUTED"
+          OV_VIOLATIONS_OUT="none"
+        fi
+      else
+        # --worker-roots verified per-worker attribution
+        check_worktree_identity "$REPO_ROOT" "missing_repo_root" "not_a_git_repo" "true"
+        PARENT_TOP_NORM="$_WT_TOP_NORM"
+        PARENT_COMMON="$_WT_COMMON_DIR"
+
+        SEEN_WT_TOPS=("$PARENT_TOP_NORM")
+        IGNORE_PACKED=""
+        if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+          IGNORE_PACKED="$(IFS='|'; printf '%s' "${IGNORE_ARR[*]}")"
+        fi
+        OV_VIOLATIONS=()
+        ATTRIBUTED_PATHS=()
+        WR_PRESENT_IDS="|"
+        re_mc_b3='^\.b3(/|$)'
+        re_mc_git='(^|/)\.git(/|$)'
+        re_mc_gitmodules='(^|/)\.gitmodules$'
+
+        for ((wri = 0; wri < ${#WR_IDS[@]}; wri++)); do
+          tid="${WR_IDS[$wri]}"
+          WR_PRESENT_IDS+="${tid}|"
+          wt_raw_p="${WR_ROOTS[$wri]}"
+          [[ -n "$wt_raw_p" ]] || continue
+
+          check_worktree_identity "$wt_raw_p" "missing_worker_root" "worker_not_git" "true"
+          W_LOGICAL="$_WT_LOGICAL"
+          W_TOP_NORM="$_WT_TOP_NORM"
+          W_COMMON="$_WT_COMMON_DIR"
+          W_GIT_DIR="$_WT_GIT_DIR"
+          W_HEAD="$_WT_HEAD"
+
+          W_MID="$(check_git_mid_operation "$W_LOGICAL")"
+          if [[ -n "$W_MID" ]]; then
+            echo "WORKTREE_UNSAFE: git_op_in_progress(${W_MID})"
+            exit 2
+          fi
+          if ! paths_equal_fs "$W_COMMON" "$PARENT_COMMON"; then
+            echo "WORKTREE_UNSAFE: peer_repo_mismatch(expected=${PARENT_COMMON},actual=${W_COMMON})"
+            exit 2
+          fi
+          if paths_equal_fs "$W_GIT_DIR" "$W_COMMON" || worktree_roots_overlap "$W_TOP_NORM" "$PARENT_TOP_NORM"; then
+            echo "WORKTREE_UNSAFE: not_isolated_linked_worktree(parent=${PARENT_TOP_NORM},worker=${W_TOP_NORM})"
+            exit 2
+          fi
+          for prev_wt in "${SEEN_WT_TOPS[@]}"; do
+            if worktree_roots_overlap "$W_TOP_NORM" "$prev_wt"; then
+              echo "WORKTREE_UNSAFE: duplicate_or_nested_worktree(${W_TOP_NORM})"
+              exit 2
+            fi
+          done
+          SEEN_WT_TOPS+=("$W_TOP_NORM")
+
+          if ! run_git_cmd_quiet "$W_TOP_NORM" merge-base --is-ancestor "$BASE_SHA" "$W_HEAD"; then
+            echo "WORKTREE_UNSAFE: base_not_ancestor_of_worker(task=${tid},base=${BASE_SHA},head=${W_HEAD})"
+            exit 2
+          fi
+
+          run_git_cmd "$W_TOP_NORM" diff --no-ext-diff --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: worker '$tid' git diff failed: $(git_err_detail)"; exit 1; }
+          W_DIFF_OUT="$_GIT_STDOUT"
+          run_git_cmd "$W_TOP_NORM" diff --no-ext-diff --cached --no-renames --name-only "$BASE_SHA" -- || { echo "MECHANICAL_FAIL: worker '$tid' git diff --cached failed: $(git_err_detail)"; exit 1; }
+          W_CA_DIFF_OUT="$_GIT_STDOUT"
+          run_git_cmd "$W_TOP_NORM" ls-files --others --exclude-standard || { echo "MECHANICAL_FAIL: worker '$tid' git ls-files failed: $(git_err_detail)"; exit 1; }
+          W_UN_OUT="$_GIT_STDOUT"
+
+          W_CHANGED=()
+          W_SEEN="|"
+          while IFS= read -r wln; do
+            wp="$(norm_path "$wln")"
+            [[ -n "$wp" ]] || continue
+            is_checkpoint_dir "$wp" && continue
+            if [[ "$W_SEEN" != *"|${wp}|"* ]]; then
+              W_SEEN+="${wp}|"
+              W_CHANGED+=("$wp")
+            fi
+          done < <(printf '%s\n%s\n%s\n' "$W_DIFF_OUT" "$W_CA_DIFF_OUT" "$W_UN_OUT")
+
+          tid_owned=""
+          for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+            if [[ "${WS_IDS[$wsi]}" == "$tid" ]]; then
+              tid_owned="${WS_PACKED[$wsi]}"
+              break
+            fi
+          done
+
+          if [[ ${#W_CHANGED[@]} -gt 0 ]]; then
+            for wp in "${W_CHANGED[@]}"; do
+              ATTRIBUTED_PATHS+=("$wp")
+              wp_low="$(printf '%s' "$wp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+              if [[ "$wp_low" =~ $re_mc_b3 || "$wp_low" =~ $re_mc_git || "$wp_low" =~ $re_mc_gitmodules ]] || _mc_prot_match_ci "$wp"; then
+                OV_VIOLATIONS+=("${wp}(${tid}->protected)")
+                continue
+              fi
+              if [[ -n "$IGNORE_PACKED" ]] && ownership_path_match "$wp" "$IGNORE_PACKED"; then
+                OV_VIOLATIONS+=("${wp}(${tid}->user_dirty)")
+                continue
+              fi
+              if [[ -z "$tid_owned" ]] || ! ownership_path_match "$wp" "$tid_owned"; then
+                OTHER_OWNERS=()
+                for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+                  other_tid="${WS_IDS[$wsi]}"
+                  [[ "$other_tid" == "$tid" ]] && continue
+                  if [[ -n "${WS_PACKED[$wsi]}" ]] && ownership_path_match "$wp" "${WS_PACKED[$wsi]}"; then
+                    OTHER_OWNERS+=("$other_tid")
+                  fi
+                done
+                if [[ ${#OTHER_OWNERS[@]} -gt 0 ]]; then
+                  first_other="$(printf '%s\n' "${OTHER_OWNERS[@]}" | LC_ALL=C sort | head -n 1)"
+                  OV_VIOLATIONS+=("${wp}(${tid}->${first_other})")
+                else
+                  OV_VIOLATIONS+=("${wp}(${tid}->unowned)")
+                fi
+                continue
+              fi
+              if ! _in_all_changed_fs "$wp"; then
+                OV_VIOLATIONS+=("${wp}(${tid}->content_mismatch)")
+                continue
+              fi
+              wt_state="$(get_effective_repo_path_state "$W_TOP_NORM" "$wp" "MECHANICAL_FAIL")" || exit 1
+              root_state="$(get_effective_repo_path_state "$REPO_ROOT" "$wp" "MECHANICAL_FAIL")" || exit 1
+              if [[ "$wt_state" == "UNSAFE_REPARSE" || "$root_state" == "UNSAFE_REPARSE" || "$wt_state" == "INDEX_WT_DIVERGED" || "$root_state" == "INDEX_WT_DIVERGED" || "$wt_state" != "$root_state" ]]; then
+                OV_VIOLATIONS+=("${wp}(${tid}->content_mismatch)")
+              fi
+            done
+          fi
+        done
+
+        if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
+          for gp in "${ALL_CHANGED[@]}"; do
+            is_attrib="false"
+            if [[ ${#ATTRIBUTED_PATHS[@]} -gt 0 ]]; then
+              for ap in "${ATTRIBUTED_PATHS[@]}"; do
+                if paths_equal_fs "$gp" "$ap"; then
+                  is_attrib="true"
+                  break
+                fi
+              done
+            fi
+            if [[ "$is_attrib" != "true" ]]; then
+              OV_VIOLATIONS+=("${gp}(unattributed)")
+            fi
+          done
+        fi
+        if [[ ${#PROTECTED_VIOLATIONS[@]} -gt 0 ]]; then
+          for pv in "${PROTECTED_VIOLATIONS[@]}"; do OV_VIOLATIONS+=("${pv}(protected)"); done
+        fi
+        if [[ ${#DIRTY_TAMPER_LIST[@]} -gt 0 ]]; then
+          for dt in "${DIRTY_TAMPER_LIST[@]}"; do OV_VIOLATIONS+=("${dt}(dirty_tamper)"); done
+        fi
+        MISSING_WORKERS=()
+        for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+          if [[ "$WR_PRESENT_IDS" != *"|${WS_IDS[$wsi]}|"* ]]; then
+            MISSING_WORKERS+=("${WS_IDS[$wsi]}(missing_worker)")
+          fi
+        done
+        if [[ ${#OV_VIOLATIONS[@]} -gt 0 ]]; then
+          OV_STATUS="VIOLATION"
+          OV_VIOLATIONS_OUT="$(printf '%s\n' "${OV_VIOLATIONS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        elif [[ ${#MISSING_WORKERS[@]} -gt 0 ]]; then
+          OV_STATUS="PARTIAL_ATTRIBUTION"
+          OV_VIOLATIONS_OUT="$(printf '%s\n' "${MISSING_WORKERS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
         else
           OV_STATUS="VERIFIED_PER_WORKER"
           OV_VIOLATIONS_OUT="none"
@@ -5845,27 +6776,36 @@ case "$CMD" in
     fi
 
     SC_OUT="none"
-    if [[ ${#SCOPE_CREEP[@]} -gt 0 ]]; then
-      SC_OUT="$(printf '%s\n' "${SCOPE_CREEP[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
-    fi
+    [[ ${#SCOPE_CREEP[@]} -gt 0 ]] && SC_OUT="$(printf '%s\n' "${SCOPE_CREEP[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
     LO_OUT="none"
-    if [[ ${#LEFTOVER_HITS[@]} -gt 0 ]]; then
-      LO_OUT="$(IFS=','; echo "${LEFTOVER_HITS[*]}")"
-    fi
+    [[ ${#LEFTOVER_HITS[@]} -gt 0 ]] && LO_OUT="$(IFS=','; echo "${LEFTOVER_HITS[*]}")"
     OB_OUT="none"
-    if [[ ${#OBS_HITS[@]} -gt 0 ]]; then
-      OB_OUT="$(printf '%s\n' "${OBS_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
-    fi
+    [[ ${#OBS_HITS[@]} -gt 0 ]] && OB_OUT="$(printf '%s\n' "${OBS_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
     SF_OUT="none"
-    if [[ ${#SAFETY_HITS[@]} -gt 0 ]]; then
-      SF_OUT="$(printf '%s\n' "${SAFETY_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
-    fi
+    [[ ${#SAFETY_HITS[@]} -gt 0 ]] && SF_OUT="$(printf '%s\n' "${SAFETY_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    PV_OUT="none"
+    [[ ${#PROTECTED_VIOLATIONS[@]} -gt 0 ]] && PV_OUT="$(printf '%s\n' "${PROTECTED_VIOLATIONS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    DT_OUT="none"
+    [[ ${#DIRTY_TAMPER_LIST[@]} -gt 0 ]] && DT_OUT="$(printf '%s\n' "${DIRTY_TAMPER_LIST[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
 
     printf 'scope_creep=%s\nleftovers=%s\nobsolete_hits=%s\nsafety_hits=%s\n' "$SC_OUT" "$LO_OUT" "$OB_OUT" "$SF_OUT"
+    if [[ "$HAS_PROTECTED_ARG" == "true" ]]; then
+      printf 'protected_violations=%s\n' "$PV_OUT"
+    fi
+    if [[ "$HAS_DIRTY_DIGESTS_ARG" == "true" ]]; then
+      printf 'dirty_tamper=%s\n' "$DT_OUT"
+    fi
     if [[ "$HAS_WAVE_SPECS" == "true" ]]; then
       printf 'ownership_verification=%s\nownership_violations=%s\n' "$OV_STATUS" "$OV_VIOLATIONS_OUT"
     fi
-    if [[ "$SC_OUT" == "none" && "$LO_OUT" == "none" && "$OB_OUT" == "none" && "$SF_OUT" == "none" ]] && [[ "$HAS_WAVE_SPECS" != "true" || "$OV_STATUS" != "VIOLATION" ]]; then
+    OV_OK="true"
+    if [[ "$HAS_WAVE_SPECS" == "true" ]]; then
+      case "$OV_STATUS" in
+        UNVERIFIED_COMBINED_ONLY|CALLER_ATTRIBUTED|VERIFIED_PER_WORKER) OV_OK="true" ;;
+        *) OV_OK="false" ;;
+      esac
+    fi
+    if [[ "$SC_OUT" == "none" && "$LO_OUT" == "none" && "$OB_OUT" == "none" && "$SF_OUT" == "none" && "$PV_OUT" == "none" && "$DT_OUT" == "none" && "$OV_OK" == "true" ]]; then
       echo "MECHANICAL_OK"
       exit 0
     fi
@@ -6172,12 +7112,12 @@ case "$CMD" in
         exit 2
       fi
 
-      if ! run_git_cmd "$REPO_ROOT" diff --no-renames --name-only HEAD --; then
+      if ! run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only HEAD --; then
         echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
         exit 2
       fi
       DIFF_HEAD_OUT="$_GIT_STDOUT"
-      if ! run_git_cmd "$REPO_ROOT" diff --no-renames --cached --name-only --; then
+      if ! run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames --cached --name-only --; then
         echo "WAVE_BASE_MISMATCH: git diff HEAD failed"
         exit 2
       fi
@@ -6798,13 +7738,20 @@ case "$CMD" in
     EFF_SCOPE="$(trim_str "$(printf '%s' "$SCOPE" | LC_ALL=C tr '\r\n' '  ')")"
     [[ -n "$EFF_SCOPE" ]] || EFF_SCOPE="scoped"
 
+    split_path_csv_checked "$IGNORE_DIRTY" "VERIFY_RUN_FAIL" "true"
+    split_path_csv_checked "$RELEVANT_PATHS" "VERIFY_RUN_FAIL" "false"
+
     mkdir -p "$(dirname "$FULL_RECEIPT")"
 
     make_temp_file "b3-verify-out" OUT_TMP
+    START_MS="$(now_epoch_ms)"
     set +e
     (cd "$REPO_ROOT" && sh -c "$VERIFY_CMD") >"$OUT_TMP" 2>&1
     CMD_EXIT=$?
     set -e
+    END_MS="$(now_epoch_ms)"
+    DURATION_MS=$((END_MS - START_MS))
+    [[ $DURATION_MS -lt 0 ]] && DURATION_MS=0
 
     OUT_LINES="$(awk 'END{print NR}' "$OUT_TMP")"
     if ! FP_OUT="$(compute_tree_fingerprint "$REPO_ROOT" "$RELEVANT_PATHS" "$IGNORE_DIRTY")"; then
@@ -6841,6 +7788,7 @@ tree_hash=${FP_TREE}
 relevant_paths=${FP_PATHS}
 exit_code=${CMD_EXIT}
 status=${STATUS_VAL}
+duration_ms=${DURATION_MS}
 command=${SINGLE_CMD}
 log_path=${LOG_DISP}
 timestamp_utc=${TS_UTC}
@@ -6850,10 +7798,10 @@ timestamp_utc=${TS_UTC}
     SHORT_TREE="${FP_TREE:0:12}"
     if [[ $CMD_EXIT -eq 0 ]]; then
       rm -f "$OUT_TMP"
-      printf 'VERIFY_PASS: exit=0 tree=%s receipt=%s\n' "$SHORT_TREE" "$RECEIPT_REL"
+      printf 'VERIFY_PASS: exit=0 tree=%s receipt=%s duration_ms=%s\n' "$SHORT_TREE" "$RECEIPT_REL" "$DURATION_MS"
       exit 0
     fi
-    printf 'VERIFY_FAIL: exit=%s tree=%s receipt=%s log=%s\n' "$CMD_EXIT" "$SHORT_TREE" "$RECEIPT_REL" "$LOG_DISP"
+    printf 'VERIFY_FAIL: exit=%s tree=%s receipt=%s log=%s duration_ms=%s\n' "$CMD_EXIT" "$SHORT_TREE" "$RECEIPT_REL" "$LOG_DISP" "$DURATION_MS"
     LC_ALL=C awk 'NR <= 35 { sub(/\r$/, ""); print } NR == 35 { exit }' "$OUT_TMP"
     rm -f "$OUT_TMP"
     exit 1
@@ -6875,6 +7823,7 @@ timestamp_utc=${TS_UTC}
         *) echo "VERIFY_CHECK_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
+    split_path_csv_checked "$IGNORE_DIRTY" "VERIFY_CHECK_FAIL" "true"
     if ! REPO_ROOT="$(canon_repo_root "$REPO_ROOT")"; then
       _VR_MSG="VERIFY_CHECK_FAIL: invalid --repo-root"
       printf '%s\n' "$_VR_MSG"
@@ -6903,8 +7852,9 @@ timestamp_utc=${TS_UTC}
       esac
     done
 
+    split_path_csv_checked "$IGNORE_DIRTY" "SYMBOL_FAIL" "true"
     IGNORE_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGNORE_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
     resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "SYMBOL_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
     TARGET_REF="$_SCOPE_TARGET_REF"
@@ -6912,10 +7862,10 @@ timestamp_utc=${TS_UTC}
     BASE_SHA="$_SCOPE_BASE_SHA"
 
     if [[ -n "$TARGET_REF" ]]; then
-      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames -U0 "$BASE_SHA" "$TARGET_COMMIT_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
     else
-      run_git_cmd "$REPO_ROOT" diff --no-renames -U0 "$BASE_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
+      run_git_cmd "$REPO_ROOT" diff --no-ext-diff --no-renames -U0 "$BASE_SHA" -- || { echo "SYMBOL_FAIL: git diff -U0 failed: $(git_err_detail)"; exit 1; }
       DIFF_U0="$_GIT_STDOUT"
     fi
 
@@ -7355,8 +8305,9 @@ timestamp_utc=${TS_UTC}
         *) echo "INVENTORY_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
+    split_path_csv_checked "$IGNORE_DIRTY" "INVENTORY_FAIL" "true"
     IGNORE_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGNORE_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
     resolve_scope_target_and_base "$REPO_ROOT" "$TARGET_REF" "$BASE_SHA" "INVENTORY_FAIL" "object" ${IGNORE_ARR[@]+"${IGNORE_ARR[@]}"}
     TARGET_REF="$_SCOPE_TARGET_REF"
@@ -7419,6 +8370,7 @@ timestamp_utc=${TS_UTC}
     PASSES_USED=-1
     PASSES_USED_SET="false"
     SCOPE=""
+    FORCE=false
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
@@ -7440,6 +8392,7 @@ timestamp_utc=${TS_UTC}
         --review-independence) REVIEW_INDEPENDENCE="${2:-}"; shift 2 ;;
         --passes-used) PASSES_USED="${2:--1}"; PASSES_USED_SET="true"; shift 2 ;;
         --scope) SCOPE="${2:-}"; shift 2 ;;
+        --force) FORCE=true; shift ;;
         *) echo "LEDGER_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
@@ -7468,8 +8421,9 @@ timestamp_utc=${TS_UTC}
     fi
     LEDGER_FULL="$_SAFE_FULL"
     LEDGER_REL="$_SAFE_REL"
+    split_path_csv_checked "$IGNORE_DIRTY" "LEDGER_FAIL" "true"
     IGNORE_ARR=()
-    while IFS= read -r p; do [[ -n "$p" ]] && IGNORE_ARR+=("$p"); done < <(split_csv_lines "$IGNORE_DIRTY" true | LC_ALL=C sort -u)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && IGNORE_ARR=("${_CHECKED_CSV_PATHS[@]}")
 
     if [[ "$ACT_LOW" == "normalize" ]]; then
       [[ -f "$LEDGER_FULL" ]] || { echo "LEDGER_MISSING: $LEDGER_REL"; exit 1; }
@@ -7547,6 +8501,112 @@ timestamp_utc=${TS_UTC}
         HEAD_SHA="$_VALID_REV_SHA"
       fi
 
+      if ! $FORCE && [[ -f "$LEDGER_FULL" ]]; then
+        set +e
+        _INIT_PROBE="$(
+          _CLEANUP_FILES=()
+          trap _cleanup_tmp EXIT
+          make_temp_file "b3-git-err-ip" _B3_GIT_ERR_FILE
+          L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
+          L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"; L_RIND=""
+          L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
+          L_SEEN_KEYS=""
+          U_ROWS=()
+          P_ROWS=()
+          while IFS= read -r rawln || [[ -n "$rawln" ]]; do
+            ln="$(trim_str "${rawln%$'\r'}")"
+            [[ -z "$ln" || "$ln" == \#* ]] && continue
+            if [[ "$ln" == \|* ]]; then
+              inner="${ln#|}"; inner="${inner%|}"
+              c_cnt=0; c0=""; c2=""; c3=""
+              while IFS= read -r col; do
+                tc="$(trim_str "$col")"
+                case "$c_cnt" in 0) c0="$tc" ;; 2) c2="$tc" ;; 3) c3="$tc" ;; esac
+                c_cnt=$((c_cnt + 1))
+              done < <(printf '%s\n' "$inner" | LC_ALL=C awk -F'|' '{for(i=1;i<=NF;i++) print $i}')
+              [[ "$c_cnt" -eq 12 ]] || exit 10
+              [[ "$c0" == "unit_id" || "$c0" == "---" ]] && continue
+              [[ "$c0" =~ ^U[0-9]{2,}$ && "$c2" =~ ^[0-9]+$ && "$c3" =~ ^[0-9]+$ ]] || exit 10
+              U_ROWS+=("$c0")
+              continue
+            fi
+            if [[ "$ln" == pass\|* ]]; then
+              _re_pass='^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$'
+              [[ "$ln" =~ $_re_pass ]] || exit 10
+              P_ROWS+=("$ln")
+              continue
+            fi
+            [[ "$ln" == *"="* ]] || exit 10
+            lk="$(trim_str "${ln%%=*}")"; lv="$(trim_str "${ln#*=}")"
+            [[ -n "$lk" ]] || exit 10
+            case "$L_SEEN_KEYS" in *"|${lk}|"*) exit 10 ;; esac
+            L_SEEN_KEYS+="|${lk}|"
+            case "$lk" in
+              schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
+              target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
+              risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
+              l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
+              review_independence) L_RIND="$lv" ;; contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;;
+              max_concurrency) L_MCONC="$lv" ;; max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;;
+              budget_status) L_BSTAT="$lv" ;; cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
+            esac
+          done < "$LEDGER_FULL"
+          for rv in "$L_SCHEMA" "$L_BASE" "$L_HEAD" "$L_TREF" "$L_SNAP" "$L_SIZE" "$L_NLSIZE" "$L_RISK" "$L_RSIG" "$L_RSPEC" "$L_CFILES" "$L_GFILES" "$L_MCONC" "$L_MPASS" "$L_PUSED" "$L_BSTAT" "$L_CSTAT" "$L_CHASH" "$L_UCNT"; do
+            [[ -n "$rv" ]] || exit 10
+          done
+          [[ "$L_SCHEMA" == "b3-review-ledger-v1" && "$L_BASE" =~ ^[0-9a-f]{40}$ && "$L_HEAD" =~ ^[0-9a-f]{40}$ ]] || exit 10
+          if [[ -z "$L_TSHA" ]]; then
+            if [[ "$L_TREF" == "working_tree" ]]; then
+              L_TSHA="none"
+            elif [[ "$L_TREF" =~ ^[0-9a-f]{40}$ ]]; then
+              L_TSHA="$L_TREF"
+            else
+              exit 10
+            fi
+          fi
+          if [[ "$L_TREF" == "working_tree" ]]; then
+            [[ "$L_TSHA" == "none" ]] || exit 10
+          else
+            [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || exit 10
+          fi
+          [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ && "$L_UCNT" =~ ^[0-9]+$ ]] || exit 10
+          L_PUSED="$((10#$L_PUSED))"; L_UCNT="$((10#$L_UCNT))"
+          [[ "$L_UCNT" -eq ${#U_ROWS[@]} ]] || exit 10
+          [[ "$L_HAS_CHAIN" == "true" && "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || exit 10
+          [[ "$L_RIND" == "UNKNOWN" || "$L_RIND" == "INDEPENDENT" || "$L_RIND" == "SINGLE_AGENT_LIMIT" ]] || exit 10
+          normalize_size_class "$L_SIZE" >/dev/null || exit 10
+          cur="$(init_pass_chain "$REPO_ROOT" "$L_BASE")" || exit 10
+          sum=0; idx=0
+          if [[ ${#P_ROWS[@]} -gt 0 ]]; then
+            for row in "${P_ROWS[@]}"; do
+              IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
+              p_seq="$((10#$p_seq))"; p_delta="$((10#$p_delta))"
+              [[ "$p_seq" -eq $((idx + 1)) && "$p_delta" -ge 1 ]] || exit 10
+              sum=$((sum + p_delta))
+              cur="$(step_pass_chain "$REPO_ROOT" "$cur" "$p_seq" "$p_scope" "$p_kind" "$p_delta" "$p_ref")" || exit 10
+              [[ "$cur" == "$p_hash" ]] || exit 10
+              idx=$((idx + 1))
+            done
+          fi
+          [[ "$sum" -eq "$L_PUSED" && "$cur" == "$L_PCHAIN" ]] || exit 10
+          if [[ "$L_BASE" == "$BASE_SHA" ]]; then
+            if [[ "$L_PUSED" -gt 0 || "$L_BSTAT" == "EXHAUSTED" || "$L_RIND" == "SINGLE_AGENT_LIMIT" ]]; then
+              exit 11
+            fi
+          fi
+          exit 0
+        )"
+        _IP_RC=$?
+        set -e
+        if [[ $_IP_RC -eq 11 ]]; then
+          printf "LEDGER_FAIL: cannot reset active ledger '%s' on same base_sha without --force\n" "$LEDGER_REL"
+          exit 1
+        elif [[ $_IP_RC -ne 0 ]]; then
+          printf "LEDGER_CORRUPT: cannot overwrite corrupt ledger '%s' without --force\n" "$LEDGER_REL"
+          exit 1
+        fi
+      fi
+
       INV_OUT=""
       if ! INV_OUT="$(run_scope_engine "$REPO_ROOT" "$BASE_SHA" "$TARGET_COMMIT_SHA" "$IGNORE_DIRTY" "$MAX_CONC" "LEDGER_FAIL")"; then
         printf '%s\n' "$INV_OUT"
@@ -7586,7 +8646,7 @@ timestamp_utc=${TS_UTC}
       INIT_CHAIN="$(init_pass_chain "$REPO_ROOT" "$BASE_SHA")" || exit 1
 
       if [[ "$MAX_PASSES_SET" != "true" ]]; then
-        MAX_PASSES="$(default_max_passes "$SIZE_CLASS")"
+        MAX_PASSES="$(default_max_passes "$SIZE_CLASS" "$UNIT_CNT")"
       fi
 
       NEED_CROSS=false
@@ -7691,6 +8751,7 @@ timestamp_utc=${TS_UTC}
     done
     [[ "$L_SCHEMA" == "b3-review-ledger-v1" ]] || { echo "LEDGER_CORRUPT: unsupported schema '$L_SCHEMA'"; exit 1; }
     [[ "$L_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid base_sha"; exit 1; }
+    [[ "$L_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid head_sha"; exit 1; }
     if [[ -z "$L_TSHA" ]]; then
       if [[ "$L_TREF" == "working_tree" ]]; then
         L_TSHA="none"
@@ -8017,8 +9078,9 @@ timestamp_utc=${TS_UTC}
     MANIFEST_REL="$_CONTAINED_REL"
     MANIFEST_FULL="$_CONTAINED_FULL"
 
+    split_path_csv_checked "$SOURCE_PATHS" "EVIDENCE_MISSING" "true" "EVIDENCE_MISSING: invalid path ."
     SRC_RAW=()
-    while IFS= read -r sp; do [[ -n "$sp" ]] && SRC_RAW+=("$sp"); done < <(split_csv_lines "$SOURCE_PATHS" true)
+    [[ ${#_CHECKED_CSV_PATHS[@]} -gt 0 ]] && SRC_RAW=("${_CHECKED_CSV_PATHS[@]}")
 
     if $WRITE_MANIFEST; then
       if [[ ${#SRC_RAW[@]} -lt 1 ]]; then
@@ -8188,13 +9250,17 @@ ${el}"
     POST_MERGE=false
     MERGED_SHA=""
     MAIN_REF=""
+    TARGET_REF=""
+    AUTHORITY_REF=""
     BASE_SHA=""
+    HEAD_SHA_ARG=""
     LEDGER_PATH=""
     IGNORE_DIRTY=""
     PR_NUMBER=""
     REPO_ARG=""
     TARGET_BRANCH=""
     LOCAL_ONLY=false
+    REQUIRE_REMOTE_CI=false
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
@@ -8208,16 +9274,24 @@ ${el}"
         --post-merge) POST_MERGE=true; shift ;;
         --merged-sha) MERGED_SHA="${2:-}"; shift 2 ;;
         --main-ref) MAIN_REF="${2:-}"; shift 2 ;;
+        --target-ref) TARGET_REF="${2:-}"; shift 2 ;;
+        --authority-ref) AUTHORITY_REF="${2:-}"; shift 2 ;;
         --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
+        --head-sha) HEAD_SHA_ARG="${2:-}"; shift 2 ;;
         --ledger-path) LEDGER_PATH="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         --pr-number) PR_NUMBER="${2:-}"; shift 2 ;;
         --repo) REPO_ARG="${2:-}"; shift 2 ;;
         --target-branch) TARGET_BRANCH="${2:-}"; shift 2 ;;
         --local-only) LOCAL_ONLY=true; shift ;;
+        --require-remote-ci) REQUIRE_REMOTE_CI=true; shift ;;
         *) echo "MERGE_BLOCKED: unknown option $1" >&2; exit 1 ;;
       esac
     done
+
+    MP_ERR_PFX="MERGE_BLOCKED"
+    $POST_MERGE && MP_ERR_PFX="POST_MERGE_FAILED"
+    split_path_csv_checked "$IGNORE_DIRTY" "$MP_ERR_PFX" "true"
 
     PR_STATE="$(trim_str "$PR_STATE")"; [[ -n "$PR_STATE" ]] || PR_STATE="NONE"
     CI_STATUS="$(trim_str "$CI_STATUS")"; [[ -n "$CI_STATUS" ]] || CI_STATUS="UNKNOWN"
@@ -8226,6 +9300,10 @@ ${el}"
     BLOCKING_FINDINGS="$(trim_str "$BLOCKING_FINDINGS")"; [[ -n "$BLOCKING_FINDINGS" ]] || BLOCKING_FINDINGS="0"
     PR_NUM_TRIM="$(trim_str "$PR_NUMBER")"
     TARGET_BR_TRIM="$(trim_str "$TARGET_BRANCH")"
+    T_REF_TRIM="$(trim_str "$TARGET_REF")"
+    M_REF_TRIM="$(trim_str "$MAIN_REF")"
+    AUTH_REF_TRIM="$(trim_str "$AUTHORITY_REF")"
+    HEAD_SHA_TRIM="$(trim_str "$HEAD_SHA_ARG")"
 
     case "$PR_STATE" in OPEN|MERGED|CLOSED|NONE) ;; *) echo "MERGE_BLOCKED: invalid_pr_state=$PR_STATE"; exit 1 ;; esac
     case "$CI_STATUS" in PASS|FAIL|PENDING|UNKNOWN) ;; *) echo "MERGE_BLOCKED: invalid_ci_status=$CI_STATUS"; exit 1 ;; esac
@@ -8241,33 +9319,35 @@ ${el}"
     BLOCKING_FINDINGS="$((10#$BLOCKING_FINDINGS))"
     if [[ -n "$TARGET_BR_TRIM" ]]; then
       if [[ "$TARGET_BR_TRIM" == -* || "$TARGET_BR_TRIM" =~ [[:space:][:cntrl:]] || "$TARGET_BR_TRIM" == *".."* ]]; then
-        if $POST_MERGE; then
-          echo "POST_MERGE_FAILED: invalid_target_branch"
-        else
-          echo "MERGE_BLOCKED: invalid_target_branch"
-        fi
+        echo "${MP_ERR_PFX}: invalid_target_branch"
         exit 1
       fi
     fi
+    if [[ -n "$T_REF_TRIM" && -n "$M_REF_TRIM" && "$T_REF_TRIM" != "$M_REF_TRIM" ]]; then
+      echo "${MP_ERR_PFX}: conflicting_target_ref"
+      exit 1
+    fi
+    EFF_TARGET_REF_ARG="${T_REF_TRIM:-$M_REF_TRIM}"
+    _re_head='^(HEAD([~^].*)?|@([~^{].*)?)$'
+    _re_ls_pol=$'^(100644|100755) blob ([0-9a-f]{40})\t\\.b3/research-policy\\.json$'
 
     if $POST_MERGE; then
       if $PR_STATE_SET && [[ "$PR_STATE" != "MERGED" ]]; then
         echo "POST_MERGE_FAILED: pr_state=$PR_STATE"
         exit 1
       fi
-      MAIN_REF="$(trim_str "$MAIN_REF")"
-      if [[ -z "$MAIN_REF" ]]; then
+      M_REF="$EFF_TARGET_REF_ARG"
+      if [[ -z "$M_REF" ]]; then
         echo "POST_MERGE_FAILED: missing_main_ref"
         exit 1
       fi
-      MAIN_REF_UP="$(printf '%s' "$MAIN_REF" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
-      _re_head='^(HEAD([~^].*)?|@([~^{].*)?)$'
-      if [[ "$MAIN_REF" == -* || "$MAIN_REF" =~ [[:space:][:cntrl:]] || "$MAIN_REF_UP" =~ $_re_head ]]; then
+      M_REF_UP="$(printf '%s' "$M_REF" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+      if [[ "$M_REF" == -* || "$M_REF" =~ [[:space:][:cntrl:]] || "$M_REF_UP" =~ $_re_head ]]; then
         echo "POST_MERGE_FAILED: invalid_main_ref"
         exit 1
       fi
       SYM_FULL=""
-      if run_git_cmd "$REPO_ROOT" rev-parse --symbolic-full-name "$MAIN_REF"; then
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --symbolic-full-name "$M_REF"; then
         SYM_FULL="$(trim_str "$_GIT_STDOUT")"
       fi
       if [[ "$SYM_FULL" != refs/heads/* && "$SYM_FULL" != refs/remotes/* ]]; then
@@ -8288,115 +9368,392 @@ ${el}"
         echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${TARGET_BR_TRIM},got=${LOCAL_TARGET_BRANCH})"
         exit 1
       fi
-      if [[ -z "$PR_NUM_TRIM" ]]; then
-        echo "POST_MERGE_FAILED: missing_pr_number"
+      M_SHA="$(trim_str "$MERGED_SHA")"
+      if [[ -n "$M_SHA" && "$M_SHA" == -* ]]; then
+        echo "POST_MERGE_FAILED: invalid_ref"
         exit 1
       fi
-      if [[ ! "$PR_NUM_TRIM" =~ ^[1-9][0-9]*$ ]]; then
-        echo "POST_MERGE_FAILED: invalid_pr_number"
-        exit 1
-      fi
-      MERGED_SHA="$(trim_str "$MERGED_SHA")"
-      if [[ -n "$MERGED_SHA" && "$MERGED_SHA" == -* ]]; then
+      if [[ -n "$HEAD_SHA_TRIM" && "$HEAD_SHA_TRIM" == -* ]]; then
         echo "POST_MERGE_FAILED: invalid_ref"
         exit 1
       fi
 
-      resolve_github_repo_slug "$REPO_ROOT" "$REPO_ARG" "POST_MERGE_FAILED"
-      REPO_SLUG="$_RESOLVED_GH_REPO"
-      invoke_b3_github_verify "post-merge" "$REPO_SLUG" "$PR_NUM_TRIM" "POST_MERGE_FAILED"
-
-      _gh_br_low="$(printf '%s' "$GH_BASE_REPO" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-      _rs_low="$(printf '%s' "$REPO_SLUG" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-      if [[ "$GH_PR_NUMBER" != "$PR_NUM_TRIM" || "$_gh_br_low" != "$_rs_low" ]]; then
-        echo "POST_MERGE_FAILED: pr_identity_mismatch"
-        exit 1
-      fi
-      if [[ "$GH_PR_MERGED" != "true" || "$GH_PR_STATE" != "CLOSED" ]]; then
-        echo "POST_MERGE_FAILED: pr_not_merged(state=${GH_PR_STATE},merged=${GH_PR_MERGED})"
-        exit 1
-      fi
-      if [[ ! "$GH_MERGE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "POST_MERGE_FAILED: missing_merge_commit_sha"
-        exit 1
-      fi
-      if [[ "$LOCAL_TARGET_BRANCH" != "$GH_BASE_REF" ]]; then
-        echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${GH_BASE_REF},got=${LOCAL_TARGET_BRANCH})"
-        exit 1
-      fi
-      if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$GH_BASE_REF" ]]; then
-        echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${GH_BASE_REF},got=${TARGET_BR_TRIM})"
-        exit 1
-      fi
-      if [[ -n "$MERGED_SHA" ]]; then
-        CALLER_M_SHA=""
-        if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${MERGED_SHA}^{commit}"; then
-          CALLER_M_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ -n "$PR_NUM_TRIM" ]]; then
+        if [[ ! "$PR_NUM_TRIM" =~ ^[1-9][0-9]*$ ]]; then
+          echo "POST_MERGE_FAILED: invalid_pr_number"
+          exit 1
         fi
-        if [[ ! "$CALLER_M_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        invoke_b3_github_verify "post-merge" "$REPO_ROOT" "$REPO_ARG" "$PR_NUM_TRIM" "POST_MERGE_FAILED"
+        if [[ "$GH_PR_NUMBER" != "$PR_NUM_TRIM" ]]; then
+          echo "POST_MERGE_FAILED: pr_identity_mismatch"
+          exit 1
+        fi
+        REPO_TRIM_PM="$(trim_str "$REPO_ARG")"
+        if [[ -n "$REPO_TRIM_PM" ]]; then
+          _gh_br_low="$(printf '%s' "$GH_BASE_REPO" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          _rs_low="$(printf '%s' "$REPO_TRIM_PM" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+          if [[ "$_gh_br_low" != "$_rs_low" ]]; then
+            echo "POST_MERGE_FAILED: pr_identity_mismatch"
+            exit 1
+          fi
+        fi
+        if [[ "$GH_PR_MERGED" != "true" || "$GH_PR_STATE" != "CLOSED" ]]; then
+          echo "POST_MERGE_FAILED: pr_not_merged(state=${GH_PR_STATE},merged=${GH_PR_MERGED})"
+          exit 1
+        fi
+        if [[ ! "$GH_MERGE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "POST_MERGE_FAILED: missing_merge_commit_sha"
+          exit 1
+        fi
+        if [[ "$LOCAL_TARGET_BRANCH" != "$GH_BASE_REF" ]]; then
+          echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${GH_BASE_REF},got=${LOCAL_TARGET_BRANCH})"
+          exit 1
+        fi
+        if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$GH_BASE_REF" ]]; then
+          echo "POST_MERGE_FAILED: target_branch_mismatch(expected=${GH_BASE_REF},got=${TARGET_BR_TRIM})"
+          exit 1
+        fi
+        if [[ -n "$M_SHA" ]]; then
+          CALLER_M_SHA=""
+          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${M_SHA}^{commit}"; then
+            CALLER_M_SHA="$(trim_str "$_GIT_STDOUT")"
+          fi
+          if [[ ! "$CALLER_M_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "POST_MERGE_FAILED: unresolvable_commit"
+            exit 1
+          fi
+          if [[ "$CALLER_M_SHA" != "$GH_MERGE_COMMIT_SHA" ]]; then
+            echo "POST_MERGE_FAILED: merge_commit_sha_mismatch(expected=${GH_MERGE_COMMIT_SHA},got=${CALLER_M_SHA})"
+            exit 1
+          fi
+        fi
+        if [[ -n "$HEAD_SHA_TRIM" ]]; then
+          CALLER_H_SHA=""
+          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${HEAD_SHA_TRIM}^{commit}"; then
+            CALLER_H_SHA="$(trim_str "$_GIT_STDOUT")"
+          fi
+          if [[ ! "$CALLER_H_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "POST_MERGE_FAILED: invalid_head_sha"
+            exit 1
+          fi
+          if [[ "$CALLER_H_SHA" != "$GH_HEAD_SHA" ]]; then
+            echo "POST_MERGE_FAILED: head_sha_mismatch(expected=${GH_HEAD_SHA},got=${CALLER_H_SHA})"
+            exit 1
+          fi
+        fi
+        if [[ ( "$GH_COMPARE_STATUS" != "identical" && "$GH_COMPARE_STATUS" != "ahead" ) || "$GH_COMPARE_BEHIND" != "0" ]]; then
+          echo "POST_MERGE_FAILED: merge_commit_not_in_remote_target(status=${GH_COMPARE_STATUS},target_ref=${GH_BASE_REF})"
+          exit 1
+        fi
+
+        RES_MERGED=""
+        RES_MAIN=""
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${GH_MERGE_COMMIT_SHA}^{commit}"; then
+          RES_MERGED="$(trim_str "$_GIT_STDOUT")"
+        fi
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${M_REF}^{commit}"; then
+          RES_MAIN="$(trim_str "$_GIT_STDOUT")"
+        fi
+        if [[ ! "$RES_MERGED" =~ ^[0-9a-f]{40}$ || ! "$RES_MAIN" =~ ^[0-9a-f]{40}$ ]]; then
           echo "POST_MERGE_FAILED: unresolvable_commit"
           exit 1
         fi
-        if [[ "$CALLER_M_SHA" != "$GH_MERGE_COMMIT_SHA" ]]; then
-          echo "POST_MERGE_FAILED: merge_commit_sha_mismatch(expected=${GH_MERGE_COMMIT_SHA},got=${CALLER_M_SHA})"
+        if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$RES_MAIN"; then
+          echo "POST_MERGE_FAILED: sha_not_in_target(sha=${RES_MERGED},target_ref=${GH_BASE_REF},main_ref=${M_REF})"
           exit 1
         fi
-      fi
-      if [[ ( "$GH_COMPARE_STATUS" != "identical" && "$GH_COMPARE_STATUS" != "ahead" ) || "$GH_COMPARE_BEHIND" != "0" ]]; then
-        echo "POST_MERGE_FAILED: merge_commit_not_in_remote_target(status=${GH_COMPARE_STATUS},target_ref=${GH_BASE_REF})"
-        exit 1
+
+        if [[ -z "$GH_POLICY_AUTH_REF" || ! "$GH_POLICY_AUTH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "POST_MERGE_FAILED: incomplete_pr_metadata"
+          exit 1
+        fi
+        if ! run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${GH_POLICY_AUTH_SHA}^{commit}" || [[ "$(trim_str "$_GIT_STDOUT")" != "$GH_POLICY_AUTH_SHA" ]]; then
+          echo "POST_MERGE_FAILED: policy_authority_not_fetched"
+          exit 1
+        fi
+        if ! run_git_cmd_quiet "$REPO_ROOT" ls-tree "$GH_POLICY_AUTH_SHA" -- ".b3/research-policy.json"; then
+          echo "POST_MERGE_FAILED: policy_authority_not_fetched"
+          exit 1
+        fi
+        _gh_pm_ls="$(trim_str "$_GIT_STDOUT")"
+        if [[ -n "$_gh_pm_ls" ]]; then
+          if [[ ! "$_gh_pm_ls" =~ $_re_ls_pol ]]; then
+            echo "POST_MERGE_FAILED: invalid_policy_path"
+            exit 1
+          fi
+          if ! run_git_cmd_quiet "$REPO_ROOT" show "${GH_POLICY_AUTH_SHA}:.b3/research-policy.json"; then
+            echo "POST_MERGE_FAILED: policy_not_in_authority"
+            exit 1
+          fi
+          load_merge_policy_from_source "-" "$_GIT_STDOUT" "POST_MERGE_FAILED"
+          if [[ ${#_POL_ALLOWED_BR[@]} -gt 0 ]]; then
+            if ! branch_pattern_match "$GH_BASE_REF" "${_POL_ALLOWED_BR[@]}"; then
+              echo "POST_MERGE_FAILED: target_branch_not_allowed(${GH_BASE_REF})"
+              exit 1
+            fi
+          fi
+        fi
+
+        if ! run_git_cmd_quiet "$REPO_ROOT" rev-list --parents -n 1 "$RES_MERGED"; then
+          echo "POST_MERGE_FAILED: unresolvable_commit"
+          exit 1
+        fi
+        PAR_LINE="$(trim_str "$_GIT_STDOUT")"
+        read -r -a PAR_TOKS <<< "$PAR_LINE"
+        PAR_CNT=$((${#PAR_TOKS[@]} - 1))
+        MERGE_KIND="squash_or_rebase"
+        if [[ "$PAR_CNT" -ge 2 ]]; then
+          MERGE_KIND="merge_commit"
+          if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$GH_HEAD_SHA" "$RES_MERGED"; then
+            echo "POST_MERGE_FAILED: merge_commit_head_mismatch"
+            exit 1
+          fi
+        elif [[ "$RES_MERGED" == "$GH_HEAD_SHA" ]]; then
+          MERGE_KIND="fast_forward"
+        fi
+
+        printf 'POST_MERGE_VERIFIED: mode=github pr=%s#%s pr_status=PR_MERGED sha=%s target_ref=%s main_ref=%s merge_kind=%s runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED\n' \
+          "$GH_BASE_REPO" "$PR_NUM_TRIM" "$RES_MERGED" "$GH_BASE_REF" "$M_REF" "$MERGE_KIND"
+        exit 0
       fi
 
-      RES_MERGED=""
-      RES_MAIN=""
-      if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${GH_MERGE_COMMIT_SHA}^{commit}"; then
+      # Provider-neutral local post-merge verification (no --pr-number)
+      if [[ -z "$M_SHA" ]]; then echo "POST_MERGE_FAILED: missing_merged_sha"; exit 1; fi
+      if [[ ! "$M_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then echo "POST_MERGE_FAILED: invalid_merged_sha"; exit 1; fi
+      if [[ -z "$HEAD_SHA_TRIM" ]]; then echo "POST_MERGE_FAILED: missing_head_sha"; exit 1; fi
+      if [[ ! "$HEAD_SHA_TRIM" =~ ^[0-9a-fA-F]{40}$ ]]; then echo "POST_MERGE_FAILED: invalid_head_sha"; exit 1; fi
+
+      RES_MERGED=""; RES_HEAD_PM=""; RES_MAIN=""
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${M_SHA}^{commit}"; then
         RES_MERGED="$(trim_str "$_GIT_STDOUT")"
       fi
-      if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${MAIN_REF}^{commit}"; then
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${HEAD_SHA_TRIM}^{commit}"; then
+        RES_HEAD_PM="$(trim_str "$_GIT_STDOUT")"
+      fi
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${M_REF}^{commit}"; then
         RES_MAIN="$(trim_str "$_GIT_STDOUT")"
       fi
-      if [[ ! "$RES_MERGED" =~ ^[0-9a-f]{40}$ || ! "$RES_MAIN" =~ ^[0-9a-f]{40}$ ]]; then
+      if [[ ! "$RES_MERGED" =~ ^[0-9a-f]{40}$ || ! "$RES_HEAD_PM" =~ ^[0-9a-f]{40}$ || ! "$RES_MAIN" =~ ^[0-9a-f]{40}$ ]]; then
         echo "POST_MERGE_FAILED: unresolvable_commit"
         exit 1
       fi
-      if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$RES_MAIN"; then
-        echo "POST_MERGE_FAILED: sha_not_in_target(sha=${RES_MERGED},target_ref=${GH_BASE_REF},main_ref=${MAIN_REF})"
+
+      RES_BASE_PM=""
+      BASE_PM_TRIM="$(trim_str "$BASE_SHA")"
+      if [[ -n "$BASE_PM_TRIM" ]]; then
+        if [[ "$BASE_PM_TRIM" == -* || ! "$BASE_PM_TRIM" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          echo "POST_MERGE_FAILED: invalid_base_sha"
+          exit 1
+        fi
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${BASE_PM_TRIM}^{commit}"; then
+          RES_BASE_PM="$(trim_str "$_GIT_STDOUT")"
+        fi
+        if [[ ! "$RES_BASE_PM" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "POST_MERGE_FAILED: invalid_base_sha"
+          exit 1
+        fi
+        if [[ "$RES_BASE_PM" == "$RES_MERGED" ]]; then echo "POST_MERGE_FAILED: base_sha_equals_merged_sha"; exit 1; fi
+        if [[ "$RES_BASE_PM" == "$RES_HEAD_PM" ]]; then echo "POST_MERGE_FAILED: base_sha_equals_head"; exit 1; fi
+        if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_BASE_PM" "$RES_MERGED"; then
+          echo "POST_MERGE_FAILED: base_not_ancestor_of_merged"
+          exit 1
+        fi
+        if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_BASE_PM" "$RES_HEAD_PM"; then
+          echo "POST_MERGE_FAILED: base_not_ancestor_of_head"
+          exit 1
+        fi
+      fi
+
+      HAS_ANY_REMOTE_PM=false
+      HAS_ORIGIN_PM=false
+      if run_git_cmd_quiet "$REPO_ROOT" remote; then
+        while IFS= read -r rln; do
+          rt="$(trim_str "${rln%$'\r'}")"
+          if [[ -n "$rt" ]]; then
+            HAS_ANY_REMOTE_PM=true
+            [[ "$rt" == "origin" ]] && HAS_ORIGIN_PM=true
+          fi
+        done <<< "$_GIT_STDOUT"
+      fi
+      if ! $LOCAL_ONLY && $HAS_ANY_REMOTE_PM && ! $HAS_ORIGIN_PM; then
+        echo "POST_MERGE_FAILED: origin_remote_missing"
         exit 1
       fi
 
-      if ! run_git_cmd "$REPO_ROOT" rev-list --parents -n 1 "$RES_MERGED"; then
+      PM_TRUNK_SHA=""
+      PM_TRUNK_BRANCH=""
+      if $HAS_ORIGIN_PM; then
+        if run_git_cmd_quiet "$REPO_ROOT" symbolic-ref -q refs/remotes/origin/HEAD; then
+          _oh_full="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$_oh_full" == refs/remotes/origin/* ]]; then
+            if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_oh_full}^{commit}"; then
+              _oh_sha="$(trim_str "$_GIT_STDOUT")"
+              if [[ "$_oh_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                PM_TRUNK_SHA="$_oh_sha"
+                PM_TRUNK_BRANCH="${_oh_full#refs/remotes/origin/}"
+              fi
+            fi
+          fi
+        fi
+        if [[ -z "$PM_TRUNK_SHA" ]]; then
+          for _cand_br in main master; do
+            if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/origin/${_cand_br}^{commit}"; then
+              _c_sha="$(trim_str "$_GIT_STDOUT")"
+              if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                PM_TRUNK_SHA="$_c_sha"
+                PM_TRUNK_BRANCH="$_cand_br"
+                break
+              fi
+            fi
+          done
+        fi
+      fi
+      if [[ -z "$PM_TRUNK_SHA" ]]; then
+        for _cand_br in main master; do
+          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "refs/heads/${_cand_br}^{commit}"; then
+            _c_sha="$(trim_str "$_GIT_STDOUT")"
+            if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              PM_TRUNK_SHA="$_c_sha"
+              PM_TRUNK_BRANCH="$_cand_br"
+              break
+            fi
+          fi
+        done
+      fi
+
+      PM_ALLOWED_BRANCHES=()
+      if [[ -n "$PM_TRUNK_SHA" ]]; then
+        if run_git_cmd_quiet "$REPO_ROOT" ls-tree "$PM_TRUNK_SHA" -- ".b3/research-policy.json"; then
+          _pm_ls="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$_pm_ls" =~ $_re_ls_pol ]]; then
+            if run_git_cmd_quiet "$REPO_ROOT" show "${PM_TRUNK_SHA}:.b3/research-policy.json"; then
+              load_merge_policy_from_source "-" "$_GIT_STDOUT" "POST_MERGE_FAILED"
+              [[ ${#_POL_ALLOWED_BR[@]} -gt 0 ]] && PM_ALLOWED_BRANCHES=("${_POL_ALLOWED_BR[@]}")
+            fi
+          fi
+        fi
+      fi
+      if [[ ${#PM_ALLOWED_BRANCHES[@]} -gt 0 ]]; then
+        if ! branch_pattern_match "$LOCAL_TARGET_BRANCH" "${PM_ALLOWED_BRANCHES[@]}"; then
+          echo "POST_MERGE_FAILED: target_branch_not_allowed(${LOCAL_TARGET_BRANCH})"
+          exit 1
+        fi
+      elif [[ -n "$PM_TRUNK_BRANCH" ]]; then
+        if [[ "$LOCAL_TARGET_BRANCH" != "$PM_TRUNK_BRANCH" ]]; then
+          echo "POST_MERGE_FAILED: target_branch_not_allowed(${LOCAL_TARGET_BRANCH})"
+          exit 1
+        fi
+      else
+        echo "POST_MERGE_FAILED: canonical_trunk_missing"
+        exit 1
+      fi
+
+      if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$RES_MAIN"; then
+        echo "POST_MERGE_FAILED: sha_not_in_target(sha=${RES_MERGED},target_ref=${LOCAL_TARGET_BRANCH},main_ref=${M_REF})"
+        exit 1
+      fi
+      if $HAS_ORIGIN_PM && ! $LOCAL_ONLY; then
+        REM_TARGET_SHA=""
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/origin/${LOCAL_TARGET_BRANCH}^{commit}"; then
+          REM_TARGET_SHA="$(trim_str "$_GIT_STDOUT")"
+        fi
+        if [[ ! "$REM_TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "POST_MERGE_FAILED: remote_target_not_fetched"
+          exit 1
+        fi
+        if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$REM_TARGET_SHA"; then
+          echo "POST_MERGE_FAILED: merge_commit_not_in_remote_target(target_ref=${LOCAL_TARGET_BRANCH})"
+          exit 1
+        fi
+      fi
+
+      if ! run_git_cmd_quiet "$REPO_ROOT" rev-list --parents -n 1 "$RES_MERGED"; then
         echo "POST_MERGE_FAILED: unresolvable_commit"
         exit 1
       fi
       PAR_LINE="$(trim_str "$_GIT_STDOUT")"
       read -r -a PAR_TOKS <<< "$PAR_LINE"
       PAR_CNT=$((${#PAR_TOKS[@]} - 1))
-      MERGE_KIND="squash_or_rebase"
-      if [[ "$PAR_CNT" -ge 2 ]]; then
-        MERGE_KIND="merge_commit"
-        if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$GH_HEAD_SHA" "$RES_MERGED"; then
+      MERGE_KIND=""
+      if [[ "$RES_MERGED" == "$RES_HEAD_PM" ]]; then
+        MERGE_KIND="fast_forward"
+      elif [[ "$PAR_CNT" -ge 2 ]]; then
+        IN_FIRST_PAR=false
+        if run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_HEAD_PM" "${PAR_TOKS[1]}"; then
+          IN_FIRST_PAR=true
+        fi
+        IN_MERGED_PAR=false
+        for (( _pidx=2; _pidx<${#PAR_TOKS[@]}; _pidx++ )); do
+          if run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_HEAD_PM" "${PAR_TOKS[$_pidx]}"; then
+            IN_MERGED_PAR=true
+            break
+          fi
+        done
+        if ! $IN_MERGED_PAR || $IN_FIRST_PAR; then
           echo "POST_MERGE_FAILED: merge_commit_head_mismatch"
           exit 1
         fi
-      elif [[ "$RES_MERGED" == "$GH_HEAD_SHA" ]]; then
-        MERGE_KIND="fast_forward"
+        MERGE_KIND="merge_commit"
+      elif [[ "$PAR_CNT" -eq 1 ]]; then
+        if [[ -z "$RES_BASE_PM" ]]; then
+          echo "POST_MERGE_FAILED: squash_or_rebase_requires_base_sha"
+          exit 1
+        fi
+        P1_SHA="${PAR_TOKS[1]}"
+        if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_BASE_PM" "$P1_SHA"; then
+          echo "POST_MERGE_FAILED: base_not_ancestor_of_merged_parent"
+          exit 1
+        fi
+        M_TREE=""; H_TREE=""
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${RES_MERGED}^{tree}"; then
+          M_TREE="$(trim_str "$_GIT_STDOUT")"
+        fi
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${RES_HEAD_PM}^{tree}"; then
+          H_TREE="$(trim_str "$_GIT_STDOUT")"
+        fi
+        TREE_OK=false
+        if [[ "$M_TREE" =~ ^[0-9a-f]{40}$ && "$P1_SHA" == "$RES_BASE_PM" && "$M_TREE" == "$H_TREE" ]]; then
+          TREE_OK=true
+        fi
+        if ! $TREE_OK && [[ "$M_TREE" =~ ^[0-9a-f]{40}$ ]]; then
+          if run_git_cmd_quiet "$REPO_ROOT" merge-tree --write-tree "$P1_SHA" "$RES_HEAD_PM"; then
+            MT_LINE="${_GIT_STDOUT%%$'\n'*}"
+            MT_LINE="$(trim_str "${MT_LINE%$'\r'}")"
+            [[ "$MT_LINE" == "$M_TREE" ]] && TREE_OK=true
+          fi
+        fi
+        if ! $TREE_OK; then
+          echo "POST_MERGE_FAILED: squash_tree_mismatch"
+          exit 1
+        fi
+        MERGE_KIND="squash_or_rebase"
+      else
+        echo "POST_MERGE_FAILED: merge_commit_head_mismatch"
+        exit 1
       fi
 
-      printf 'POST_MERGE_VERIFIED: pr=%s#%s pr_status=PR_MERGED sha=%s target_ref=%s main_ref=%s merge_kind=%s runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED\n' \
-        "$GH_BASE_REPO" "$PR_NUM_TRIM" "$RES_MERGED" "$GH_BASE_REF" "$MAIN_REF" "$MERGE_KIND"
+      printf 'POST_MERGE_VERIFIED: mode=local sha=%s target_ref=%s main_ref=%s merge_kind=%s runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED\n' \
+        "$RES_MERGED" "$LOCAL_TARGET_BRANCH" "$M_REF" "$MERGE_KIND"
       exit 0
     fi
 
-    AUTO_MERGE="disabled"
-    ALLOW_PROT="false"
-    REQ_CI="true"
-    REQ_REV="true"
-    PROT_ARR=()
-    ALLOWED_BRANCHES=()
+    # --- Unified Provider-Neutral Pre-Merge Pipeline ---
+    if [[ -L "${REPO_ROOT%/}/.b3" ]] || { [[ -d "${REPO_ROOT%/}/.b3" ]] && is_dir_link_or_junction "$REPO_ROOT" ".b3"; }; then
+      echo "MERGE_BLOCKED: invalid_policy_path"
+      exit 1
+    fi
+    DEF_POL_FILE_FULL=""
+    if [[ -e "${REPO_ROOT%/}/.b3/research-policy.json" || -L "${REPO_ROOT%/}/.b3/research-policy.json" ]]; then
+      if ! check_contained_repo_path "$REPO_ROOT" ".b3/research-policy.json" || [[ ! -f "$_CONTAINED_FULL" || -L "$_CONTAINED_FULL" ]]; then
+        echo "MERGE_BLOCKED: invalid_policy_path"
+        exit 1
+      fi
+      DEF_POL_FILE_FULL="$_CONTAINED_FULL"
+    fi
 
-    POL_FULL=""
-    POL_REL=""
     POL_EXPLICIT=false
+    POL_FILE_FULL=""
+    POL_REL=""
     POLICY_PATH="$(trim_str "$POLICY_PATH")"
     if [[ -n "$POLICY_PATH" ]]; then
       POL_EXPLICIT=true
@@ -8404,68 +9761,16 @@ ${el}"
         echo "MERGE_BLOCKED: invalid_policy_path"
         exit 1
       fi
-      POL_FULL="$_CONTAINED_FULL"
-      POL_REL="$_CONTAINED_REL"
-      if [[ ! -f "$POL_FULL" ]]; then
+      if [[ ! -f "$_CONTAINED_FULL" || -L "$_CONTAINED_FULL" ]]; then
         echo "MERGE_BLOCKED: missing_policy"
         exit 1
       fi
-    elif [[ -e "${REPO_ROOT}/.b3/research-policy.json" || -L "${REPO_ROOT}/.b3/research-policy.json" ]]; then
-      if ! check_contained_repo_path "$REPO_ROOT" ".b3/research-policy.json"; then
-        echo "MERGE_BLOCKED: invalid_policy_path"
-        exit 1
-      fi
-      POL_FULL="$_CONTAINED_FULL"
+      POL_FILE_FULL="$_CONTAINED_FULL"
       POL_REL="$_CONTAINED_REL"
-      if [[ ! -f "$POL_FULL" ]]; then
-        echo "MERGE_BLOCKED: invalid_policy_path"
-        exit 1
-      fi
-    fi
-
-    if [[ -n "$POL_FULL" ]]; then
-      set +e
-      PARSED_POL="$(parse_merge_policy_json "$POL_FULL")"
-      POL_RC=$?
-      set -e
-      if [[ $POL_RC -eq 3 ]]; then
-        _bad_am="${PARSED_POL#invalid_auto_merge=}"
-        _bad_am="${_bad_am%%$'\n'*}"
-        _bad_am="${_bad_am%$'\r'}"
-        echo "MERGE_BLOCKED: invalid_auto_merge=${_bad_am}"
-        exit 1
-      elif [[ $POL_RC -ne 0 ]]; then
-        echo "MERGE_BLOCKED: invalid_policy_json"
-        exit 1
-      fi
-      while IFS= read -r pline; do
-        pline="${pline%$'\r'}"
-        case "$pline" in
-          auto_merge=*) AUTO_MERGE="${pline#auto_merge=}" ;;
-          allow_protected_paths=*) ALLOW_PROT="${pline#allow_protected_paths=}" ;;
-          require_ci=*) REQ_CI="${pline#require_ci=}" ;;
-          require_review=*) REQ_REV="${pline#require_review=}" ;;
-          protected_path=*)
-            raw_pp="${pline#protected_path=}"
-            if ! normalize_merge_policy_path "$raw_pp"; then
-              echo "MERGE_BLOCKED: invalid_policy_json"
-              exit 1
-            fi
-            PROT_ARR+=("$_MP_NORM_PATH")
-            ;;
-          allowed_target_branch=*)
-            ALLOWED_BRANCHES+=("${pline#allowed_target_branch=}")
-            ;;
-        esac
-      done <<< "$PARSED_POL"
-    fi
-
-    if [[ "$GOV_STATUS" != "CLEAR" ]]; then
-      echo "MERGE_BLOCKED: governance=$GOV_STATUS"
-      exit 1
     fi
 
     CHANGED_ARR=()
+    _seen_chg="|"
     TRIM_CP="$(trim_str "$CHANGED_PATHS")"
     if [[ -n "$TRIM_CP" && "$TRIM_CP" != "[]" && "$TRIM_CP" != "none" ]]; then
       RAW_CP="$CHANGED_PATHS"
@@ -8490,21 +9795,327 @@ ${el}"
           echo "MERGE_BLOCKED: invalid_changed_path"
           exit 1
         fi
-        CHANGED_ARR+=("$_MP_NORM_PATH")
+        if [[ "$_seen_chg" != *"|${_MP_NORM_PATH}|"* ]]; then
+          _seen_chg+="${_MP_NORM_PATH}|"
+          CHANGED_ARR+=("$_MP_NORM_PATH")
+        fi
         $_cp_more || break
       done
     fi
 
+    if [[ -n "$EFF_TARGET_REF_ARG" ]]; then
+      _t_up="$(printf '%s' "$EFF_TARGET_REF_ARG" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+      if [[ "$EFF_TARGET_REF_ARG" == -* || "$EFF_TARGET_REF_ARG" =~ [[:space:][:cntrl:]] || "$_t_up" =~ $_re_head ]]; then
+        echo "MERGE_BLOCKED: invalid_target_ref"
+        exit 1
+      fi
+    fi
+    if [[ -n "$AUTH_REF_TRIM" ]]; then
+      _a_up="$(printf '%s' "$AUTH_REF_TRIM" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+      if [[ "$AUTH_REF_TRIM" == -* || "$AUTH_REF_TRIM" =~ [[:space:][:cntrl:]] || "$_a_up" =~ $_re_head ]]; then
+        echo "MERGE_BLOCKED: invalid_authority_ref"
+        exit 1
+      fi
+    fi
+
+    LIVE_HEAD_SHA=""
+    if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "HEAD^{commit}"; then
+      _hp="$(trim_str "$_GIT_STDOUT")"
+      [[ "$_hp" =~ ^[0-9a-f]{40}$ ]] && LIVE_HEAD_SHA="$_hp"
+    fi
+    if [[ -n "$HEAD_SHA_TRIM" ]]; then
+      if [[ "$HEAD_SHA_TRIM" == -* ]]; then echo "MERGE_BLOCKED: invalid_head"; exit 1; fi
+      CALLER_HEAD_SHA=""
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${HEAD_SHA_TRIM}^{commit}"; then
+        CALLER_HEAD_SHA="$(trim_str "$_GIT_STDOUT")"
+      fi
+      if [[ ! "$CALLER_HEAD_SHA" =~ ^[0-9a-f]{40}$ || -z "$LIVE_HEAD_SHA" ]]; then
+        echo "MERGE_BLOCKED: invalid_head"
+        exit 1
+      fi
+      if [[ "$CALLER_HEAD_SHA" != "$LIVE_HEAD_SHA" ]]; then
+        echo "MERGE_BLOCKED: head_sha_mismatch"
+        exit 1
+      fi
+    fi
+
+    HAS_ANY_REMOTE=false
+    HAS_ORIGIN=false
+    if run_git_cmd_quiet "$REPO_ROOT" remote; then
+      while IFS= read -r rln; do
+        rt="$(trim_str "${rln%$'\r'}")"
+        if [[ -n "$rt" ]]; then
+          HAS_ANY_REMOTE=true
+          [[ "$rt" == "origin" ]] && HAS_ORIGIN=true
+        fi
+      done <<< "$_GIT_STDOUT"
+    fi
+
+    CUR_SYM_FULL=""
+    if run_git_cmd_quiet "$REPO_ROOT" symbolic-ref -q HEAD; then
+      CUR_SYM_FULL="$(trim_str "$_GIT_STDOUT")"
+    fi
+
+    CANON_AUTH_FULL=""
+    CANON_AUTH_BRANCH=""
+    CANON_AUTH_SHA=""
+    if $HAS_ORIGIN; then
+      if run_git_cmd_quiet "$REPO_ROOT" symbolic-ref -q refs/remotes/origin/HEAD; then
+        _oh_full="$(trim_str "$_GIT_STDOUT")"
+        if [[ "$_oh_full" == refs/remotes/origin/* ]]; then
+          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_oh_full}^{commit}"; then
+            _oh_sha="$(trim_str "$_GIT_STDOUT")"
+            if [[ "$_oh_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              CANON_AUTH_FULL="$_oh_full"
+              CANON_AUTH_BRANCH="${_oh_full#refs/remotes/origin/}"
+              CANON_AUTH_SHA="$_oh_sha"
+            fi
+          fi
+        fi
+      fi
+      if [[ -z "$CANON_AUTH_SHA" ]]; then
+        for _cand_br in main master; do
+          _c_full="refs/remotes/origin/${_cand_br}"
+          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_c_full}^{commit}"; then
+            _c_sha="$(trim_str "$_GIT_STDOUT")"
+            if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              CANON_AUTH_FULL="$_c_full"
+              CANON_AUTH_BRANCH="$_cand_br"
+              CANON_AUTH_SHA="$_c_sha"
+              break
+            fi
+          fi
+        done
+      fi
+    elif ! $HAS_ANY_REMOTE; then
+      for _cand_br in main master; do
+        _c_full="refs/heads/${_cand_br}"
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_c_full}^{commit}"; then
+          _c_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            CANON_AUTH_FULL="$_c_full"
+            CANON_AUTH_BRANCH="$_cand_br"
+            CANON_AUTH_SHA="$_c_sha"
+            break
+          fi
+        fi
+      done
+    fi
+
+    CALLER_AUTH_SYM_FULL=""
+    CALLER_AUTH_BRANCH=""
+    if [[ -n "$AUTH_REF_TRIM" ]]; then
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --symbolic-full-name "$AUTH_REF_TRIM"; then
+        CALLER_AUTH_SYM_FULL="$(trim_str "$_GIT_STDOUT")"
+      fi
+      if [[ "$CALLER_AUTH_SYM_FULL" != refs/heads/* && "$CALLER_AUTH_SYM_FULL" != refs/remotes/* ]]; then
+        echo "MERGE_BLOCKED: invalid_authority_ref"
+        exit 1
+      fi
+      if [[ -n "$CUR_SYM_FULL" && "$CALLER_AUTH_SYM_FULL" == "$CUR_SYM_FULL" ]]; then
+        echo "MERGE_BLOCKED: invalid_authority_ref"
+        exit 1
+      fi
+      if [[ "$CALLER_AUTH_SYM_FULL" == refs/heads/* ]]; then
+        CALLER_AUTH_BRANCH="${CALLER_AUTH_SYM_FULL#refs/heads/}"
+      elif [[ "$CALLER_AUTH_SYM_FULL" =~ ^refs/remotes/[^/]+/(.+)$ ]]; then
+        CALLER_AUTH_BRANCH="${BASH_REMATCH[1]}"
+      fi
+      if [[ -n "$CANON_AUTH_FULL" && "$CALLER_AUTH_SYM_FULL" != "$CANON_AUTH_FULL" ]]; then
+        echo "MERGE_BLOCKED: authority_ref_mismatch"
+        exit 1
+      fi
+    fi
+
     EFFECTIVE_POL_REL="${POL_REL:-.b3/research-policy.json}"
-    POL_PROT_ARR=(".b3/research-policy.json")
     _pr_low="$(printf '%s' "$EFFECTIVE_POL_REL" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    if [[ "$_pr_low" != ".b3/research-policy.json" ]]; then
+    POL_IS_DEFAULT_PATH=true
+    if $POL_EXPLICIT && [[ "$_pr_low" != ".b3/research-policy.json" ]]; then
+      POL_IS_DEFAULT_PATH=false
+    fi
+    POL_PROT_ARR=(".b3/research-policy.json")
+    if ! $POL_IS_DEFAULT_PATH; then
       POL_PROT_ARR+=("$EFFECTIVE_POL_REL")
     fi
 
-    if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#CHANGED_ARR[@]} -gt 0 ]]; then
-      PROT_HITS=()
+    AUTO_MERGE="disabled"
+    ALLOW_PROT="false"
+    REQ_CI="false"
+    REQ_REV="true"
+    PROT_ARR=()
+    ALLOWED_BRANCHES=()
+
+    FALLBACK_LOCAL_TRUNK_SHA=""
+    if [[ -z "$CANON_AUTH_SHA" ]] && ! $HAS_ANY_REMOTE; then
+      for _cand_br in main master; do
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "refs/heads/${_cand_br}^{commit}"; then
+          _fb_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$_fb_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            FALLBACK_LOCAL_TRUNK_SHA="$_fb_sha"
+            break
+          fi
+        fi
+      done
+    fi
+    INSPECT_AUTH_SHA="${CANON_AUTH_SHA:-$FALLBACK_LOCAL_TRUNK_SHA}"
+    IS_GITHUB_PR_MODE=false
+    if [[ -n "$PR_NUM_TRIM" ]] && ! $LOCAL_ONLY; then
+      IS_GITHUB_PR_MODE=true
+    fi
+    if ! $IS_GITHUB_PR_MODE && ! $LOCAL_ONLY && $HAS_ANY_REMOTE && ! $HAS_ORIGIN; then
+      echo "MERGE_BLOCKED: origin_remote_missing"
+      exit 1
+    fi
+
+    if ! $POL_IS_DEFAULT_PATH; then
+      load_merge_policy_from_source "$POL_FILE_FULL" "" "MERGE_BLOCKED"
+      AUTO_MERGE="$_POL_AUTO_MERGE"
+      ALLOW_PROT="$_POL_ALLOW_PROT"
+      REQ_CI="$_POL_REQ_CI"
+      REQ_REV="$_POL_REQ_REV"
+      [[ ${#_POL_PROT_ARR[@]} -gt 0 ]] && PROT_ARR=("${_POL_PROT_ARR[@]}")
+      [[ ${#_POL_ALLOWED_BR[@]} -gt 0 ]] && ALLOWED_BRANCHES=("${_POL_ALLOWED_BR[@]}")
+      if ! $IS_GITHUB_PR_MODE && [[ -n "$INSPECT_AUTH_SHA" ]]; then
+        if run_git_cmd_quiet "$REPO_ROOT" ls-tree "$INSPECT_AUTH_SHA" -- ".b3/research-policy.json"; then
+          _tls_ln="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$_tls_ln" =~ $_re_ls_pol ]] && run_git_cmd_quiet "$REPO_ROOT" show "${INSPECT_AUTH_SHA}:.b3/research-policy.json"; then
+            load_merge_policy_from_source "-" "$_GIT_STDOUT" "MERGE_BLOCKED"
+            [[ "$_POL_REQ_CI" == "true" ]] && REQ_CI="true"
+            [[ "$_POL_REQ_REV" == "true" ]] && REQ_REV="true"
+            if [[ ${#_POL_PROT_ARR[@]} -gt 0 ]]; then
+              _seen_tpp="|"
+              if [[ ${#PROT_ARR[@]} -gt 0 ]]; then
+                for _epp in "${PROT_ARR[@]}"; do _seen_tpp+="${_epp}|"; done
+              fi
+              for _tpp in "${_POL_PROT_ARR[@]}"; do
+                if [[ "$_seen_tpp" != *"|${_tpp}|"* ]]; then
+                  _seen_tpp+="${_tpp}|"
+                  PROT_ARR+=("$_tpp")
+                fi
+              done
+              [[ "$_POL_ALLOW_PROT" != "true" ]] && ALLOW_PROT="false"
+            fi
+          fi
+        fi
+      fi
+    elif ! $IS_GITHUB_PR_MODE; then
+      AUTH_HAS_COMMITTED_POL=false
+      if [[ -n "$INSPECT_AUTH_SHA" ]]; then
+        if run_git_cmd_quiet "$REPO_ROOT" ls-tree "$INSPECT_AUTH_SHA" -- ".b3/research-policy.json"; then
+          _als_ln="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$_als_ln" =~ $_re_ls_pol ]]; then
+            AUTH_HAS_COMMITTED_POL=true
+            if ! run_git_cmd_quiet "$REPO_ROOT" show "${INSPECT_AUTH_SHA}:.b3/research-policy.json"; then
+              echo "MERGE_BLOCKED: policy_not_in_authority"
+              exit 1
+            fi
+            load_merge_policy_from_source "-" "$_GIT_STDOUT" "MERGE_BLOCKED"
+            AUTO_MERGE="$_POL_AUTO_MERGE"
+            ALLOW_PROT="$_POL_ALLOW_PROT"
+            REQ_CI="$_POL_REQ_CI"
+            REQ_REV="$_POL_REQ_REV"
+            [[ ${#_POL_PROT_ARR[@]} -gt 0 ]] && PROT_ARR=("${_POL_PROT_ARR[@]}")
+            [[ ${#_POL_ALLOWED_BR[@]} -gt 0 ]] && ALLOWED_BRANCHES=("${_POL_ALLOWED_BR[@]}")
+          fi
+        fi
+      fi
+      if $AUTH_HAS_COMMITTED_POL; then
+        if [[ -n "$INSPECT_AUTH_SHA" && -n "$LIVE_HEAD_SHA" && "$INSPECT_AUTH_SHA" != "$LIVE_HEAD_SHA" ]]; then
+          if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then
+            _mb_insp="$(trim_str "$_GIT_STDOUT")"
+            if [[ "$_mb_insp" =~ ^[0-9a-f]{40}$ ]]; then
+              if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${_mb_insp}..${LIVE_HEAD_SHA}" -- ".b3/research-policy.json"; then
+                if [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+                  echo "MERGE_BLOCKED: policy_modified_in_pr"
+                  exit 1
+                fi
+              fi
+            fi
+          fi
+        fi
+        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only -- ".b3/research-policy.json" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+          echo "MERGE_BLOCKED: policy_modified_in_pr"
+          exit 1
+        fi
+        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only -- ".b3/research-policy.json" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+          echo "MERGE_BLOCKED: policy_modified_in_pr"
+          exit 1
+        fi
+        if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only HEAD -- ".b3/research-policy.json" && [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+          echo "MERGE_BLOCKED: policy_modified_in_pr"
+          exit 1
+        fi
+      else
+        if [[ -n "$INSPECT_AUTH_SHA" && -n "$LIVE_HEAD_SHA" && "$INSPECT_AUTH_SHA" != "$LIVE_HEAD_SHA" ]]; then
+          if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then
+            _mb_insp="$(trim_str "$_GIT_STDOUT")"
+            if [[ "$_mb_insp" =~ ^[0-9a-f]{40}$ ]]; then
+              if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${_mb_insp}..${LIVE_HEAD_SHA}" -- ".b3/research-policy.json"; then
+                if [[ -n "$(trim_str "$_GIT_STDOUT")" ]]; then
+                  echo "MERGE_BLOCKED: policy_not_in_authority"
+                  exit 1
+                fi
+              fi
+            fi
+          fi
+          if [[ -n "$DEF_POL_FILE_FULL" ]]; then
+            echo "MERGE_BLOCKED: policy_not_in_authority"
+            exit 1
+          fi
+        elif [[ -n "$DEF_POL_FILE_FULL" ]]; then
+          load_merge_policy_from_source "$DEF_POL_FILE_FULL" "" "MERGE_BLOCKED"
+          if [[ "$_POL_AUTO_MERGE" == "authorized" ]]; then
+            echo "MERGE_BLOCKED: policy_not_in_authority"
+            exit 1
+          fi
+          AUTO_MERGE="disabled"
+          ALLOW_PROT="$_POL_ALLOW_PROT"
+          REQ_CI="$_POL_REQ_CI"
+          REQ_REV="true"
+          [[ ${#_POL_PROT_ARR[@]} -gt 0 ]] && PROT_ARR=("${_POL_PROT_ARR[@]}")
+          [[ ${#_POL_ALLOWED_BR[@]} -gt 0 ]] && ALLOWED_BRANCHES=("${_POL_ALLOWED_BR[@]}")
+        fi
+      fi
+    fi
+
+    if [[ "$GOV_STATUS" != "CLEAR" ]]; then
+      echo "MERGE_BLOCKED: governance=$GOV_STATUS"
+      exit 1
+    fi
+
+    LOCAL_PRE_CHANGED_ARR=()
+    _seen_lpre="|"
+    if [[ ${#CHANGED_ARR[@]} -gt 0 ]]; then
       for cp in "${CHANGED_ARR[@]}"; do
+        if [[ "$_seen_lpre" != *"|${cp}|"* ]]; then
+          _seen_lpre+="${cp}|"
+          LOCAL_PRE_CHANGED_ARR+=("$cp")
+        fi
+      done
+    fi
+    if ! $IS_GITHUB_PR_MODE && [[ -n "$INSPECT_AUTH_SHA" && -n "$LIVE_HEAD_SHA" && "$INSPECT_AUTH_SHA" != "$LIVE_HEAD_SHA" ]]; then
+      if run_git_cmd_quiet "$REPO_ROOT" merge-base "$INSPECT_AUTH_SHA" "$LIVE_HEAD_SHA"; then
+        _mb_chg="$(trim_str "$_GIT_STDOUT")"
+        if [[ "$_mb_chg" =~ ^[0-9a-f]{40}$ ]]; then
+          if run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${_mb_chg}..${LIVE_HEAD_SHA}" --; then
+            while IFS= read -r lln; do
+              lp="$(trim_str "${lln%$'\r'}")"
+              lp="${lp//\\//}"
+              [[ -n "$lp" ]] || continue
+              is_checkpoint_dir "$lp" && continue
+              if [[ "$_seen_lpre" != *"|${lp}|"* ]]; then
+                _seen_lpre+="${lp}|"
+                LOCAL_PRE_CHANGED_ARR+=("$lp")
+              fi
+            done <<< "$_GIT_STDOUT"
+          fi
+        fi
+      fi
+    fi
+
+    if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#LOCAL_PRE_CHANGED_ARR[@]} -gt 0 ]]; then
+      PROT_HITS=()
+      for cp in "${LOCAL_PRE_CHANGED_ARR[@]}"; do
         if protected_path_match_ci "$cp" "${PROT_ARR[@]}"; then
           PROT_HITS+=("$cp")
         fi
@@ -8542,36 +10153,296 @@ ${el}"
       exit 1
     fi
 
-    # Offline / deterministic local mode (when --pr-number is omitted or --local-only is set)
-    if [[ -z "$PR_NUM_TRIM" ]] || $LOCAL_ONLY; then
-      if [[ "$REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
-        echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
+    if ! $POL_IS_DEFAULT_PATH; then
+      if $IS_GITHUB_PR_MODE || [[ "$AUTO_MERGE" == "authorized" ]] || [[ -n "$INSPECT_AUTH_SHA" && -n "$LIVE_HEAD_SHA" && "$INSPECT_AUTH_SHA" != "$LIVE_HEAD_SHA" ]]; then
+        echo "MERGE_BLOCKED: policy_path_override_not_allowed"
         exit 1
       fi
-      if [[ "$REQ_REV" == "true" && "$REVIEW_STATUS" != "PASS" ]]; then
-        echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
+    fi
+
+    # --- GitHub PR Authorization Path (when --pr-number is supplied and !--local-only) ---
+    if $IS_GITHUB_PR_MODE; then
+      if [[ ! "$PR_NUM_TRIM" =~ ^[1-9][0-9]*$ ]]; then
+        echo "MERGE_BLOCKED: invalid_pr_number"
         exit 1
       fi
-      if [[ "$PR_STATE" != "OPEN" ]]; then
-        echo "MERGE_BLOCKED: pr_state=$PR_STATE"
+      invoke_b3_github_verify "pre-merge" "$REPO_ROOT" "$REPO_ARG" "$PR_NUM_TRIM" "MERGE_BLOCKED"
+
+      if [[ "$GH_PR_NUMBER" != "$PR_NUM_TRIM" ]]; then echo "MERGE_BLOCKED: pr_identity_mismatch"; exit 1; fi
+      REPO_TRIM_GH="$(trim_str "$REPO_ARG")"
+      if [[ -n "$REPO_TRIM_GH" ]]; then
+        _gh_br_low="$(printf '%s' "$GH_BASE_REPO" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        _rs_low="$(printf '%s' "$REPO_TRIM_GH" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        if [[ "$_gh_br_low" != "$_rs_low" ]]; then
+          echo "MERGE_BLOCKED: cross_repo_mismatch"
+          exit 1
+        fi
+      fi
+      if [[ "$GH_SAME_REPO" != "true" ]]; then echo "MERGE_BLOCKED: cross_repo_head_pr"; exit 1; fi
+      if [[ "$GH_PR_STATE" != "OPEN" || "$GH_PR_MERGED" == "true" ]]; then echo "MERGE_BLOCKED: pr_state=$GH_PR_STATE"; exit 1; fi
+      if [[ "$GH_PR_DRAFT" == "true" ]]; then echo "MERGE_BLOCKED: pr_is_draft"; exit 1; fi
+
+      if [[ -z "$GH_BASE_REF" || -z "$GH_POLICY_AUTH_REF" || ! "$GH_PR_BASE_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_LIVE_TARGET_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_HEAD_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_POLICY_AUTH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "MERGE_BLOCKED: incomplete_pr_metadata"
         exit 1
       fi
 
-      if [[ "$AUTO_MERGE" != "authorized" ]]; then
-        if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#CHANGED_ARR[@]} -eq 0 ]]; then
+      if [[ "$GH_LIVE_TARGET_SHA" != "$GH_PR_BASE_SHA" ]]; then
+        echo "MERGE_BLOCKED: target_branch_moved"
+        exit 1
+      fi
+      if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$GH_BASE_REF" ]]; then
+        echo "MERGE_BLOCKED: target_ref_mismatch"
+        exit 1
+      fi
+      if [[ -n "$EFF_TARGET_REF_ARG" ]]; then
+        T_SYM_GH=""
+        T_BR_GH=""
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --symbolic-full-name "$EFF_TARGET_REF_ARG"; then
+          T_SYM_GH="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$T_SYM_GH" == refs/heads/* ]]; then
+            T_BR_GH="${T_SYM_GH#refs/heads/}"
+          elif [[ "$T_SYM_GH" =~ ^refs/remotes/origin/(.+)$ ]]; then
+            T_BR_GH="${BASH_REMATCH[1]}"
+          fi
+        fi
+        if [[ -z "$T_BR_GH" || "$T_BR_GH" != "$GH_BASE_REF" ]]; then
+          echo "MERGE_BLOCKED: target_ref_mismatch"
+          exit 1
+        fi
+      fi
+      if [[ -n "$CALLER_AUTH_BRANCH" && "$CALLER_AUTH_BRANCH" != "$GH_POLICY_AUTH_REF" ]]; then
+        echo "MERGE_BLOCKED: authority_ref_mismatch"
+        exit 1
+      fi
+
+      BASE_TRIM="$(trim_str "$BASE_SHA")"
+      if [[ -n "$BASE_TRIM" ]]; then
+        if [[ "$BASE_TRIM" == -* ]] || ! run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM}^{commit}"; then
+          echo "MERGE_BLOCKED: invalid_base_sha"
+          exit 1
+        fi
+        CALLER_BASE_SHA="$(trim_str "$_GIT_STDOUT")"
+        if [[ ! "$CALLER_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "MERGE_BLOCKED: invalid_base_sha"
+          exit 1
+        fi
+        if [[ "$CALLER_BASE_SHA" != "$GH_LIVE_TARGET_SHA" ]]; then
+          if [[ -n "$LIVE_HEAD_SHA" && "$CALLER_BASE_SHA" == "$LIVE_HEAD_SHA" ]]; then
+            echo "MERGE_BLOCKED: base_sha_equals_head"
+            exit 1
+          fi
+          echo "MERGE_BLOCKED: base_sha_mismatch"
+          exit 1
+        fi
+      fi
+      RES_BASE_SHA="$GH_LIVE_TARGET_SHA"
+
+      if [[ -z "$LIVE_HEAD_SHA" ]]; then
+        echo "MERGE_BLOCKED: invalid_head"
+        exit 1
+      fi
+      if [[ "$LIVE_HEAD_SHA" != "$GH_HEAD_SHA" ]]; then
+        echo "MERGE_BLOCKED: head_sha_mismatch"
+        exit 1
+      fi
+      if [[ "$RES_BASE_SHA" == "$LIVE_HEAD_SHA" ]]; then
+        echo "MERGE_BLOCKED: base_sha_equals_head"
+        exit 1
+      fi
+
+      if ! run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${RES_BASE_SHA}^{commit}" || [[ "$(trim_str "$_GIT_STDOUT")" != "$RES_BASE_SHA" ]]; then
+        echo "MERGE_BLOCKED: target_sha_not_fetched"
+        exit 1
+      fi
+      if ! run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${GH_POLICY_AUTH_SHA}^{commit}" || [[ "$(trim_str "$_GIT_STDOUT")" != "$GH_POLICY_AUTH_SHA" ]]; then
+        echo "MERGE_BLOCKED: policy_authority_not_fetched"
+        exit 1
+      fi
+
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/origin/${GH_BASE_REF}^{commit}"; then
+        REM_TRACK_SHA="$(trim_str "$_GIT_STDOUT")"
+        if [[ "$REM_TRACK_SHA" =~ ^[0-9a-f]{40}$ && "$REM_TRACK_SHA" != "$RES_BASE_SHA" ]]; then
+          echo "MERGE_BLOCKED: target_branch_moved"
+          exit 1
+        fi
+      fi
+      if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_BASE_SHA" "$LIVE_HEAD_SHA"; then
+        echo "MERGE_BLOCKED: target_branch_moved"
+        exit 1
+      fi
+
+      AUTH_HAS_POLICY=false
+      if run_git_cmd_quiet "$REPO_ROOT" ls-tree "$GH_POLICY_AUTH_SHA" -- ".b3/research-policy.json"; then
+        AUTH_LS_LINE="$(trim_str "$_GIT_STDOUT")"
+        if [[ "$AUTH_LS_LINE" =~ $_re_ls_pol ]]; then
+          AUTH_HAS_POLICY=true
+        fi
+      fi
+      AUTH_AUTO_MERGE="disabled"
+      AUTH_ALLOW_PROT="false"
+      AUTH_REQ_CI="false"
+      AUTH_PROT_ARR=()
+      AUTH_ALLOWED_BR=()
+      GH_POL_VIOLATION_REASON="policy_not_in_authority"
+      if $AUTH_HAS_POLICY; then
+        GH_POL_VIOLATION_REASON="policy_modified_in_pr"
+        if ! run_git_cmd_quiet "$REPO_ROOT" show "${GH_POLICY_AUTH_SHA}:.b3/research-policy.json"; then
+          echo "MERGE_BLOCKED: policy_not_in_authority"
+          exit 1
+        fi
+        load_merge_policy_from_source "-" "$_GIT_STDOUT" "MERGE_BLOCKED"
+        AUTH_AUTO_MERGE="$_POL_AUTO_MERGE"
+        AUTH_ALLOW_PROT="$_POL_ALLOW_PROT"
+        AUTH_REQ_CI="$_POL_REQ_CI"
+        [[ ${#_POL_PROT_ARR[@]} -gt 0 ]] && AUTH_PROT_ARR=("${_POL_PROT_ARR[@]}")
+        [[ ${#_POL_ALLOWED_BR[@]} -gt 0 ]] && AUTH_ALLOWED_BR=("${_POL_ALLOWED_BR[@]}")
+      else
+        if $POL_EXPLICIT || [[ -n "$DEF_POL_FILE_FULL" ]]; then
+          echo "MERGE_BLOCKED: policy_not_in_authority"
+          exit 1
+        fi
+      fi
+
+      if [[ "$GH_BASE_REF" != "$GH_POLICY_AUTH_REF" ]]; then
+        if ! run_git_cmd_quiet "$REPO_ROOT" merge-base "$GH_POLICY_AUTH_SHA" "$RES_BASE_SHA"; then
+          echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
+          exit 1
+        fi
+        MB_AUTH_SHA="$(trim_str "$_GIT_STDOUT")"
+        if [[ ! "$MB_AUTH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
+          exit 1
+        fi
+        run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${MB_AUTH_SHA}..${RES_BASE_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
+        while IFS= read -r tln; do
+          tp="$(trim_str "${tln%$'\r'}")"
+          tp="${tp//\\//}"
+          [[ -n "$tp" ]] || continue
+          if protected_path_match_ci "$tp" "${POL_PROT_ARR[@]}"; then
+            echo "MERGE_BLOCKED: target_branch_modified_policy"
+            exit 1
+          fi
+        done <<< "$_GIT_STDOUT"
+      fi
+
+      HAS_DIRTY_WT=false
+      for _dkind in staged wt untracked; do
+        case "$_dkind" in
+          staged) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+          wt) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+          untracked) run_git_cmd_quiet "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+        esac
+        while IFS= read -r dln; do
+          dp="$(trim_str "${dln%$'\r'}")"
+          dp="${dp//\\//}"
+          [[ -n "$dp" ]] || continue
+          is_checkpoint_dir "$dp" && continue
+          if protected_path_match_ci "$dp" "${POL_PROT_ARR[@]}"; then
+            echo "MERGE_BLOCKED: $GH_POL_VIOLATION_REASON"
+            exit 1
+          fi
+          HAS_DIRTY_WT=true
+        done <<< "$_GIT_STDOUT"
+      done
+      if $HAS_DIRTY_WT; then
+        echo "MERGE_BLOCKED: dirty_worktree"
+        exit 1
+      fi
+
+      ALL_CHANGED=()
+      _seen_all="|"
+      if [[ ${#CHANGED_ARR[@]} -gt 0 ]]; then
+        for cp in "${CHANGED_ARR[@]}"; do
+          if [[ "$_seen_all" != *"|${cp}|"* ]]; then
+            _seen_all+="${cp}|"
+            ALL_CHANGED+=("$cp")
+          fi
+        done
+      fi
+      if [[ ${#GH_PR_CHANGED_FILES[@]} -gt 0 ]]; then
+        for ghf in "${GH_PR_CHANGED_FILES[@]}"; do
+          if ! normalize_merge_policy_path "$ghf"; then
+            echo "MERGE_BLOCKED: invalid_pr_changed_path"
+            exit 1
+          fi
+          if [[ "$_seen_all" != *"|${_MP_NORM_PATH}|"* ]]; then
+            _seen_all+="${_MP_NORM_PATH}|"
+            ALL_CHANGED+=("$_MP_NORM_PATH")
+          fi
+        done
+      fi
+      run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
+      while IFS= read -r gln; do
+        gp="$(trim_str "${gln%$'\r'}")"
+        gp="${gp//\\//}"
+        [[ -n "$gp" ]] || continue
+        is_checkpoint_dir "$gp" && continue
+        if [[ "$_seen_all" != *"|${gp}|"* ]]; then
+          _seen_all+="${gp}|"
+          ALL_CHANGED+=("$gp")
+        fi
+      done <<< "$_GIT_STDOUT"
+
+      if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
+        for cp in "${ALL_CHANGED[@]}"; do
+          if protected_path_match_ci "$cp" "${POL_PROT_ARR[@]}"; then
+            echo "MERGE_BLOCKED: $GH_POL_VIOLATION_REASON"
+            exit 1
+          fi
+        done
+      fi
+      if [[ ${#AUTH_PROT_ARR[@]} -gt 0 && "$AUTH_ALLOW_PROT" != "true" ]]; then
+        if [[ ${#ALL_CHANGED[@]} -eq 0 ]]; then
           echo "MERGE_BLOCKED: missing_changed_paths"
           exit 1
         fi
-        BASE_TRIM="$(trim_str "$BASE_SHA")"
-        if [[ -n "$BASE_TRIM" ]]; then
-          if [[ "$BASE_TRIM" == -* ]] || ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM}^{commit}" || [[ ! "$(trim_str "$_GIT_STDOUT")" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "MERGE_BLOCKED: invalid_base_sha"
-            exit 1
+        PROT_HITS=()
+        for cp in "${ALL_CHANGED[@]}"; do
+          if protected_path_match_ci "$cp" "${AUTH_PROT_ARR[@]}"; then
+            PROT_HITS+=("$cp")
           fi
+        done
+        if [[ ${#PROT_HITS[@]} -gt 0 ]]; then
+          echo "MERGE_BLOCKED: protected_paths=$(printf '%s\n' "${PROT_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+          exit 1
         fi
-        LED_TRIM="$(trim_str "$LEDGER_PATH")"
-        if [[ -n "$LED_TRIM" ]]; then
-          if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM"; then
+      fi
+
+      if [[ ${#AUTH_ALLOWED_BR[@]} -gt 0 ]]; then
+        if ! branch_pattern_match "$GH_BASE_REF" "${AUTH_ALLOWED_BR[@]}"; then
+          echo "MERGE_BLOCKED: target_branch_not_allowed(${GH_BASE_REF})"
+          exit 1
+        fi
+      fi
+
+      if [[ "$GH_MERGEABLE" == "false" ]]; then
+        echo "MERGE_BLOCKED: pr_not_mergeable(mergeable=${GH_MERGEABLE},state=${GH_MERGEABLE_STATE})"
+        exit 1
+      fi
+      if [[ "$GH_MERGEABLE_STATE" == "dirty" ]]; then
+        echo "MERGE_BLOCKED: mergeable_state=$GH_MERGEABLE_STATE"
+        exit 1
+      fi
+
+      EFF_REQ_CI=false
+      if [[ "$AUTH_REQ_CI" == "true" ]] || $REQUIRE_REMOTE_CI; then
+        EFF_REQ_CI=true
+      fi
+      if $EFF_REQ_CI; then
+        if [[ "$GH_CI_STATUS" != "PASS" ]]; then
+          echo "MERGE_BLOCKED: ci_status=$GH_CI_STATUS"
+          exit 1
+        fi
+      elif [[ "$GH_CI_STATUS" == "FAIL" || "$GH_CI_STATUS" == "PENDING" ]]; then
+        echo "MERGE_BLOCKED: ci_status=$GH_CI_STATUS"
+        exit 1
+      fi
+
+      if [[ "$AUTH_AUTO_MERGE" != "authorized" ]]; then
+        LED_OPT_GH="$(trim_str "$LEDGER_PATH")"
+        if [[ -n "$LED_OPT_GH" ]]; then
+          if ! check_contained_repo_path "$REPO_ROOT" "$LED_OPT_GH"; then
             echo "MERGE_BLOCKED: invalid_ledger_path"
             exit 1
           fi
@@ -8580,238 +10451,110 @@ ${el}"
         exit 2
       fi
 
-      if ! $LOCAL_ONLY; then
-        echo "MERGE_BLOCKED: missing_pr_number"
+      LED_TRIM="$(trim_str "$LEDGER_PATH")"
+      if [[ -z "$LED_TRIM" ]]; then
+        echo "MERGE_BLOCKED: missing_ledger_path"
         exit 1
       fi
-
-      # Explicit --local-only deterministic check (NEVER returns MERGE_AUTHORIZED / exit 0)
-      BASE_TRIM_LOC="$(trim_str "$BASE_SHA")"
-      if [[ -z "$BASE_TRIM_LOC" ]]; then echo "MERGE_BLOCKED: missing_base_sha"; exit 1; fi
-      if [[ "$BASE_TRIM_LOC" == -* ]] || ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM_LOC}^{commit}"; then
-        echo "MERGE_BLOCKED: invalid_base_sha"; exit 1
+      if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM"; then
+        echo "MERGE_BLOCKED: invalid_ledger_path"
+        exit 1
       fi
-      RES_BASE_LOC="$(trim_str "$_GIT_STDOUT")"
-      if [[ ! "$RES_BASE_LOC" =~ ^[0-9a-f]{40}$ ]]; then echo "MERGE_BLOCKED: invalid_base_sha"; exit 1; fi
-      if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "HEAD^{commit}"; then echo "MERGE_BLOCKED: invalid_head"; exit 1; fi
-      LIVE_HEAD_LOC="$(trim_str "$_GIT_STDOUT")"
-      if [[ ! "$LIVE_HEAD_LOC" =~ ^[0-9a-f]{40}$ ]]; then echo "MERGE_BLOCKED: invalid_head"; exit 1; fi
-      if [[ "$RES_BASE_LOC" == "$LIVE_HEAD_LOC" ]]; then echo "MERGE_BLOCKED: base_sha_equals_head"; exit 1; fi
-      LED_TRIM_LOC="$(trim_str "$LEDGER_PATH")"
-      if [[ -z "$LED_TRIM_LOC" ]]; then echo "MERGE_BLOCKED: missing_ledger_path"; exit 1; fi
-      if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM_LOC"; then echo "MERGE_BLOCKED: invalid_ledger_path"; exit 1; fi
-      LED_FULL_LOC="$_CONTAINED_FULL"; LED_REL_LOC="$_CONTAINED_REL"
-      if [[ ! -f "$LED_FULL_LOC" ]]; then echo "MERGE_BLOCKED: missing_ledger_path"; exit 1; fi
+      LED_FULL="$_CONTAINED_FULL"
+      LED_REL="$_CONTAINED_REL"
+      if [[ ! -f "$LED_FULL" ]]; then
+        echo "MERGE_BLOCKED: missing_ledger_path"
+        exit 1
+      fi
       set +e
-      LED_LOC_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL_LOC" "$LED_REL_LOC" "" "true")"
-      LED_LOC_RC=$?
+      LED_CHK_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL" "$LED_REL" "" "true")"
+      LED_CHK_RC=$?
       set -e
-      if [[ $LED_LOC_RC -ne 0 ]]; then
-        _first_err="${LED_LOC_OUT%%$'\n'*}"
+      if [[ $LED_CHK_RC -ne 0 ]]; then
+        _first_err="${LED_CHK_OUT%%$'\n'*}"
         echo "MERGE_BLOCKED: ledger_check_failed (${_first_err:-unknown})"
         exit 1
       fi
-      M_RIND_LOC=""
+      M_BASE=""; M_HEAD=""; M_TREF=""; M_TSHA=""; M_RIND=""
       while IFS= read -r mline; do
-        case "$mline" in META_REVIEW_INDEPENDENCE=*) M_RIND_LOC="${mline#META_REVIEW_INDEPENDENCE=}" ;; esac
-      done <<< "$LED_LOC_OUT"
-      if [[ "$M_RIND_LOC" == "SINGLE_AGENT_LIMIT" ]]; then echo "MERGE_BLOCKED: single_agent_limit"; exit 1; fi
-      if [[ "$M_RIND_LOC" != "INDEPENDENT" ]]; then echo "MERGE_BLOCKED: review_independence_unknown"; exit 1; fi
-      echo "LOCAL_ELIGIBLE_ONLY: remote_provider_required"
-      exit 2
-    fi
-
-    # --- Trusted Remote Authorization Path (R001 + R002) ---
-    if [[ "$EFFECTIVE_POL_REL" != ".b3/research-policy.json" ]]; then
-      echo "MERGE_BLOCKED: policy_path_override_not_allowed"
-      exit 1
-    fi
-    if [[ ! "$PR_NUM_TRIM" =~ ^[1-9][0-9]*$ ]]; then
-      echo "MERGE_BLOCKED: invalid_pr_number"
-      exit 1
-    fi
-    resolve_github_repo_slug "$REPO_ROOT" "$REPO_ARG" "MERGE_BLOCKED"
-    REPO_SLUG="$_RESOLVED_GH_REPO"
-    invoke_b3_github_verify "pre-merge" "$REPO_SLUG" "$PR_NUM_TRIM" "MERGE_BLOCKED"
-
-    if [[ "$GH_PR_NUMBER" != "$PR_NUM_TRIM" ]]; then echo "MERGE_BLOCKED: pr_identity_mismatch"; exit 1; fi
-    _gh_br_low="$(printf '%s' "$GH_BASE_REPO" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    _rs_low="$(printf '%s' "$REPO_SLUG" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-    if [[ "$_gh_br_low" != "$_rs_low" ]]; then echo "MERGE_BLOCKED: cross_repo_mismatch"; exit 1; fi
-    if [[ "$GH_SAME_REPO" != "true" ]]; then echo "MERGE_BLOCKED: cross_repo_head_pr"; exit 1; fi
-    if [[ "$GH_PR_STATE" != "OPEN" || "$GH_PR_MERGED" == "true" ]]; then echo "MERGE_BLOCKED: pr_state=$GH_PR_STATE"; exit 1; fi
-    if [[ "$GH_PR_DRAFT" == "true" ]]; then echo "MERGE_BLOCKED: pr_is_draft"; exit 1; fi
-
-    if [[ -z "$GH_BASE_REF" || -z "$GH_POLICY_AUTH_REF" || ! "$GH_PR_BASE_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_LIVE_TARGET_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_HEAD_SHA" =~ ^[0-9a-f]{40}$ || ! "$GH_POLICY_AUTH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "MERGE_BLOCKED: incomplete_pr_metadata"
-      exit 1
-    fi
-
-    # Detect remote target branch movement between PR snapshot and live branch ref
-    if [[ "$GH_LIVE_TARGET_SHA" != "$GH_PR_BASE_SHA" ]]; then
-      echo "MERGE_BLOCKED: target_branch_moved"
-      exit 1
-    fi
-    if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$GH_BASE_REF" ]]; then
-      echo "MERGE_BLOCKED: target_ref_mismatch"
-      exit 1
-    fi
-
-    # Never trust caller-supplied --base-sha; if provided, it MUST match trusted live target SHA
-    BASE_TRIM="$(trim_str "$BASE_SHA")"
-    if [[ -n "$BASE_TRIM" ]]; then
-      if [[ "$BASE_TRIM" == -* ]] || ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM}^{commit}"; then
-        echo "MERGE_BLOCKED: invalid_base_sha"
+        case "$mline" in
+          META_BASE_SHA=*) M_BASE="${mline#META_BASE_SHA=}" ;;
+          META_HEAD_SHA=*) M_HEAD="${mline#META_HEAD_SHA=}" ;;
+          META_TARGET_REF=*) M_TREF="${mline#META_TARGET_REF=}" ;;
+          META_TARGET_SHA=*) M_TSHA="${mline#META_TARGET_SHA=}" ;;
+          META_REVIEW_INDEPENDENCE=*) M_RIND="${mline#META_REVIEW_INDEPENDENCE=}" ;;
+        esac
+      done <<< "$LED_CHK_OUT"
+      if [[ "$M_BASE" != "$RES_BASE_SHA" ]]; then
+        echo "MERGE_BLOCKED: ledger_target_mismatch"
         exit 1
       fi
-      CALLER_BASE_SHA="$(trim_str "$_GIT_STDOUT")"
-      if [[ ! "$CALLER_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "MERGE_BLOCKED: invalid_base_sha"
+      if [[ "$M_HEAD" != "$LIVE_HEAD_SHA" || ( "$M_TREF" != "working_tree" && "$M_TSHA" != "$LIVE_HEAD_SHA" ) ]]; then
+        echo "MERGE_BLOCKED: ledger_head_mismatch"
         exit 1
       fi
-      if [[ "$CALLER_BASE_SHA" != "$GH_LIVE_TARGET_SHA" ]]; then
-        if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "HEAD^{commit}" && [[ "$CALLER_BASE_SHA" == "$(trim_str "$_GIT_STDOUT")" ]]; then
-          echo "MERGE_BLOCKED: base_sha_equals_head"
+      if [[ "$M_RIND" == "SINGLE_AGENT_LIMIT" ]]; then
+        echo "MERGE_BLOCKED: single_agent_limit"
+        exit 1
+      fi
+      if [[ "$M_RIND" != "INDEPENDENT" ]]; then
+        echo "MERGE_BLOCKED: review_independence_unknown"
+        exit 1
+      fi
+
+      printf 'MERGE_AUTHORIZED: mode=github pr=%s#%s target_ref=%s target_sha=%s head_sha=%s policy_authority=%s@%s auto_merge=authorized ci=%s governance=CLEAR\n' \
+        "$GH_BASE_REPO" "$PR_NUM_TRIM" "$GH_BASE_REF" "$RES_BASE_SHA" "$LIVE_HEAD_SHA" "$GH_POLICY_AUTH_REF" "$GH_POLICY_AUTH_SHA" "$GH_CI_STATUS"
+      exit 0
+    fi
+
+    # --- Provider-Neutral Local / --local-only / auto_merge=disabled Path ---
+    if [[ "$AUTO_MERGE" != "authorized" ]]; then
+      if [[ "$REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
+        echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
+        exit 1
+      fi
+      LED_OPT_TRIM="$(trim_str "$LEDGER_PATH")"
+      if [[ "$REQ_REV" == "true" && "$REVIEW_STATUS" != "PASS" && -z "$LED_OPT_TRIM" ]]; then
+        echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
+        exit 1
+      fi
+      if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#LOCAL_PRE_CHANGED_ARR[@]} -eq 0 ]]; then
+        echo "MERGE_BLOCKED: missing_changed_paths"
+        exit 1
+      fi
+      BASE_OPT_TRIM="$(trim_str "$BASE_SHA")"
+      if [[ -n "$BASE_OPT_TRIM" ]]; then
+        if [[ "$BASE_OPT_TRIM" == -* ]] || ! run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${BASE_OPT_TRIM}^{commit}" || [[ ! "$(trim_str "$_GIT_STDOUT")" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "MERGE_BLOCKED: invalid_base_sha"
           exit 1
         fi
-        echo "MERGE_BLOCKED: base_sha_mismatch"
-        exit 1
       fi
-    fi
-    RES_BASE_SHA="$GH_LIVE_TARGET_SHA"
-
-    # Bind local Git HEAD, target SHA, and policy authority SHA
-    if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "HEAD^{commit}"; then
-      echo "MERGE_BLOCKED: invalid_head"
-      exit 1
-    fi
-    LIVE_HEAD_SHA="$(trim_str "$_GIT_STDOUT")"
-    if [[ ! "$LIVE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "MERGE_BLOCKED: invalid_head"
-      exit 1
-    fi
-    if [[ "$LIVE_HEAD_SHA" != "$GH_HEAD_SHA" ]]; then
-      echo "MERGE_BLOCKED: head_sha_mismatch"
-      exit 1
-    fi
-    if [[ "$RES_BASE_SHA" == "$LIVE_HEAD_SHA" ]]; then
-      echo "MERGE_BLOCKED: base_sha_equals_head"
-      exit 1
-    fi
-
-    if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${RES_BASE_SHA}^{commit}" || [[ "$(trim_str "$_GIT_STDOUT")" != "$RES_BASE_SHA" ]]; then
-      echo "MERGE_BLOCKED: target_sha_not_fetched"
-      exit 1
-    fi
-    if ! run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "${GH_POLICY_AUTH_SHA}^{commit}" || [[ "$(trim_str "$_GIT_STDOUT")" != "$GH_POLICY_AUTH_SHA" ]]; then
-      echo "MERGE_BLOCKED: policy_authority_not_fetched"
-      exit 1
-    fi
-
-    # Check local remote-tracking ref staleness if present
-    if run_git_cmd "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/origin/${GH_BASE_REF}^{commit}"; then
-      REM_TRACK_SHA="$(trim_str "$_GIT_STDOUT")"
-      if [[ "$REM_TRACK_SHA" =~ ^[0-9a-f]{40}$ && "$REM_TRACK_SHA" != "$RES_BASE_SHA" ]]; then
-        echo "MERGE_BLOCKED: target_branch_moved"
-        exit 1
-      fi
-    fi
-    # PR head must incorporate the current live target commit
-    if ! run_git_cmd "$REPO_ROOT" merge-base --is-ancestor "$RES_BASE_SHA" "$LIVE_HEAD_SHA"; then
-      echo "MERGE_BLOCKED: target_branch_moved"
-      exit 1
-    fi
-
-    # Load merge policy STRICTLY from trusted policy authority (default_branch), NEVER from feature branch/PR
-    AUTH_HAS_POLICY=false
-    _re_ls_blob=$'^(100644|100755) blob ([0-9a-f]{40})\t(.+)$'
-    if run_git_cmd "$REPO_ROOT" -c core.quotepath=false ls-tree "$GH_POLICY_AUTH_SHA" -- "$EFFECTIVE_POL_REL"; then
-      AUTH_LS_LINE="$(trim_str "$_GIT_STDOUT")"
-      if [[ "$AUTH_LS_LINE" =~ $_re_ls_blob && "${BASH_REMATCH[3]}" == "$EFFECTIVE_POL_REL" ]]; then
-        AUTH_HAS_POLICY=true
-      fi
-    fi
-    if ! $AUTH_HAS_POLICY; then
-      if $POL_EXPLICIT || [[ -n "$POL_FULL" ]]; then
-        echo "MERGE_BLOCKED: policy_not_in_authority"
-        exit 1
+      if [[ -n "$LED_OPT_TRIM" ]]; then
+        if ! check_contained_repo_path "$REPO_ROOT" "$LED_OPT_TRIM"; then
+          echo "MERGE_BLOCKED: invalid_ledger_path"
+          exit 1
+        fi
       fi
       echo "PR_READY: auto_merge=disabled"
       exit 2
     fi
-    if ! run_git_cmd "$REPO_ROOT" show "${GH_POLICY_AUTH_SHA}:${EFFECTIVE_POL_REL}"; then
-      echo "MERGE_BLOCKED: policy_not_in_authority"
-      exit 1
-    fi
-    AUTH_POL_RAW="$_GIT_STDOUT"
-    set +e
-    PARSED_AUTH_POL="$(printf '%s' "$AUTH_POL_RAW" | parse_merge_policy_json "-")"
-    APOL_RC=$?
-    set -e
-    if [[ $APOL_RC -eq 3 ]]; then
-      _bad_am="${PARSED_AUTH_POL#invalid_auto_merge=}"
-      _bad_am="${_bad_am%%$'\n'*}"
-      _bad_am="${_bad_am%$'\r'}"
-      echo "MERGE_BLOCKED: invalid_auto_merge=${_bad_am}"
-      exit 1
-    elif [[ $APOL_RC -ne 0 ]]; then
-      echo "MERGE_BLOCKED: invalid_policy_json"
-      exit 1
-    fi
-    AUTH_AUTO_MERGE="disabled"; AUTH_ALLOW_PROT="false"; AUTH_REQ_CI="true"; AUTH_REQ_REV="true"
-    AUTH_PROT_ARR=()
-    AUTH_ALLOWED_BR=()
-    while IFS= read -r pline; do
-      pline="${pline%$'\r'}"
-      case "$pline" in
-        auto_merge=*) AUTH_AUTO_MERGE="${pline#auto_merge=}" ;;
-        allow_protected_paths=*) AUTH_ALLOW_PROT="${pline#allow_protected_paths=}" ;;
-        require_ci=*) AUTH_REQ_CI="${pline#require_ci=}" ;;
-        require_review=*) AUTH_REQ_REV="${pline#require_review=}" ;;
-        protected_path=*)
-          raw_pp="${pline#protected_path=}"
-          if ! normalize_merge_policy_path "$raw_pp"; then
-            echo "MERGE_BLOCKED: invalid_policy_json"
-            exit 1
-          fi
-          AUTH_PROT_ARR+=("$_MP_NORM_PATH")
-          ;;
-        allowed_target_branch=*)
-          AUTH_ALLOWED_BR+=("${pline#allowed_target_branch=}")
-          ;;
-      esac
-    done <<< "$PARSED_AUTH_POL"
 
-    # Prevent non-default target branches (e.g. stacked parent feature branch) from modifying policy relative to authority
-    if [[ "$GH_BASE_REF" != "$GH_POLICY_AUTH_REF" ]]; then
-      if ! run_git_cmd "$REPO_ROOT" merge-base "$GH_POLICY_AUTH_SHA" "$RES_BASE_SHA"; then
-        echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
-        exit 1
-      fi
-      MB_AUTH_SHA="$(trim_str "$_GIT_STDOUT")"
-      if [[ ! "$MB_AUTH_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-        echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
-        exit 1
-      fi
-      run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --no-renames --name-only "${MB_AUTH_SHA}..${RES_BASE_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
-      while IFS= read -r tln; do
-        tp="$(trim_str "${tln%$'\r'}")"
-        tp="${tp//\\//}"
-        [[ -n "$tp" ]] || continue
-        if protected_path_match_ci "$tp" "${POL_PROT_ARR[@]}"; then
-          echo "MERGE_BLOCKED: target_branch_modified_policy"
-          exit 1
-        fi
-      done <<< "$_GIT_STDOUT"
+    # auto_merge == 'authorized' without --pr-number (or with --local-only)
+    if $POL_EXPLICIT && [[ "$EFFECTIVE_POL_REL" != ".b3/research-policy.json" ]]; then
+      echo "MERGE_BLOCKED: policy_path_override_not_allowed"
+      exit 1
+    fi
+    if [[ -z "$LIVE_HEAD_SHA" ]]; then
+      echo "MERGE_BLOCKED: invalid_head"
+      exit 1
     fi
 
-    # Require clean working tree & index outside checkpoint dirs (.b3/ship, .b3/research-ship)
-    HAS_DIRTY_WT=false
+    HAS_DIRTY_LOC=false
     for _dkind in staged wt untracked; do
       case "$_dkind" in
-        staged) run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --cached --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
-        wt) run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
-        untracked) run_git_cmd "$REPO_ROOT" -c core.quotepath=false ls-files --others --exclude-standard || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+        staged) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --cached --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+        wt) run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
+        untracked) run_git_cmd_quiet "$REPO_ROOT" ls-files --others --exclude-standard || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; } ;;
       esac
       while IFS= read -r dln; do
         dp="$(trim_str "${dln%$'\r'}")"
@@ -8822,194 +10565,342 @@ ${el}"
           echo "MERGE_BLOCKED: policy_modified_in_pr"
           exit 1
         fi
-        HAS_DIRTY_WT=true
+        HAS_DIRTY_LOC=true
       done <<< "$_GIT_STDOUT"
     done
-    if $HAS_DIRTY_WT; then
+    if $HAS_DIRTY_LOC; then
       echo "MERGE_BLOCKED: dirty_worktree"
       exit 1
     fi
 
-    # Compute authoritative changed paths: local Git diff (target..HEAD) U GitHub PR files U validated caller --changed-paths
-    ALL_CHANGED=()
-    if [[ ${#CHANGED_ARR[@]} -gt 0 ]]; then
-      for cp in "${CHANGED_ARR[@]}"; do ALL_CHANGED+=("$cp"); done
+    if ! $LOCAL_ONLY; then
+      if $REQUIRE_REMOTE_CI; then
+        echo "MERGE_BLOCKED: missing_pr_number"
+        exit 1
+      fi
+      if $HAS_ANY_REMOTE && ! $HAS_ORIGIN; then
+        echo "MERGE_BLOCKED: origin_remote_missing"
+        exit 1
+      fi
+      if $HAS_ORIGIN && [[ -z "$CANON_AUTH_SHA" ]]; then
+        echo "MERGE_BLOCKED: missing_pr_number"
+        exit 1
+      fi
     fi
-    if [[ ${#GH_PR_CHANGED_FILES[@]} -gt 0 ]]; then
-      for ghf in "${GH_PR_CHANGED_FILES[@]}"; do
-        if ! normalize_merge_policy_path "$ghf"; then
-          echo "MERGE_BLOCKED: invalid_pr_changed_path"
+
+    EFF_AUTH_SYM_FULL="$CANON_AUTH_FULL"
+    EFF_AUTH_BRANCH="$CANON_AUTH_BRANCH"
+    EFF_AUTH_SHA="${CANON_AUTH_SHA:-$FALLBACK_LOCAL_TRUNK_SHA}"
+    if [[ -z "$EFF_AUTH_SHA" ]]; then
+      echo "MERGE_BLOCKED: policy_not_in_authority"
+      exit 1
+    fi
+
+    if ! run_git_cmd_quiet "$REPO_ROOT" ls-tree "$EFF_AUTH_SHA" -- ".b3/research-policy.json"; then
+      echo "MERGE_BLOCKED: policy_not_in_authority"
+      exit 1
+    fi
+    AUTH_LOC_LINE="$(trim_str "$_GIT_STDOUT")"
+    if [[ ! "$AUTH_LOC_LINE" =~ $_re_ls_pol ]]; then
+      echo "MERGE_BLOCKED: policy_not_in_authority"
+      exit 1
+    fi
+    if ! run_git_cmd_quiet "$REPO_ROOT" show "${EFF_AUTH_SHA}:.b3/research-policy.json"; then
+      echo "MERGE_BLOCKED: policy_not_in_authority"
+      exit 1
+    fi
+    load_merge_policy_from_source "-" "$_GIT_STDOUT" "MERGE_BLOCKED"
+    AUTH_LOC_AUTO_MERGE="$_POL_AUTO_MERGE"
+    AUTH_LOC_ALLOW_PROT="$_POL_ALLOW_PROT"
+    AUTH_LOC_REQ_CI="$_POL_REQ_CI"
+    AUTH_LOC_PROT_ARR=()
+    AUTH_LOC_ALLOWED_BR=()
+    [[ ${#_POL_PROT_ARR[@]} -gt 0 ]] && AUTH_LOC_PROT_ARR=("${_POL_PROT_ARR[@]}")
+    [[ ${#_POL_ALLOWED_BR[@]} -gt 0 ]] && AUTH_LOC_ALLOWED_BR=("${_POL_ALLOWED_BR[@]}")
+    if [[ "$AUTH_LOC_AUTO_MERGE" != "authorized" ]]; then
+      echo "PR_READY: auto_merge=disabled"
+      exit 2
+    fi
+
+    TARGET_SYM_FULL=""
+    TARGET_BRANCH_NAME=""
+    RES_BASE_SHA=""
+    if [[ -n "$EFF_TARGET_REF_ARG" ]]; then
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --symbolic-full-name "$EFF_TARGET_REF_ARG"; then
+        TARGET_SYM_FULL="$(trim_str "$_GIT_STDOUT")"
+      fi
+      if [[ "$TARGET_SYM_FULL" != refs/heads/* && "$TARGET_SYM_FULL" != refs/remotes/* ]]; then
+        echo "MERGE_BLOCKED: invalid_target_ref"
+        exit 1
+      fi
+      if [[ -n "$CUR_SYM_FULL" && "$TARGET_SYM_FULL" == "$CUR_SYM_FULL" ]]; then
+        echo "MERGE_BLOCKED: invalid_target_ref"
+        exit 1
+      fi
+      if ! $LOCAL_ONLY && $HAS_ORIGIN && [[ "$TARGET_SYM_FULL" != refs/remotes/origin/* ]]; then
+        echo "MERGE_BLOCKED: remote_tracking_target_required"
+        exit 1
+      fi
+      if ! $LOCAL_ONLY && ! $HAS_ANY_REMOTE && [[ "$TARGET_SYM_FULL" != refs/heads/* ]]; then
+        echo "MERGE_BLOCKED: invalid_target_ref"
+        exit 1
+      fi
+      if [[ "$TARGET_SYM_FULL" == refs/heads/* ]]; then
+        TARGET_BRANCH_NAME="${TARGET_SYM_FULL#refs/heads/}"
+      elif [[ "$TARGET_SYM_FULL" =~ ^refs/remotes/[^/]+/(.+)$ ]]; then
+        TARGET_BRANCH_NAME="${BASH_REMATCH[1]}"
+      fi
+      if [[ -n "$TARGET_BR_TRIM" && "$TARGET_BR_TRIM" != "$TARGET_BRANCH_NAME" ]]; then
+        echo "MERGE_BLOCKED: target_ref_mismatch"
+        exit 1
+      fi
+      if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${TARGET_SYM_FULL}^{commit}"; then
+        RES_BASE_SHA="$(trim_str "$_GIT_STDOUT")"
+      fi
+      if [[ ! "$RES_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "MERGE_BLOCKED: invalid_target_ref"
+        exit 1
+      fi
+    elif [[ -n "$TARGET_BR_TRIM" ]]; then
+      CAND_REFS=()
+      if $HAS_ORIGIN; then
+        if $LOCAL_ONLY; then
+          CAND_REFS=("refs/remotes/origin/${TARGET_BR_TRIM}" "refs/heads/${TARGET_BR_TRIM}")
+        else
+          CAND_REFS=("refs/remotes/origin/${TARGET_BR_TRIM}")
+        fi
+      else
+        CAND_REFS=("refs/heads/${TARGET_BR_TRIM}")
+      fi
+      for _cr in "${CAND_REFS[@]}"; do
+        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_cr}^{commit}"; then
+          _cr_sha="$(trim_str "$_GIT_STDOUT")"
+          if [[ "$_cr_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            TARGET_SYM_FULL="$_cr"
+            TARGET_BRANCH_NAME="$TARGET_BR_TRIM"
+            RES_BASE_SHA="$_cr_sha"
+            break
+          fi
+        fi
+      done
+      if [[ -z "$RES_BASE_SHA" ]]; then
+        echo "MERGE_BLOCKED: target_sha_not_fetched"
+        exit 1
+      fi
+      if [[ -n "$CUR_SYM_FULL" && "$TARGET_SYM_FULL" == "$CUR_SYM_FULL" ]]; then
+        echo "MERGE_BLOCKED: invalid_target_ref"
+        exit 1
+      fi
+    elif [[ -n "$EFF_AUTH_SYM_FULL" ]]; then
+      if [[ -n "$CUR_SYM_FULL" && "$EFF_AUTH_SYM_FULL" == "$CUR_SYM_FULL" ]]; then
+        if ! $LOCAL_ONLY; then
+          echo "MERGE_BLOCKED: base_sha_equals_head"
           exit 1
         fi
-        ALL_CHANGED+=("$_MP_NORM_PATH")
+      else
+        TARGET_SYM_FULL="$EFF_AUTH_SYM_FULL"
+        TARGET_BRANCH_NAME="$EFF_AUTH_BRANCH"
+        RES_BASE_SHA="$EFF_AUTH_SHA"
+      fi
+    fi
+
+    BASE_TRIM_LOC="$(trim_str "$BASE_SHA")"
+    if [[ -n "$BASE_TRIM_LOC" ]]; then
+      if [[ "$BASE_TRIM_LOC" == -* ]] || ! run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${BASE_TRIM_LOC}^{commit}"; then
+        echo "MERGE_BLOCKED: invalid_base_sha"
+        exit 1
+      fi
+      CALLER_BASE_LOC="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$CALLER_BASE_LOC" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "MERGE_BLOCKED: invalid_base_sha"
+        exit 1
+      fi
+      if [[ "$CALLER_BASE_LOC" == "$LIVE_HEAD_SHA" ]]; then
+        echo "MERGE_BLOCKED: base_sha_equals_head"
+        exit 1
+      fi
+      if [[ -n "$RES_BASE_SHA" ]]; then
+        if [[ "$CALLER_BASE_LOC" != "$RES_BASE_SHA" ]]; then
+          if $LOCAL_ONLY && [[ -z "$EFF_TARGET_REF_ARG" && -z "$TARGET_BR_TRIM" ]]; then
+            RES_BASE_SHA="$CALLER_BASE_LOC"
+          else
+            echo "MERGE_BLOCKED: base_sha_mismatch"
+            exit 1
+          fi
+        fi
+      elif $LOCAL_ONLY; then
+        RES_BASE_SHA="$CALLER_BASE_LOC"
+      fi
+    fi
+
+    if [[ -z "$RES_BASE_SHA" ]]; then
+      if $LOCAL_ONLY; then
+        echo "MERGE_BLOCKED: missing_base_sha"
+        exit 1
+      fi
+      echo "MERGE_BLOCKED: invalid_target_ref"
+      exit 1
+    fi
+    if [[ "$RES_BASE_SHA" == "$LIVE_HEAD_SHA" ]]; then
+      echo "MERGE_BLOCKED: base_sha_equals_head"
+      exit 1
+    fi
+    if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_BASE_SHA" "$LIVE_HEAD_SHA"; then
+      echo "MERGE_BLOCKED: target_branch_moved"
+      exit 1
+    fi
+
+    if [[ -n "$TARGET_BRANCH_NAME" && ${#AUTH_LOC_ALLOWED_BR[@]} -gt 0 ]]; then
+      if ! branch_pattern_match "$TARGET_BRANCH_NAME" "${AUTH_LOC_ALLOWED_BR[@]}"; then
+        echo "MERGE_BLOCKED: target_branch_not_allowed(${TARGET_BRANCH_NAME})"
+        exit 1
+      fi
+    fi
+
+    if [[ "$RES_BASE_SHA" != "$EFF_AUTH_SHA" ]]; then
+      if ! run_git_cmd_quiet "$REPO_ROOT" merge-base "$EFF_AUTH_SHA" "$RES_BASE_SHA"; then
+        echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
+        exit 1
+      fi
+      MB_AUTH_LOC_SHA="$(trim_str "$_GIT_STDOUT")"
+      if [[ ! "$MB_AUTH_LOC_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "MERGE_BLOCKED: target_branch_unrelated_to_authority"
+        exit 1
+      fi
+      run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${MB_AUTH_LOC_SHA}..${RES_BASE_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
+      while IFS= read -r tln; do
+        tp="$(trim_str "${tln%$'\r'}")"
+        tp="${tp//\\//}"
+        if [[ -n "$tp" ]] && protected_path_match_ci "$tp" "${POL_PROT_ARR[@]}"; then
+          echo "MERGE_BLOCKED: target_branch_modified_policy"
+          exit 1
+        fi
+      done <<< "$_GIT_STDOUT"
+    fi
+
+    ALL_CHANGED_LOC=()
+    _seen_aloc="|"
+    if [[ ${#CHANGED_ARR[@]} -gt 0 ]]; then
+      for cp in "${CHANGED_ARR[@]}"; do
+        if [[ "$_seen_aloc" != *"|${cp}|"* ]]; then
+          _seen_aloc+="${cp}|"
+          ALL_CHANGED_LOC+=("$cp")
+        fi
       done
     fi
-    run_git_cmd "$REPO_ROOT" -c core.quotepath=false diff --no-renames --name-only "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
+    run_git_cmd_quiet "$REPO_ROOT" diff --no-ext-diff --no-renames --name-only "${RES_BASE_SHA}..${LIVE_HEAD_SHA}" -- || { echo "MERGE_BLOCKED: git_diff_failed"; exit 1; }
     while IFS= read -r gln; do
       gp="$(trim_str "${gln%$'\r'}")"
       gp="${gp//\\//}"
       [[ -n "$gp" ]] || continue
       is_checkpoint_dir "$gp" && continue
-      ALL_CHANGED+=("$gp")
+      if [[ "$_seen_aloc" != *"|${gp}|"* ]]; then
+        _seen_aloc+="${gp}|"
+        ALL_CHANGED_LOC+=("$gp")
+      fi
     done <<< "$_GIT_STDOUT"
 
-    if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
-      for cp in "${ALL_CHANGED[@]}"; do
+    if [[ ${#ALL_CHANGED_LOC[@]} -gt 0 ]]; then
+      for cp in "${ALL_CHANGED_LOC[@]}"; do
         if protected_path_match_ci "$cp" "${POL_PROT_ARR[@]}"; then
           echo "MERGE_BLOCKED: policy_modified_in_pr"
           exit 1
         fi
       done
     fi
-    if [[ ${#AUTH_PROT_ARR[@]} -gt 0 && "$AUTH_ALLOW_PROT" != "true" ]]; then
-      if [[ ${#ALL_CHANGED[@]} -eq 0 ]]; then
+    if [[ ${#AUTH_LOC_PROT_ARR[@]} -gt 0 && "$AUTH_LOC_ALLOW_PROT" != "true" ]]; then
+      if [[ ${#ALL_CHANGED_LOC[@]} -eq 0 ]]; then
         echo "MERGE_BLOCKED: missing_changed_paths"
         exit 1
       fi
-      PROT_HITS=()
-      for cp in "${ALL_CHANGED[@]}"; do
-        if protected_path_match_ci "$cp" "${AUTH_PROT_ARR[@]}"; then
-          PROT_HITS+=("$cp")
+      PROT_HITS_LOC=()
+      for cp in "${ALL_CHANGED_LOC[@]}"; do
+        if protected_path_match_ci "$cp" "${AUTH_LOC_PROT_ARR[@]}"; then
+          PROT_HITS_LOC+=("$cp")
         fi
       done
-      if [[ ${#PROT_HITS[@]} -gt 0 ]]; then
-        echo "MERGE_BLOCKED: protected_paths=$(printf '%s\n' "${PROT_HITS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+      if [[ ${#PROT_HITS_LOC[@]} -gt 0 ]]; then
+        echo "MERGE_BLOCKED: protected_paths=$(printf '%s\n' "${PROT_HITS_LOC[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
         exit 1
       fi
     fi
 
-    if [[ "$AUTH_AUTO_MERGE" != "authorized" ]]; then
-      echo "PR_READY: auto_merge=disabled"
-      exit 2
-    fi
-    if [[ ${#AUTH_ALLOWED_BR[@]} -gt 0 ]]; then
-      if ! branch_pattern_match "$GH_BASE_REF" "${AUTH_ALLOWED_BR[@]}"; then
-        echo "MERGE_BLOCKED: target_branch_not_allowed(${GH_BASE_REF})"
-        exit 1
-      fi
-    fi
-
-    # Validate GitHub mergeability & branch protection state
-    if [[ "$GH_MERGEABLE" != "true" ]]; then
-      echo "MERGE_BLOCKED: pr_not_mergeable(mergeable=${GH_MERGEABLE},state=${GH_MERGEABLE_STATE})"
-      exit 1
-    fi
-    if [[ "$GH_MERGEABLE_STATE" != "clean" && "$GH_MERGEABLE_STATE" != "has_hooks" ]]; then
-      echo "MERGE_BLOCKED: mergeable_state=$GH_MERGEABLE_STATE"
+    if [[ "$AUTH_LOC_REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
+      echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
       exit 1
     fi
 
-    # Verify CI status strictly from trusted GitHub provider on exact PR head_sha
-    EFF_REQ_CI=false
-    if [[ "$AUTH_REQ_CI" == "true" || ( -n "$GH_REQ_CHECKS" && "$GH_REQ_CHECKS" != "none" ) ]]; then
-      EFF_REQ_CI=true
-    fi
-    if $EFF_REQ_CI; then
-      if [[ "$GH_CI_STATUS" == "MISSING_REQUIRED" ]]; then
-        echo "MERGE_BLOCKED: missing_required_checks=$GH_MISSING_REQ_CHECKS"
-        exit 1
-      fi
-      if [[ "$GH_CI_STATUS" != "PASS" ]]; then
-        echo "MERGE_BLOCKED: ci_status=$GH_CI_STATUS"
-        exit 1
-      fi
-    elif [[ "$GH_CI_STATUS" == "FAIL" || "$GH_CI_STATUS" == "PENDING" ]]; then
-      echo "MERGE_BLOCKED: ci_status=$GH_CI_STATUS"
-      exit 1
-    fi
-
-    # Verify independent non-author review status strictly from trusted GitHub provider on exact PR head_sha
-    GH_CHANGES_REQ_INT="$((10#${GH_CHANGES_REQ_CNT:-0}))"
-    GH_INDEP_INT="$((10#${GH_INDEP_CNT:-0}))"
-    GH_STALE_INT="$((10#${GH_STALE_CNT:-0}))"
-    GH_SELF_INT="$((10#${GH_SELF_CNT:-0}))"
-    GH_UNAUTH_INT="$((10#${GH_UNAUTH_CNT:-0}))"
-    GH_REQ_REV_INT="$((10#${GH_REQ_REVIEWS:-0}))"
-    if [[ "$GH_CHANGES_REQ_INT" -gt 0 ]]; then
-      echo "MERGE_BLOCKED: changes_requested"
-      exit 1
-    fi
-    MIN_REQ_REV="$GH_REQ_REV_INT"
-    if [[ "$AUTH_REQ_REV" == "true" && "$MIN_REQ_REV" -lt 1 ]]; then
-      MIN_REQ_REV=1
-    fi
-    if [[ "$GH_REQ_CODEOWNERS" == "true" && "$MIN_REQ_REV" -lt 1 ]]; then
-      MIN_REQ_REV=1
-    fi
-    if [[ "$GH_BRANCH_PROTECTED" == "true" && "$GH_BRANCH_PROT_READABLE" != "true" && "$MIN_REQ_REV" -lt 1 ]]; then
-      MIN_REQ_REV=1
-    fi
-    if [[ "$MIN_REQ_REV" -gt 0 && "$GH_INDEP_INT" -lt "$MIN_REQ_REV" ]]; then
-      if [[ "$GH_INDEP_INT" -eq 0 && "$GH_SELF_INT" -gt 0 ]]; then
-        echo "MERGE_BLOCKED: self_review_not_independent"
-        exit 1
-      fi
-      if [[ "$GH_INDEP_INT" -eq 0 && "$GH_UNAUTH_INT" -gt 0 ]]; then
-        echo "MERGE_BLOCKED: unauthorized_reviewer_not_independent"
-        exit 1
-      fi
-      if [[ "$GH_INDEP_INT" -eq 0 && "$GH_STALE_INT" -gt 0 ]]; then
-        echo "MERGE_BLOCKED: stale_independent_review"
-        exit 1
-      fi
-      echo "MERGE_BLOCKED: insufficient_independent_reviews(have=${GH_INDEP_INT},need=${MIN_REQ_REV})"
-      exit 1
-    fi
-
-    # Require and verify local review ledger + exact target/head binding + review_independence (empty ignore list!)
-    LED_TRIM="$(trim_str "$LEDGER_PATH")"
-    if [[ -z "$LED_TRIM" ]]; then
+    LED_TRIM_LOC="$(trim_str "$LEDGER_PATH")"
+    if [[ -z "$LED_TRIM_LOC" ]]; then
       echo "MERGE_BLOCKED: missing_ledger_path"
       exit 1
     fi
-    if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM"; then
+    if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM_LOC"; then
       echo "MERGE_BLOCKED: invalid_ledger_path"
       exit 1
     fi
-    LED_FULL="$_CONTAINED_FULL"
-    LED_REL="$_CONTAINED_REL"
-    if [[ ! -f "$LED_FULL" ]]; then
+    LED_FULL_LOC="$_CONTAINED_FULL"
+    LED_REL_LOC="$_CONTAINED_REL"
+    if [[ ! -f "$LED_FULL_LOC" ]]; then
       echo "MERGE_BLOCKED: missing_ledger_path"
       exit 1
     fi
     set +e
-    LED_CHK_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL" "$LED_REL" "" "true")"
-    LED_CHK_RC=$?
+    LED_LOC_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL_LOC" "$LED_REL_LOC" "" "true")"
+    LED_LOC_RC=$?
     set -e
-    if [[ $LED_CHK_RC -ne 0 ]]; then
-      _first_err="${LED_CHK_OUT%%$'\n'*}"
+    if [[ $LED_LOC_RC -ne 0 ]]; then
+      _first_err="${LED_LOC_OUT%%$'\n'*}"
       echo "MERGE_BLOCKED: ledger_check_failed (${_first_err:-unknown})"
       exit 1
     fi
-    M_BASE=""; M_HEAD=""; M_TREF=""; M_TSHA=""; M_RIND=""
+    M_BASE_LOC=""; M_HEAD_LOC=""; M_TREF_LOC=""; M_TSHA_LOC=""; M_RIND_LOC=""
     while IFS= read -r mline; do
       case "$mline" in
-        META_BASE_SHA=*) M_BASE="${mline#META_BASE_SHA=}" ;;
-        META_HEAD_SHA=*) M_HEAD="${mline#META_HEAD_SHA=}" ;;
-        META_TARGET_REF=*) M_TREF="${mline#META_TARGET_REF=}" ;;
-        META_TARGET_SHA=*) M_TSHA="${mline#META_TARGET_SHA=}" ;;
-        META_REVIEW_INDEPENDENCE=*) M_RIND="${mline#META_REVIEW_INDEPENDENCE=}" ;;
+        META_BASE_SHA=*) M_BASE_LOC="${mline#META_BASE_SHA=}" ;;
+        META_HEAD_SHA=*) M_HEAD_LOC="${mline#META_HEAD_SHA=}" ;;
+        META_TARGET_REF=*) M_TREF_LOC="${mline#META_TARGET_REF=}" ;;
+        META_TARGET_SHA=*) M_TSHA_LOC="${mline#META_TARGET_SHA=}" ;;
+        META_REVIEW_INDEPENDENCE=*) M_RIND_LOC="${mline#META_REVIEW_INDEPENDENCE=}" ;;
       esac
-    done <<< "$LED_CHK_OUT"
-    if [[ "$M_BASE" != "$RES_BASE_SHA" ]]; then
+    done <<< "$LED_LOC_OUT"
+    if [[ "$M_BASE_LOC" != "$RES_BASE_SHA" ]]; then
       echo "MERGE_BLOCKED: ledger_target_mismatch"
       exit 1
     fi
-    if [[ "$M_HEAD" != "$LIVE_HEAD_SHA" || ( "$M_TREF" != "working_tree" && "$M_TSHA" != "$LIVE_HEAD_SHA" ) ]]; then
+    if [[ "$M_HEAD_LOC" != "$LIVE_HEAD_SHA" || ( "$M_TREF_LOC" != "working_tree" && "$M_TSHA_LOC" != "$LIVE_HEAD_SHA" ) ]]; then
       echo "MERGE_BLOCKED: ledger_head_mismatch"
       exit 1
     fi
-    if [[ "$M_RIND" == "SINGLE_AGENT_LIMIT" ]]; then
+    if [[ "$M_RIND_LOC" == "SINGLE_AGENT_LIMIT" ]]; then
       echo "MERGE_BLOCKED: single_agent_limit"
       exit 1
     fi
-    if [[ "$M_RIND" != "INDEPENDENT" ]]; then
+    if [[ "$M_RIND_LOC" != "INDEPENDENT" ]]; then
       echo "MERGE_BLOCKED: review_independence_unknown"
       exit 1
     fi
 
-    printf 'MERGE_AUTHORIZED: pr=%s#%s target_ref=%s target_sha=%s head_sha=%s policy_authority=%s@%s auto_merge=authorized ci=%s review=%s independent_reviews=%s governance=CLEAR\n' \
-      "$GH_BASE_REPO" "$PR_NUM_TRIM" "$GH_BASE_REF" "$RES_BASE_SHA" "$LIVE_HEAD_SHA" "$GH_POLICY_AUTH_REF" "$GH_POLICY_AUTH_SHA" "$GH_CI_STATUS" "$GH_REVIEW_STATUS" "$GH_INDEP_INT"
+    if $LOCAL_ONLY; then
+      echo "LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized"
+      exit 2
+    fi
+
+    if [[ -z "$TARGET_SYM_FULL" || -z "$EFF_AUTH_SYM_FULL" ]]; then
+      echo "MERGE_BLOCKED: invalid_target_ref"
+      exit 1
+    fi
+    if $HAS_ORIGIN && [[ "$TARGET_SYM_FULL" != refs/remotes/origin/* ]]; then
+      echo "MERGE_BLOCKED: remote_tracking_target_required"
+      exit 1
+    fi
+    if ! $HAS_ANY_REMOTE && ( [[ "$TARGET_SYM_FULL" != refs/heads/* ]] || [[ -n "$CUR_SYM_FULL" && "$TARGET_SYM_FULL" == "$CUR_SYM_FULL" ]] ); then
+      echo "MERGE_BLOCKED: invalid_target_ref"
+      exit 1
+    fi
+
+    printf 'MERGE_AUTHORIZED: mode=local target_ref=%s target_sha=%s head_sha=%s policy_authority=%s@%s auto_merge=authorized governance=CLEAR\n' \
+      "$TARGET_SYM_FULL" "$RES_BASE_SHA" "$LIVE_HEAD_SHA" "$EFF_AUTH_SYM_FULL" "$EFF_AUTH_SHA"
     exit 0
     ;;
 
