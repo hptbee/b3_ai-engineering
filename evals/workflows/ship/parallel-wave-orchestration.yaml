@@ -4,7 +4,7 @@ intent: Automatic wave scheduling must run check-wave -Partition on every ready 
 scenario: |
   Ready queue has T001 (src/api/a.ts), T002 (src/ui/b.tsx), T003 (src/api/a.ts), and T004 reading src/api/a.ts while docs/scratch.md is in initial_dirty_paths
   Parent runs check-wave -Partition with -WaveReads, -ProtectedPaths, -IgnoreDirtyPaths, -CheckDirtyScope, and -ExpectedBaseSha, then acts strictly on wave|N| rows (supports singleton wave|1|SEQUENTIAL before wave|2|PARALLEL)
-  Choose SHARED_READ_ONLY for read-only units, SHARED_DISJOINT_WRITES only when clean non-'.' disjoint writes and safe shared side effects hold (workers never stage/commit), or ISOLATED_WRITES verified via check-worktree -PeerRoots; otherwise fall back to SEQUENTIAL and record last_wave accurately
+  Choose SHARED_READ_ONLY (TaskId=none/[] + -WaveReads without dummy writes/commits), SHARED_DISJOINT_WRITES only when clean non-'.' disjoint writes and safe shared side effects hold (workers never stage/commit), or ISOLATED_WRITES verified via check-worktree -RequireIsolated -ExpectedRoot -PeerRoots (not WORKTREE_OK alone); otherwise fall back to SEQUENTIAL and record last_wave accurately
 expected_outcome: PASS
 failure_mode: missed-auto-parallel-wave-or-false-parallel-or-unsafe-shared-mutation
-notes: Never require user opt-in or infer mode from aggregate WAVE_OK/WAVE_PARTITIONED; validate worker diffs vs ownership before single-writer precommit; run post-integration verify-run and cross-unit review
+notes: Never require user opt-in or infer mode from aggregate WAVE_OK/WAVE_PARTITIONED; validate per-worker diffs via mechanical-check -WaveSpecs/-WorkerChanges (never claim ownership verified from UNVERIFIED_COMBINED_ONLY) before single-writer precommit; run post-integration verify-run and cross-unit review

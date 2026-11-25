@@ -836,8 +836,10 @@ try {
     $adapBase = (& git rev-parse HEAD).Trim()
     Pop-Location
 
-    # 1) SHARED_READ_ONLY concurrent workers (no worktrees) + WaveReads '.' semantics
+    # 1) SHARED_READ_ONLY concurrent workers (no worktrees) + WaveReads '.' semantics + F04 pure empty-write readers & mixed RW
     $roParPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-WaveSpecs', 'U001=research/r1.md;U002=research/r2.md', '-WaveReads', 'U001=sources,evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest')
+    $roPureParPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-WaveSpecs', 'U001=none;U002=[]', '-WaveReads', 'U001=evidence-index.md,sources.manifest,sources/primary.md;U002=evidence-index.md,sources.manifest')
+    $roMixedRwPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-WaveSpecs', 'W1=docs/out.md;R1=none', '-WaveReads', 'R1=docs/out.md')
     $roDotSinglePs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-WaveSpecs', 'U001=research/r1.md', '-WaveReads', 'U001=.')
     $roDotRwPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-WaveSpecs', 'U001=research/r1.md;U002=research/r2.md', '-WaveReads', 'U001=.;U002=evidence-index.md,sources.manifest')
     $roDotWritePs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-WaveSpecs', 'U001=.;U002=research/r2.md')
@@ -847,21 +849,80 @@ try {
     $protLedgerPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-ProtectedPaths', $protCsv, '-WaveSpecs', 'U001=evidence-index.md;U002=research/r2.md')
     $protAuthPs = Invoke-PsGuard @('check-wave', '-RepoRoot', $rAdap, '-ExpectedBaseSha', $adapBase, '-Partition', '-ProtectedPaths', $protCsv, '-WaveSpecs', 'U001=docs/authority/pin.md;U002=research/r2.md')
 
+    # 2b) F01 Per-worker ownership attribution on research units (combined vs swapped vs matching)
+    $rOwn = Join-Path $sandbox 'rs-ownership-repo'
+    $rOwnPosix = To-PosixPath $rOwn
+    Init-B3TestRepo -RepoPath $rOwn -DefaultBranch 'main' -UserEmail 'research-test@example.com' -UserName 'Research Test' -InitialCommit
+    Push-Location $rOwn
+    $ownBase = (& git rev-parse HEAD).Trim()
+    Pop-Location
+    New-Item -ItemType Directory -Path (Join-Path $rOwn 'docs') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $rOwn 'docs\u1.md'), "# Unit 1`n", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $rOwn 'docs\u2.md'), "# Unit 2`n", $utf8NoBom)
+    $ownCombPs = Invoke-PsGuard @('mechanical-check', '-RepoRoot', $rOwn, '-BaseSha', $ownBase, '-WaveSpecs', 'U1=docs/u1.md;U2=docs/u2.md', '-AllowedPaths', 'docs/u1.md,docs/u2.md')
+    $ownSwapPs = Invoke-PsGuard @('mechanical-check', '-RepoRoot', $rOwn, '-BaseSha', $ownBase, '-WaveSpecs', 'U1=docs/u1.md;U2=docs/u2.md', '-WorkerChanges', 'U1=docs/u2.md;U2=docs/u1.md', '-AllowedPaths', 'docs/u1.md,docs/u2.md')
+    $ownMatchPs = Invoke-PsGuard @('mechanical-check', '-RepoRoot', $rOwn, '-BaseSha', $ownBase, '-WaveSpecs', 'U1=docs/u1.md;U2=docs/u2.md', '-WorkerChanges', 'U1=docs/u1.md;U2=docs/u2.md', '-AllowedPaths', 'docs/u1.md,docs/u2.md')
+
+    # 2c) F02 Isolated worktree enforcement on Phase G (-RequireIsolated)
+    $wtReusedPs = Invoke-PsGuard @('check-worktree', '-RepoRoot', $rAdap, '-ExpectedRoot', $rAdap, '-RequireIsolated')
+    $wtIsoPs = $null
+    $wtReusedSh = $null
+    $wtIsoSh = $null
+    $rAdapWt = Join-Path $sandbox 'rs-adaptive-wt'
+    $rAdapWtPosix = To-PosixPath $rAdapWt
+    try {
+        $prevWtEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        & git -C $rAdap worktree add -q -b wt-phase-g $rAdapWt $adapBase 2>&1 | Out-Null
+        $wtAddExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevWtEap
+        if ($wtAddExit -ne 0) { throw "git worktree add failed for $rAdapWt" }
+        $wtIsoPs = Invoke-PsGuard @('check-worktree', '-RepoRoot', $rAdapWt, '-ExpectedRoot', $rAdap, '-RequireIsolated')
+        if ($script:HasBash) {
+            $wtReusedSh = Invoke-ShGuard @('check-worktree', '--repo-root', $rAdapPosix, '--expected-root', $rAdapPosix, '--require-isolated')
+            $wtIsoSh = Invoke-ShGuard @('check-worktree', '--repo-root', $rAdapWtPosix, '--expected-root', $rAdapPosix, '--require-isolated')
+        }
+    }
+    finally {
+        $prevWtCleanEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        if (Test-Path -LiteralPath $rAdap) {
+            & git -C $rAdap worktree remove --force $rAdapWt 2>$null | Out-Null
+            & git -C $rAdap worktree prune 2>$null | Out-Null
+        }
+        if (Test-Path -LiteralPath $rAdapWt) {
+            Remove-Item -LiteralPath $rAdapWt -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $ErrorActionPreference = $prevWtCleanEap
+    }
+
     $adapCleanShOk = $true
     if ($script:HasBash) {
         $roParSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--wave-specs', 'U001=research/r1.md;U002=research/r2.md', '--wave-reads', 'U001=sources,evidence-index.md,sources.manifest;U002=evidence-index.md,sources.manifest')
+        $roPureParSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--wave-specs', 'U001=none;U002=[]', '--wave-reads', 'U001=evidence-index.md,sources.manifest,sources/primary.md;U002=evidence-index.md,sources.manifest')
+        $roMixedRwSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--wave-specs', 'W1=docs/out.md;R1=none', '--wave-reads', 'R1=docs/out.md')
         $roDotSingleSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--wave-specs', 'U001=research/r1.md', '--wave-reads', 'U001=.')
         $roDotRwSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--wave-specs', 'U001=research/r1.md;U002=research/r2.md', '--wave-reads', 'U001=.;U002=evidence-index.md,sources.manifest')
         $roDotWriteSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--wave-specs', 'U001=.;U002=research/r2.md')
         $protLedgerSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--protected-paths', $protCsv, '--wave-specs', 'U001=evidence-index.md;U002=research/r2.md')
         $protAuthSh = Invoke-ShGuard @('check-wave', '--repo-root', $rAdapPosix, '--expected-base-sha', $adapBase, '--partition', '--protected-paths', $protCsv, '--wave-specs', 'U001=docs/authority/pin.md;U002=research/r2.md')
+        $ownCombSh = Invoke-ShGuard @('mechanical-check', '--repo-root', $rOwnPosix, '--base-sha', $ownBase, '--wave-specs', 'U1=docs/u1.md;U2=docs/u2.md', '--allowed-paths', 'docs/u1.md,docs/u2.md')
+        $ownSwapSh = Invoke-ShGuard @('mechanical-check', '--repo-root', $rOwnPosix, '--base-sha', $ownBase, '--wave-specs', 'U1=docs/u1.md;U2=docs/u2.md', '--worker-changes', 'U1=docs/u2.md;U2=docs/u1.md', '--allowed-paths', 'docs/u1.md,docs/u2.md')
+        $ownMatchSh = Invoke-ShGuard @('mechanical-check', '--repo-root', $rOwnPosix, '--base-sha', $ownBase, '--wave-specs', 'U1=docs/u1.md;U2=docs/u2.md', '--worker-changes', 'U1=docs/u1.md;U2=docs/u2.md', '--allowed-paths', 'docs/u1.md,docs/u2.md')
 
         $adapCleanShOk = ($roParSh.Code -eq $roParPs.Code -and $roParSh.Text -ceq $roParPs.Text) -and
+                         ($roPureParSh.Code -eq $roPureParPs.Code -and $roPureParSh.Text -ceq $roPureParPs.Text) -and
+                         ($roMixedRwSh.Code -eq $roMixedRwPs.Code -and $roMixedRwSh.Text -ceq $roMixedRwPs.Text) -and
                          ($roDotSingleSh.Code -eq $roDotSinglePs.Code -and $roDotSingleSh.Text -ceq $roDotSinglePs.Text) -and
                          ($roDotRwSh.Code -eq $roDotRwPs.Code -and $roDotRwSh.Text -ceq $roDotRwPs.Text) -and
                          ($roDotWriteSh.Code -eq $roDotWritePs.Code -and $roDotWriteSh.Text -ceq $roDotWritePs.Text) -and
                          ($protLedgerSh.Code -eq $protLedgerPs.Code -and $protLedgerSh.Text -ceq $protLedgerPs.Text) -and
-                         ($protAuthSh.Code -eq $protAuthPs.Code -and $protAuthSh.Text -ceq $protAuthPs.Text)
+                         ($protAuthSh.Code -eq $protAuthPs.Code -and $protAuthSh.Text -ceq $protAuthPs.Text) -and
+                         ($ownCombSh.Code -eq $ownCombPs.Code -and $ownCombSh.Text -ceq $ownCombPs.Text) -and
+                         ($ownSwapSh.Code -eq $ownSwapPs.Code -and $ownSwapSh.Text -ceq $ownSwapPs.Text) -and
+                         ($ownMatchSh.Code -eq $ownMatchPs.Code -and $ownMatchSh.Text -ceq $ownMatchPs.Text) -and
+                         ($null -ne $wtReusedSh -and $wtReusedSh.Code -eq $wtReusedPs.Code -and ($wtReusedSh.Text -match 'parent_root_reused_or_nested')) -and
+                         ($null -ne $wtIsoSh -and $wtIsoSh.Code -eq $wtIsoPs.Code -and ($wtIsoSh.Text -match 'WORKTREE_OK:.*linked=true isolated=true'))
     }
 
     # 3) Dirty scope + resume reconciliation (initial_dirty_paths, resolve-run, evidence-check)
@@ -909,6 +970,12 @@ try {
     $adapPsOk = ($roParPs.Code -eq 0 -and
                  ($roParPs.Text -match '(?m)^WAVE_OK: disjoint \(2 tasks, 2 paths\)$') -and
                  ($roParPs.Text -match '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=U001,U002\|reason=independent_ready_tasks$')) -and
+                ($roPureParPs.Code -eq 0 -and
+                 ($roPureParPs.Text -match '(?m)^wave\|1\|PARALLEL\|agents=2\|tasks=U001,U002\|reason=independent_ready_tasks$') -and
+                 ($roPureParPs.Text -match '(?m)^WAVE_OK: disjoint \(2 tasks, 0 paths\)$')) -and
+                ($roMixedRwPs.Code -eq 2 -and
+                 ($roMixedRwPs.Text -match '(?m)^conflicts=rw:docs/out\.md\(W1->R1\)$') -and
+                 ($roMixedRwPs.Text -match '(?m)^WAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=shared_write_conflict$')) -and
                 ($roDotSinglePs.Code -eq 0 -and
                  ($roDotSinglePs.Text -match '(?m)^WAVE_OK: disjoint \(1 tasks, 1 paths\)$')) -and
                 ($roDotRwPs.Code -eq 2 -and
@@ -920,6 +987,19 @@ try {
                  ($protLedgerPs.Text -match "WAVE_FAIL: protected path 'evidence-index\.md' overlaps single-writer boundary 'evidence-index\.md'")) -and
                 ($protAuthPs.Code -eq 1 -and
                  ($protAuthPs.Text -match "WAVE_FAIL: protected path 'docs/authority/pin\.md' overlaps single-writer boundary 'docs/authority'")) -and
+                ($ownCombPs.Code -eq 0 -and
+                 ($ownCombPs.Text -match '(?m)^ownership_verification=UNVERIFIED_COMBINED_ONLY$') -and
+                 ($ownCombPs.Text -match '(?m)^ownership_violations=unverified$')) -and
+                ($ownSwapPs.Code -eq 2 -and
+                 ($ownSwapPs.Text -match '(?m)^ownership_verification=VIOLATION$') -and
+                 ($ownSwapPs.Text -match '(?m)^ownership_violations=docs/u1\.md\(U2->U1\),docs/u2\.md\(U1->U2\)$')) -and
+                ($ownMatchPs.Code -eq 0 -and
+                 ($ownMatchPs.Text -match '(?m)^ownership_verification=VERIFIED_PER_WORKER$') -and
+                 ($ownMatchPs.Text -match '(?m)^ownership_violations=none$')) -and
+                ($wtReusedPs.Code -eq 2 -and
+                 ($wtReusedPs.Text -match 'parent_root_reused_or_nested')) -and
+                ($null -ne $wtIsoPs -and $wtIsoPs.Code -eq 0 -and
+                 ($wtIsoPs.Text -match 'WORKTREE_OK:.*linked=true isolated=true')) -and
                 ($dsUserOnlyPs.Code -eq 0 -and
                  ($dsUserOnlyPs.Text -match '(?m)^dirty_scope=user_only$') -and
                  ($dsUserOnlyPs.Text -match '(?m)^user_dirty=research/user-notes\.md$') -and
@@ -969,6 +1049,10 @@ try {
                   ($wfText -match 'initial_dirty_paths') -and
                   ($wfText -match '-ProtectedPaths') -and
                   ($wfText -match 'wave\|N\|') -and
+                  ($wfText -match 'UNVERIFIED_COMBINED_ONLY') -and
+                  ($wfText -match '-WorkerChanges') -and
+                  ($wfText -match '-RequireIsolated') -and
+                  ($wfText -match 'TaskId=none`/`\[\]') -and
                   ($tmplText -match 'SHARED_READ_ONLY') -and
                   ($tmplText -match 'initial_dirty_paths') -and
                   ($tmplText -match 'exec_mode') -and

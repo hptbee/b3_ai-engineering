@@ -181,14 +181,44 @@ path_in_list() {
   return 1
 }
 
+ownership_path_match() {
+  local candidate="$1"
+  local packed="$2"
+  [[ -n "$candidate" && -n "$packed" ]] || return 1
+  local cmp_cand="$candidate"
+  local cmp_packed="$packed"
+  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+    cmp_cand="$(printf '%s' "$candidate" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    cmp_packed="$(printf '%s' "$packed" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
+  local -a pats=()
+  IFS='|' read -ra pats <<< "$cmp_packed"
+  local pat
+  if [[ ${#pats[@]} -gt 0 ]]; then
+    for pat in "${pats[@]}"; do
+      [[ -z "$pat" ]] && continue
+      if [[ "$pat" == "." || "$cmp_cand" == "$pat" || "$cmp_cand" == "$pat/"* ]]; then
+        return 0
+      fi
+    done
+  fi
+  return 1
+}
+
 parse_wave_paths() {
   local raw_in="$1"
   local check_protected="${2:-false}"
   local reject_dot="${3:-false}"
+  local error_prefix="${4:-WAVE_FAIL}"
   _WAVE_PARSED_PATHS=()
+  _WAVE_EXPLICIT_EMPTY=false
   local cleaned
   cleaned="$(trim_str "$raw_in")"
-  if [[ -z "$cleaned" || "$cleaned" == "[]" || "$cleaned" == "none" ]]; then
+  if [[ "$cleaned" == "[]" || "$cleaned" == "none" ]]; then
+    _WAVE_EXPLICIT_EMPTY=true
+    return 0
+  fi
+  if [[ -z "$cleaned" ]]; then
     return 0
   fi
   if [[ "$cleaned" == \[*\] ]]; then
@@ -217,21 +247,21 @@ parse_wave_paths() {
     if [[ "$part" =~ [[:cntrl:]] ]]; then
       tok="$(trim_str "$part")"
       [[ -n "$tok" ]] || tok="$part"
-      echo "WAVE_FAIL: invalid path '$tok'"
+      echo "${error_prefix}: invalid path '$tok'"
       exit 1
     fi
     tok="$(trim_str "$part")"
     [[ -z "$tok" || "$tok" == "none" ]] && continue
     slash="${tok//\\//}"
     if [[ "$slash" == *"|"* || "$slash" == *:* || "$slash" == /* || "$slash" == *"//"* || "$slash" =~ $re_dotdot ]]; then
-      echo "WAVE_FAIL: invalid path '$tok'"
+      echo "${error_prefix}: invalid path '$tok'"
       exit 1
     fi
     if [[ "$slash" == "." || "$slash" == "./" ]]; then
       norm="."
     else
       if [[ "$slash" == *"/./"* || "$slash" == *"/." ]]; then
-        echo "WAVE_FAIL: invalid path '$tok'"
+        echo "${error_prefix}: invalid path '$tok'"
         exit 1
       fi
       norm="$slash"
@@ -242,7 +272,7 @@ parse_wave_paths() {
         norm="${norm%/}"
       done
       if [[ -z "$norm" || "$norm" == "." || "$norm" == ".." ]]; then
-        echo "WAVE_FAIL: invalid path '$tok'"
+        echo "${error_prefix}: invalid path '$tok'"
         exit 1
       fi
       rem="$norm"
@@ -255,7 +285,7 @@ parse_wave_paths() {
           rem=""
         fi
         if [[ -z "$seg" || "$seg" == "." || "$seg" == ".." || "$seg" == *. || "$seg" == *" " ]]; then
-          echo "WAVE_FAIL: invalid path '$tok'"
+          echo "${error_prefix}: invalid path '$tok'"
           exit 1
         fi
         [[ -n "$rem" ]] || break
@@ -264,12 +294,12 @@ parse_wave_paths() {
     if [[ "$check_protected" == "true" ]]; then
       low_p="$(printf '%s' "$norm" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
       if [[ "$low_p" =~ $re_b3 || "$low_p" =~ $re_git || "$low_p" =~ $re_gitmodules ]]; then
-        echo "WAVE_FAIL: protected path '$norm' cannot be worker-owned"
+        echo "${error_prefix}: protected path '$norm' cannot be worker-owned"
         exit 1
       fi
     fi
     if [[ "$reject_dot" == "true" && "$norm" == "." ]]; then
-      echo "WAVE_FAIL: protected path '.' cannot be worker-owned in parallel partition"
+      echo "${error_prefix}: protected path '.' cannot be worker-owned in parallel partition"
       exit 1
     fi
     seen="false"
@@ -285,6 +315,102 @@ parse_wave_paths() {
       _WAVE_PARSED_PATHS+=("$norm")
     fi
   done
+}
+
+parse_wave_task_map() {
+  local specs="$1"
+  local root="$2"
+  local err_prefix="$3"
+  local spec_label="$4"
+  local empty_arg_label="$5"
+  local check_protected="$6"
+  local reject_dot="$7"
+  local allow_empty="$8"
+  local allowed_packed="${9:-}"
+
+  _WTM_IDS=()
+  _WTM_PACKED=()
+  _WTM_LOW_PACKED=()
+  _WTM_TOTAL_PATHS=0
+
+  local repo_exists="false"
+  if [[ -n "$root" && -d "$root" ]]; then
+    repo_exists="true"
+  fi
+  local entry_label="entry"
+  local dup_suffix=""
+  if [[ "$spec_label" != "WaveSpecs" ]]; then
+    entry_label="${spec_label} entry"
+    dup_suffix=" in ${spec_label}"
+  fi
+
+  local _had_noglob_wtm=false
+  case "$-" in
+    *f*) _had_noglob_wtm=true ;;
+  esac
+  set -f
+  local -a entries=()
+  IFS=';' read -r -d '' -a entries < <(printf '%s\0' "$specs") || true
+  if ! $_had_noglob_wtm; then set +f; fi
+
+  local entry trim_e tid raw_csv prev_t wp packed low_packed
+  if [[ ${#entries[@]} -gt 0 ]]; then
+    for entry in "${entries[@]}"; do
+      trim_e="$(trim_str "$entry")"
+      [[ -z "$trim_e" ]] && continue
+      if [[ "$trim_e" != *"="* ]]; then
+        echo "${err_prefix}: invalid ${entry_label} '$trim_e' (expected TaskId=path1,path2)"
+        exit 1
+      fi
+      tid="$(trim_str "${trim_e%%=*}")"
+      raw_csv="${trim_e#*=}"
+      [[ -n "$tid" ]] || { echo "${err_prefix}: empty task id in '$trim_e'"; exit 1; }
+      if ! is_valid_wave_task_id "$tid"; then
+        echo "${err_prefix}: invalid task id '$tid'"
+        exit 1
+      fi
+      if [[ ${#_WTM_IDS[@]} -gt 0 ]]; then
+        for prev_t in "${_WTM_IDS[@]}"; do
+          if [[ "$prev_t" == "$tid" ]]; then
+            echo "${err_prefix}: duplicate task id '$tid'${dup_suffix}"
+            exit 1
+          fi
+        done
+      fi
+      if [[ -n "$allowed_packed" && "$allowed_packed" != *"|${tid}|"* ]]; then
+        echo "${err_prefix}: unknown task id '$tid' in ${spec_label}"
+        exit 1
+      fi
+      parse_wave_paths "$raw_csv" "$check_protected" "$reject_dot" "$err_prefix"
+      if [[ ${#_WAVE_PARSED_PATHS[@]} -lt 1 ]] && ! [[ "$allow_empty" == "true" && "$_WAVE_EXPLICIT_EMPTY" == "true" ]]; then
+        echo "${err_prefix}: task '$tid' has no owned paths"
+        exit 1
+      fi
+      if [[ "$repo_exists" == "true" && ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+        for wp in "${_WAVE_PARSED_PATHS[@]}"; do
+          if ! check_wave_path_containment "$root" "$wp"; then
+            echo "${err_prefix}: unsafe symlink or junction alias in path '$wp'"
+            exit 1
+          fi
+        done
+      fi
+      _WTM_IDS+=("$tid")
+      packed=""
+      low_packed=""
+      if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+        packed="$(IFS='|'; printf '%s' "${_WAVE_PARSED_PATHS[*]}")"
+        if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+          low_packed="$(printf '%s' "$packed" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        else
+          low_packed="$packed"
+        fi
+      fi
+      _WTM_PACKED+=("$packed")
+      _WTM_LOW_PACKED+=("$low_packed")
+      _WTM_TOTAL_PATHS=$((_WTM_TOTAL_PATHS + ${#_WAVE_PARSED_PATHS[@]}))
+    done
+  fi
+  [[ ${#_WTM_IDS[@]} -gt 0 ]] || { echo "${err_prefix}: no tasks in ${empty_arg_label}"; exit 1; }
 }
 
 check_wave_path_containment() {
@@ -2576,6 +2702,18 @@ paths_equal_fs() {
     b="$(printf '%s' "$b" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
   fi
   [[ "$a" == "$b" ]]
+}
+
+worktree_roots_overlap() {
+  local a="$1" b="$2"
+  if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$a" =~ ^[A-Za-z]: || "$b" =~ ^[A-Za-z]: ]]; then
+    a="$(printf '%s' "$a" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    b="$(printf '%s' "$b" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  fi
+  [[ "$a" == "$b" ]] && return 0
+  local a_base="${a%/}" b_base="${b%/}"
+  [[ -n "$a_base" && -n "$b_base" ]] || return 1
+  [[ "$a" == "$b_base/"* || "$b" == "$a_base/"* ]]
 }
 
 _normalize_logical_abs_path() {
@@ -5340,6 +5478,8 @@ case "$CMD" in
     IGNORE_DIRTY=""
     OBSOLETES=""
     ALLOW_MASS_DELETE=false
+    WAVE_SPECS=""
+    WORKER_CHANGES=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
@@ -5349,9 +5489,38 @@ case "$CMD" in
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         --obsoletes) OBSOLETES="${2:-}"; shift 2 ;;
         --allow-mass-delete) ALLOW_MASS_DELETE=true; shift ;;
+        --wave-specs) [[ $# -ge 2 ]] || { echo "MECHANICAL_FAIL: missing value for $1"; exit 1; }; WAVE_SPECS="$2"; shift 2 ;;
+        --worker-changes) [[ $# -ge 2 ]] || { echo "MECHANICAL_FAIL: missing value for $1"; exit 1; }; WORKER_CHANGES="$2"; shift 2 ;;
         *) echo "MECHANICAL_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
+    HAS_WAVE_SPECS="false"
+    if [[ -n "$(trim_str "$WAVE_SPECS")" ]]; then
+      HAS_WAVE_SPECS="true"
+    fi
+    HAS_WORKER_CHANGES="false"
+    if [[ -n "$(trim_str "$WORKER_CHANGES")" ]]; then
+      HAS_WORKER_CHANGES="true"
+    fi
+    if [[ "$HAS_WORKER_CHANGES" == "true" && "$HAS_WAVE_SPECS" != "true" ]]; then
+      echo "MECHANICAL_FAIL: -WorkerChanges requires -WaveSpecs"
+      exit 1
+    fi
+    WS_IDS=()
+    WS_PACKED=()
+    WC_IDS=()
+    WC_PACKED=()
+    if [[ "$HAS_WAVE_SPECS" == "true" ]]; then
+      parse_wave_task_map "$WAVE_SPECS" "$REPO_ROOT" "MECHANICAL_FAIL" "WaveSpecs" "--wave-specs" true true true ""
+      WS_IDS=("${_WTM_IDS[@]}")
+      WS_PACKED=("${_WTM_PACKED[@]}")
+      if [[ "$HAS_WORKER_CHANGES" == "true" ]]; then
+        WS_ALLOWED_PACKED="|$(IFS='|'; printf '%s' "${WS_IDS[*]}")|"
+        parse_wave_task_map "$WORKER_CHANGES" "$REPO_ROOT" "MECHANICAL_FAIL" "WorkerChanges" "--worker-changes" false true true "$WS_ALLOWED_PACKED"
+        WC_IDS=("${_WTM_IDS[@]}")
+        WC_PACKED=("${_WTM_PACKED[@]}")
+      fi
+    fi
     ALLOWED_ARR=()
     while IFS= read -r p; do [[ -n "$p" ]] && ALLOWED_ARR+=("$p"); done < <(split_csv_lines "$ALLOWED" true | LC_ALL=C sort -u)
     IGNORE_ARR=()
@@ -5590,6 +5759,91 @@ case "$CMD" in
       done
     fi
 
+    OV_STATUS=""
+    OV_VIOLATIONS_OUT=""
+    if [[ "$HAS_WAVE_SPECS" == "true" ]]; then
+      if [[ "$HAS_WORKER_CHANGES" != "true" ]]; then
+        OV_STATUS="UNVERIFIED_COMBINED_ONLY"
+        OV_VIOLATIONS_OUT="unverified"
+      else
+        IGNORE_PACKED=""
+        if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
+          IGNORE_PACKED="$(IFS='|'; printf '%s' "${IGNORE_ARR[*]}")"
+        fi
+        OV_VIOLATIONS=()
+        ATTRIBUTED_PATHS=()
+        re_mc_b3='^\.b3(/|$)'
+        re_mc_git='(^|/)\.git(/|$)'
+        re_mc_gitmodules='(^|/)\.gitmodules$'
+        for ((wci = 0; wci < ${#WC_IDS[@]}; wci++)); do
+          tid="${WC_IDS[$wci]}"
+          wc_packed="${WC_PACKED[$wci]}"
+          [[ -n "$wc_packed" ]] || continue
+          tid_owned=""
+          for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+            if [[ "${WS_IDS[$wsi]}" == "$tid" ]]; then
+              tid_owned="${WS_PACKED[$wsi]}"
+              break
+            fi
+          done
+          IFS='|' read -ra wp_arr <<< "$wc_packed"
+          for wp in "${wp_arr[@]}"; do
+            [[ -n "$wp" ]] || continue
+            ATTRIBUTED_PATHS+=("$wp")
+            wp_low="$(printf '%s' "$wp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            if [[ "$wp_low" =~ $re_mc_b3 || "$wp_low" =~ $re_mc_git || "$wp_low" =~ $re_mc_gitmodules ]]; then
+              OV_VIOLATIONS+=("${wp}(${tid}->protected)")
+              continue
+            fi
+            if [[ -n "$IGNORE_PACKED" ]] && ownership_path_match "$wp" "$IGNORE_PACKED"; then
+              OV_VIOLATIONS+=("${wp}(${tid}->user_dirty)")
+              continue
+            fi
+            if [[ -n "$tid_owned" ]] && ownership_path_match "$wp" "$tid_owned"; then
+              continue
+            fi
+            OTHER_OWNERS=()
+            for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+              other_tid="${WS_IDS[$wsi]}"
+              [[ "$other_tid" == "$tid" ]] && continue
+              if [[ -n "${WS_PACKED[$wsi]}" ]] && ownership_path_match "$wp" "${WS_PACKED[$wsi]}"; then
+                OTHER_OWNERS+=("$other_tid")
+              fi
+            done
+            if [[ ${#OTHER_OWNERS[@]} -gt 0 ]]; then
+              first_other="$(printf '%s\n' "${OTHER_OWNERS[@]}" | LC_ALL=C sort | head -n 1)"
+              OV_VIOLATIONS+=("${wp}(${tid}->${first_other})")
+            else
+              OV_VIOLATIONS+=("${wp}(${tid}->unowned)")
+            fi
+          done
+        done
+        if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
+          for gp in "${ALL_CHANGED[@]}"; do
+            is_attrib="false"
+            if [[ ${#ATTRIBUTED_PATHS[@]} -gt 0 ]]; then
+              for ap in "${ATTRIBUTED_PATHS[@]}"; do
+                if paths_equal_fs "$gp" "$ap"; then
+                  is_attrib="true"
+                  break
+                fi
+              done
+            fi
+            if [[ "$is_attrib" != "true" ]]; then
+              OV_VIOLATIONS+=("${gp}(unattributed)")
+            fi
+          done
+        fi
+        if [[ ${#OV_VIOLATIONS[@]} -gt 0 ]]; then
+          OV_STATUS="VIOLATION"
+          OV_VIOLATIONS_OUT="$(printf '%s\n' "${OV_VIOLATIONS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+        else
+          OV_STATUS="VERIFIED_PER_WORKER"
+          OV_VIOLATIONS_OUT="none"
+        fi
+      fi
+    fi
+
     SC_OUT="none"
     if [[ ${#SCOPE_CREEP[@]} -gt 0 ]]; then
       SC_OUT="$(printf '%s\n' "${SCOPE_CREEP[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
@@ -5608,7 +5862,10 @@ case "$CMD" in
     fi
 
     printf 'scope_creep=%s\nleftovers=%s\nobsolete_hits=%s\nsafety_hits=%s\n' "$SC_OUT" "$LO_OUT" "$OB_OUT" "$SF_OUT"
-    if [[ "$SC_OUT" == "none" && "$LO_OUT" == "none" && "$OB_OUT" == "none" && "$SF_OUT" == "none" ]]; then
+    if [[ "$HAS_WAVE_SPECS" == "true" ]]; then
+      printf 'ownership_verification=%s\nownership_violations=%s\n' "$OV_STATUS" "$OV_VIOLATIONS_OUT"
+    fi
+    if [[ "$SC_OUT" == "none" && "$LO_OUT" == "none" && "$OB_OUT" == "none" && "$SF_OUT" == "none" ]] && [[ "$HAS_WAVE_SPECS" != "true" || "$OV_STATUS" != "VIOLATION" ]]; then
       echo "MECHANICAL_OK"
       exit 0
     fi
@@ -5684,71 +5941,17 @@ case "$CMD" in
       REPO_EXISTS="true"
     fi
 
-    TASK_IDS=()
-    TASK_PATHS_PACKED=()
-    TASK_PATHS_LOW_PACKED=()
+    parse_wave_task_map "$WAVE_SPECS" "$REPO_ROOT" "WAVE_FAIL" "WaveSpecs" "--wave-specs" true "$PARTITION" true ""
+    TASK_IDS=("${_WTM_IDS[@]}")
+    TASK_PATHS_PACKED=("${_WTM_PACKED[@]}")
+    TASK_PATHS_LOW_PACKED=("${_WTM_LOW_PACKED[@]}")
+    TOTAL_PATHS="$_WTM_TOTAL_PATHS"
     TASK_READS_PACKED=()
     TASK_READS_LOW_PACKED=()
-    TOTAL_PATHS=0
-    _had_noglob_ws=false
-    case "$-" in
-      *f*) _had_noglob_ws=true ;;
-    esac
-    set -f
-    ENTRIES=()
-    IFS=';' read -r -d '' -a ENTRIES < <(printf '%s\0' "$WAVE_SPECS") || true
-    if ! $_had_noglob_ws; then set +f; fi
-    if [[ ${#ENTRIES[@]} -gt 0 ]]; then
-      for entry in "${ENTRIES[@]}"; do
-        trim_e="$(trim_str "$entry")"
-        [[ -z "$trim_e" ]] && continue
-        if [[ "$trim_e" != *"="* ]]; then
-          echo "WAVE_FAIL: invalid entry '$trim_e' (expected TaskId=path1,path2)"
-          exit 1
-        fi
-        tid="$(trim_str "${trim_e%%=*}")"
-        raw_csv="${trim_e#*=}"
-        [[ -n "$tid" ]] || { echo "WAVE_FAIL: empty task id in '$trim_e'"; exit 1; }
-        if ! is_valid_wave_task_id "$tid"; then
-          echo "WAVE_FAIL: invalid task id '$tid'"
-          exit 1
-        fi
-        if [[ ${#TASK_IDS[@]} -gt 0 ]]; then
-          for prev_t in "${TASK_IDS[@]}"; do
-            if [[ "$prev_t" == "$tid" ]]; then
-              echo "WAVE_FAIL: duplicate task id '$tid'"
-              exit 1
-            fi
-          done
-        fi
-        parse_wave_paths "$raw_csv" true "$PARTITION"
-        if [[ ${#_WAVE_PARSED_PATHS[@]} -lt 1 ]]; then
-          echo "WAVE_FAIL: task '$tid' has no owned paths"
-          exit 1
-        fi
-        if [[ "$REPO_EXISTS" == "true" ]]; then
-          for wp in "${_WAVE_PARSED_PATHS[@]}"; do
-            if ! check_wave_path_containment "$REPO_ROOT" "$wp"; then
-              echo "WAVE_FAIL: unsafe symlink or junction alias in path '$wp'"
-              exit 1
-            fi
-          done
-        fi
-        TASK_IDS+=("$tid")
-        packed="$(IFS='|'; printf '%s' "${_WAVE_PARSED_PATHS[*]}")"
-        if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
-          low_packed="$(printf '%s' "$packed" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-        else
-          low_packed="$packed"
-        fi
-        TASK_PATHS_PACKED+=("$packed")
-        TASK_PATHS_LOW_PACKED+=("$low_packed")
-        TASK_READS_PACKED+=("")
-        TASK_READS_LOW_PACKED+=("")
-        TOTAL_PATHS=$((TOTAL_PATHS + ${#_WAVE_PARSED_PATHS[@]}))
-      done
-    fi
-    [[ ${#TASK_IDS[@]} -gt 0 ]] || { echo "WAVE_FAIL: no tasks in --wave-specs"; exit 1; }
+    for ((ti_init = 0; ti_init < ${#TASK_IDS[@]}; ti_init++)); do
+      TASK_READS_PACKED+=("")
+      TASK_READS_LOW_PACKED+=("")
+    done
 
     n_tasks="${#TASK_IDS[@]}"
     READ_SEEN_IDS=()
@@ -5847,6 +6050,7 @@ case "$CMD" in
 
     if [[ ${#PROTECTED_LIST[@]} -gt 0 ]]; then
       for ((i = 0; i < n_tasks; i++)); do
+        [[ -n "${TASK_PATHS_PACKED[$i]}" ]] || continue
         IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
         IFS='|' read -ra pi_low_arr <<< "${TASK_PATHS_LOW_PACKED[$i]}"
         for ((pi_k = 0; pi_k < ${#pi_arr[@]}; pi_k++)); do
@@ -5867,7 +6071,9 @@ case "$CMD" in
     done
     CONFLICTS=()
     for ((i = 0; i < n_tasks; i++)); do
+      [[ -n "${TASK_PATHS_PACKED[$i]}" ]] || continue
       for ((j = i + 1; j < n_tasks; j++)); do
+        [[ -n "${TASK_PATHS_PACKED[$j]}" ]] || continue
         ti="${TASK_IDS[$i]}"
         tj="${TASK_IDS[$j]}"
         IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
@@ -5892,6 +6098,7 @@ case "$CMD" in
     done
 
     for ((i = 0; i < n_tasks; i++)); do
+      [[ -n "${TASK_PATHS_PACKED[$i]}" ]] || continue
       ti="${TASK_IDS[$i]}"
       IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
       IFS='|' read -ra pi_low_arr <<< "${TASK_PATHS_LOW_PACKED[$i]}"
@@ -6037,10 +6244,12 @@ case "$CMD" in
       for ((i = 0; i < n_tasks; i++)); do
         ti="${TASK_IDS[$i]}"
         TASK_ALL_LOW=()
-        IFS='|' read -ra tw_low <<< "${TASK_PATHS_LOW_PACKED[$i]}"
-        for twp in "${tw_low[@]}"; do
-          TASK_ALL_LOW+=("$twp")
-        done
+        if [[ -n "${TASK_PATHS_LOW_PACKED[$i]}" ]]; then
+          IFS='|' read -ra tw_low <<< "${TASK_PATHS_LOW_PACKED[$i]}"
+          for twp in "${tw_low[@]}"; do
+            TASK_ALL_LOW+=("$twp")
+          done
+        fi
         if [[ -n "${TASK_READS_LOW_PACKED[$i]}" ]]; then
           IFS='|' read -ra tr_low <<< "${TASK_READS_LOW_PACKED[$i]}"
           for trp in "${tr_low[@]}"; do
@@ -6048,7 +6257,7 @@ case "$CMD" in
           done
         fi
 
-        if [[ ${#DIRTY_TAGGED_PATHS[@]} -gt 0 ]]; then
+        if [[ ${#DIRTY_TAGGED_PATHS[@]} -gt 0 && ${#TASK_ALL_LOW[@]} -gt 0 ]]; then
           for ((dk = 0; dk < ${#DIRTY_TAGGED_PATHS[@]}; dk++)); do
             d_orig="${DIRTY_TAGGED_PATHS[$dk]}"
             d_cmp="${DIRTY_TAGGED_LOW_PATHS[$dk]}"
@@ -7009,12 +7218,14 @@ timestamp_utc=${TS_UTC}
     EXPECTED_ROOT=""
     EXPECTED_BASE_SHA=""
     PEER_ROOTS=""
+    REQUIRE_ISOLATED="false"
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; REPO_ROOT="$2"; shift 2 ;;
         --expected-root) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; EXPECTED_ROOT="$2"; shift 2 ;;
         --expected-base-sha) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; EXPECTED_BASE_SHA="$2"; shift 2 ;;
         --peer-roots) [[ $# -ge 2 ]] || { echo "WORKTREE_FAIL: missing value for $1"; exit 1; }; PEER_ROOTS="$2"; shift 2 ;;
+        --require-isolated) REQUIRE_ISOLATED="true"; shift ;;
         *) echo "WORKTREE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
@@ -7036,59 +7247,80 @@ timestamp_utc=${TS_UTC}
       IS_LINKED="false"
     fi
 
+    PEER_ROOTS="$(trim_str "$PEER_ROOTS")"
+    PEER_LIST=()
+    if [[ -n "$PEER_ROOTS" && "$PEER_ROOTS" != "none" && "$PEER_ROOTS" != "[]" ]]; then
+      while IFS= read -r p_item; do
+        p_trim="$(trim_str "$p_item")"
+        [[ -z "$p_trim" || "$p_trim" == "none" ]] && continue
+        PEER_LIST+=("$p_trim")
+      done < <(split_csv_lines "$PEER_ROOTS")
+    fi
+
     EXPECTED_ROOT="$(trim_str "$EXPECTED_ROOT")"
+    HAS_EXPECTED_ROOT="false"
     if [[ -n "$EXPECTED_ROOT" ]]; then
+      HAS_EXPECTED_ROOT="true"
+    fi
+    if [[ "$REQUIRE_ISOLATED" == "true" && "$HAS_EXPECTED_ROOT" != "true" ]]; then
+      echo "WORKTREE_UNSAFE: missing_expected_root_for_isolation"
+      exit 2
+    fi
+    CHECK_ISOLATION="false"
+    if [[ "$REQUIRE_ISOLATED" == "true" || ( "$HAS_EXPECTED_ROOT" == "true" && ${#PEER_LIST[@]} -gt 0 ) ]]; then
+      CHECK_ISOLATION="true"
+    fi
+
+    EXP_TOP_NORM=""
+    COMMON_SAME=false
+    if [[ "$HAS_EXPECTED_ROOT" == "true" ]]; then
       check_worktree_identity "$EXPECTED_ROOT" "expected_root_missing" "expected_root_not_git" "false"
       EXP_TOP_NORM="$_WT_TOP_NORM"
       EXP_COMMON="$_WT_COMMON_DIR"
 
       TOP_SAME=false
-      COMMON_SAME=false
       if paths_equal_fs "$ACTUAL_ROOT_NORM" "$EXP_TOP_NORM"; then TOP_SAME=true; fi
       if [[ -n "$ACT_COMMON" && -n "$EXP_COMMON" ]] && paths_equal_fs "$ACT_COMMON" "$EXP_COMMON"; then COMMON_SAME=true; fi
       if ! $TOP_SAME && ! $COMMON_SAME; then
         echo "WORKTREE_UNSAFE: root_mismatch(expected=${EXP_TOP_NORM},actual=${ACTUAL_ROOT_NORM})"
         exit 2
       fi
+      if [[ "$CHECK_ISOLATION" == "true" ]]; then
+        if worktree_roots_overlap "$ACTUAL_ROOT_NORM" "$EXP_TOP_NORM"; then
+          echo "WORKTREE_UNSAFE: parent_root_reused_or_nested(parent=${EXP_TOP_NORM},worker=${ACTUAL_ROOT_NORM})"
+          exit 2
+        fi
+        if [[ "$IS_LINKED" != "true" ]] || ! $COMMON_SAME; then
+          echo "WORKTREE_UNSAFE: not_isolated_linked_worktree(parent=${EXP_TOP_NORM},worker=${ACTUAL_ROOT_NORM})"
+          exit 2
+        fi
+      fi
     fi
 
-    PEER_ROOTS="$(trim_str "$PEER_ROOTS")"
-    if [[ -n "$PEER_ROOTS" ]]; then
-      PEER_LIST=()
-      while IFS= read -r p_item; do
-        [[ -n "$p_item" ]] && PEER_LIST+=("$p_item")
-      done < <(split_csv_lines "$PEER_ROOTS")
-      if [[ ${#PEER_LIST[@]} -gt 0 ]]; then
-        SEEN_TOPS=("$ACTUAL_ROOT_NORM")
-        for peer_raw in "${PEER_LIST[@]}"; do
-          peer="$(trim_str "$peer_raw")"
-          [[ -z "$peer" ]] && continue
-          check_worktree_identity "$peer" "missing_peer_root" "peer_not_git" "false"
-          PEER_TOP_NORM="$_WT_TOP_NORM"
-          PEER_COMMON="$_WT_COMMON_DIR"
-          if ! paths_equal_fs "$ACT_COMMON" "$PEER_COMMON"; then
-            echo "WORKTREE_UNSAFE: peer_repo_mismatch(expected=${ACT_COMMON},actual=${PEER_COMMON})"
+    if [[ ${#PEER_LIST[@]} -gt 0 ]]; then
+      SEEN_TOPS=("$ACTUAL_ROOT_NORM")
+      for peer in "${PEER_LIST[@]}"; do
+        check_worktree_identity "$peer" "missing_peer_root" "peer_not_git" "false"
+        PEER_TOP_NORM="$_WT_TOP_NORM"
+        PEER_COMMON="$_WT_COMMON_DIR"
+        if ! paths_equal_fs "$ACT_COMMON" "$PEER_COMMON"; then
+          echo "WORKTREE_UNSAFE: peer_repo_mismatch(expected=${ACT_COMMON},actual=${PEER_COMMON})"
+          exit 2
+        fi
+        if [[ "$CHECK_ISOLATION" == "true" && "$HAS_EXPECTED_ROOT" == "true" ]]; then
+          if worktree_roots_overlap "$PEER_TOP_NORM" "$EXP_TOP_NORM"; then
+            echo "WORKTREE_UNSAFE: parent_root_reused_or_nested(parent=${EXP_TOP_NORM},worker=${PEER_TOP_NORM})"
             exit 2
           fi
-          p_cmp="$PEER_TOP_NORM"
-          if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$p_cmp" =~ ^[A-Za-z]: ]]; then
-            p_cmp="$(printf '%s' "$p_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        fi
+        for prev_top in "${SEEN_TOPS[@]}"; do
+          if worktree_roots_overlap "$PEER_TOP_NORM" "$prev_top"; then
+            echo "WORKTREE_UNSAFE: duplicate_or_nested_worktree(${PEER_TOP_NORM})"
+            exit 2
           fi
-          p_base="${p_cmp%/}"
-          for prev_top in "${SEEN_TOPS[@]}"; do
-            prev_cmp="$prev_top"
-            if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" || "$prev_cmp" =~ ^[A-Za-z]: ]]; then
-              prev_cmp="$(printf '%s' "$prev_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-            fi
-            prev_base="${prev_cmp%/}"
-            if [[ "$p_cmp" == "$prev_cmp" || "$p_cmp" == "$prev_base/"* || "$prev_cmp" == "$p_base/"* ]]; then
-              echo "WORKTREE_UNSAFE: duplicate_or_nested_worktree(${PEER_TOP_NORM})"
-              exit 2
-            fi
-          done
-          SEEN_TOPS+=("$PEER_TOP_NORM")
         done
-      fi
+        SEEN_TOPS+=("$PEER_TOP_NORM")
+      done
     fi
 
     EXPECTED_BASE_SHA="$(trim_str "$EXPECTED_BASE_SHA")"
@@ -7099,7 +7331,11 @@ timestamp_utc=${TS_UTC}
       fi
     fi
 
-    printf 'WORKTREE_OK: root=%s head=%s common_dir=%s linked=%s\n' "$ACTUAL_ROOT_NORM" "$HEAD_RAW" "$ACT_COMMON" "$IS_LINKED"
+    IS_ISOLATED="false"
+    if [[ "$HAS_EXPECTED_ROOT" == "true" && "$COMMON_SAME" == "true" && "$IS_LINKED" == "true" ]] && ! worktree_roots_overlap "$ACTUAL_ROOT_NORM" "$EXP_TOP_NORM"; then
+      IS_ISOLATED="true"
+    fi
+    printf 'WORKTREE_OK: root=%s head=%s common_dir=%s linked=%s isolated=%s\n' "$ACTUAL_ROOT_NORM" "$HEAD_RAW" "$ACT_COMMON" "$IS_LINKED" "$IS_ISOLATED"
     exit 0
     ;;
 
