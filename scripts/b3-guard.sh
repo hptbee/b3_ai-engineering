@@ -93,8 +93,15 @@ fi
 shift
 
 _B3_IS_WINDOWS=false
+_B3_IS_CASE_INSENSITIVE_FS=false
 case "$(uname -s 2>/dev/null || true)" in
-  MINGW*|MSYS*|CYGWIN*) _B3_IS_WINDOWS=true ;;
+  MINGW*|MSYS*|CYGWIN*)
+    _B3_IS_WINDOWS=true
+    _B3_IS_CASE_INSENSITIVE_FS=true
+    ;;
+  Darwin*)
+    _B3_IS_CASE_INSENSITIVE_FS=true
+    ;;
 esac
 
 norm_path() {
@@ -170,6 +177,121 @@ path_in_list() {
     fi
   done
   return 1
+}
+
+parse_wave_paths() {
+  local raw_in="$1"
+  local check_protected="${2:-false}"
+  _WAVE_PARSED_PATHS=()
+  local cleaned
+  cleaned="$(trim_str "$raw_in")"
+  if [[ -z "$cleaned" || "$cleaned" == "[]" || "$cleaned" == "none" ]]; then
+    return 0
+  fi
+  if [[ "$cleaned" == \[*\] ]]; then
+    cleaned="${cleaned#[}"
+    cleaned="${cleaned%]}"
+  fi
+  local _had_noglob=false
+  case "$-" in
+    *f*) _had_noglob=true ;;
+  esac
+  set -f
+  local -a parts=()
+  IFS=',' read -r -d '' -a parts < <(printf '%s\0' "$cleaned") || true
+  if ! $_had_noglob; then set +f; fi
+  if [[ ${#parts[@]} -eq 0 ]]; then
+    return 0
+  fi
+  local LC_ALL=C
+  local part tok slash norm seg rem low_p
+  local re_dotdot='(^|/)\.\.(/|$)'
+  local re_git='(^|/)\.git(/|$)'
+  local prev seen
+  for part in "${parts[@]}"; do
+    if [[ "$part" =~ [[:cntrl:]] ]]; then
+      tok="$(trim_str "$part")"
+      [[ -n "$tok" ]] || tok="$part"
+      echo "WAVE_FAIL: invalid path '$tok'"
+      exit 1
+    fi
+    tok="$(trim_str "$part")"
+    [[ -z "$tok" || "$tok" == "none" ]] && continue
+    slash="${tok//\\//}"
+    if [[ "$slash" == *"|"* || "$slash" == *:* || "$slash" == /* || "$slash" == *"//"* || "$slash" =~ $re_dotdot ]]; then
+      echo "WAVE_FAIL: invalid path '$tok'"
+      exit 1
+    fi
+    if [[ "$slash" == "." || "$slash" == "./" ]]; then
+      norm="."
+    else
+      if [[ "$slash" == *"/./"* || "$slash" == *"/." ]]; then
+        echo "WAVE_FAIL: invalid path '$tok'"
+        exit 1
+      fi
+      norm="$slash"
+      if [[ "$norm" == ./* ]]; then
+        norm="${norm#./}"
+      fi
+      while [[ "$norm" == */ ]]; do
+        norm="${norm%/}"
+      done
+      if [[ -z "$norm" || "$norm" == "." || "$norm" == ".." ]]; then
+        echo "WAVE_FAIL: invalid path '$tok'"
+        exit 1
+      fi
+      rem="$norm"
+      while true; do
+        if [[ "$rem" == */* ]]; then
+          seg="${rem%%/*}"
+          rem="${rem#*/}"
+        else
+          seg="$rem"
+          rem=""
+        fi
+        if [[ -z "$seg" || "$seg" == "." || "$seg" == ".." || "$seg" == *. || "$seg" == *" " ]]; then
+          echo "WAVE_FAIL: invalid path '$tok'"
+          exit 1
+        fi
+        [[ -n "$rem" ]] || break
+      done
+    fi
+    if [[ "$check_protected" == "true" ]]; then
+      low_p="$(printf '%s' "$norm" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      if is_checkpoint_dir "$norm" || [[ "$low_p" == ".b3" ]] || [[ "$low_p" =~ $re_git ]]; then
+        echo "WAVE_FAIL: protected path '$norm' cannot be worker-owned"
+        exit 1
+      fi
+    fi
+    seen="false"
+    if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+      for prev in "${_WAVE_PARSED_PATHS[@]}"; do
+        if [[ "$prev" == "$norm" ]]; then
+          seen="true"
+          break
+        fi
+      done
+    fi
+    if [[ "$seen" != "true" ]]; then
+      _WAVE_PARSED_PATHS+=("$norm")
+    fi
+  done
+}
+
+is_valid_wave_task_id() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+wave_paths_overlap_cmp() {
+  local a="$1" b="$2"
+  if [[ "$a" == "$b" ]]; then
+    _WAVE_OV="equal"
+  elif [[ "$a" == "." || "$b" == "." || "$a" == "$b/"* || "$b" == "$a/"* ]]; then
+    _WAVE_OV="prefix"
+  else
+    _WAVE_OV="none"
+  fi
 }
 
 valid_run_id() {
@@ -5215,17 +5337,26 @@ case "$CMD" in
     WAVE_SPECS=""
     WAVE_READS=""
     EXPECTED_BASE_SHA=""
+    PARTITION="false"
+    MAX_CONCURRENCY="3"
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
-        --wave-specs) WAVE_SPECS="${2:-}"; shift 2 ;;
-        --wave-reads) WAVE_READS="${2:-}"; shift 2 ;;
-        --expected-base-sha) EXPECTED_BASE_SHA="${2:-}"; shift 2 ;;
+        --repo-root) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; REPO_ROOT="$2"; shift 2 ;;
+        --wave-specs) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; WAVE_SPECS="$2"; shift 2 ;;
+        --wave-reads) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; WAVE_READS="$2"; shift 2 ;;
+        --expected-base-sha) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; EXPECTED_BASE_SHA="$2"; shift 2 ;;
+        --partition) PARTITION="true"; shift ;;
+        --max-concurrency) [[ $# -ge 2 ]] || { echo "WAVE_FAIL: missing value for $1"; exit 1; }; MAX_CONCURRENCY="$2"; shift 2 ;;
         *) echo "WAVE_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
     WAVE_SPECS="$(trim_str "$WAVE_SPECS")"
     [[ -n "$WAVE_SPECS" ]] || { echo "WAVE_FAIL: missing --wave-specs"; exit 1; }
+    MAX_CONCURRENCY="$(trim_str "$MAX_CONCURRENCY")"
+    if [[ ! "$MAX_CONCURRENCY" =~ ^[1-4]$ ]]; then
+      echo "WAVE_FAIL: --max-concurrency must be between 1 and 4"
+      exit 1
+    fi
 
     EXPECTED_BASE_SHA="$(trim_str "$EXPECTED_BASE_SHA")"
     if [[ -n "$EXPECTED_BASE_SHA" ]]; then
@@ -5251,8 +5382,18 @@ case "$CMD" in
 
     TASK_IDS=()
     TASK_PATHS_PACKED=()
+    TASK_PATHS_LOW_PACKED=()
+    TASK_READS_PACKED=()
+    TASK_READS_LOW_PACKED=()
     TOTAL_PATHS=0
-    IFS=';' read -ra ENTRIES <<< "$WAVE_SPECS"
+    _had_noglob_ws=false
+    case "$-" in
+      *f*) _had_noglob_ws=true ;;
+    esac
+    set -f
+    ENTRIES=()
+    IFS=';' read -r -d '' -a ENTRIES < <(printf '%s\0' "$WAVE_SPECS") || true
+    if ! $_had_noglob_ws; then set +f; fi
     if [[ ${#ENTRIES[@]} -gt 0 ]]; then
       for entry in "${ENTRIES[@]}"; do
         trim_e="$(trim_str "$entry")"
@@ -5264,6 +5405,10 @@ case "$CMD" in
         tid="$(trim_str "${trim_e%%=*}")"
         raw_csv="${trim_e#*=}"
         [[ -n "$tid" ]] || { echo "WAVE_FAIL: empty task id in '$trim_e'"; exit 1; }
+        if ! is_valid_wave_task_id "$tid"; then
+          echo "WAVE_FAIL: invalid task id '$tid'"
+          exit 1
+        fi
         if [[ ${#TASK_IDS[@]} -gt 0 ]]; then
           for prev_t in "${TASK_IDS[@]}"; do
             if [[ "$prev_t" == "$tid" ]]; then
@@ -5272,25 +5417,39 @@ case "$CMD" in
             fi
           done
         fi
-        p_arr=()
-        while IFS= read -r p; do [[ -n "$p" ]] && p_arr+=("$p"); done < <(split_csv_lines "$raw_csv" true | LC_ALL=C sort -u)
-        if [[ ${#p_arr[@]} -lt 1 ]]; then
+        parse_wave_paths "$raw_csv" true
+        if [[ ${#_WAVE_PARSED_PATHS[@]} -lt 1 ]]; then
           echo "WAVE_FAIL: task '$tid' has no owned paths"
           exit 1
         fi
         TASK_IDS+=("$tid")
-        packed="$(printf '%s\n' "${p_arr[@]}" | paste -sd '|' -)"
+        packed="$(IFS='|'; printf '%s' "${_WAVE_PARSED_PATHS[*]}")"
+        if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+          low_packed="$(printf '%s' "$packed" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        else
+          low_packed="$packed"
+        fi
         TASK_PATHS_PACKED+=("$packed")
-        TOTAL_PATHS=$((TOTAL_PATHS + ${#p_arr[@]}))
+        TASK_PATHS_LOW_PACKED+=("$low_packed")
+        TASK_READS_PACKED+=("")
+        TASK_READS_LOW_PACKED+=("")
+        TOTAL_PATHS=$((TOTAL_PATHS + ${#_WAVE_PARSED_PATHS[@]}))
       done
     fi
     [[ ${#TASK_IDS[@]} -gt 0 ]] || { echo "WAVE_FAIL: no tasks in --wave-specs"; exit 1; }
 
-    READ_IDS=()
-    READ_PATHS_PACKED=()
+    n_tasks="${#TASK_IDS[@]}"
+    READ_SEEN_IDS=()
     WAVE_READS="$(trim_str "$WAVE_READS")"
     if [[ -n "$WAVE_READS" ]]; then
-      IFS=';' read -ra RENTRIES <<< "$WAVE_READS"
+      _had_noglob_wr=false
+      case "$-" in
+        *f*) _had_noglob_wr=true ;;
+      esac
+      set -f
+      RENTRIES=()
+      IFS=';' read -r -d '' -a RENTRIES < <(printf '%s\0' "$WAVE_READS") || true
+      if ! $_had_noglob_wr; then set +f; fi
       if [[ ${#RENTRIES[@]} -gt 0 ]]; then
         for entry in "${RENTRIES[@]}"; do
           trim_e="$(trim_str "$entry")"
@@ -5302,77 +5461,232 @@ case "$CMD" in
           rtid="$(trim_str "${trim_e%%=*}")"
           rcsv="${trim_e#*=}"
           [[ -n "$rtid" ]] || { echo "WAVE_FAIL: empty task id in WaveReads '$trim_e'"; exit 1; }
-          if [[ ${#READ_IDS[@]} -gt 0 ]]; then
-            for prev_rt in "${READ_IDS[@]}"; do
+          if ! is_valid_wave_task_id "$rtid"; then
+            echo "WAVE_FAIL: invalid task id '$rtid'"
+            exit 1
+          fi
+          if [[ ${#READ_SEEN_IDS[@]} -gt 0 ]]; then
+            for prev_rt in "${READ_SEEN_IDS[@]}"; do
               if [[ "$prev_rt" == "$rtid" ]]; then
                 echo "WAVE_FAIL: duplicate task id '$rtid' in WaveReads"
                 exit 1
               fi
             done
           fi
-          r_arr=()
-          while IFS= read -r rp; do [[ -n "$rp" ]] && r_arr+=("$rp"); done < <(split_csv_lines "$rcsv" true | LC_ALL=C sort -u)
-          READ_IDS+=("$rtid")
-          if [[ ${#r_arr[@]} -gt 0 ]]; then
-            rpacked="$(printf '%s\n' "${r_arr[@]}" | paste -sd '|' -)"
-          else
-            rpacked=""
+          rt_idx=-1
+          for ((ti_idx = 0; ti_idx < n_tasks; ti_idx++)); do
+            if [[ "${TASK_IDS[$ti_idx]}" == "$rtid" ]]; then
+              rt_idx=$ti_idx
+              break
+            fi
+          done
+          if [[ $rt_idx -lt 0 ]]; then
+            echo "WAVE_FAIL: unknown task id '$rtid' in WaveReads"
+            exit 1
           fi
-          READ_PATHS_PACKED+=("$rpacked")
+          READ_SEEN_IDS+=("$rtid")
+          parse_wave_paths "$rcsv" false
+          if [[ ${#_WAVE_PARSED_PATHS[@]} -gt 0 ]]; then
+            rpacked="$(IFS='|'; printf '%s' "${_WAVE_PARSED_PATHS[*]}")"
+            if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+              rlow_packed="$(printf '%s' "$rpacked" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+            else
+              rlow_packed="$rpacked"
+            fi
+            TASK_READS_PACKED[$rt_idx]="$rpacked"
+            TASK_READS_LOW_PACKED[$rt_idx]="$rlow_packed"
+          fi
         done
       fi
     fi
 
+    HAS_CONFLICT=()
+    for ((idx = 0; idx < n_tasks * n_tasks; idx++)); do
+      HAS_CONFLICT+=(0)
+    done
     CONFLICTS=()
-    n_tasks="${#TASK_IDS[@]}"
     for ((i = 0; i < n_tasks; i++)); do
       for ((j = i + 1; j < n_tasks; j++)); do
         ti="${TASK_IDS[$i]}"
         tj="${TASK_IDS[$j]}"
         IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
         IFS='|' read -ra pj_arr <<< "${TASK_PATHS_PACKED[$j]}"
-        for pi in "${pi_arr[@]}"; do
-          for pj in "${pj_arr[@]}"; do
-            if [[ "$pi" == "$pj" ]]; then
-              CONFLICTS+=("${pi}(${ti},${tj})")
-            elif [[ "$pi" == "." || "$pj" == "." || "$pi" == "$pj/"* || "$pj" == "$pi/"* ]]; then
-              CONFLICTS+=("${pi}<->${pj}(${ti},${tj})")
+        IFS='|' read -ra pi_low_arr <<< "${TASK_PATHS_LOW_PACKED[$i]}"
+        IFS='|' read -ra pj_low_arr <<< "${TASK_PATHS_LOW_PACKED[$j]}"
+        for ((pi_k = 0; pi_k < ${#pi_arr[@]}; pi_k++)); do
+          for ((pj_k = 0; pj_k < ${#pj_arr[@]}; pj_k++)); do
+            wave_paths_overlap_cmp "${pi_low_arr[$pi_k]}" "${pj_low_arr[$pj_k]}"
+            if [[ "$_WAVE_OV" == "equal" ]]; then
+              CONFLICTS+=("${pi_arr[$pi_k]}(${ti},${tj})")
+              HAS_CONFLICT[$((i * n_tasks + j))]=1
+              HAS_CONFLICT[$((j * n_tasks + i))]=1
+            elif [[ "$_WAVE_OV" == "prefix" ]]; then
+              CONFLICTS+=("${pi_arr[$pi_k]}<->${pj_arr[$pj_k]}(${ti},${tj})")
+              HAS_CONFLICT[$((i * n_tasks + j))]=1
+              HAS_CONFLICT[$((j * n_tasks + i))]=1
             fi
           done
         done
       done
     done
 
-    if [[ ${#READ_IDS[@]} -gt 0 ]]; then
-      n_reads="${#READ_IDS[@]}"
-      for ((i = 0; i < n_tasks; i++)); do
-        ti="${TASK_IDS[$i]}"
-        IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
-        for ((k = 0; k < n_reads; k++)); do
-          tj="${READ_IDS[$k]}"
-          [[ "$ti" == "$tj" ]] && continue
-          [[ -z "${READ_PATHS_PACKED[$k]}" ]] && continue
-          IFS='|' read -ra rj_arr <<< "${READ_PATHS_PACKED[$k]}"
-          for pi in "${pi_arr[@]}"; do
-            for rj in "${rj_arr[@]}"; do
-              if [[ "$pi" == "$rj" ]]; then
-                CONFLICTS+=("rw:${pi}(${ti}->${tj})")
-              elif [[ "$pi" == "." || "$rj" == "." || "$pi" == "$rj/"* || "$rj" == "$pi/"* ]]; then
-                CONFLICTS+=("rw:${pi}<->${rj}(${ti}->${tj})")
-              fi
-            done
+    for ((i = 0; i < n_tasks; i++)); do
+      ti="${TASK_IDS[$i]}"
+      IFS='|' read -ra pi_arr <<< "${TASK_PATHS_PACKED[$i]}"
+      IFS='|' read -ra pi_low_arr <<< "${TASK_PATHS_LOW_PACKED[$i]}"
+      for ((j = 0; j < n_tasks; j++)); do
+        [[ $i -eq $j ]] && continue
+        [[ -z "${TASK_READS_PACKED[$j]}" ]] && continue
+        tj="${TASK_IDS[$j]}"
+        IFS='|' read -ra rj_arr <<< "${TASK_READS_PACKED[$j]}"
+        IFS='|' read -ra rj_low_arr <<< "${TASK_READS_LOW_PACKED[$j]}"
+        for ((pi_k = 0; pi_k < ${#pi_arr[@]}; pi_k++)); do
+          for ((rj_k = 0; rj_k < ${#rj_arr[@]}; rj_k++)); do
+            wave_paths_overlap_cmp "${pi_low_arr[$pi_k]}" "${rj_low_arr[$rj_k]}"
+            if [[ "$_WAVE_OV" == "equal" ]]; then
+              CONFLICTS+=("rw:${pi_arr[$pi_k]}(${ti}->${tj})")
+              HAS_CONFLICT[$((i * n_tasks + j))]=1
+              HAS_CONFLICT[$((j * n_tasks + i))]=1
+            elif [[ "$_WAVE_OV" == "prefix" ]]; then
+              CONFLICTS+=("rw:${pi_arr[$pi_k]}<->${rj_arr[$rj_k]}(${ti}->${tj})")
+              HAS_CONFLICT[$((i * n_tasks + j))]=1
+              HAS_CONFLICT[$((j * n_tasks + i))]=1
+            fi
           done
         done
       done
+    done
+
+    if [[ "$PARTITION" != "true" ]]; then
+      if [[ ${#CONFLICTS[@]} -gt 0 ]]; then
+        C_STR="$(printf '%s\n' "${CONFLICTS[@]}" | LC_ALL=C sort -u | awk 'NR>1{printf ", "} {printf "%s", $0}')"
+        echo "WAVE_CONFLICT: ${C_STR}"
+        exit 2
+      fi
+      printf 'WAVE_OK: disjoint (%d tasks, %d paths)\n' "$n_tasks" "$TOTAL_PATHS"
+      exit 0
     fi
 
+    WAVE_MEMBERS=()
+    WAVE_COUNTS=()
+    for ((i = 0; i < n_tasks; i++)); do
+      placed="false"
+      w_len="${#WAVE_MEMBERS[@]}"
+      for ((w = 0; w < w_len; w++)); do
+        if [[ "${WAVE_COUNTS[$w]}" -ge "$MAX_CONCURRENCY" ]]; then
+          continue
+        fi
+        ok="true"
+        IFS=',' read -ra mem_arr <<< "${WAVE_MEMBERS[$w]}"
+        for m in "${mem_arr[@]}"; do
+          if [[ "${HAS_CONFLICT[$((i * n_tasks + m))]}" == "1" ]]; then
+            ok="false"
+            break
+          fi
+        done
+        if [[ "$ok" == "true" ]]; then
+          WAVE_MEMBERS[$w]="${WAVE_MEMBERS[$w]},$i"
+          WAVE_COUNTS[$w]=$((WAVE_COUNTS[$w] + 1))
+          placed="true"
+          break
+        fi
+      done
+      if [[ "$placed" != "true" ]]; then
+        WAVE_MEMBERS+=("$i")
+        WAVE_COUNTS+=(1)
+      fi
+    done
+
+    W_COUNT="${#WAVE_MEMBERS[@]}"
+    MAX_PARALLEL=0
+    for ((w = 0; w < W_COUNT; w++)); do
+      if [[ "${WAVE_COUNTS[$w]}" -gt "$MAX_PARALLEL" ]]; then
+        MAX_PARALLEL="${WAVE_COUNTS[$w]}"
+      fi
+    done
     if [[ ${#CONFLICTS[@]} -gt 0 ]]; then
-      C_STR="$(printf '%s\n' "${CONFLICTS[@]}" | LC_ALL=C sort -u | awk 'NR>1{printf ", "} {printf "%s", $0}')"
-      echo "WAVE_CONFLICT: ${C_STR}"
+      CONFLICTS_CSV="$(printf '%s\n' "${CONFLICTS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
+    else
+      CONFLICTS_CSV="none"
+    fi
+
+    printf 'wave_count=%d\n' "$W_COUNT"
+    printf 'max_concurrency=%d\n' "$MAX_CONCURRENCY"
+    printf 'max_parallel=%d\n' "$MAX_PARALLEL"
+    printf 'conflicts=%s\n' "$CONFLICTS_CSV"
+
+    for ((w = 0; w < W_COUNT; w++)); do
+      cnt="${WAVE_COUNTS[$w]}"
+      IFS=',' read -ra mem_arr <<< "${WAVE_MEMBERS[$w]}"
+      t_names=()
+      for m in "${mem_arr[@]}"; do
+        t_names+=("${TASK_IDS[$m]}")
+      done
+      tasks_csv="$(IFS=','; printf '%s' "${t_names[*]}")"
+      if [[ "$cnt" -ge 2 ]]; then
+        printf 'wave|%d|PARALLEL|agents=%d|tasks=%s|reason=independent_ready_tasks\n' "$((w + 1))" "$cnt" "$tasks_csv"
+      else
+        t="${mem_arr[0]}"
+        if [[ "$n_tasks" -eq 1 ]]; then
+          w_reason="single_ready_task"
+        else
+          bounded="false"
+          for ((k = 0; k < w; k++)); do
+            if [[ "${WAVE_COUNTS[$k]}" -eq "$MAX_CONCURRENCY" ]]; then
+              prior_conflict="false"
+              IFS=',' read -ra prior_arr <<< "${WAVE_MEMBERS[$k]}"
+              for pm in "${prior_arr[@]}"; do
+                if [[ "${HAS_CONFLICT[$((t * n_tasks + pm))]}" == "1" ]]; then
+                  prior_conflict="true"
+                  break
+                fi
+              done
+              if [[ "$prior_conflict" != "true" ]]; then
+                bounded="true"
+                break
+              fi
+            fi
+          done
+          if [[ "$bounded" != "true" && "$MAX_CONCURRENCY" -eq 1 ]]; then
+            any_conf="false"
+            for ((u = 0; u < n_tasks; u++)); do
+              if [[ $u -ne $t && "${HAS_CONFLICT[$((t * n_tasks + u))]}" == "1" ]]; then
+                any_conf="true"
+                break
+              fi
+            done
+            if [[ "$any_conf" != "true" ]]; then
+              bounded="true"
+            fi
+          fi
+          if [[ "$bounded" == "true" ]]; then
+            w_reason="bounded_concurrency"
+          else
+            w_reason="shared_write_conflict"
+          fi
+        fi
+        printf 'wave|%d|SEQUENTIAL|agents=1|tasks=%s|reason=%s\n' "$((w + 1))" "$tasks_csv" "$w_reason"
+      fi
+    done
+
+    if [[ "$W_COUNT" -eq 1 && "$CONFLICTS_CSV" == "none" ]]; then
+      printf 'WAVE_OK: disjoint (%d tasks, %d paths)\n' "$n_tasks" "$TOTAL_PATHS"
+      exit 0
+    elif [[ "$MAX_PARALLEL" -ge 2 ]]; then
+      if [[ "$CONFLICTS_CSV" == "none" ]]; then
+        term_reason="bounded_concurrency_split"
+      else
+        term_reason="conflicting_wave_split"
+      fi
+      printf 'WAVE_PARTITIONED: waves=%d max_parallel=%d reason=%s\n' "$W_COUNT" "$MAX_PARALLEL" "$term_reason"
+      exit 0
+    elif [[ "$CONFLICTS_CSV" == "none" ]]; then
+      printf 'WAVE_SEQUENTIAL: waves=%d max_parallel=1 reason=bounded_concurrency\n' "$W_COUNT"
+      exit 0
+    else
+      printf 'WAVE_SEQUENTIAL: waves=%d max_parallel=1 reason=shared_write_conflict\n' "$W_COUNT"
       exit 2
     fi
-    printf 'WAVE_OK: disjoint (%d tasks, %d paths)\n' "$n_tasks" "$TOTAL_PATHS"
-    exit 0
     ;;
 
   new-run)

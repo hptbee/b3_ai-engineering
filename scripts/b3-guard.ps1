@@ -68,7 +68,8 @@ param(
     [string]$AnchorPaths = '',
     [string]$ScopePaths = '',
     [string]$GraphIndexSha = '',
-    [string]$SummaryRef = ''
+    [string]$SummaryRef = '',
+    [switch]$Partition
 )
 
 $ErrorActionPreference = 'Stop'
@@ -124,6 +125,70 @@ function Split-CsvList([string]$Csv, [switch]$AsPaths) {
 function Test-CheckpointPath([string]$PathVal) {
     if (-not $PathVal) { return $false }
     return ($PathVal -match '^\.b3/(ship|research-ship|autodev)(/|$)')
+}
+
+function ConvertTo-WavePaths([string]$Csv, [switch]$RejectProtected) {
+    $list = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    if (-not $Csv) { return @{ Error = ''; Paths = @() } }
+    $cleaned = $Csv.Trim()
+    if ($cleaned -ceq '[]' -or $cleaned -ceq 'none') { return @{ Error = ''; Paths = @() } }
+    if ($cleaned.StartsWith('[') -and $cleaned.EndsWith(']')) {
+        $cleaned = $cleaned.Substring(1, $cleaned.Length - 2)
+    }
+    foreach ($part in ($cleaned -split ',')) {
+        if ($part -match '[\x00-\x1F\x7F]') {
+            $disp = $part.Trim()
+            if (-not $disp) { $disp = $part }
+            return @{ Error = "WAVE_FAIL: invalid path '$disp'"; Paths = @() }
+        }
+        $tok = $part.Trim()
+        if (-not $tok -or $tok -ceq 'none') { continue }
+        $slash = $tok -replace '\\', '/'
+        if ($slash.Contains('|') -or $slash.Contains(':') -or $slash.StartsWith('/') -or $slash.Contains('//') -or ($slash -match '(^|/)\.\.(/|$)')) {
+            return @{ Error = "WAVE_FAIL: invalid path '$tok'"; Paths = @() }
+        }
+        $norm = ''
+        if ($slash -eq '.' -or $slash -eq './') {
+            $norm = '.'
+        } else {
+            if ($slash.Contains('/./') -or $slash.EndsWith('/.')) {
+                return @{ Error = "WAVE_FAIL: invalid path '$tok'"; Paths = @() }
+            }
+            $norm = $slash
+            if ($norm.StartsWith('./')) {
+                $norm = $norm.Substring(2)
+            }
+            $norm = $norm.TrimEnd('/')
+            if (-not $norm -or $norm -eq '.' -or $norm -eq '..') {
+                return @{ Error = "WAVE_FAIL: invalid path '$tok'"; Paths = @() }
+            }
+            foreach ($seg in ($norm -split '/')) {
+                if (-not $seg -or $seg -eq '.' -or $seg -eq '..' -or $seg.EndsWith('.') -or $seg.EndsWith(' ')) {
+                    return @{ Error = "WAVE_FAIL: invalid path '$tok'"; Paths = @() }
+                }
+            }
+        }
+        if ($RejectProtected) {
+            if ((Test-CheckpointPath $norm) -or ($norm -ieq '.b3') -or ($norm -imatch '(^|/)\.git(/|$)')) {
+                return @{ Error = "WAVE_FAIL: protected path '$norm' cannot be worker-owned"; Paths = @() }
+            }
+        }
+        if ($seen.Add($norm)) {
+            $list.Add($norm)
+        }
+    }
+    return @{ Error = ''; Paths = @($list) }
+}
+
+function Test-WavePathOverlap([string]$PathA, [string]$PathB, [bool]$CaseInsensitive) {
+    $a = if ($CaseInsensitive) { $PathA.ToLowerInvariant() } else { $PathA }
+    $b = if ($CaseInsensitive) { $PathB.ToLowerInvariant() } else { $PathB }
+    if ($a -ceq $b) { return 'equal' }
+    if ($a -ceq '.' -or $b -ceq '.' -or $a.StartsWith("$b/", [System.StringComparison]::Ordinal) -or $b.StartsWith("$a/", [System.StringComparison]::Ordinal)) {
+        return 'prefix'
+    }
+    return 'none'
 }
 
 function Resolve-NamespaceDir([string]$Root, [string]$Ns) {
@@ -3617,6 +3682,10 @@ switch ($Command) {
 
     'check-wave' {
         if (-not $WaveSpecs -or -not $WaveSpecs.Trim()) { Fail 'WAVE_FAIL: missing -WaveSpecs' 1 }
+        $waveMaxConc = if ($PSBoundParameters.ContainsKey('MaxConcurrency')) { $MaxConcurrency } else { 3 }
+        if ($waveMaxConc -lt 1 -or $waveMaxConc -gt 4) {
+            Fail 'WAVE_FAIL: -MaxConcurrency must be between 1 and 4' 1
+        }
 
         if ($ExpectedBaseSha -and $ExpectedBaseSha.Trim()) {
             $expBase = $ExpectedBaseSha.Trim()
@@ -3635,7 +3704,7 @@ switch ($Command) {
         }
 
         $taskOrder = New-Object System.Collections.Generic.List[string]
-        $taskPaths = @{}
+        $taskPaths = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         $totalPaths = 0
 
         foreach ($entry in ($WaveSpecs -split ';')) {
@@ -3646,8 +3715,11 @@ switch ($Command) {
             $tid = $trimEntry.Substring(0, $eqIdx).Trim()
             $rawCsv = $trimEntry.Substring($eqIdx + 1)
             if (-not $tid) { Fail "WAVE_FAIL: empty task id in '$trimEntry'" 1 }
+            if ($tid -cnotmatch '\A[A-Za-z0-9._-]+\z') { Fail "WAVE_FAIL: invalid task id '$tid'" 1 }
             if ($taskPaths.ContainsKey($tid)) { Fail "WAVE_FAIL: duplicate task id '$tid'" 1 }
-            $paths = @(Split-CsvList $rawCsv -AsPaths)
+            $parsedW = ConvertTo-WavePaths $rawCsv -RejectProtected
+            if ($parsedW.Error) { Fail $parsedW.Error 1 }
+            $paths = @($parsedW.Paths)
             if ($paths.Count -lt 1) { Fail "WAVE_FAIL: task '$tid' has no owned paths" 1 }
             $taskOrder.Add($tid)
             $taskPaths[$tid] = $paths
@@ -3655,7 +3727,7 @@ switch ($Command) {
         }
         if ($taskOrder.Count -lt 1) { Fail 'WAVE_FAIL: no tasks in -WaveSpecs' 1 }
 
-        $readPaths = @{}
+        $readPaths = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         if ($WaveReads -and $WaveReads.Trim()) {
             foreach ($entry in ($WaveReads -split ';')) {
                 $trimEntry = $entry.Trim()
@@ -3665,50 +3737,166 @@ switch ($Command) {
                 $rtid = $trimEntry.Substring(0, $eqIdx).Trim()
                 $rCsv = $trimEntry.Substring($eqIdx + 1)
                 if (-not $rtid) { Fail "WAVE_FAIL: empty task id in WaveReads '$trimEntry'" 1 }
+                if ($rtid -cnotmatch '\A[A-Za-z0-9._-]+\z') { Fail "WAVE_FAIL: invalid task id '$rtid'" 1 }
                 if ($readPaths.ContainsKey($rtid)) { Fail "WAVE_FAIL: duplicate task id '$rtid' in WaveReads" 1 }
-                $rArr = @(Split-CsvList $rCsv -AsPaths)
+                if (-not $taskPaths.ContainsKey($rtid)) { Fail "WAVE_FAIL: unknown task id '$rtid' in WaveReads" 1 }
+                $parsedR = ConvertTo-WavePaths $rCsv
+                if ($parsedR.Error) { Fail $parsedR.Error 1 }
+                $rArr = @($parsedR.Paths)
                 $readPaths[$rtid] = $rArr
             }
         }
 
+        $waveCaseInsensitive = ($env:OS -eq 'Windows_NT') -or ($IsMacOS -eq $true)
+        $nTasks = $taskOrder.Count
+        $taskIndexMap = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        for ($idx = 0; $idx -lt $nTasks; $idx++) {
+            $taskIndexMap[$taskOrder[$idx]] = $idx
+        }
+        $hasConflict = New-Object 'bool[,]' $nTasks, $nTasks
         $conflicts = New-Object System.Collections.Generic.List[string]
-        for ($i = 0; $i -lt $taskOrder.Count; $i++) {
-            for ($j = $i + 1; $j -lt $taskOrder.Count; $j++) {
+
+        for ($i = 0; $i -lt $nTasks; $i++) {
+            for ($j = $i + 1; $j -lt $nTasks; $j++) {
                 $ti = $taskOrder[$i]
                 $tj = $taskOrder[$j]
                 foreach ($pi in $taskPaths[$ti]) {
                     foreach ($pj in $taskPaths[$tj]) {
-                        if ($pi -eq $pj) {
+                        $ov = Test-WavePathOverlap $pi $pj $waveCaseInsensitive
+                        if ($ov -eq 'equal') {
                             $conflicts.Add("${pi}(${ti},${tj})")
-                        } elseif ($pi -eq '.' -or $pj -eq '.' -or $pi.StartsWith("$pj/") -or $pj.StartsWith("$pi/")) {
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
+                        } elseif ($ov -eq 'prefix') {
                             $conflicts.Add("${pi}<->${pj}(${ti},${tj})")
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
                         }
                     }
                 }
             }
         }
 
-        foreach ($ti in $taskOrder) {
+        for ($i = 0; $i -lt $nTasks; $i++) {
+            $ti = $taskOrder[$i]
             foreach ($tj in @($readPaths.Keys)) {
                 if ($ti -ceq $tj) { continue }
+                $j = [int]$taskIndexMap[$tj]
                 foreach ($pi in $taskPaths[$ti]) {
                     foreach ($rj in $readPaths[$tj]) {
-                        if ($pi -eq $rj) {
+                        $ov = Test-WavePathOverlap $pi $rj $waveCaseInsensitive
+                        if ($ov -eq 'equal') {
                             $conflicts.Add("rw:${pi}(${ti}->${tj})")
-                        } elseif ($pi -eq '.' -or $rj -eq '.' -or $pi.StartsWith("$rj/") -or $rj.StartsWith("$pi/")) {
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
+                        } elseif ($ov -eq 'prefix') {
                             $conflicts.Add("rw:${pi}<->${rj}(${ti}->${tj})")
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
                         }
                     }
                 }
             }
         }
 
-        if ($conflicts.Count -gt 0) {
-            $sortedConflicts = (Sort-Ordinal $conflicts.ToArray()) -join ', '
-            Fail "WAVE_CONFLICT: $sortedConflicts" 2
+        if (-not $Partition) {
+            if ($conflicts.Count -gt 0) {
+                $sortedConflicts = (Sort-Ordinal $conflicts.ToArray()) -join ', '
+                Fail "WAVE_CONFLICT: $sortedConflicts" 2
+            }
+            Write-Output "WAVE_OK: disjoint ($nTasks tasks, $totalPaths paths)"
+            exit 0
         }
-        Write-Output "WAVE_OK: disjoint ($($taskOrder.Count) tasks, $totalPaths paths)"
-        exit 0
+
+        $waves = New-Object System.Collections.Generic.List[object]
+        for ($i = 0; $i -lt $nTasks; $i++) {
+            $placed = $false
+            for ($w = 0; $w -lt $waves.Count; $w++) {
+                $members = $waves[$w]
+                if ($members.Count -ge $waveMaxConc) { continue }
+                $ok = $true
+                foreach ($m in $members) {
+                    if ($hasConflict[$i, $m]) { $ok = $false; break }
+                }
+                if ($ok) {
+                    $members.Add($i)
+                    $placed = $true
+                    break
+                }
+            }
+            if (-not $placed) {
+                $newWave = New-Object System.Collections.Generic.List[int]
+                $newWave.Add($i)
+                $waves.Add($newWave)
+            }
+        }
+
+        $wCount = $waves.Count
+        $maxParallel = 0
+        foreach ($waveMembers in $waves) {
+            if ($waveMembers.Count -gt $maxParallel) { $maxParallel = $waveMembers.Count }
+        }
+        $conflictsCsv = if ($conflicts.Count -gt 0) { (Sort-Ordinal $conflicts.ToArray()) -join ',' } else { 'none' }
+
+        Write-Output "wave_count=$wCount"
+        Write-Output "max_concurrency=$waveMaxConc"
+        Write-Output "max_parallel=$maxParallel"
+        Write-Output "conflicts=$conflictsCsv"
+
+        for ($w = 0; $w -lt $wCount; $w++) {
+            $waveMembers = $waves[$w]
+            $cnt = $waveMembers.Count
+            $tNames = @()
+            foreach ($m in $waveMembers) { $tNames += $taskOrder[$m] }
+            $tasksCsv = $tNames -join ','
+            if ($cnt -ge 2) {
+                Write-Output "wave|$($w + 1)|PARALLEL|agents=$cnt|tasks=$tasksCsv|reason=independent_ready_tasks"
+            } else {
+                $t = $waveMembers[0]
+                if ($nTasks -eq 1) {
+                    $wReason = 'single_ready_task'
+                } else {
+                    $bounded = $false
+                    for ($k = 0; $k -lt $w; $k++) {
+                        $prior = $waves[$k]
+                        if ($prior.Count -eq $waveMaxConc) {
+                            $priorConflict = $false
+                            foreach ($pm in $prior) {
+                                if ($hasConflict[$t, $pm]) { $priorConflict = $true; break }
+                            }
+                            if (-not $priorConflict) {
+                                $bounded = $true
+                                break
+                            }
+                        }
+                    }
+                    if (-not $bounded -and $waveMaxConc -eq 1) {
+                        $anyConf = $false
+                        for ($u = 0; $u -lt $nTasks; $u++) {
+                            if ($u -ne $t -and $hasConflict[$t, $u]) { $anyConf = $true; break }
+                        }
+                        if (-not $anyConf) { $bounded = $true }
+                    }
+                    $wReason = if ($bounded) { 'bounded_concurrency' } else { 'shared_write_conflict' }
+                }
+                Write-Output "wave|$($w + 1)|SEQUENTIAL|agents=1|tasks=$tasksCsv|reason=$wReason"
+            }
+        }
+
+        if ($wCount -eq 1 -and $conflictsCsv -eq 'none') {
+            Write-Output "WAVE_OK: disjoint ($nTasks tasks, $totalPaths paths)"
+            exit 0
+        } elseif ($maxParallel -ge 2) {
+            $termReason = if ($conflictsCsv -eq 'none') { 'bounded_concurrency_split' } else { 'conflicting_wave_split' }
+            Write-Output "WAVE_PARTITIONED: waves=$wCount max_parallel=$maxParallel reason=$termReason"
+            exit 0
+        } elseif ($conflictsCsv -eq 'none') {
+            Write-Output "WAVE_SEQUENTIAL: waves=$wCount max_parallel=1 reason=bounded_concurrency"
+            exit 0
+        } else {
+            Write-Output "WAVE_SEQUENTIAL: waves=$wCount max_parallel=1 reason=shared_write_conflict"
+            exit 2
+        }
     }
 
     'new-run' {
