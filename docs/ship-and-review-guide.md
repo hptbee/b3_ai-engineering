@@ -223,8 +223,9 @@ All byte caps are measured in **canonical LF UTF-8 bytes** (identical across Win
 | `ship_refs_load` (`templates` + `resume`) | `<= 6,000 B` | On-demand `/b3-ship` progressive-disclosure refs |
 | `workflows/research-ship.md` | `<= 9,500 B` | Core `/b3-research-ship` orchestrator prompt |
 | `research_ship_refs` (`templates` + `resume` + `gates`) | `<= 12,000 B` | On-demand `/b3-research-ship` progressive-disclosure refs |
-| `context_routing` (`workflows/references/context-routing.md`) | `<= 3,200 B` | On-demand MCP-aware routing contract (`0 B` always-on) |
-| `review-loop/strategy.md` | `<= 5,400 B` | Self-sufficient runtime `/b3-review-loop` prompt |
+| `context_routing` (`workflows/references/context-routing.md`) | `<= 3,000 B` | On-demand MCP-aware routing contract (`0 B` always-on) |
+| `dispatch_naming` (`workflows/references/dispatch-naming.md`) | `<= 9,200 B` | On-demand wave dispatch, worktree, and naming contract |
+| `review-loop/strategy.md` | `<= 5,200 B` | Self-sufficient runtime `/b3-review-loop` prompt |
 | `review_delta_load` (`b3-reviewer.md` only) | Tracked | Self-contained per-pass independent review subagent payload |
 | `review_iter_subag` (`b3-reviewer.md` + `b3-fixer.md`) | Tracked | Self-contained per-iteration reviewer + fixer subagent payloads |
 | `review_hier_load` (`review_loop_op` + `hierarchical.md`) | Tracked | On-demand `L`/`XL`/`XXL` hierarchical review load |
