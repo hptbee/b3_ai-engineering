@@ -147,33 +147,37 @@ install_flat_skills() {
 update_b3_gitignore() {
   local gi="${PRODUCT_ROOT}/.gitignore"
   if [[ ! -f "$gi" ]]; then
-    printf '# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/models.md\n' > "$gi"
+    printf '# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/pr-feedback/\n.b3/models.md\n' > "$gi"
     echo "created"
     return
   fi
-  local has_ship=false has_research=false has_models=false
+  local has_ship=false has_research=false has_prfb=false has_models=false
   grep -Eq '^[[:space:]]*\.b3/ship/[[:space:]]*$' "$gi" && has_ship=true
   grep -Eq '^[[:space:]]*\.b3/research-ship/[[:space:]]*$' "$gi" && has_research=true
+  grep -Eq '^[[:space:]]*\.b3/pr-feedback/[[:space:]]*$' "$gi" && has_prfb=true
   grep -Eq '^[[:space:]]*\.b3/models\.md[[:space:]]*$' "$gi" && has_models=true
-  if $has_ship && $has_research && $has_models; then
+  if $has_ship && $has_research && $has_prfb && $has_models; then
     echo "present"
     return
   fi
   local missing=()
   $has_ship || missing+=(".b3/ship/")
   $has_research || missing+=(".b3/research-ship/")
+  $has_prfb || missing+=(".b3/pr-feedback/")
   $has_models || missing+=(".b3/models.md")
 
   if grep -Eq '^[[:space:]]*\.b3/[[:space:]]*$' "$gi"; then
     local tmp="${gi}.b3tmp"
-    local add_s=1 add_r=1 add_m=1
+    local add_s=1 add_r=1 add_p=1 add_m=1
     $has_ship && add_s=0
     $has_research && add_r=0
+    $has_prfb && add_p=0
     $has_models && add_m=0
-    LC_ALL=C awk -v add_s="$add_s" -v add_r="$add_r" -v add_m="$add_m" '
+    LC_ALL=C awk -v add_s="$add_s" -v add_r="$add_r" -v add_p="$add_p" -v add_m="$add_m" '
       /^[[:space:]]*\.b3\/[[:space:]]*$/ {
         if (add_s) print ".b3/ship/"
         if (add_r) print ".b3/research-ship/"
+        if (add_p) print ".b3/pr-feedback/"
         if (add_m) print ".b3/models.md"
         next
       }
@@ -182,7 +186,7 @@ update_b3_gitignore() {
     echo "upgraded"
     return
   fi
-  if $has_ship || $has_research || $has_models; then
+  if $has_ship || $has_research || $has_prfb || $has_models; then
     {
       echo ""
       printf '%s\n' "${missing[@]}"
@@ -190,7 +194,7 @@ update_b3_gitignore() {
     echo "upgraded"
     return
   fi
-  printf '\n# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/models.md\n' >> "$gi"
+  printf '\n# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/pr-feedback/\n.b3/models.md\n' >> "$gi"
   echo "appended"
 }
 

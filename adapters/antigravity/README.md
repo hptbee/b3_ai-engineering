@@ -9,7 +9,7 @@
 | `AGENTS.md` | Native workspace rule (auto-loaded from repo root) |
 | `rules/*.md` | Referenced via `AGENTS.md` in-repo, or bundled into plugin `rules/AGENTS.md` (plain Markdown, no frontmatter, `< 24 KB`, with global `B3_HOME` and project-precedence header) |
 | `skills/` | Committed `.agents/skills.json` (in this repo), flattened `.agents/skills/<name>` (`install-product -HostName antigravity`), or global `~/.gemini/config/skills.json` category entries + plugin `skills/<name>` links |
-| `commands/` + `adapters/command-skills/` | Exposed as command skills (`b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`, `b3-ship`, `b3-research-ship`) inside `~/.gemini/config/skills.json`, plugin `skills/`, or `.agents/` |
+| `commands/` + `adapters/command-skills/` | Exposed as command skills (`b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`, `b3-ship`, `b3-research-ship`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`) inside `~/.gemini/config/skills.json`, plugin `skills/`, or `.agents/` |
 | `agents/*.md` | Rendered into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, least-privilege `tools:`, zero hardcoded models), or dynamically delegated via `define_subagent` / `invoke_subagent` |
 
 ## Capability classification
@@ -76,7 +76,7 @@ Use either the unified host dispatcher or the standalone plugin manager:
 ### Arbitrary-project usage examples
 
 In any local repository that has never run `install-product`:
-- Invoke `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, or `/b3-research-ship` (or describe the workflow intent).
+- Invoke `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, or `/b3-pr-comment` (or describe the workflow intent).
 - Bundled `rules/AGENTS.md` supplies the global `B3_HOME` fallback when neither `B3_HOME` env nor product `.b3/home` exists, so canonical `workflows/ship.md`, `review-loop/strategy.md`, `scripts/b3-guard.*`, and skills resolve cleanly.
 
 ## 2. Global vs. project-specific behavior & coexistence

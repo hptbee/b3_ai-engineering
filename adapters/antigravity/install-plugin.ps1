@@ -433,7 +433,7 @@ Generated from B3_HOME: ``$b3HomeForward`` (do not edit here).
 Resolve B3_HOME from ``B3_HOME`` env, product ``.b3/home``, or ``$b3HomeForward``.
 Precedence: ``$b3HomeForward/docs/precedence.md``. Ship: ``$b3HomeForward/workflows/ship.md``. Review loop: ``$b3HomeForward/review-loop/strategy.md``.
 Project-level AGENTS.md, GEMINI.md, .agents/rules/, and .agents/skills/ override this global baseline within their project scope; per-project install-product is optional.
-B3 commands (``/b3-plan``, ``/b3-implement``, ``/b3-debug``, ``/b3-review``, ``/b3-verify``, ``/b3-review-loop``, ``/b3-ship``, ``/b3-research-ship``) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above.
+B3 commands (``/b3-plan``, ``/b3-implement``, ``/b3-debug``, ``/b3-review``, ``/b3-verify``, ``/b3-review-loop``, ``/b3-ship``, ``/b3-research-ship``, ``/b3-pr-resolve``, ``/b3-pr-reply``, ``/b3-pr-comment``) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above.
 "@
 $rulesParts = New-Object System.Collections.Generic.List[string]
 $rulesParts.Add($rulesHeader.Trim())
@@ -535,7 +535,7 @@ if ($Action -eq 'verify') {
                 }
             }
         }
-        foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship')) {
+        foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship', 'b3-pr-resolve', 'b3-pr-reply', 'b3-pr-comment')) {
             if (-not $cmdSkillMap.ContainsKey($coreCmd)) {
                 $commandsOk = $false; $errors.Add("missing expected command skill in B3_HOME: $coreCmd")
             }

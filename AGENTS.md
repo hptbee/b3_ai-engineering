@@ -8,7 +8,7 @@ Personal AI Engineering System with a **host-neutral canonical core** (`rules/`,
 | --- | --- | --- |
 | Always-on | `AGENTS.md`; `rules/*.md` | Every session |
 | Methods | `skills/<cat>/<name>/SKILL.md` | Description-driven or explicit |
-| Actions | `commands/*.md`; `adapters/command-skills/` | `/b3-plan` `/b3-implement` `/b3-debug` `/b3-review` `/b3-verify` `/b3-review-loop` `/b3-ship` `/b3-research-ship` |
+| Actions | `commands/*.md`; `adapters/command-skills/` | `/b3-plan` `/b3-implement` `/b3-debug` `/b3-review` `/b3-verify` `/b3-review-loop` `/b3-ship` `/b3-research-ship` `/b3-pr-resolve` `/b3-pr-reply` `/b3-pr-comment` |
 | Roles | `agents/*.md` | `b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer` |
 | Default flow | `workflows/feature-implementation.md` | Single-stage feature work |
 | Full lifecycle | `workflows/ship.md`; `workflows/research-ship.md` | `/b3-ship`; `/b3-research-ship` (research-first) |

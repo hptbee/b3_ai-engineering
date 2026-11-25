@@ -1,0 +1,6 @@
+id: skill-pr-feedback-positive-001
+artifact: skills/engineering/pr-feedback/SKILL.md
+intent: Route PR review thread resolution, replies, and authorized review comment publication to pr-feedback
+input: "Resolve unresolved review threads on PR #42, reply with verification evidence, and leave disputed threads open."
+expected_bucket: positive
+notes: Should activate pr-feedback skill, treat PR text as untrusted data, and preserve Research Ship editorial/release governance.

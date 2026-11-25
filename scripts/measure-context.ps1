@@ -121,6 +121,8 @@ $debugCmdBytes = (Get-FileBytes 'commands/b3-debug.md') + (Get-FileBytes 'skills
 $reviewCmdBytes = (Get-FileBytes 'commands/b3-review.md') + $crSkillBytes
 $standaloneRevAllBytes = $reviewCmdBytes + $revTplBytes
 $verifyCmdBytes = (Get-FileBytes 'commands/b3-verify.md') + (Get-FileBytes 'skills/engineering/verification/SKILL.md')
+$prFeedbackSkillBytes = Get-FileBytes 'skills/engineering/pr-feedback/SKILL.md'
+$prFeedbackRefsBytes = (Get-FileBytes 'skills/engineering/pr-feedback/references/reply-template.md') + (Get-FileBytes 'skills/engineering/pr-feedback/references/thread-lifecycle.md') + (Get-FileBytes 'skills/engineering/pr-feedback/references/github-adapter.md')
 $rlOpBytes = $rlStrategyBytes + (Get-FileBytes 'commands/b3-review-loop.md') + $revAgentBytes
 $rlHierBytes = $rlOpBytes + (Get-FileBytes 'review-loop/hierarchical.md')
 $rlAllBytes = 0
@@ -148,6 +150,7 @@ Write-Output ("review_delta_load : {0,6} B (~{1,4} tok)  [b3-reviewer.md (self-c
 Write-Output ("review_iter_subag : {0,6} B (~{1,4} tok)  [b3-reviewer.md + b3-fixer.md (self-contained loop iter)]" -f $revIterSubagBytes, (Est-Tokens $revIterSubagBytes))
 Write-Output ("standalone_cmds   : plan={0} B, impl={1} B, debug={2} B, review={3} B, verify={4} B" -f $planCmdBytes, $implCmdBytes, $debugCmdBytes, $reviewCmdBytes, $verifyCmdBytes)
 Write-Output ("standalone_rev_all: {0,6} B (~{1,4} tok)  [cmd + code-review/SKILL.md + review-template.md]" -f $standaloneRevAllBytes, (Est-Tokens $standaloneRevAllBytes))
+Write-Output ("pr_feedback_load  : {0,6} B (~{1,4} tok)  [pr-feedback/SKILL.md={2} B + refs={3} B (on-demand)]" -f ($prFeedbackSkillBytes + $prFeedbackRefsBytes), (Est-Tokens ($prFeedbackSkillBytes + $prFeedbackRefsBytes)), $prFeedbackSkillBytes, $prFeedbackRefsBytes)
 Write-Output ("review_loop_all   : {0,6} B (~{1,4} tok)  [spec+strategy+sizing+models+hierarchical (reference-only)]" -f $rlAllBytes, (Est-Tokens $rlAllBytes))
 Write-Output ("agents_roles_total: {0,6} B (~{1,4} tok)  [{2} runtime subagent roles excl. README.md]" -f $agentRolesBytes, (Est-Tokens $agentRolesBytes), $agentRoleFiles.Count)
 Write-Output ("max_skill_file    : {0,6} B  ({1})" -f $maxSkillBytes, $maxSkillFile)

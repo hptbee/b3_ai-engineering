@@ -1,0 +1,7 @@
+id: skill-pr-feedback-near-miss-001
+artifact: skills/engineering/pr-feedback/SKILL.md
+intent: Standalone read-only code review or PR merge should not route to pr-feedback
+input: "Review my local uncommitted diff without posting anything to GitHub."
+expected_bucket: near-miss
+preferred_skill: code-review
+notes: Standalone read-only review stays in code-review; PR merge governance stays in b3-ship/b3-research-ship.

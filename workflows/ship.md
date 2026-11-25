@@ -47,7 +47,7 @@ Skip `planning`; `skills/engineering/problem-solving/SKILL.md`:
 1. Inspect scope, callers, contracts, schema, tests (`context-routing.md`/`context-cache` on demand); split **`files`** vs **`read_only_deps`**; **`watched_paths`**=`files`+`read_only_deps`. Set **`reuse:`**, **`obsoletes:`** (`none`).
 2. **Depth:** `inline` (`progress.md`), `notes` (`approach/T00N.md`, multi-file), `detailed` (API/schema/auth/migration/prod/new layer/`>=4`-task; `failure_matrix:`, `write_paths:` `>=2` stores+invalidation, `io_budget:` loops).
 3. **Evidence-based refinement:** >1 commit → narrow task, add `T00N` slices, chain `depends_on`, retarget dependents, bump `version`/`plan_id`/`plan_version`, log `Plan changes`, re-Scope.
-4. **Implementation Readiness Gate:** start `readiness: draft`; Empty template headings are not evidence. `readiness: ready` only when `inspected`, `files` (or new-file), `watched_paths`, `reuse`, `obsoletes`, `changes`, `verification`, `task_spec_fingerprint` (`b3-guard fingerprint`) filled; `approach_at_sha`=`git rev-parse HEAD`. Else `INCOMPLETE`.
+4. **Implementation Readiness Gate:** start `readiness: draft` (empty headings != evidence). `readiness: ready` only when `inspected`, `files` (or new-file), `watched_paths`, `reuse`, `obsoletes`, `changes`, `verification`, `task_spec_fingerprint` (`b3-guard fingerprint`) filled; `approach_at_sha`=`git rev-parse HEAD`. Else `INCOMPLETE`.
 5. **Pre-code Review (`detailed`):** `b3-architecture-reviewer.md` (`design-only`, contrarian) + `b3-security-reviewer.md` (`design-only`; `dispatch-naming.md`) on auth/untrusted input/race/abuse. `CONFIRMED` flaw → revise, `readiness: draft`, **re-run the Implementation Readiness Gate** pre-`Build`.
 
 ### Build (Subagents & Waves) & Verify
@@ -63,7 +63,7 @@ Skip `planning`; `skills/engineering/problem-solving/SKILL.md`:
 
 ## Finalize & Outcomes
 
-When all required tasks are `completed`:
+All required tasks `completed`:
 1. Verify `AC1..ACn` e2e, `Invariants`, full checks vs `baseline_status` (reuse `verify-check` if unchanged; `PASS`→`NOT_RUN(verify_green)`), `git log --oneline {run_base_sha}..HEAD`.
 2. Cumulative `review-loop` on `{run_base_sha}..HEAD` (excl. unchanged `initial_dirty_paths`): **only if `>=2` tasks completed**/post-review edits; default **Cross-Cutting** (`git diff --stat`+contracts/duplication); review edits need `verify-run`+`precommit -RequireVerifyReceipt`→1 `final` commit.
-3. Unignored run-dirty files block `PASS` (`INCOMPLETE`). Set `run_status` (`PASS`|`FAIL`|`INCOMPLETE`|`BLOCKED`); report `last_wave:`, ACs, SHAs, checks, review, unverified claims, PR ([pr-template.md](references/pr-template.md)).
+3. Unignored run-dirty files block `PASS` (`INCOMPLETE`). Set `run_status` (`PASS`|`FAIL`|`INCOMPLETE`|`BLOCKED`); report `last_wave:`, ACs, SHAs, checks, review, unverified claims, PR ([pr-template.md](references/pr-template.md)); authorized PR feedback: `pr-feedback/SKILL.md`.
