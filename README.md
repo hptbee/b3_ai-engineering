@@ -1,6 +1,6 @@
 # b3-ai-engineering
 
-A personal AI-assisted software engineering system built on a **host-neutral canonical core** supporting **Cursor**, **Codex**, **Claude Code**, and **Antigravity**. The conceptual core (Agent Skills, rules, commands, agents, workflows, review-loop, evals, research) stays portable; thin host wrappers and adapters map it onto each product without duplicating prose.
+A personal AI-assisted software engineering system built on a **host-neutral canonical core** supporting **Cursor**, **Codex**, **Claude Code**, and **Antigravity**. The conceptual core (`24` canonical Agent Skills + `11` command-skills = `35` total `SKILL.md` files, `5` rules, `11` commands, `5` agents, workflows, review-loop, `299` eval fixtures, research) stays portable and provider-neutral; thin host wrappers and adapters map it onto each product without duplicating prose.
 
 This is an **evolving** operating layer for AI coding agents. It is not a company handbook.
 
@@ -12,18 +12,18 @@ b3-ai-engineering/
 ├── CLAUDE.md                 Thin @AGENTS.md bridge (Claude Code)
 ├── README.md                 Human-facing entry
 ├── rules/                    Portable rule bodies (source of meaning)
-├── skills/                   Canonical skills (Agent Skills SKILL.md)
-├── commands/                 Canonical user-facing / actions
-├── agents/                   Canonical reviewer / fixer subagent specs
+├── skills/                   24 canonical skills (Agent Skills SKILL.md)
+├── commands/                 11 canonical user-facing /b3-* actions
+├── agents/                   5 canonical reviewer / fixer subagent specs
 ├── workflows/                Default product sequence, /b3-ship & /b3-research-ship lifecycles
 ├── review-loop/              Spec + orchestration procedure
 ├── knowledge/                Reusable internal knowledge
 ├── research/                 Provenance & architecture decisions
-├── evals/                    Fixtures (not a runner)
-├── adapters/                 4-host adapters, command-skills & installers
+├── evals/                    299 YAML fixtures (not a runner)
+├── adapters/                 4-host adapters, 11 command-skills & installers
 ├── .cursor/rules/            Committed thin Cursor .mdc wrappers (@rules/*.md)
 ├── .agents/skills.json       Committed Antigravity 1-level skill manifest
-├── scripts/                  Repository tooling & validation
+├── scripts/                  Provider-neutral guards, optional GitHub adapters & validation
 ├── config/                   Optional Markdown model preference example (models.example.md)
 └── docs/                     Architecture, standards, contracts
 ```
@@ -36,7 +36,7 @@ Agents are useful when they have durable constraints, reusable methods, verifica
 
 ## Host-neutral core, 4-host activation
 
-Skills are Agent Skills (`SKILL.md`) stored canonically under `skills/`, commands under `commands/`, subagent roles under `agents/`, and rule bodies under `rules/`. Each host consumes that single source of truth through thin committed entrypoints (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`) and/or gitignored local links managed by `adapters/sync-skills.{ps1,sh}` and `adapters/install-product.{ps1,sh}`.
+Skills are Agent Skills (`SKILL.md`) stored canonically under `skills/` (`24` domain & engineering skills) plus `11` thin `adapters/command-skills/` (`35` total `SKILL.md` files), commands under `commands/` (`11` `/b3-*` actions), subagent roles under `agents/` (`5` roles), and rule bodies under `rules/`. Each host consumes that single source of truth through thin committed entrypoints (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`) and/or gitignored local links managed by `adapters/sync-skills.{ps1,sh}` and `adapters/install-product.{ps1,sh}`.
 
 Evidence over opinion. Progressive disclosure. Small composable skills. Research, then adapt — do not copy skill packs.
 
@@ -72,7 +72,7 @@ Details, project overrides, and manual host runtime smoke checklists: [`adapters
 
 ### Cursor
 
-**Global one-time install:** makes all 11 commands, flattened 1-level skills, 5 subagents, global `b3-home`, and a compact `b3-user-rules.txt` User Rules template available under `~/.cursor/` (or via `.\adapters\install-global.ps1 -HostName cursor`):
+**Global one-time install:** makes all `11` commands, flattened 1-level skills (`24` canonical skills), `5` subagents, global `b3-home`, and a compact `b3-user-rules.txt` User Rules template available under `~/.cursor/` (or via `.\adapters\install-global.ps1 -HostName cursor`):
 
 ```powershell
 # Windows
@@ -114,7 +114,7 @@ Details, project overrides, and manual host runtime smoke checklists: [`adapters
 
 ### Codex
 
-**Inside this B3 checkout:** Create the local flattened `.agents/skills/<name>` index (core `skills/` + `adapters/command-skills/`):
+**Inside this B3 checkout:** Create the local flattened `.agents/skills/<name>` index (`35` skills = `24` core `skills/` + `11` `adapters/command-skills/`):
 
 ```powershell
 .\adapters\sync-skills.ps1 -HostName codex
@@ -126,11 +126,11 @@ Details, project overrides, and manual host runtime smoke checklists: [`adapters
 ./adapters/sync-skills.sh --verify codex
 ```
 
-**Separate product repo:** Use `install-product` with `-HostName codex` / `--host codex`. That writes `.b3/home`, a thin `AGENTS.md` if missing, and a gitignored flattened `.agents/skills/<name>` index so Codex can invoke `$b3-ship` (and `$b3-plan`, `$b3-implement`, …).
+**Separate product repo:** Use `install-product` with `-HostName codex` / `--host codex`. That writes `.b3/home`, a thin `AGENTS.md` if missing, and a gitignored flattened `.agents/skills/<name>` index so Codex can invoke `$b3-ship` (and `$b3-plan`, `$b3-implement`, `$b3-pr-resolve`, …).
 
 ### Claude Code
 
-**Inside this B3 checkout:** Root `CLAUDE.md` (`@AGENTS.md`) is committed and works on fresh clone. Create the local gitignored `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`, unified slash commands as skills) and `.claude/agents` links:
+**Inside this B3 checkout:** Root `CLAUDE.md` (`@AGENTS.md`) is committed and works on fresh clone. Create the local gitignored `.claude/skills/<name>` (`35` skills = `24` core `skills/` + `11` `adapters/command-skills/`, unified slash commands as skills) and `.claude/agents` links:
 
 ```powershell
 .\adapters\sync-skills.ps1 -HostName claude
@@ -146,7 +146,7 @@ Details, project overrides, and manual host runtime smoke checklists: [`adapters
 
 ### Antigravity
 
-- **Inside this B3 checkout:** Root `AGENTS.md` and committed `.agents/skills.json` (1-level category entries over `skills/*` plus `adapters/command-skills`) work out of the box without creating a `.agents/skills` link. Verify with:
+- **Inside this B3 checkout:** Root `AGENTS.md` and committed `.agents/skills.json` (1-level category entries over `skills/*` plus `adapters/command-skills`, exposing all `35` `SKILL.md` entries) work out of the box without creating a `.agents/skills` link. Verify with:
 
 ```powershell
 .\adapters\sync-skills.ps1 -HostName antigravity -VerifyOnly
@@ -166,7 +166,7 @@ Details, project overrides, and manual host runtime smoke checklists: [`adapters
 ./adapters/install-product.sh --product-root /path/to/your-product --host antigravity
 ```
 
-- **Machine-global plugin:** Manage `~/.gemini/config/plugins/b3-ai-engineering/` (rules, 1-level skill links, command skills, and isolated `agents/*.md` subagents; or use `.\adapters\install-global.ps1 -HostName antigravity`) via:
+- **Machine-global plugin:** Manage `~/.gemini/config/plugins/b3-ai-engineering/` (rules, 1-level skill links, `11` command skills, and isolated `agents/*.md` subagents; or use `.\adapters\install-global.ps1 -HostName antigravity`) via:
 
 ```powershell
 .\adapters\antigravity\install-plugin.ps1
@@ -202,26 +202,26 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Standalone commands, review & review loop
 
-- **Standalone operations** ([`commands/README.md`](commands/README.md)): `/b3-plan` (risk-adaptive scoped plans, AC-to-check mapping, plan-only stop), `/b3-implement` (single-hop via [`problem-solving`](skills/engineering/problem-solving/SKILL.md) with `b3-guard` checks, risk-sensitive specialists, and max 2 bounded fix-verify rounds without escalating to `/b3-ship`), `/b3-debug` (broken invariant, sibling sweep, regression test, 3-attempt stop/escalate), and `/b3-verify` (`b3-guard verify-run`/`verify-check` `b3-verify-v1` provenance receipts with `-ExpectedCmd` & `-RelevantPaths` coverage).
+- **Standalone operations** ([`commands/README.md`](commands/README.md), `11` commands total): `/b3-plan` (risk-adaptive scoped plans, AC-to-check mapping, plan-only stop), `/b3-implement` (single-hop via [`problem-solving`](skills/engineering/problem-solving/SKILL.md) with `b3-guard` checks, risk-sensitive specialists, and max 2 bounded fix-verify rounds without escalating to `/b3-ship`), `/b3-debug` (broken invariant, sibling sweep, regression test, 3-attempt stop/escalate), and `/b3-verify` (`b3-guard verify-run`/`verify-check` `b3-verify-v1` provenance receipts with `-ExpectedCmd` & `-RelevantPaths` coverage).
 - **Single-pass `/b3-review`** ([`commands/b3-review.md`](commands/b3-review.md) / [`skills/engineering/code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): supports **3 modes** — **local diff/branch** (delta-first/scope-first via `b3-guard diff-scope` + `mechanical-check` `safety_hits` + `symbol-check` on refactors, plus `verify-check` / CI evidence validation), **GitHub PR (`#<id>` / URL)** with noise filtering before pulling diffs, and **optional authorized PR posting (`--post`)** delegated to [`skills/engineering/pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md) + `scripts/b3-pr-github.{ps1,sh}` (`COMMENT` default, `CONFIRMED` findings only).
-- **PR feedback lifecycle (`/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`)** ([`skills/engineering/pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md)): end-to-end thread triage/fix/verify/reply/resolve, evidence-backed reply-only mode, and SHA-fresh review publication (`summary`, `inline`, `both`, `--draft`) via `scripts/b3-pr-github.{ps1,sh}` with untrusted-data framing, separate authorizations, actor-scoped idempotency, and Research Ship governance separation.
-- **Iterative `/b3-review-loop`** ([`commands/b3-review-loop.md`](commands/b3-review-loop.md)): runtime-self-sufficient [`review-loop/strategy.md`](review-loop/strategy.md) (skips `spec.md`/`sizing.md`/`models.md` on normal runs), 0-token `diff-scope` + `mechanical-check` + `symbol-check`, Iteration 2+ `--prev-sha` `delta_files`, `impl_agent` prompt-cache resume (or fresh `b3-fixer` + compact `.b3/ship/review-loop/<slug>/` state when run standalone without `/b3-ship`), `verify-run`/`verify-check` gate, bug-class sweep, 2-tier circuit breaker, and explicit `review_independence: SINGLE_AGENT_LIMIT` honesty when host lacks subagent isolation. Normative references: [`review-loop/spec.md`](review-loop/spec.md), [`review-loop/models.md`](review-loop/models.md).
+- **PR feedback lifecycle (`/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`)** ([`skills/engineering/pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md)): end-to-end thread triage/fix/verify/reply/resolve, evidence-backed reply-only mode, and SHA-fresh review publication (`summary`, `inline`, `both`, `--draft`) via `scripts/b3-pr-github.{ps1,sh}` (sharing `scripts/lib/b3-gh-exec.mjs` with `b3-github-verify`) with canonical `<git-common-dir>/b3/pr-feedback/` per-repo/PR state & PID locks (shared across linked worktrees; `.b3/pr-feedback/` is gitignored local scratch only), untrusted-data framing, separate authorizations, actor-scoped idempotency, and Research Ship governance separation.
+- **Iterative `/b3-review-loop`** ([`commands/b3-review-loop.md`](commands/b3-review-loop.md)): runtime-self-sufficient [`review-loop/strategy.md`](review-loop/strategy.md) (skips `spec.md`/`sizing.md`/`models.md` on normal runs), 0-token `diff-scope` + `mechanical-check` + `symbol-check`, Iteration 2+ `--prev-sha` `delta_files`, `context-cache` (`AnchorPaths` stable contract hash vs `ScopePaths` graph-index scope), `impl_agent` prompt-cache resume (or fresh `b3-fixer` + compact `.b3/ship/review-loop/<slug>/` state when run standalone without `/b3-ship`), `verify-run`/`verify-check` gate, bug-class sweep, 2-tier circuit breaker, and explicit `review_independence: SINGLE_AGENT_LIMIT` honesty when host lacks subagent isolation. Normative references: [`review-loop/spec.md`](review-loop/spec.md), [`review-loop/models.md`](review-loop/models.md).
 
 ## Full lifecycles (`/b3-ship` & `/b3-research-ship`)
 
-One `/b3-ship` invocation runs `Preflight → Plan → [Scope → Build → Verify → Review → Commit] → Finalize` (with verbatim shared contracts, risk-adaptive `detailed` matrices `failure_matrix` / `write_paths` / `io_budget`, automatic dependency-aware **Parallel Waves** via `b3-guard check-wave -WaveReads -ExpectedBaseSha` + `check-worktree` when disjoint and justified, `impl_agent` Context Packets, Hub-and-Spoke `discoveries`/`change_requests`, 0-token `mechanical-check` `safety_hits` + `symbol-check`, `verify-run` / `verify-check` (`b3-verify-v1`) receipts enforced by `precommit -RequireVerifyReceipt`, risk-tiered independent review with portable 4-tier escalation, sequential atomic commits, and Git-verified resume with read-only `.b3/autodev/` legacy fallback). Procedure: [`workflows/ship.md`](workflows/ship.md) (progressive-disclosure templates & resume under `workflows/references/`). Guard CLI: [`scripts/README.md`](scripts/README.md). Command: [`commands/b3-ship.md`](commands/b3-ship.md) (1-hop `adapters/command-skills/b3-ship/SKILL.md` for skill-based hosts). Run-scoped checkpoints live under `.b3/ship/runs/<run_id>/` via 1-line `.b3/ship/CURRENT` (gitignored).
+One `/b3-ship` invocation runs `Preflight → Plan → [Scope → Build → Verify → Review → Commit] → Finalize` with verbatim shared contracts, risk-adaptive `detailed` matrices (`failure_matrix` / `write_paths` / `io_budget`), automatic 4-mode **Parallel Waves** (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`) via `b3-guard check-wave -Partition` (`WAVE_OK` / `WAVE_PARTITIONED` / `WAVE_SEQUENTIAL`, `wave|N|...`, `-WaveReads`, `-ProtectedPaths`, `-CheckDirtyScope`, `-MaxConcurrency 1..4`, `none`/`[]` readers) + `check-worktree -RequireIsolated -PeerRoots`, `impl_agent` Context Packets, Hub-and-Spoke `discoveries`/`change_requests`, 0-token `mechanical-check` (`-WaveSpecs`, `-WorkerChanges` / `-WorkerRoots`, `-ProtectedPaths`, `-DirtyDigests` → `ownership_verification` ∈ `UNVERIFIED_COMBINED_ONLY | CALLER_ATTRIBUTED | PARTIAL_ATTRIBUTION | VERIFIED_PER_WORKER | VIOLATION`) + `symbol-check`, `verify-run` / `verify-check` (`b3-verify-v1`) receipts enforced by `precommit -RequireVerifyReceipt`, risk-tiered independent review with portable 4-tier escalation, sequential atomic commits, and Git-verified resume with read-only `.b3/autodev/` legacy fallback. Procedure: [`workflows/ship.md`](workflows/ship.md) (progressive-disclosure templates & resume under `workflows/references/`). Guard CLI: [`scripts/README.md`](scripts/README.md). Command: [`commands/b3-ship.md`](commands/b3-ship.md) (1-hop `adapters/command-skills/b3-ship/SKILL.md` for skill-based hosts). Run-scoped checkpoints live under `.b3/ship/runs/<run_id>/` via 1-line `.b3/ship/CURRENT` (gitignored).
 
-Research-first delivery (`/b3-research-ship`) runs Phases A–K from source discovery and SHA-256 provenance manifests (`evidence-check`) through independent source verification, formalization, optional `/b3-ship` implementation, dual Research/Engineering/Editorial gates, PR lifecycle, and fail-closed `merge-policy-check` under `.b3/research-ship/runs/<run_id>/`. Procedure: [`workflows/research-ship.md`](workflows/research-ship.md); command: [`commands/b3-research-ship.md`](commands/b3-research-ship.md) (1-hop `adapters/command-skills/b3-research-ship/SKILL.md`).
+Research-first delivery (`/b3-research-ship`) runs Phases A–K from source discovery and SHA-256 provenance manifests (`evidence-check`) through independent source verification, formalization, optional `/b3-ship` implementation, dual Research/Engineering/Editorial gates, PR lifecycle, and provider-neutral fail-closed `merge-policy-check` (`mode=local|github` bound to canonical trunk `.b3/research-policy.json` authority, `PR_READY` / `LOCAL_ELIGIBLE_ONLY` / `PROVIDER_UNAVAILABLE`, and `-PostMerge` local Git ancestry + optional `b3-github-verify`) under `.b3/research-ship/runs/<run_id>/`. Procedure: [`workflows/research-ship.md`](workflows/research-ship.md); command: [`commands/b3-research-ship.md`](commands/b3-research-ship.md) (1-hop `adapters/command-skills/b3-research-ship/SKILL.md`).
 
-**Visual diagrams & walkthrough:** [`docs/ship-and-review-guide.md`](docs/ship-and-review-guide.md) (Mermaid flowcharts & sequence diagrams for `/b3-ship`, Parallel Waves, `/b3-review-loop`, and 3-mode `/b3-review`).
+**Visual diagrams & walkthrough:** [`docs/ship-and-review-guide.md`](docs/ship-and-review-guide.md) (Mermaid flowcharts & sequence diagrams for `/b3-ship`, 4-mode Parallel Waves, `/b3-review-loop`, and 3-mode `/b3-review`).
 
 ## Context budget & validation
 
-Static always-on, `/b3-ship`, `/b3-research-ship`, `/b3-review-loop`, `review_delta_load`, `context_routing`, and standalone command (`standalone_cmds`) byte/token budgets are tracked identically across shells by [`scripts/measure-context.ps1`](scripts/measure-context.ps1) / [`scripts/measure-context.sh`](scripts/measure-context.sh) (`-Strict` / `--strict`). Optional on-demand MCP-aware context routing (`0 B` always-on) is defined in [`workflows/references/context-routing.md`](workflows/references/context-routing.md) and documented in [`docs/context-routing.md`](docs/context-routing.md). Behavioral (`validate-ship-behavior.ps1`, `validate-standalone-commands.ps1`, `validate-tshirt-hierarchical.ps1`, `validate-research-ship.ps1`, `validate-context-routing.ps1`, `validate-model-preferences.ps1`, `validate-cursor-global.ps1`, `validate-antigravity-global.ps1`), isolated product smoke (`smoke-ship-product.ps1`), and eval schema (`validate-evals.sh`) checks are cataloged in [`scripts/README.md`](scripts/README.md).
+Static always-on, `/b3-ship`, `/b3-research-ship`, `/b3-review-loop`, `review_delta_load`, `context_routing`, and standalone command (`standalone_cmds`) byte/token budgets are tracked identically across shells by [`scripts/measure-context.ps1`](scripts/measure-context.ps1) / [`scripts/measure-context.sh`](scripts/measure-context.sh) (`-Strict` / `--strict`). Optional on-demand MCP-aware context routing (`0 B` always-on) is defined in [`workflows/references/context-routing.md`](workflows/references/context-routing.md) and documented in [`docs/context-routing.md`](docs/context-routing.md). Behavioral (`validate-ship-behavior.ps1`, `validate-standalone-commands.ps1`, `validate-pr-feedback.ps1`, `validate-merge-security.sh`, `validate-tshirt-hierarchical.ps1`, `validate-research-ship.ps1`, `validate-context-routing.ps1`, `validate-model-preferences.ps1`, `validate-cursor-global.ps1`, `validate-antigravity-global.ps1`), isolated product smoke (`smoke-ship-product.ps1`), and eval schema (`validate-evals.sh`) checks are cataloged in [`scripts/README.md`](scripts/README.md).
 
 ## Evaluation
 
-283 YAML schema/activation fixtures live under `evals/` (including `evals/commands/`, `evals/workflows/ship/`, and `evals/workflows/research-ship/`), validated with [`scripts/validate-evals.sh`](scripts/validate-evals.sh); automated LLM scoring runner remains deferred. Behavioral CLI suites run via `scripts/validate-standalone-commands.ps1`, `scripts/validate-ship-behavior.ps1`, `scripts/validate-research-ship.ps1`, `scripts/validate-context-routing.ps1`, `scripts/validate-tshirt-hierarchical.ps1`, `scripts/validate-model-preferences.ps1`, and `scripts/smoke-ship-product.ps1`. Layout: [`docs/evaluation.md`](docs/evaluation.md).
+`299` YAML schema/activation fixtures live under `evals/` (`176` in `evals/skills/`, `64` in `evals/workflows/` [`50` `ship` + `14` `research-ship`], `26` in `evals/review-loop/`, `16` in `evals/commands/`, `10` in `evals/rules/`, and `7` in `evals/agents/`), validated with [`scripts/validate-evals.sh`](scripts/validate-evals.sh); automated LLM scoring runner remains deferred. Behavioral CLI suites run via `scripts/validate-standalone-commands.ps1`, `scripts/validate-pr-feedback.ps1`, `scripts/validate-merge-security.sh`, `scripts/validate-ship-behavior.ps1`, `scripts/validate-research-ship.ps1`, `scripts/validate-context-routing.ps1`, `scripts/validate-tshirt-hierarchical.ps1`, `scripts/validate-model-preferences.ps1`, `scripts/validate-cursor-global.ps1`, `scripts/validate-antigravity-global.ps1`, and `scripts/smoke-ship-product.ps1`. Layout: [`docs/evaluation.md`](docs/evaluation.md).
 
 ## Personal profile
 
@@ -234,7 +234,7 @@ Personal preference  ≠  Engineering rule
 ## Platforms
 
 ```text
-Canonical core (rules/, skills/, commands/, agents/)
+Canonical core (rules/, 24 skills/, 11 commands/, 5 agents/)
   → .cursor/rules/*.mdc + sync-skills cursor     → Cursor
   → AGENTS.md + sync-skills codex                → Codex
   → CLAUDE.md + sync-skills claude               → Claude Code
@@ -247,13 +247,14 @@ Canonical core (rules/, skills/, commands/, agents/)
 | --- | --- |
 | Architecture, standards, precedence, lifecycle | Present |
 | Foundation rules + Cursor `.mdc` activation + Claude `CLAUDE.md` bridge | Present |
-| Engineering + domain skills | Present (see [`skills/README.md`](skills/README.md)) |
-| Commands, agents | Present (host-neutral canonical core) |
-| Eval fixtures | Present; runner deferred |
+| Engineering + domain skills (`24` canonical + `11` command-skills = `35` `SKILL.md`) | Present (see [`skills/README.md`](skills/README.md)) |
+| Commands (`11`), agents (`5`) | Present (host-neutral canonical core) |
+| Eval fixtures (`299` YAML cases) | Present; runner deferred |
 | Review-loop orchestration | Present (agent procedure; host isolation **UNKNOWN / INCOMPLETE**) |
 | Full lifecycles (`/b3-ship`, `/b3-research-ship`) | Present as workflows + `commands/b3-{ship,research-ship}.md` + `adapters/command-skills/b3-{ship,research-ship}/` |
+| PR feedback lifecycle (`/b3-pr-{resolve,reply,comment}`) | Present (`skills/engineering/pr-feedback/` + optional `scripts/b3-pr-github.{ps1,sh}`) |
 | Knowledge after lessons | Minimal (`knowledge/personal/` only) |
 | Profile files | Not created (`knowledge/personal/` holds background) |
-| Cursor / Codex / Claude / Antigravity adapters | Present (`sync-skills`, `install-product`, Antigravity plugin); live runtime host discovery **UNKNOWN / INCOMPLETE** |
+| Cursor / Codex / Claude / Antigravity adapters | Present (`sync-skills`, `install-product`, `install-global`, Antigravity plugin); live runtime host discovery **UNKNOWN / INCOMPLETE** |
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

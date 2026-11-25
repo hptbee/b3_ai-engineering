@@ -1,5 +1,7 @@
 # Decision 009 — Cursor-native layout (first host)
 
+> **Status:** Superseded by [decision-013-host-neutral-multi-host-layout.md](decision-013-host-neutral-multi-host-layout.md) (canonical `skills/`, `commands/`, `agents/`, and `rules/` returned to host-neutral repository root with thin 4-host adapters for Cursor, Codex, Claude Code, and Antigravity). Retained intact as historical provenance.
+
 ## Context
 
 B3’s portable core lived at repo-root `skills/`, `commands/`, `agents/`, and `rules/*.md`. Cursor does not discover those folders. Discovery required a gitignored junction (`.cursor/skills` → `skills/`), so a fresh clone did not load skills. Rules were never `.mdc`. Commands and agents were not on Cursor discovery paths.

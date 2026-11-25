@@ -1,5 +1,7 @@
 # Decision 010 — Autonomous development v1
 
+> **Status:** Superseded / Amended in naming, host activation, and wave execution by [decision-012-autodev-v2-hardening.md](decision-012-autodev-v2-hardening.md), [decision-013-host-neutral-multi-host-layout.md](decision-013-host-neutral-multi-host-layout.md), [decision-014-autodev-parallel-waves-and-mechanical-pass.md](decision-014-autodev-parallel-waves-and-mechanical-pass.md), and PR #31: `/autodev` (`workflows/autonomous-development.md`, `.b3/autodev/`) was superseded by `/b3-ship` ([`../../workflows/ship.md`](../../workflows/ship.md), `.b3/ship/runs/<run_id>/` with read-only `.b3/autodev/` fallback), 1-hop command-skills (`adapters/command-skills/`) serve skill-based hosts, and `b3-guard check-wave -Partition` dispatches 4-mode adaptive waves (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). Core option-1 architectural choice (one workflow + thin entrypoints, no external runner) remains active.
+
 ## Context
 
 B3 already has planning, problem-solving, testing, verification, a single-pass review, and an independent review loop, each with its own command. A full feature still needs the user to invoke those commands one stage at a time. The requested addition is one invocation that runs that lifecycle until completion or a blocker.
