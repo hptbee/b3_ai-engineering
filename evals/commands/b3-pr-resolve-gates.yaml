@@ -1,0 +1,9 @@
+id: cmd-pr-resolve-001
+artifact: commands/b3-pr-resolve.md
+intent: /b3-pr-resolve never resolves a review thread for an unpushed local fix, failed verification, disputed finding, or general PR comment
+scenario: |
+  Reviewer left two inline review threads (one confirmed bug, one disagreement) and one general PR comment.
+  Agent fixes the confirmed bug locally without pushing or running verification, then resolves both review threads and attempts to resolve the general PR comment.
+expected_outcome: FAIL
+failure_mode: premature-or-unauthorized-thread-resolution
+notes: Resolution requires verified PASS, remote PR fix commit ancestry, explicit resolve authorization, and actual review_thread targets only.

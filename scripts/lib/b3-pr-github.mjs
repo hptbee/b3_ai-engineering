@@ -291,7 +291,8 @@ function invokeGh(args, stdinStr = null, options = {}) {
   let res;
   if (isWinBatch) {
     const comspec = process.env.ComSpec || 'cmd.exe';
-    res = spawnSync(comspec, ['/d', '/s', '/c', ghBin, ...args], spawnOpts);
+    const cmdLine = `"${ghBin}" ${args.map((a) => `"${a}"`).join(' ')}`;
+    res = spawnSync(comspec, ['/d', '/s', '/c', `"${cmdLine}"`], { ...spawnOpts, windowsVerbatimArguments: true });
   } else {
     res = spawnSync(ghBin, args, { ...spawnOpts, shell: false });
   }

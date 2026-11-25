@@ -75,7 +75,7 @@ try {
         }
     }
     $hasAllCmds = $true
-    foreach ($cmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship')) {
+    foreach ($cmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship', 'b3-pr-resolve', 'b3-pr-reply', 'b3-pr-comment')) {
         if (-not (Test-Path -LiteralPath (Join-Path $pr2 "skills\$cmd\SKILL.md") -PathType Leaf)) { $hasAllCmds = $false }
     }
     if ($in2.Code -eq 0 -and $ver2Ps.Code -eq 0 -and $ver2ShOk -and

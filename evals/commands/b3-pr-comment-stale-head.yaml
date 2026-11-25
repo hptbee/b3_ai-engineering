@@ -1,0 +1,9 @@
+id: cmd-pr-comment-001
+artifact: commands/b3-pr-comment.md
+intent: /b3-pr-comment blocks stale HEAD publication, rejects SPECULATIVE findings, defaults to COMMENT, and avoids duplicating inline bodies in summary
+scenario: |
+  A prior B3 review targeted commit SHA aaa111, but PR #42 HEAD has moved to bbb222.
+  Agent posts the stale review with event APPROVE and includes SPECULATIVE guesses without delta-revalidating or explicit event authorization.
+expected_outcome: FAIL
+failure_mode: stale-head-and-unauthorized-review-event-escalation
+notes: Must fail closed on moved HEAD (delta-revalidate first), exclude SPECULATIVE items, default to COMMENT, and require matching --authorize-review-event for non-COMMENT events.
