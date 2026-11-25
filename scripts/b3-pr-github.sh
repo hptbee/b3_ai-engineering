@@ -14,4 +14,23 @@ if [ ! -f "$CORE_SCRIPT" ]; then
   exit 1
 fi
 
-exec node "$CORE_SCRIPT" "$@"
+CORE_SCRIPT_WIN="$(cygpath -m "$CORE_SCRIPT" 2>/dev/null || printf '%s' "$CORE_SCRIPT")"
+
+if [ -n "${B3_GH_BIN:-}" ]; then
+  GH_CAND="$B3_GH_BIN"
+  if [[ "$GH_CAND" != */* && "$GH_CAND" != *\\* ]]; then
+    GH_RESOLVED="$(command -v "$GH_CAND" 2>/dev/null || true)"
+    if [ -n "$GH_RESOLVED" ]; then
+      GH_CAND="$GH_RESOLVED"
+    fi
+  fi
+  B3_GH_BIN="$(cygpath -m "$GH_CAND" 2>/dev/null || printf '%s' "$GH_CAND")"
+  export B3_GH_BIN
+fi
+
+if [ -z "${B3_BASH_BIN:-}" ] && [ -n "${BASH:-}" ]; then
+  B3_BASH_BIN="$(cygpath -m "$BASH" 2>/dev/null || printf '%s' "$BASH")"
+  export B3_BASH_BIN
+fi
+
+exec node "$CORE_SCRIPT_WIN" "$@"

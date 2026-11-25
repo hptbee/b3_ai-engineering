@@ -1,6 +1,6 @@
 ---
 name: b3-pr-reply
-description: Reply to selected PR comments or review threads ($b3-pr-reply, /b3-pr-reply) with verified evidence. Never edits code or resolves threads.
+description: Explicit command wrapper ($b3-pr-reply, /b3-pr-reply, b3-pr-reply) to reply to selected PR comments or review threads with verified evidence via pr-feedback skill. Never edits code or resolves threads.
 ---
 
 # b3-pr-reply

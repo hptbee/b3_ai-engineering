@@ -4,8 +4,13 @@
 // Exit codes: 0 = verified metadata emitted, 1 = GH_VERIFY_ERROR (invalid input/404/corrupt), 2 = GH_VERIFY_UNAVAILABLE (missing gh/auth/5xx/network).
 
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
+import {
+  execGh,
+  hasControlChars,
+  parseGitHubRemoteSlug,
+  resolveBashBinary,
+  resolveGhBinary,
+} from "./b3-gh-exec.mjs";
 
 function failError(reason) {
   process.stdout.write(`GH_VERIFY_ERROR: ${reason}\n`);
@@ -19,7 +24,7 @@ function failUnavailable(reason) {
 
 function safeText(val, field) {
   const s = val == null ? "" : String(val);
-  if (/[\x00-\x1F\x7F]/.test(s)) {
+  if (hasControlChars(s)) {
     failError(`control_chars_in_response(${field})`);
   }
   return s;
@@ -31,98 +36,6 @@ function sortUnique(arr) {
     if (x) set.add(x);
   }
   return Array.from(set).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-}
-
-function parseGitHubRemoteSlug(remoteUrl) {
-  if (!remoteUrl) return "";
-  const u = String(remoteUrl).trim();
-  let m = u.match(/^https:\/\/(?:[^/@\s]+@)?github\.com\/([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/i);
-  if (m) {
-    return m[1].includes("..") ? "" : m[1];
-  }
-  m = u.match(/^(?:ssh:\/\/)?git@github\.com[:/]([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/i);
-  if (m) {
-    return m[1].includes("..") ? "" : m[1];
-  }
-  return "";
-}
-
-function isExecutableOrFile(filePath) {
-  try {
-    const st = fs.statSync(filePath);
-    if (!st.isFile()) return false;
-    if (process.platform === "win32") return true;
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveGhBinary(explicitGh) {
-  const candidateRaw = (explicitGh || process.env.B3_GH_BIN || "").trim();
-  const isWin = process.platform === "win32";
-  const pathEnv = process.env.PATH || process.env.Path || "";
-  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
-
-  if (candidateRaw) {
-    if (candidateRaw.includes("/") || candidateRaw.includes("\\") || (isWin && /^[A-Za-z]:/.test(candidateRaw))) {
-      return isExecutableOrFile(candidateRaw) ? candidateRaw : "";
-    }
-    const names = isWin && !/\.[A-Za-z0-9]+$/.test(candidateRaw)
-      ? [`${candidateRaw}.exe`, `${candidateRaw}.com`, `${candidateRaw}.cmd`, `${candidateRaw}.bat`, candidateRaw]
-      : [candidateRaw];
-    for (const d of dirs) {
-      for (const n of names) {
-        const full = path.join(d, n);
-        if (isExecutableOrFile(full)) return full;
-      }
-    }
-    return "";
-  }
-
-  const names = isWin ? ["gh.exe", "gh.com", "gh.cmd", "gh.bat", "gh"] : ["gh"];
-  for (const d of dirs) {
-    for (const n of names) {
-      const full = path.join(d, n);
-      if (isExecutableOrFile(full)) return full;
-    }
-  }
-  return "";
-}
-
-function resolveBashBinary(explicitBash) {
-  const raw = (explicitBash || process.env.B3_BASH_BIN || "").trim();
-  if (raw && isExecutableOrFile(raw)) return raw;
-  const isWin = process.platform === "win32";
-  if (isWin) {
-    const winCands = [];
-    if (process.env.ProgramFiles) {
-      winCands.push(path.join(process.env.ProgramFiles, "Git", "bin", "bash.exe"));
-      winCands.push(path.join(process.env.ProgramFiles, "Git", "usr", "bin", "bash.exe"));
-    }
-    winCands.push(
-      "C:\\Program Files\\Git\\bin\\bash.exe",
-      "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
-      "C:\\Program Files (x86)\\Git\\bin\\bash.exe"
-    );
-    for (const cand of winCands) {
-      if (isExecutableOrFile(cand)) return cand;
-    }
-  }
-  const pathEnv = process.env.PATH || process.env.Path || "";
-  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
-  for (const d of dirs) {
-    const full = path.join(d, isWin ? "bash.exe" : "bash");
-    if (isWin) {
-      const normBack = full.replace(/\//g, "\\");
-      if (/\\windows\\(system32|sysnative)\\bash\.exe$/i.test(normBack) || /\\microsoft\\windowsapps\\bash\.exe$/i.test(normBack)) {
-        continue;
-      }
-    }
-    if (isExecutableOrFile(full)) return full;
-  }
-  return "";
 }
 
 let mode = "";
@@ -223,38 +136,18 @@ if (isWin && !/\.(exe|com|cmd|bat)$/i.test(ghBin) && !bashBin) {
 }
 
 function invokeGhApi(args) {
-  let r;
-  const opts = {
-    encoding: "utf8",
+  const r = execGh(["api", ...args], {
+    ghBin,
+    bashBin,
     maxBuffer: 32 * 1024 * 1024,
-  };
-  if (isWin && /\.(cmd|bat)$/i.test(ghBin)) {
-    const comSpec = process.env.ComSpec || "cmd.exe";
-    const fullArgs = ["api", ...args];
-    const cmdEnv = { ...process.env, B3_GH_CMD_EXE: ghBin.replace(/"/g, "") };
-    const tokens = ['"%B3_GH_CMD_EXE%"'];
-    for (let idx = 0; idx < fullArgs.length; idx++) {
-      const k = `B3_GH_CMD_${idx}`;
-      cmdEnv[k] = String(fullArgs[idx]).replace(/"/g, '\\"');
-      tokens.push(`"%${k}%"`);
-    }
-    r = spawnSync(comSpec, ["/d", "/s", "/c", `"${tokens.join(" ")}"`], {
-      ...opts,
-      env: cmdEnv,
-      windowsVerbatimArguments: true,
-    });
-  } else if (isWin && !/\.(exe|com)$/i.test(ghBin)) {
-    r = spawnSync(bashBin, ["--", ghBin.replace(/\\/g, "/"), "api", ...args], opts);
-  } else {
-    r = spawnSync(ghBin, ["api", ...args], opts);
-  }
-  if (r.error) {
+  });
+  if (!r.ok) {
     failUnavailable("gh_cli_unavailable");
   }
   return {
-    code: typeof r.status === "number" ? r.status : 1,
-    stdout: r.stdout || "",
-    stderr: r.stderr || "",
+    code: r.status,
+    stdout: r.stdout,
+    stderr: r.stderr,
   };
 }
 

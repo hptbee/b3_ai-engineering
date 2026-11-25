@@ -1,6 +1,6 @@
 ---
 name: b3-pr-resolve
-description: Handle PR review feedback end-to-end ($b3-pr-resolve, /b3-pr-resolve): validate, fix, verify, reply, and resolve eligible threads. Not for PR merge.
+description: Explicit command wrapper ($b3-pr-resolve, /b3-pr-resolve, b3-pr-resolve) to validate, fix, verify, reply, and resolve eligible PR threads via pr-feedback skill. Not for PR merge.
 ---
 
 # b3-pr-resolve
