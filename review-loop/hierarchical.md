@@ -16,8 +16,8 @@ Load **only** when `size_class` is `L`, `XL`, or `XXL` (never on `always-on` or 
 Run `scripts/b3-guard.{ps1,sh} review-inventory` (`-BaseSha`, optional `-TargetRef`, `-MaxConcurrency`):
 - Collects T-shirt `size_class`, files/LOC, `change_types`, `contract_files`, `generated_files`, `test_files`, `noise_files`, decoupled PR & per-unit `risk_level` / `risk_signals` / `recommended_specialists`, conditional Level-1 dispatch (`l1_specialists`, `l1_skip_rationale`), `split_recommended`, and bounded cohesive `unit|U01|...` slices (`L`/`XL` coalesced `<= 4`; oversized buckets subdivided without arbitrary LOC slicing; paired tests preserved). Fails `PARTITION_INCOMPLETE` (`exit 2`) if safe bounded partitioning is impossible.
 - Initialize resumable tamper-evident coverage ledger immediately:
-  `scripts/b3-guard.{ps1,sh} review-ledger -Action init -LedgerPath .b3/ship/review-loop/<slug>/ledger.md [-MaxConcurrency N] [-MaxPasses M] [-ReviewIndependence INDEPENDENT|SINGLE_AGENT_LIMIT]`
-  (Fails closed before creating objects on sensitive untracked files, dirty submodules, or unsafe partitions.)
+  `scripts/b3-guard.{ps1,sh} review-ledger -Action init -LedgerPath .b3/ship/review-loop/<slug>/ledger.md [-MaxConcurrency N] [-MaxPasses M] [-ReviewIndependence UNKNOWN|INDEPENDENT|SINGLE_AGENT_LIMIT]`
+  (Defaults to `UNKNOWN` — never assumes `INDEPENDENT`; fails closed before creating objects on sensitive untracked files, dirty submodules, or unsafe partitions.)
 - If `split_recommended=true` and units are independently mergeable, advise splitting into stacked/feature PRs; if reviewed here, execute Levels 1–4 across **all** units.
 
 ### Level 1 — Conditional Architecture & Shared Contract Review

@@ -59,6 +59,10 @@ param(
     [switch]$PostMerge,
     [string]$MergedSha = '',
     [string]$MainRef = '',
+    [string]$PrNumber = '',
+    [string]$Repo = '',
+    [string]$TargetBranch = '',
+    [switch]$LocalOnly,
     [string]$CachePath = '',
     [string]$ScopeId = '',
     [string]$AnchorPaths = '',
@@ -2487,6 +2491,7 @@ function Parse-MergePolicyJsonText([string]$RawJson) {
         RequireCi = $true
         RequireReview = $true
         ProtectedPaths = @()
+        AllowedTargetBranches = @()
     }
     $amProp = & $getExactProp 'auto_merge'
     if ($null -ne $amProp) {
@@ -2524,7 +2529,116 @@ function Parse-MergePolicyJsonText([string]$RawJson) {
         }
         $res.ProtectedPaths = @($ppList)
     }
+    $atbProp = & $getExactProp 'allowed_target_branches'
+    if ($null -ne $atbProp) {
+        if ($null -eq $atbProp.Value -or ($atbProp.Value -isnot [array])) { Fail 'MERGE_BLOCKED: invalid_policy_json' 1 }
+        $atbList = New-Object System.Collections.Generic.List[string]
+        foreach ($bp in $atbProp.Value) {
+            if ($null -eq $bp -or ($bp -isnot [string]) -or ($bp -match '[\x00-\x1F\x7F\s]')) {
+                Fail 'MERGE_BLOCKED: invalid_policy_json' 1
+            }
+            $bTrim = $bp.Trim()
+            if (-not $bTrim -or $bTrim.StartsWith('-') -or $bTrim.Contains('..')) {
+                Fail 'MERGE_BLOCKED: invalid_policy_json' 1
+            }
+            if (-not $atbList.Contains($bTrim)) { $atbList.Add($bTrim) }
+        }
+        $res.AllowedTargetBranches = @($atbList)
+    }
     return $res
+}
+
+function Test-BranchPatternMatch([string]$BranchName, [string[]]$Patterns) {
+    if (-not $BranchName) { return $false }
+    foreach ($pat in @($Patterns)) {
+        if (-not $pat) { continue }
+        $rx = '^' + ([regex]::Escape($pat) -replace '\\\*', '.*') + '$'
+        if ($BranchName -cmatch $rx) { return $true }
+    }
+    return $false
+}
+
+function Parse-GitHubRemoteSlug([string]$RemoteUrl) {
+    if (-not $RemoteUrl) { return '' }
+    $u = $RemoteUrl.Trim()
+    if ($u -match '^https://(?:[^/@\s]+@)?github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$') {
+        $slug = $Matches[1]
+        if (-not $slug.Contains('..')) { return $slug }
+    } elseif ($u -match '^(?:ssh://)?git@github\.com[:/]([A-Za-z0-9._-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$') {
+        $slug = $Matches[1]
+        if (-not $slug.Contains('..')) { return $slug }
+    }
+    return ''
+}
+
+function Resolve-GitHubRepoSlug([string]$Root, [string]$ExplicitRepo, [string]$ErrPrefix) {
+    $expTrim = if ($ExplicitRepo) { $ExplicitRepo.Trim() } else { '' }
+    if ($expTrim) {
+        if ($expTrim -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -or $expTrim.Contains('..')) {
+            Fail "${ErrPrefix}: invalid_repo" 1
+        }
+    }
+    $remRes = Invoke-GitCommand $Root @('remote', 'get-url', 'origin')
+    if ($remRes.ExitCode -ne 0) {
+        Fail "${ErrPrefix}: origin_remote_missing" 1
+    }
+    $originSlug = Parse-GitHubRemoteSlug $remRes.StdOut
+    if (-not $originSlug) {
+        Fail "${ErrPrefix}: origin_remote_not_github" 1
+    }
+    if ($expTrim) {
+        if (-not $expTrim.Equals($originSlug, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Fail "${ErrPrefix}: repo_mismatch" 1
+        }
+    }
+    return $originSlug
+}
+
+function Invoke-B3GitHubVerify([string]$Mode, [string]$RepoSlug, [string]$PrNum, [string]$ErrPrefix) {
+    $adapterPath = Join-Path $PSScriptRoot 'b3-github-verify.ps1'
+    if (-not (Test-Path -LiteralPath $adapterPath -PathType Leaf)) {
+        Fail "${ErrPrefix}: github_adapter_missing" 1
+    }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $rawOut = @()
+    $rc = 1
+    try {
+        $rawOut = @(& $adapterPath -Mode $Mode -Repo $RepoSlug -PrNumber $PrNum 2>&1)
+        $rc = $LASTEXITCODE
+    } catch {
+        $rawOut = @("GH_VERIFY_ERROR: adapter_exception")
+        $rc = 1
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    $lines = @($rawOut | ForEach-Object { ([string]$_).TrimEnd("`r") })
+    if ($rc -ne 0) {
+        $first = if ($lines.Count -gt 0 -and $lines[0]) { $lines[0] } else { 'unknown' }
+        $detail = ($first -replace '^GH_VERIFY_ERROR:\s*', '').Trim()
+        if (-not $detail) { $detail = 'unknown' }
+        Fail "${ErrPrefix}: github_verification_failed($detail)" 1
+    }
+    $data = @{}
+    $changedFiles = New-Object System.Collections.Generic.List[string]
+    foreach ($ln in $lines) {
+        if (-not $ln) { continue }
+        $eq = $ln.IndexOf('=')
+        if ($eq -lt 1) { Fail "${ErrPrefix}: github_verification_failed(malformed_adapter_output)" 1 }
+        $k = $ln.Substring(0, $eq)
+        $v = $ln.Substring($eq + 1)
+        if ($k -ceq 'pr_changed_file') {
+            if ($v) { [void]$changedFiles.Add($v) }
+        } else {
+            if ($data.ContainsKey($k)) { Fail "${ErrPrefix}: github_verification_failed(duplicate_adapter_key)" 1 }
+            $data[$k] = $v
+        }
+    }
+    if ($data['schema'] -cne 'b3-gh-verify-v1' -or $data['mode'] -cne $Mode) {
+        Fail "${ErrPrefix}: github_verification_failed(invalid_adapter_schema)" 1
+    }
+    $data['PrChangedFiles'] = @($changedFiles)
+    return $data
 }
 
 function Get-InitialPassChain([string]$Root, [string]$BaseSha) {
@@ -2658,7 +2772,7 @@ function Parse-ReviewLedger([string]$FullPath) {
     if (-not $meta.ContainsKey('review_independence') -or $meta['review_independence'] -eq '') {
         Fail 'LEDGER_CORRUPT: missing review_independence' 1
     }
-    if ($meta['review_independence'] -cnotin @('INDEPENDENT', 'SINGLE_AGENT_LIMIT')) {
+    if ($meta['review_independence'] -cnotin @('UNKNOWN', 'INDEPENDENT', 'SINGLE_AGENT_LIMIT')) {
         Fail "LEDGER_CORRUPT: invalid review_independence '$($meta['review_independence'])'" 1
     }
     if (-not $meta.ContainsKey('l1_specialists') -or $meta['l1_specialists'] -eq '') { $meta['l1_specialists'] = 'none' }
@@ -2732,6 +2846,9 @@ function Invoke-ReviewLedgerCheck([string]$Root, [string]$LedgerFull, [string]$L
     if ($ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT' -and $liveOverallRisk.RiskLevel -in @('HIGH', 'CRITICAL')) {
         Fail 'LEDGER_INCOMPLETE: single_agent_limit_blocks_high_risk' 2
     }
+    if ($ledger['review_independence'] -ceq 'UNKNOWN' -and $liveOverallRisk.RiskLevel -in @('HIGH', 'CRITICAL')) {
+        Fail 'LEDGER_INCOMPLETE: review_independence_unknown_blocks_high_risk' 2
+    }
 
     $assignedSet = New-Object 'System.Collections.Hashtable' ([System.StringComparer]::Ordinal)
     foreach ($u in $ledger.Units) {
@@ -2757,6 +2874,9 @@ function Invoke-ReviewLedgerCheck([string]$Root, [string]$LedgerFull, [string]$L
         $liveURisk = Eval-RiskForSubset $uFiles $liveScope.FileSignals $liveScope.FileLines
         if ($ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT' -and $liveURisk.RiskLevel -in @('HIGH', 'CRITICAL')) {
             Fail 'LEDGER_INCOMPLETE: single_agent_limit_blocks_high_risk' 2
+        }
+        if ($ledger['review_independence'] -ceq 'UNKNOWN' -and $liveURisk.RiskLevel -in @('HIGH', 'CRITICAL')) {
+            Fail 'LEDGER_INCOMPLETE: review_independence_unknown_blocks_high_risk' 2
         }
         if ($liveURisk.RiskLevel -cne $u.risk) {
             Fail "LEDGER_STALE: unit $uid risk changed ($($u.risk)->$($liveURisk.RiskLevel))" 2
@@ -2823,7 +2943,7 @@ function Invoke-ReviewLedgerCheck([string]$Root, [string]$LedgerFull, [string]$L
     $normTag = if ($origRawSize -cne $normSize) { " normalized_from=$origRawSize" } else { '' }
     return @{
         Code = 0
-        Message = "LEDGER_GATE_PASS: size=$normSize risk=$($ledger['risk_level']) units=$unitCount/$unitCount cross_unit=$($ledger['cross_unit_status'])${normTag}"
+        Message = "LEDGER_GATE_PASS: size=$normSize risk=$($ledger['risk_level']) units=$unitCount/$unitCount cross_unit=$($ledger['cross_unit_status']) review_independence=$($ledger['review_independence'])${normTag}"
         Ledger = $ledger
     }
 }
@@ -4233,6 +4353,12 @@ switch ($Command) {
                 $script:normChanges++
                 return "$($m.Groups[1].Value)$n"
             })
+            if (($updated -cmatch '(?m)^schema=b3-review-ledger-v1\r?$') -and ($updated -cnotmatch '(?m)^review_independence=')) {
+                if ($updated -cmatch '(?m)^budget_status=[^\r\n]*') {
+                    $updated = [regex]::Replace($updated, '(?m)^(budget_status=[^\r\n]*)', "`$1`nreview_independence=UNKNOWN", 1)
+                    $script:normChanges++
+                }
+            }
             if ($script:normChanges -gt 0) {
                 Write-AtomicLfFile $ledgerFull $updated
             }
@@ -4246,8 +4372,8 @@ switch ($Command) {
             if ($maxPassesExplicit -and $MaxPasses -le 0) {
                 Fail 'LEDGER_FAIL: -MaxPasses must be a positive integer' 1
             }
-            $riInit = if ($ReviewIndependence -and $ReviewIndependence.Trim()) { $ReviewIndependence.Trim().ToUpperInvariant() } else { 'INDEPENDENT' }
-            if ($riInit -cnotin @('INDEPENDENT', 'SINGLE_AGENT_LIMIT')) {
+            $riInit = if ($ReviewIndependence -and $ReviewIndependence.Trim()) { $ReviewIndependence.Trim().ToUpperInvariant() } else { 'UNKNOWN' }
+            if ($riInit -cnotin @('UNKNOWN', 'INDEPENDENT', 'SINGLE_AGENT_LIMIT')) {
                 Fail "LEDGER_FAIL: invalid -ReviewIndependence '$riInit'" 1
             }
             $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'LEDGER_FAIL' 'commit'
@@ -4360,13 +4486,18 @@ switch ($Command) {
             if ($passesUsedExplicit -and $PassesUsed -lt 0) {
                 Fail 'LEDGER_FAIL: -PassesUsed must be non-negative' 1
             }
-            if ($ReviewIndependence -and $ReviewIndependence.Trim()) {
+            $origHeadSha = $ledger['head_sha']
+            $riExplicit = [bool]($ReviewIndependence -and $ReviewIndependence.Trim())
+            if ($riExplicit) {
                 $riUpd = $ReviewIndependence.Trim().ToUpperInvariant()
-                if ($riUpd -cnotin @('INDEPENDENT', 'SINGLE_AGENT_LIMIT')) {
+                if ($riUpd -cnotin @('UNKNOWN', 'INDEPENDENT', 'SINGLE_AGENT_LIMIT')) {
                     Fail "LEDGER_FAIL: invalid -ReviewIndependence '$riUpd'" 1
                 }
                 if ($ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT' -and $riUpd -ceq 'INDEPENDENT') {
                     Fail 'LEDGER_FAIL: cannot upgrade SINGLE_AGENT_LIMIT to INDEPENDENT' 1
+                }
+                if ($ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT' -and $riUpd -ceq 'UNKNOWN') {
+                    Fail 'LEDGER_FAIL: cannot clear SINGLE_AGENT_LIMIT' 1
                 }
                 $ledger['review_independence'] = $riUpd
             }
@@ -4462,6 +4593,9 @@ switch ($Command) {
                     $cuPaths = if ($liveContractsUpd.Count -gt 0) { $liveContractsUpd } else { $allUnitFiles.ToArray() }
                     $ledger['cross_unit_tree_hash'] = Get-ScopePathsTreeHash $RepoRoot $targetCommitSha $cuPaths $ignored
                 }
+            }
+            if ($ledger['head_sha'] -cne $origHeadSha -and -not $riExplicit -and $ledger['review_independence'] -ceq 'INDEPENDENT') {
+                $ledger['review_independence'] = 'UNKNOWN'
             }
 
             $passEvents = New-Object System.Collections.Generic.List[hashtable]
@@ -4651,6 +4785,10 @@ switch ($Command) {
     }
 
     'merge-policy-check' {
+        $prStateExplicit = $PSBoundParameters.ContainsKey('PrState')
+        $ciStatusExplicit = $PSBoundParameters.ContainsKey('CiStatus')
+        $revStatusExplicit = $PSBoundParameters.ContainsKey('ReviewStatus')
+
         $prSt = if ($PrState) { $PrState.Trim() } else { 'NONE' }
         if ($prSt -cnotin @('OPEN', 'MERGED', 'CLOSED', 'NONE')) { Fail "MERGE_BLOCKED: invalid_pr_state=$prSt" 1 }
         $ciSt = if ($CiStatus) { $CiStatus.Trim() } else { 'UNKNOWN' }
@@ -4662,10 +4800,15 @@ switch ($Command) {
             Fail "MERGE_BLOCKED: invalid_governance=$govSt" 1
         }
         if ($BlockingFindings -lt 0) { Fail "MERGE_BLOCKED: invalid_blocking_findings=$BlockingFindings" 1 }
+        $prNumTrim = if ($PrNumber) { $PrNumber.Trim() } else { '' }
+        $targetBrTrim = if ($TargetBranch) { $TargetBranch.Trim() } else { '' }
+        if ($targetBrTrim -and ($targetBrTrim.StartsWith('-') -or ($targetBrTrim -match '[\s\x00-\x1F\x7F]') -or $targetBrTrim.Contains('..'))) {
+            if ($PostMerge) { Fail 'POST_MERGE_FAILED: invalid_target_branch' 1 }
+            Fail 'MERGE_BLOCKED: invalid_target_branch' 1
+        }
 
         if ($PostMerge) {
-            if ($prSt -cne 'MERGED') { Fail "POST_MERGE_FAILED: pr_state=$prSt" 1 }
-            $mSha = if ($MergedSha) { $MergedSha.Trim() } else { '' }
+            if ($prStateExplicit -and $prSt -cne 'MERGED') { Fail "POST_MERGE_FAILED: pr_state=$prSt" 1 }
             $mRef = if ($MainRef) { $MainRef.Trim() } else { '' }
             if (-not $mRef) {
                 Fail 'POST_MERGE_FAILED: missing_main_ref' 1
@@ -4678,21 +4821,92 @@ switch ($Command) {
             if ($symRes.ExitCode -ne 0 -or (-not ($symFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal) -or $symFull.StartsWith('refs/remotes/', [System.StringComparison]::Ordinal)))) {
                 Fail 'POST_MERGE_FAILED: invalid_main_ref' 1
             }
-            if (-not $mSha -or $mSha.StartsWith('-')) {
+            $localTargetBranch = ''
+            if ($symFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal)) {
+                $localTargetBranch = $symFull.Substring('refs/heads/'.Length)
+            } elseif ($symFull -cmatch '^refs/remotes/[^/]+/(.+)$') {
+                $localTargetBranch = $Matches[1]
+            }
+            if (-not $localTargetBranch) {
+                Fail 'POST_MERGE_FAILED: invalid_main_ref' 1
+            }
+            if ($targetBrTrim -and $targetBrTrim -cne $localTargetBranch) {
+                Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$targetBrTrim,got=$localTargetBranch)" 1
+            }
+            if (-not $prNumTrim) {
+                Fail 'POST_MERGE_FAILED: missing_pr_number' 1
+            }
+            if ($prNumTrim -cnotmatch '^[1-9][0-9]*$') {
+                Fail 'POST_MERGE_FAILED: invalid_pr_number' 1
+            }
+            $mSha = if ($MergedSha) { $MergedSha.Trim() } else { '' }
+            if ($mSha -and $mSha.StartsWith('-')) {
                 Fail 'POST_MERGE_FAILED: invalid_ref' 1
             }
-            $mergedRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mSha}^{commit}")
+
+            $repoSlug = Resolve-GitHubRepoSlug $RepoRoot $Repo 'POST_MERGE_FAILED'
+            $ghPost = Invoke-B3GitHubVerify 'post-merge' $repoSlug $prNumTrim 'POST_MERGE_FAILED'
+
+            if ($ghPost['pr_number'] -cne $prNumTrim -or -not ($ghPost['base_repo'].Equals($repoSlug, [System.StringComparison]::OrdinalIgnoreCase))) {
+                Fail 'POST_MERGE_FAILED: pr_identity_mismatch' 1
+            }
+            if ($ghPost['pr_merged'] -cne 'true' -or $ghPost['pr_state'] -cne 'CLOSED') {
+                Fail "POST_MERGE_FAILED: pr_not_merged(state=$($ghPost['pr_state']),merged=$($ghPost['pr_merged']))" 1
+            }
+            $ghMergeSha = $ghPost['merge_commit_sha']
+            $ghBaseRef = $ghPost['base_ref']
+            $ghHeadSha = $ghPost['head_sha']
+            if ($ghMergeSha -cnotmatch '^[0-9a-f]{40}$') {
+                Fail 'POST_MERGE_FAILED: missing_merge_commit_sha' 1
+            }
+            if ($localTargetBranch -cne $ghBaseRef) {
+                Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$ghBaseRef,got=$localTargetBranch)" 1
+            }
+            if ($targetBrTrim -and $targetBrTrim -cne $ghBaseRef) {
+                Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$ghBaseRef,got=$targetBrTrim)" 1
+            }
+            if ($mSha) {
+                $callerMRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mSha}^{commit}")
+                $callerMSha = $callerMRes.StdOut.Trim()
+                if ($callerMRes.ExitCode -ne 0 -or $callerMSha -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'POST_MERGE_FAILED: unresolvable_commit' 1
+                }
+                if ($callerMSha -cne $ghMergeSha) {
+                    Fail "POST_MERGE_FAILED: merge_commit_sha_mismatch(expected=$ghMergeSha,got=$callerMSha)" 1
+                }
+            }
+            if ($ghPost['compare_status'] -cnotin @('identical', 'ahead') -or $ghPost['compare_behind_by'] -cne '0') {
+                Fail "POST_MERGE_FAILED: merge_commit_not_in_remote_target(status=$($ghPost['compare_status']),target_ref=$ghBaseRef)" 1
+            }
+
+            $mergedRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ghMergeSha}^{commit}")
             $resMerged = $mergedRes.StdOut.Trim()
             $mainRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mRef}^{commit}")
             $resMain = $mainRes.StdOut.Trim()
-            if ($mergedRes.ExitCode -ne 0 -or $resMerged -notmatch '^[0-9a-f]{40}$' -or $mainRes.ExitCode -ne 0 -or $resMain -notmatch '^[0-9a-f]{40}$') {
+            if ($mergedRes.ExitCode -ne 0 -or $resMerged -cnotmatch '^[0-9a-f]{40}$' -or $mainRes.ExitCode -ne 0 -or $resMain -cnotmatch '^[0-9a-f]{40}$') {
                 Fail 'POST_MERGE_FAILED: unresolvable_commit' 1
             }
             $ancRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resMerged, $resMain)
             if ($ancRes.ExitCode -ne 0) {
-                Fail "POST_MERGE_FAILED: sha_not_in_main(sha=$resMerged,main_ref=$mRef)" 1
+                Fail "POST_MERGE_FAILED: sha_not_in_target(sha=$resMerged,target_ref=$ghBaseRef,main_ref=$mRef)" 1
             }
-            Write-Output "POST_MERGE_VERIFIED: sha=$resMerged main_ref=$mRef runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED"
+
+            $parRes = Invoke-GitCommand $RepoRoot @('rev-list', '--parents', '-n', '1', $resMerged)
+            if ($parRes.ExitCode -ne 0) { Fail 'POST_MERGE_FAILED: unresolvable_commit' 1 }
+            $parToks = @($parRes.StdOut.Trim() -split '\s+' | Where-Object { $_ })
+            $parCnt = $parToks.Count - 1
+            $mergeKind = 'squash_or_rebase'
+            if ($parCnt -ge 2) {
+                $mergeKind = 'merge_commit'
+                $headAncRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $ghHeadSha, $resMerged)
+                if ($headAncRes.ExitCode -ne 0) {
+                    Fail 'POST_MERGE_FAILED: merge_commit_head_mismatch' 1
+                }
+            } elseif ($resMerged -ceq $ghHeadSha) {
+                $mergeKind = 'fast_forward'
+            }
+
+            Write-Output "POST_MERGE_VERIFIED: pr=$($ghPost['base_repo'])#$prNumTrim pr_status=PR_MERGED sha=$resMerged target_ref=$ghBaseRef main_ref=$mRef merge_kind=$mergeKind runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED"
             exit 0
         }
 
@@ -4701,10 +4915,12 @@ switch ($Command) {
         $allowProtected = $false
         $requireCi = $true
         $requireReview = $true
+        $allowedTargetBranches = @()
 
         $polFileFull = $null
         $polRel = ''
-        if ($PolicyPath -and $PolicyPath.Trim()) {
+        $polExplicit = [bool]($PolicyPath -and $PolicyPath.Trim())
+        if ($polExplicit) {
             $pSpec = Test-ContainedRepoPath $RepoRoot $PolicyPath
             if (-not $pSpec) { Fail 'MERGE_BLOCKED: invalid_policy_path' 1 }
             if (-not (Test-Path -LiteralPath $pSpec.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_policy' 1 }
@@ -4729,6 +4945,7 @@ switch ($Command) {
             $requireCi = $polParsed.RequireCi
             $requireReview = $polParsed.RequireReview
             $protectedPaths = $polParsed.ProtectedPaths
+            $allowedTargetBranches = $polParsed.AllowedTargetBranches
         }
 
         if ($govSt -cne 'CLEAR') { Fail "MERGE_BLOCKED: governance=$govSt" 1 }
@@ -4751,10 +4968,11 @@ switch ($Command) {
         }
         $changedArr = @($changedList)
 
+        $effectivePolRel = if ($polRel) { $polRel } else { '.b3/research-policy.json' }
         $policyProtected = New-Object System.Collections.Generic.List[string]
         $policyProtected.Add('.b3/research-policy.json')
-        if ($polRel -and -not $polRel.Equals('.b3/research-policy.json', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $policyProtected.Add($polRel)
+        if ($effectivePolRel -and -not $effectivePolRel.Equals('.b3/research-policy.json', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $policyProtected.Add($effectivePolRel)
         }
         $policyProtectedArr = @($policyProtected)
 
@@ -4778,70 +4996,204 @@ switch ($Command) {
         }
 
         if ($BlockingFindings -gt 0) { Fail "MERGE_BLOCKED: blocking_findings=$BlockingFindings" 1 }
-        if ($requireCi -and $ciSt -cne 'PASS') { Fail "MERGE_BLOCKED: ci_status=$ciSt" 1 }
-        if ($requireReview -and $revSt -cne 'PASS') { Fail "MERGE_BLOCKED: review_status=$revSt" 1 }
-        if ($prSt -cne 'OPEN') { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
 
-        if ($autoMerge -cne 'authorized') {
-            if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
-                Fail 'MERGE_BLOCKED: missing_changed_paths' 1
-            }
-            if ($BaseSha -and $BaseSha.Trim()) {
-                $bt = $BaseSha.Trim()
-                if ($bt.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
-                $bChk = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${bt}^{commit}")
-                if ($bChk.ExitCode -ne 0 -or $bChk.StdOut.Trim() -cnotmatch '^[0-9a-f]{40}$') {
-                    Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+        # Caller-supplied negative signals always tighten (can block, never authorize)
+        if ($ciStatusExplicit -and $ciSt -cin @('FAIL', 'PENDING')) { Fail "MERGE_BLOCKED: ci_status=$ciSt" 1 }
+        if ($revStatusExplicit -and $revSt -cin @('BLOCKED', 'PENDING')) { Fail "MERGE_BLOCKED: review_status=$revSt" 1 }
+        if ($prStateExplicit -and $prSt -cin @('CLOSED', 'MERGED')) { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
+
+        # Offline / deterministic local mode (when -PrNumber is omitted or -LocalOnly is set)
+        if (-not $prNumTrim -or $LocalOnly) {
+            if ($requireCi -and $ciSt -cne 'PASS') { Fail "MERGE_BLOCKED: ci_status=$ciSt" 1 }
+            if ($requireReview -and $revSt -cne 'PASS') { Fail "MERGE_BLOCKED: review_status=$revSt" 1 }
+            if ($prSt -cne 'OPEN') { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
+
+            if ($autoMerge -cne 'authorized') {
+                if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
+                    Fail 'MERGE_BLOCKED: missing_changed_paths' 1
                 }
+                if ($BaseSha -and $BaseSha.Trim()) {
+                    $bt = $BaseSha.Trim()
+                    if ($bt.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
+                    $bChk = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${bt}^{commit}")
+                    if ($bChk.ExitCode -ne 0 -or $bChk.StdOut.Trim() -cnotmatch '^[0-9a-f]{40}$') {
+                        Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+                    }
+                }
+                if ($LedgerPath -and $LedgerPath.Trim()) {
+                    $lOptSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
+                    if (-not $lOptSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+                }
+                Fail 'PR_READY: auto_merge=disabled' 2
             }
-            if ($LedgerPath -and $LedgerPath.Trim()) {
-                $lOptSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
-                if (-not $lOptSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+
+            if (-not $LocalOnly) {
+                Fail 'MERGE_BLOCKED: missing_pr_number' 1
             }
-            Fail 'PR_READY: auto_merge=disabled' 2
+
+            # Explicit -LocalOnly deterministic check (NEVER returns MERGE_AUTHORIZED / exit 0)
+            $baseTrimLoc = if ($BaseSha) { $BaseSha.Trim() } else { '' }
+            if (-not $baseTrimLoc) { Fail 'MERGE_BLOCKED: missing_base_sha' 1 }
+            if ($baseTrimLoc.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
+            $bLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${baseTrimLoc}^{commit}")
+            $resBaseLoc = $bLocRes.StdOut.Trim()
+            if ($bLocRes.ExitCode -ne 0 -or $resBaseLoc -cnotmatch '^[0-9a-f]{40}$') { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
+            $hLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
+            $liveHeadLoc = $hLocRes.StdOut.Trim()
+            if ($hLocRes.ExitCode -ne 0 -or $liveHeadLoc -cnotmatch '^[0-9a-f]{40}$') { Fail 'MERGE_BLOCKED: invalid_head' 1 }
+            if ($resBaseLoc -ceq $liveHeadLoc) { Fail 'MERGE_BLOCKED: base_sha_equals_head' 1 }
+            if (-not $LedgerPath -or -not $LedgerPath.Trim()) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
+            $ledSpecLoc = Test-ContainedRepoPath $RepoRoot $LedgerPath
+            if (-not $ledSpecLoc) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+            if (-not (Test-Path -LiteralPath $ledSpecLoc.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
+            $prevCapLoc = $script:CaptureFailMode
+            $script:CaptureFailMode = $true
+            $ledChkLoc = $null
+            try {
+                $ledChkLoc = Invoke-ReviewLedgerCheck $RepoRoot $ledSpecLoc.Full $ledSpecLoc.Rel @()
+            } catch {
+                $exMsg = $_.Exception.Message
+                if ($exMsg -match '^B3_GUARD_FAIL\|(\d+)\|(.*)$') {
+                    $ledChkLoc = @{ Code = [int]$Matches[1]; Message = $Matches[2]; Ledger = $null }
+                } else {
+                    $ledChkLoc = @{ Code = 1; Message = $exMsg; Ledger = $null }
+                }
+            } finally {
+                $script:CaptureFailMode = $prevCapLoc
+            }
+            if (-not $ledChkLoc -or $ledChkLoc.Code -ne 0 -or -not $ledChkLoc.Ledger) {
+                $detailMsg = if ($ledChkLoc -and $ledChkLoc.Message) { $ledChkLoc.Message } else { 'unknown' }
+                Fail "MERGE_BLOCKED: ledger_check_failed ($detailMsg)" 1
+            }
+            if ($ledChkLoc.Ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT') { Fail 'MERGE_BLOCKED: single_agent_limit' 1 }
+            if ($ledChkLoc.Ledger['review_independence'] -cne 'INDEPENDENT') { Fail 'MERGE_BLOCKED: review_independence_unknown' 1 }
+            Fail 'LOCAL_ELIGIBLE_ONLY: remote_provider_required' 2
         }
 
-        # Mandatory trust boundary for MERGE_AUTHORIZED
-        $baseTrim = if ($BaseSha) { $BaseSha.Trim() } else { '' }
-        if (-not $baseTrim) { Fail 'MERGE_BLOCKED: missing_base_sha' 1 }
-        if ($baseTrim.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
-        $baseRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${baseTrim}^{commit}")
-        $resolvedBaseSha = $baseRes.StdOut.Trim()
-        if ($baseRes.ExitCode -ne 0 -or $resolvedBaseSha -cnotmatch '^[0-9a-f]{40}$') {
-            Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+        # --- Trusted Remote Authorization Path (R001 + R002) ---
+        if ($effectivePolRel -cne '.b3/research-policy.json') {
+            Fail 'MERGE_BLOCKED: policy_path_override_not_allowed' 1
         }
+        if ($prNumTrim -cnotmatch '^[1-9][0-9]*$') {
+            Fail 'MERGE_BLOCKED: invalid_pr_number' 1
+        }
+        $repoSlug = Resolve-GitHubRepoSlug $RepoRoot $Repo 'MERGE_BLOCKED'
+        $gh = Invoke-B3GitHubVerify 'pre-merge' $repoSlug $prNumTrim 'MERGE_BLOCKED'
+
+        if ($gh['pr_number'] -cne $prNumTrim) { Fail 'MERGE_BLOCKED: pr_identity_mismatch' 1 }
+        if (-not ($gh['base_repo'].Equals($repoSlug, [System.StringComparison]::OrdinalIgnoreCase))) { Fail 'MERGE_BLOCKED: cross_repo_mismatch' 1 }
+        if ($gh['same_repo'] -cne 'true') { Fail 'MERGE_BLOCKED: cross_repo_head_pr' 1 }
+        if ($gh['pr_state'] -cne 'OPEN' -or $gh['pr_merged'] -ceq 'true') { Fail "MERGE_BLOCKED: pr_state=$($gh['pr_state'])" 1 }
+        if ($gh['pr_draft'] -ceq 'true') { Fail 'MERGE_BLOCKED: pr_is_draft' 1 }
+
+        $ghBaseRef = $gh['base_ref']
+        $ghPrBaseSha = $gh['pr_base_sha']
+        $ghLiveTargetSha = $gh['live_target_sha']
+        $ghHeadSha = $gh['head_sha']
+        $ghAuthRef = $gh['policy_authority_ref']
+        $ghAuthSha = $gh['policy_authority_sha']
+        if (-not $ghBaseRef -or -not $ghAuthRef -or
+            $ghPrBaseSha -cnotmatch '^[0-9a-f]{40}$' -or
+            $ghLiveTargetSha -cnotmatch '^[0-9a-f]{40}$' -or
+            $ghHeadSha -cnotmatch '^[0-9a-f]{40}$' -or
+            $ghAuthSha -cnotmatch '^[0-9a-f]{40}$') {
+            Fail 'MERGE_BLOCKED: incomplete_pr_metadata' 1
+        }
+
+        # Detect remote target branch movement between PR snapshot and live branch ref
+        if ($ghLiveTargetSha -cne $ghPrBaseSha) {
+            Fail 'MERGE_BLOCKED: target_branch_moved' 1
+        }
+        if ($targetBrTrim -and $targetBrTrim -cne $ghBaseRef) {
+            Fail 'MERGE_BLOCKED: target_ref_mismatch' 1
+        }
+
+        # Never trust caller-supplied BaseSha; if provided, it MUST match trusted live target SHA
+        $baseTrim = if ($BaseSha) { $BaseSha.Trim() } else { '' }
+        if ($baseTrim) {
+            if ($baseTrim.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
+            $baseRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${baseTrim}^{commit}")
+            $callerBaseSha = $baseRes.StdOut.Trim()
+            if ($baseRes.ExitCode -ne 0 -or $callerBaseSha -cnotmatch '^[0-9a-f]{40}$') {
+                Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+            }
+            if ($callerBaseSha -cne $ghLiveTargetSha) {
+                $headTmpRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
+                if ($headTmpRes.ExitCode -eq 0 -and $callerBaseSha -ceq $headTmpRes.StdOut.Trim()) {
+                    Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
+                }
+                Fail 'MERGE_BLOCKED: base_sha_mismatch' 1
+            }
+        }
+        $resolvedBaseSha = $ghLiveTargetSha
+
+        # Bind local Git HEAD, target SHA, and policy authority SHA
         $headRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
         $liveHeadSha = $headRes.StdOut.Trim()
         if ($headRes.ExitCode -ne 0 -or $liveHeadSha -cnotmatch '^[0-9a-f]{40}$') {
             Fail 'MERGE_BLOCKED: invalid_head' 1
         }
+        if ($liveHeadSha -cne $ghHeadSha) {
+            Fail 'MERGE_BLOCKED: head_sha_mismatch' 1
+        }
         if ($resolvedBaseSha -ceq $liveHeadSha) {
             Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
         }
 
-        # Load policy strictly from baseSha and verify unmodified in HEAD, index, and working tree
-        $baseLs = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'ls-tree', $resolvedBaseSha, '--', $polRel)
-        $baseLsLine = $baseLs.StdOut.Trim()
-        if ($baseLs.ExitCode -ne 0 -or $baseLsLine -cnotmatch "^(100644|100755) blob ([0-9a-f]{40})`t(.+)$" -or $Matches[3] -cne $polRel) {
-            Fail 'MERGE_BLOCKED: policy_not_in_base' 1
+        $tLocalRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${resolvedBaseSha}^{commit}")
+        if ($tLocalRes.ExitCode -ne 0 -or $tLocalRes.StdOut.Trim() -cne $resolvedBaseSha) {
+            Fail 'MERGE_BLOCKED: target_sha_not_fetched' 1
         }
-        $basePolOid = $Matches[2]
-        $headLs = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'ls-tree', $liveHeadSha, '--', $polRel)
-        $headLsLine = $headLs.StdOut.Trim()
-        if ($headLs.ExitCode -ne 0 -or $headLsLine -cnotmatch "^(100644|100755) blob ([0-9a-f]{40})`t(.+)$" -or $Matches[3] -cne $polRel -or $Matches[2] -cne $basePolOid) {
-            Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
+        $aLocalRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ghAuthSha}^{commit}")
+        if ($aLocalRes.ExitCode -ne 0 -or $aLocalRes.StdOut.Trim() -cne $ghAuthSha) {
+            Fail 'MERGE_BLOCKED: policy_authority_not_fetched' 1
         }
-        $polStaged = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'diff', '--cached', '--name-only', '--', $polRel)
-        $polWt = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'diff', '--name-only', 'HEAD', '--', $polRel)
-        if ($polStaged.ExitCode -ne 0 -or $polWt.ExitCode -ne 0 -or $polStaged.StdOut.Trim() -or $polWt.StdOut.Trim()) {
-            Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
+
+        # Check local remote-tracking ref staleness if present
+        $remTrackRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/${ghBaseRef}^{commit}")
+        if ($remTrackRes.ExitCode -eq 0) {
+            $remTrackSha = $remTrackRes.StdOut.Trim()
+            if ($remTrackSha -cmatch '^[0-9a-f]{40}$' -and $remTrackSha -cne $resolvedBaseSha) {
+                Fail 'MERGE_BLOCKED: target_branch_moved' 1
+            }
         }
-        $baseShow = Invoke-GitCommand $RepoRoot @('show', "${resolvedBaseSha}:${polRel}")
-        if ($baseShow.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: policy_not_in_base' 1 }
-        $basePol = Parse-MergePolicyJsonText $baseShow.StdOut
-        if ($basePol.AutoMerge -cne 'authorized') { Fail 'PR_READY: auto_merge=disabled' 2 }
-        if ($basePol.RequireCi -and $ciSt -cne 'PASS') { Fail "MERGE_BLOCKED: ci_status=$ciSt" 1 }
-        if ($basePol.RequireReview -and $revSt -cne 'PASS') { Fail "MERGE_BLOCKED: review_status=$revSt" 1 }
+        # PR head must incorporate the current live target commit (catches target movement even before GitHub updates)
+        $ancTargetRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resolvedBaseSha, $liveHeadSha)
+        if ($ancTargetRes.ExitCode -ne 0) {
+            Fail 'MERGE_BLOCKED: target_branch_moved' 1
+        }
+
+        # Load merge policy STRICTLY from trusted policy authority (default_branch), NEVER from feature branch/PR
+        $authLs = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'ls-tree', $ghAuthSha, '--', $effectivePolRel)
+        $authLsLine = $authLs.StdOut.Trim()
+        $authHasPolicy = ($authLs.ExitCode -eq 0 -and $authLsLine -cmatch "^(100644|100755) blob ([0-9a-f]{40})`t(.+)$" -and $Matches[3] -ceq $effectivePolRel)
+        if (-not $authHasPolicy) {
+            if ($polExplicit -or $polFileFull) {
+                Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+            }
+            Fail 'PR_READY: auto_merge=disabled' 2
+        }
+        $authShow = Invoke-GitCommand $RepoRoot @('show', "${ghAuthSha}:${effectivePolRel}")
+        if ($authShow.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: policy_not_in_authority' 1 }
+        $authPol = Parse-MergePolicyJsonText $authShow.StdOut
+
+        # Prevent non-default target branches (e.g. stacked parent feature branch) from modifying policy relative to authority
+        if ($ghBaseRef -cne $ghAuthRef) {
+            $mbAuthRes = Invoke-GitCommand $RepoRoot @('merge-base', $ghAuthSha, $resolvedBaseSha)
+            $mbAuthSha = $mbAuthRes.StdOut.Trim()
+            if ($mbAuthRes.ExitCode -ne 0 -or $mbAuthSha -cnotmatch '^[0-9a-f]{40}$') {
+                Fail 'MERGE_BLOCKED: target_branch_unrelated_to_authority' 1
+            }
+            $tPolDiff = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'diff', '--no-renames', '--name-only', "${mbAuthSha}..${resolvedBaseSha}", '--')
+            if ($tPolDiff.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: git_diff_failed' 1 }
+            foreach ($rawLn in ($tPolDiff.StdOut -split "\r?\n")) {
+                $tp = ($rawLn.TrimEnd("`r") -replace '\\', '/').Trim()
+                if (-not $tp) { continue }
+                if (Test-ProtectedPathMatchCI $tp $policyProtectedArr) {
+                    Fail 'MERGE_BLOCKED: target_branch_modified_policy' 1
+                }
+            }
+        }
 
         # Require clean working tree & index outside checkpoint dirs (.b3/ship, .b3/research-ship)
         $dirtyWtCmds = @(
@@ -4867,12 +5219,17 @@ switch ($Command) {
             Fail 'MERGE_BLOCKED: dirty_worktree' 1
         }
 
-        # Compute real changed paths directly from Git commit diff unioned with validated -ChangedPaths
+        # Compute authoritative changed paths: local Git diff (target..HEAD) U GitHub PR files U validated caller -ChangedPaths
         $allChanged = New-Object System.Collections.Generic.List[string]
         foreach ($cp in $changedArr) {
             if (-not $allChanged.Contains($cp)) { $allChanged.Add($cp) }
         }
-        $cDiffRes = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'diff', '--no-renames', '--name-only', "${resolvedBaseSha}..HEAD", '--')
+        foreach ($ghf in @($gh['PrChangedFiles'])) {
+            $npGh = Normalize-MergePolicyPath $ghf
+            if (-not $npGh) { Fail 'MERGE_BLOCKED: invalid_pr_changed_path' 1 }
+            if (-not $allChanged.Contains($npGh)) { $allChanged.Add($npGh) }
+        }
+        $cDiffRes = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'diff', '--no-renames', '--name-only', "${resolvedBaseSha}..${liveHeadSha}", '--')
         if ($cDiffRes.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: git_diff_failed' 1 }
         foreach ($rawLn in ($cDiffRes.StdOut -split "\r?\n")) {
             $gp = ($rawLn.TrimEnd("`r") -replace '\\', '/').Trim()
@@ -4882,11 +5239,16 @@ switch ($Command) {
         }
         $allChangedArr = @($allChanged)
 
-        if ($basePol.ProtectedPaths.Count -gt 0 -and -not $basePol.AllowProtected) {
+        foreach ($cp in $allChangedArr) {
+            if (Test-ProtectedPathMatchCI $cp $policyProtectedArr) {
+                Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
+            }
+        }
+        if ($authPol.ProtectedPaths.Count -gt 0 -and -not $authPol.AllowProtected) {
             if ($allChangedArr.Count -eq 0) { Fail 'MERGE_BLOCKED: missing_changed_paths' 1 }
             $protHits = New-Object System.Collections.Generic.List[string]
             foreach ($cp in $allChangedArr) {
-                if (Test-ProtectedPathMatchCI $cp $basePol.ProtectedPaths) {
+                if (Test-ProtectedPathMatchCI $cp $authPol.ProtectedPaths) {
                     if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
                 }
             }
@@ -4894,13 +5256,67 @@ switch ($Command) {
                 Fail ("MERGE_BLOCKED: protected_paths=" + ((Sort-Ordinal $protHits.ToArray()) -join ',')) 1
             }
         }
-        foreach ($cp in $allChangedArr) {
-            if (Test-ProtectedPathMatchCI $cp $policyProtectedArr) {
-                Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
+
+        if ($authPol.AutoMerge -cne 'authorized') { Fail 'PR_READY: auto_merge=disabled' 2 }
+
+        if ($authPol.AllowedTargetBranches.Count -gt 0) {
+            if (-not (Test-BranchPatternMatch $ghBaseRef $authPol.AllowedTargetBranches)) {
+                Fail "MERGE_BLOCKED: target_branch_not_allowed($ghBaseRef)" 1
             }
         }
 
-        # Require and verify review ledger + revision binding + review_independence (empty ignore list!)
+        # Validate GitHub mergeability & branch protection state
+        $mState = $gh['mergeable_state']
+        if ($gh['mergeable'] -cne 'true') {
+            Fail "MERGE_BLOCKED: pr_not_mergeable(mergeable=$($gh['mergeable']),state=$mState)" 1
+        }
+        if ($mState -cnotin @('clean', 'has_hooks')) {
+            Fail "MERGE_BLOCKED: mergeable_state=$mState" 1
+        }
+
+        # Verify CI status strictly from trusted GitHub provider on exact PR head_sha
+        $hasReqChecks = ($gh['required_checks'] -and $gh['required_checks'] -cne 'none')
+        $effReqCi = ($authPol.RequireCi -or $hasReqChecks)
+        $ghCi = $gh['gh_ci_status']
+        if ($effReqCi) {
+            if ($ghCi -ceq 'MISSING_REQUIRED') {
+                Fail "MERGE_BLOCKED: missing_required_checks=$($gh['missing_required_checks'])" 1
+            }
+            if ($ghCi -cne 'PASS') {
+                Fail "MERGE_BLOCKED: ci_status=$ghCi" 1
+            }
+        } elseif ($ghCi -ceq 'FAIL' -or $ghCi -ceq 'PENDING') {
+            Fail "MERGE_BLOCKED: ci_status=$ghCi" 1
+        }
+
+        # Verify independent non-author review status strictly from trusted GitHub provider on exact PR head_sha
+        $ghChangesReq = [int]$gh['changes_requested_count']
+        $ghIndepCnt = [int]$gh['independent_approved_count']
+        $ghStaleCnt = [int]$gh['stale_independent_approved_count']
+        $ghSelfCnt = [int]$gh['self_approved_count']
+        $ghUnauthCnt = if ($gh.ContainsKey('unauthorized_approved_count')) { [int]$gh['unauthorized_approved_count'] } else { 0 }
+        $ghReqRevCnt = [int]$gh['required_approving_reviews']
+        if ($ghChangesReq -gt 0) {
+            Fail 'MERGE_BLOCKED: changes_requested' 1
+        }
+        $minReqReviews = $ghReqRevCnt
+        if ($authPol.RequireReview -and $minReqReviews -lt 1) { $minReqReviews = 1 }
+        if ($gh['require_codeowners'] -ceq 'true' -and $minReqReviews -lt 1) { $minReqReviews = 1 }
+        if ($gh['branch_protected'] -ceq 'true' -and $gh['branch_protection_readable'] -cne 'true' -and $minReqReviews -lt 1) { $minReqReviews = 1 }
+        if ($minReqReviews -gt 0 -and $ghIndepCnt -lt $minReqReviews) {
+            if ($ghIndepCnt -eq 0 -and $ghSelfCnt -gt 0) {
+                Fail 'MERGE_BLOCKED: self_review_not_independent' 1
+            }
+            if ($ghIndepCnt -eq 0 -and $ghUnauthCnt -gt 0) {
+                Fail 'MERGE_BLOCKED: unauthorized_reviewer_not_independent' 1
+            }
+            if ($ghIndepCnt -eq 0 -and $ghStaleCnt -gt 0) {
+                Fail 'MERGE_BLOCKED: stale_independent_review' 1
+            }
+            Fail "MERGE_BLOCKED: insufficient_independent_reviews(have=$ghIndepCnt,need=$minReqReviews)" 1
+        }
+
+        # Require and verify local review ledger + exact target/head binding + review_independence (empty ignore list!)
         if (-not $LedgerPath -or -not $LedgerPath.Trim()) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
         $ledSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
         if (-not $ledSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
@@ -4924,14 +5340,20 @@ switch ($Command) {
             $detailMsg = if ($ledChkRes -and $ledChkRes.Message) { $ledChkRes.Message } else { 'unknown' }
             Fail "MERGE_BLOCKED: ledger_check_failed ($detailMsg)" 1
         }
-        if ($ledChkRes.Ledger['base_sha'] -cne $resolvedBaseSha -or $ledChkRes.Ledger['head_sha'] -cne $liveHeadSha -or ($ledChkRes.Ledger['target_ref'] -cne 'working_tree' -and $ledChkRes.Ledger['target_sha'] -cne $liveHeadSha)) {
-            Fail 'MERGE_BLOCKED: ledger_revision_mismatch' 1
+        if ($ledChkRes.Ledger['base_sha'] -cne $resolvedBaseSha) {
+            Fail 'MERGE_BLOCKED: ledger_target_mismatch' 1
         }
-        if ($ledChkRes.Ledger['review_independence'] -cne 'INDEPENDENT') {
+        if ($ledChkRes.Ledger['head_sha'] -cne $liveHeadSha -or ($ledChkRes.Ledger['target_ref'] -cne 'working_tree' -and $ledChkRes.Ledger['target_sha'] -cne $liveHeadSha)) {
+            Fail 'MERGE_BLOCKED: ledger_head_mismatch' 1
+        }
+        if ($ledChkRes.Ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT') {
             Fail 'MERGE_BLOCKED: single_agent_limit' 1
         }
+        if ($ledChkRes.Ledger['review_independence'] -cne 'INDEPENDENT') {
+            Fail 'MERGE_BLOCKED: review_independence_unknown' 1
+        }
 
-        Write-Output 'MERGE_AUTHORIZED: auto_merge=authorized ci=PASS review=PASS governance=CLEAR'
+        Write-Output "MERGE_AUTHORIZED: pr=$($gh['base_repo'])#$prNumTrim target_ref=$ghBaseRef target_sha=$resolvedBaseSha head_sha=$liveHeadSha policy_authority=${ghAuthRef}@${ghAuthSha} auto_merge=authorized ci=$ghCi review=$($gh['gh_review_status']) independent_reviews=$ghIndepCnt governance=CLEAR"
         exit 0
     }
 

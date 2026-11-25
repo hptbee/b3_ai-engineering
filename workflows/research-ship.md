@@ -59,16 +59,16 @@ Load [templates](references/research-ship-templates.md) only on creation; [gates
 - **Failure / Recovery:** passing tests never override source failure; unauthorized reviewer, invalid digest, or `CONFIRMED` blocker → fix & revalidate before PR.
 
 ### I. PR Lifecycle (When publishing/delivering via PR)
-- **In:** green verified branch. **Out:** single up-to-date PR against `main`.
-- **Readiness:** reconcile `origin/main`; run final checks; verify 0 blocking findings; reuse existing PR if open (`gh pr list --head <branch>` — avoid duplicates); push branch; create/update PR; collect CI/review evidence; fix confirmed findings & revalidate.
+- **In:** green verified branch. **Out:** single up-to-date PR against the target branch (`main`, `develop`, `release/*`, `feature/*`, or stacked parent).
+- **Readiness:** reconcile `origin/<target>`; run final checks; verify 0 blocking findings; reuse existing PR if open (`gh pr list --head <branch>` — avoid duplicates); push branch; create/update PR; collect CI/review evidence; fix confirmed findings & revalidate.
 
 ### J. Merge Eligibility Evaluation
-- **In:** PR state, CI status, review status, governance status, changed paths, `.b3/research-policy.json`.
-- **Readiness:** run `b3-guard merge-policy-check` ([gates](references/research-ship-gates.md)). Default `auto_merge: disabled` → stop at **`PR_READY`** (`exit 2`) or **`BLOCKED`** (`exit 1`); `SINGLE_AGENT_LIMIT` unconditionally blocks `auto_merge`. Never infer merge permission from repo write access; respect branch protection, required checks, CODEOWNERS, and domain release authority.
+- **In:** `-PrNumber <N>`, `-LedgerPath`, governance status, trusted `default_branch` policy (`.b3/research-policy.json`).
+- **Readiness:** run `b3-guard merge-policy-check` ([gates](references/research-ship-gates.md)). Default `auto_merge: disabled` or offline mode → stop at **`PR_READY`** / **`LOCAL_ELIGIBLE_ONLY`** (`exit 2`) or **`BLOCKED`** (`exit 1`); `UNKNOWN` and `SINGLE_AGENT_LIMIT` block `auto_merge`. Never infer merge permission from repo write access or unmerged feature-branch policy; require live GitHub CI, non-author head-SHA-bound review, and branch protection/CODEOWNERS.
 
 ### K. Authorized Auto-Merge & Post-Merge Verification
-- **In:** `MERGE_AUTHORIZED` (`exit 0` from `merge-policy-check`).
-- **Readiness:** merge via GitHub; confirm `PR == MERGED`; run `b3-guard merge-policy-check -PostMerge -PrState MERGED -MergedSha <sha> -MainRef origin/main`; reconcile affected artifacts/coverage/authority boundaries; verify evidence freshness (`evidence-check`). Report `MERGED_VERIFIED` with `runtime_served=NOT_VERIFIED` and `deployed=NOT_VERIFIED` unless separately verified.
+- **In:** `MERGE_AUTHORIZED` (`exit 0` from `merge-policy-check -PrNumber <N>`).
+- **Readiness:** merge via GitHub; run `b3-guard merge-policy-check -PostMerge -PrNumber <N> -MainRef origin/<target>` (binds PR identity, `merge_commit_sha`, and target branch across merge/squash/rebase); reconcile affected artifacts/coverage/authority boundaries; verify evidence freshness (`evidence-check`). Report `MERGED_VERIFIED` (`pr_status=PR_MERGED`) with `runtime_served=NOT_VERIFIED` and `deployed=NOT_VERIFIED` unless separately verified.
 
 ## Parallel Research & Subagent Naming
 

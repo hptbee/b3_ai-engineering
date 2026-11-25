@@ -16,7 +16,95 @@ function Init-TestRepo([string]$DirPath) {
 $sandbox = Join-Path $env:TEMP ('b3-research-ship-test-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $sandbox | Out-Null
 $prevModelsPersonal = $env:B3_MODELS_PERSONAL
+$prevPathEnv = $env:PATH
+$prevMockGhDir = $env:B3_TEST_GH_DIR
 $env:B3_MODELS_PERSONAL = Join-Path $sandbox 'personal-models.md'
+
+$mockBinDir = Join-Path $sandbox 'mock-bin'
+$mockDataDir = Join-Path $sandbox 'mock-data'
+New-Item -ItemType Directory -Path $mockBinDir, $mockDataDir -Force | Out-Null
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$mockPsHelper = Join-Path $mockBinDir 'mock-gh.ps1'
+[IO.File]::WriteAllText($mockPsHelper, @'
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ArgsIn)
+$dir = $env:B3_TEST_GH_DIR
+if (-not $dir -or -not (Test-Path -LiteralPath $dir -PathType Container)) { [Console]::Error.WriteLine('HTTP 500: mock dir missing'); exit 1 }
+if (-not $ArgsIn -or $ArgsIn[0] -cne 'api') { [Console]::Error.WriteLine('unexpected gh subcommand'); exit 1 }
+$slurp = $false
+$endpoint = ''
+for ($i = 1; $i -lt $ArgsIn.Count; $i++) {
+    if ($ArgsIn[$i] -ceq '--paginate') { continue }
+    elseif ($ArgsIn[$i] -ceq '--slurp') { $slurp = $true }
+    else { $endpoint = $ArgsIn[$i] }
+}
+$clean = ($endpoint -split '\?')[0]
+$key = (($clean -replace '%2[fF]', '__') -replace '/', '__')
+$errFile = Join-Path $dir "$key.err"
+$jsonFile = Join-Path $dir "$key.json"
+if (Test-Path -LiteralPath $errFile -PathType Leaf) { [Console]::Error.Write([IO.File]::ReadAllText($errFile)); exit 1 }
+if (Test-Path -LiteralPath $jsonFile -PathType Leaf) {
+    $raw = [IO.File]::ReadAllText($jsonFile)
+    if ($slurp) { Write-Output "[$raw]" } else { Write-Output $raw }
+    exit 0
+}
+[Console]::Error.WriteLine("HTTP 404 Not Found: $clean")
+exit 1
+'@, $utf8NoBom)
+[IO.File]::WriteAllText((Join-Path $mockBinDir 'gh.cmd'), "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"%~dp0mock-gh.ps1`" %*`r`n", $utf8NoBom)
+[IO.File]::WriteAllText((Join-Path $mockBinDir 'gh'), @'
+#!/usr/bin/env bash
+set -euo pipefail
+dir="${B3_TEST_GH_DIR:-}"
+[[ -n "$dir" && -d "$dir" ]] || { echo "HTTP 500: mock dir missing" >&2; exit 1; }
+[[ "${1:-}" == "api" ]] || { echo "unexpected gh subcommand" >&2; exit 1; }
+shift; slurp=false; endpoint=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in --paginate) shift ;; --slurp) slurp=true; shift ;; *) endpoint="$1"; shift ;; esac
+done
+clean="${endpoint%%\?*}"
+key="$(printf '%s' "$clean" | sed 's|%2[fF]|__|g; s|/|__|g')"
+if [[ -f "${dir}/${key}.err" ]]; then cat "${dir}/${key}.err" >&2; exit 1; fi
+if [[ -f "${dir}/${key}.json" ]]; then
+  if $slurp; then printf '['; cat "${dir}/${key}.json"; printf ']\n'; else cat "${dir}/${key}.json"; fi
+  exit 0
+fi
+echo "HTTP 404 Not Found: ${clean}" >&2; exit 1
+'@, $utf8NoBom)
+
+function Write-MockPreMergeFixtures([string]$Dir, [string]$Slug, [int]$PrNum, [string]$DefBr, [string]$DefSha, [string]$BaseRef, [string]$BaseSha, [string]$HeadRef, [string]$HeadSha, [string]$ChangedFile) {
+    New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+    $sk = $Slug -replace '/', '__'
+    $bk = $BaseRef -replace '/', '__'
+    $dk = $DefBr -replace '/', '__'
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__pulls__${PrNum}.json"), (@{
+        number = $PrNum; state = 'open'; draft = $false; merged = $false; merged_at = $null; merge_commit_sha = $null
+        mergeable = $true; mergeable_state = 'clean'; user = @{ login = 'alice' }
+        base = @{ ref = $BaseRef; sha = $BaseSha; repo = @{ full_name = $Slug; default_branch = $DefBr } }
+        head = @{ ref = $HeadRef; sha = $HeadSha; repo = @{ full_name = $Slug } }
+    } | ConvertTo-Json -Depth 6), $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__branches__${bk}.json"), (@{ name = $BaseRef; protected = $false; commit = @{ sha = $BaseSha } } | ConvertTo-Json -Depth 4), $utf8NoBom)
+    if ($DefBr -cne $BaseRef) {
+        [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__branches__${dk}.json"), (@{ name = $DefBr; protected = $false; commit = @{ sha = $DefSha } } | ConvertTo-Json -Depth 4), $utf8NoBom)
+    }
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__rules__branches__${bk}.json"), '[]', $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__pulls__${PrNum}__files.json"), "[{`"filename`":`"$ChangedFile`",`"status`":`"modified`"}]", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__pulls__${PrNum}__reviews.json"), "[{`"id`":1,`"user`":{`"login`":`"bob`",`"type`":`"User`"},`"author_association`":`"COLLABORATOR`",`"state`":`"APPROVED`",`"commit_id`":`"$HeadSha`"}]", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__commits__${HeadSha}__check-runs.json"), "{`"total_count`":1,`"check_runs`":[{`"id`":1,`"name`":`"ci/test`",`"app`":{`"id`":15368},`"head_sha`":`"$HeadSha`",`"status`":`"completed`",`"conclusion`":`"success`"}]}", $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__commits__${HeadSha}__status.json"), "{`"sha`":`"$HeadSha`",`"state`":`"pending`",`"total_count`":0,`"statuses`":[]}", $utf8NoBom)
+}
+
+function Write-MockPostMergeFixtures([string]$Dir, [string]$Slug, [int]$PrNum, [string]$BaseRef, [string]$HeadSha, [string]$MergeSha, [string]$LiveSha) {
+    New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+    $sk = $Slug -replace '/', '__'
+    $bk = $BaseRef -replace '/', '__'
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__pulls__${PrNum}.json"), (@{
+        number = $PrNum; state = 'closed'; merged = $true; merged_at = '2026-11-24T15:00:00Z'; merge_commit_sha = $MergeSha; commits = 1
+        base = @{ ref = $BaseRef; sha = $LiveSha; repo = @{ full_name = $Slug; default_branch = 'main' } }
+        head = @{ ref = 'feat/research-test'; sha = $HeadSha; repo = @{ full_name = $Slug } }
+    } | ConvertTo-Json -Depth 6), $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__branches__${bk}.json"), (@{ name = $BaseRef; protected = $false; commit = @{ sha = $LiveSha } } | ConvertTo-Json -Depth 4), $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $Dir "repos__${sk}__compare__${MergeSha}...${LiveSha}.json"), '{"status":"identical","behind_by":0,"ahead_by":0}', $utf8NoBom)
+}
 
 try {
     # --- 1. research-evidence-freshness-and-containment (PS + Bash) ---
@@ -139,12 +227,12 @@ try {
     $authDotFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/auth-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', '.')
     $omitChangedFail = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/research-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
 
-    # Clean base-bound authorized repo with committed policy + PR commit + verified INDEPENDENT ledger
+    # Clean base-bound authorized repo with committed policy + PR commit + verified INDEPENDENT ledger + trusted GitHub mock
     $rAuth = Join-Path $sandbox 'auth-ok-repo'
     $rAuthPosix = To-PosixPath $rAuth
     Init-TestRepo $rAuth
     New-Item -ItemType Directory -Path (Join-Path $rAuth '.b3'), (Join-Path $rAuth 'docs') -Force | Out-Null
-    Set-Content (Join-Path $rAuth '.b3\auth-policy.json') (@{
+    Set-Content (Join-Path $rAuth '.b3\research-policy.json') (@{
         auto_merge = 'authorized'
         protected_paths = @('releases/')
         allow_protected_paths = $false
@@ -153,16 +241,23 @@ try {
     } | ConvertTo-Json)
     Set-Content (Join-Path $rAuth 'docs\notes.md') "# Base Notes`n"
     Push-Location $rAuth
+    & git remote add origin 'https://github.com/octo/rs-auth.git'
     & git add .; & git commit -qm 'base with auth policy'
     $authBaseSha = (& git rev-parse HEAD).Trim()
     & git checkout -qb feat/auth-pr
     Set-Content (Join-Path $rAuth 'docs\notes.md') "# Updated Authorized Notes`n"
     & git add .; & git commit -qm 'pr notes change'
+    $authHeadSha = (& git rev-parse HEAD).Trim()
     Pop-Location
     $authLed = '.b3/research-ship/runs/auth-ok/ledger.md'
-    $authLedInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'init', '-LedgerPath', $authLed, '-BaseSha', $authBaseSha)
+    $authLedInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'init', '-LedgerPath', $authLed, '-BaseSha', $authBaseSha, '-ReviewIndependence', 'INDEPENDENT')
     $authLedUpd = Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'update', '-LedgerPath', $authLed, '-UnitId', 'U01', '-Status', 'REVIEWED')
-    $authOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+
+    $pathSep = [System.IO.Path]::PathSeparator
+    $env:PATH = "${mockBinDir}${pathSep}${prevPathEnv}"
+    $env:B3_TEST_GH_DIR = $mockDataDir
+    Write-MockPreMergeFixtures $mockDataDir 'octo/rs-auth' 101 'main' $authBaseSha 'main' $authBaseSha 'feat/auth-pr' $authHeadSha 'docs/notes.md'
+    $authOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
 
     # Malformed & type-mismatched / injection / F2 policy JSON checks
     Set-Content (Join-Path $rGov '.b3\bad-policy.json') '{ broken json'
@@ -191,16 +286,20 @@ try {
     New-Item -ItemType Junction -Path (Join-Path $rDefJunc '.b3') -Target $outPolDir | Out-Null
     $defJuncPs = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rDefJunc, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS')
 
-    # Post-merge verification: merge featSha into main and test ancestor vs non-ancestor + missing/invalid MainRef
+    # Post-merge verification: merge featSha into main + PR-specific GitHub post-merge verification
     Push-Location $rGov
+    & git remote add origin 'https://github.com/octo/rs-gov.git'
     & git merge --no-ff -qm 'merge feat' $featSha | Out-Null
+    $govMergeSha = (& git rev-parse HEAD).Trim()
     Pop-Location
-    $postOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha, '-MainRef', 'main')
-    $postFalse = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $sideSha, '-MainRef', 'main')
-    $postOpen = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'OPEN', '-MergedSha', $featSha, '-MainRef', 'main')
-    $postNoMain = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha)
-    $postHeadRef = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha, '-MainRef', 'HEAD')
-    $postHeadTilde = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $featSha, '-MainRef', 'HEAD~0')
+    Write-MockPostMergeFixtures $mockDataDir 'octo/rs-gov' 201 'main' $featSha $govMergeSha $govMergeSha
+    $postOk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrNumber', '201', '-PrState', 'MERGED', '-MergedSha', $govMergeSha, '-MainRef', 'main')
+    $postFalse = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrNumber', '201', '-PrState', 'MERGED', '-MergedSha', $sideSha, '-MainRef', 'main')
+    $postOpen = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrNumber', '201', '-PrState', 'OPEN', '-MergedSha', $govMergeSha, '-MainRef', 'main')
+    $postNoMain = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrNumber', '201', '-PrState', 'MERGED', '-MergedSha', $govMergeSha)
+    $postHeadRef = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrNumber', '201', '-PrState', 'MERGED', '-MergedSha', $govMergeSha, '-MainRef', 'HEAD')
+    $postHeadTilde = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrNumber', '201', '-PrState', 'MERGED', '-MergedSha', $govMergeSha, '-MainRef', 'HEAD~0')
+    $postNoPr = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PostMerge', '-PrState', 'MERGED', '-MergedSha', $govMergeSha, '-MainRef', 'main')
 
     $govShOk = $true
     if ($script:HasBash) {
@@ -210,34 +309,36 @@ try {
         $shDot = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/auth-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', '.')
         $shOctalBlk = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--blocking-findings', '08')
         $shOmitChanged = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/research-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
-        $shAuth = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md')
+        $shAuth = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md')
         $shBadJson = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/bad-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
         $shBadNl = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/nl-pp-policy.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md')
         $shF2ArrObj = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/f2-arr-obj.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
         $shF2Upper = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--policy-path', '.b3/f2-upper-key.json', '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
         $shDefJunc = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rDefJuncPosix, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS')
-        $shPostOk = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha, '--main-ref', 'main')
-        $shPostBad = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $sideSha, '--main-ref', 'main')
-        $shPostNoMain = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha)
-        $shPostHead = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha, '--main-ref', 'HEAD')
-        $shPostTilde = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $featSha, '--main-ref', 'HEAD~0')
+        $shPostOk = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-number', '201', '--pr-state', 'MERGED', '--merged-sha', $govMergeSha, '--main-ref', 'main')
+        $shPostBad = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-number', '201', '--pr-state', 'MERGED', '--merged-sha', $sideSha, '--main-ref', 'main')
+        $shPostNoMain = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-number', '201', '--pr-state', 'MERGED', '--merged-sha', $govMergeSha)
+        $shPostHead = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-number', '201', '--pr-state', 'MERGED', '--merged-sha', $govMergeSha, '--main-ref', 'HEAD')
+        $shPostTilde = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-number', '201', '--pr-state', 'MERGED', '--merged-sha', $govMergeSha, '--main-ref', 'HEAD~0')
+        $shPostNoPr = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rGovPosix, '--post-merge', '--pr-state', 'MERGED', '--merged-sha', $govMergeSha, '--main-ref', 'main')
         $govShOk = ($shDisabled.Code -eq 2 -and $shDisabled.Text -match 'PR_READY: auto_merge=disabled') -and
                    ($shWithheld.Code -eq 1 -and $shWithheld.Text -match 'WITHHELD_PROMOTION') -and
                    ($shProt.Code -eq 1 -and $shProt.Text -match 'protected_paths=releases/v3\.json') -and
                    ($shDot.Code -eq 1 -and $shDot.Text -match 'protected_paths=\.') -and
                    ($shOctalBlk.Code -eq 1 -and $shOctalBlk.Text -match 'blocking_findings=8') -and
                    ($shOmitChanged.Code -eq 1 -and $shOmitChanged.Text -match 'missing_changed_paths') -and
-                   ($shAuth.Code -eq 0 -and $shAuth.Text -match 'MERGE_AUTHORIZED') -and
+                   ($shAuth.Code -eq 0 -and $shAuth.Text -match 'MERGE_AUTHORIZED' -and $shAuth.Text -ceq $authOk.Text) -and
                    ($shBadJson.Code -eq 1 -and $shBadJson.Text -match 'invalid_policy_json') -and
                    ($shBadNl.Code -eq 1 -and $shBadNl.Text -match 'invalid_policy_json') -and
                    ($shF2ArrObj.Code -eq 1 -and $shF2ArrObj.Text -match 'invalid_policy_json' -and $shF2ArrObj.Text -notmatch 'MERGE_AUTHORIZED') -and
                    ($shF2Upper.Code -eq 2 -and $shF2Upper.Text -match 'PR_READY: auto_merge=disabled' -and $shF2Upper.Text -notmatch 'MERGE_AUTHORIZED') -and
                    ($shDefJunc.Code -eq 1 -and $shDefJunc.Text -match 'invalid_policy_path') -and
-                   ($shPostOk.Code -eq 0 -and $shPostOk.Text -match 'POST_MERGE_VERIFIED' -and $shPostOk.Text -match 'deployed=NOT_VERIFIED') -and
+                   ($shPostOk.Code -eq 0 -and $shPostOk.Text -match 'POST_MERGE_VERIFIED' -and $shPostOk.Text -match 'pr_status=PR_MERGED' -and $shPostOk.Text -match 'deployed=NOT_VERIFIED' -and $shPostOk.Text -ceq $postOk.Text) -and
                    ($shPostBad.Code -eq 1 -and $shPostBad.Text -match 'POST_MERGE_FAILED') -and
                    ($shPostNoMain.Code -eq 1 -and $shPostNoMain.Text -match 'POST_MERGE_FAILED: missing_main_ref') -and
                    ($shPostHead.Code -eq 1 -and $shPostHead.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and
-                   ($shPostTilde.Code -eq 1 -and $shPostTilde.Text -match 'POST_MERGE_FAILED: invalid_main_ref')
+                   ($shPostTilde.Code -eq 1 -and $shPostTilde.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and
+                   ($shPostNoPr.Code -eq 1 -and $shPostNoPr.Text -match 'POST_MERGE_FAILED: missing_pr_number')
     }
 
     if (($noPol.Code -eq 2 -and $noPol.Text -match 'PR_READY') -and
@@ -263,45 +364,51 @@ try {
         ($f2ArrObj.Code -eq 1 -and $f2ArrObj.Text -match 'invalid_policy_json' -and $f2ArrObj.Text -notmatch 'MERGE_AUTHORIZED') -and
         ($f2UpperKey.Code -eq 2 -and $f2UpperKey.Text -match 'PR_READY: auto_merge=disabled' -and $f2UpperKey.Text -notmatch 'MERGE_AUTHORIZED') -and
         ($defJuncPs.Code -eq 1 -and $defJuncPs.Text -match 'invalid_policy_path') -and
-        ($postOk.Code -eq 0 -and $postOk.Text -match 'POST_MERGE_VERIFIED' -and $postOk.Text -match 'runtime_served=NOT_VERIFIED' -and $postOk.Text -match 'deployed=NOT_VERIFIED') -and
+        ($postOk.Code -eq 0 -and $postOk.Text -match 'POST_MERGE_VERIFIED' -and $postOk.Text -match 'pr_status=PR_MERGED' -and $postOk.Text -match 'runtime_served=NOT_VERIFIED' -and $postOk.Text -match 'deployed=NOT_VERIFIED') -and
         ($postFalse.Code -eq 1 -and $postFalse.Text -match 'POST_MERGE_FAILED') -and
         ($postOpen.Code -eq 1 -and $postOpen.Text -match 'POST_MERGE_FAILED') -and
         ($postNoMain.Code -eq 1 -and $postNoMain.Text -match 'POST_MERGE_FAILED: missing_main_ref') -and
         ($postHeadRef.Code -eq 1 -and $postHeadRef.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and
-        ($postHeadTilde.Code -eq 1 -and $postHeadTilde.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and $govShOk) {
+        ($postHeadTilde.Code -eq 1 -and $postHeadTilde.Text -match 'POST_MERGE_FAILED: invalid_main_ref') -and
+        ($postNoPr.Code -eq 1 -and $postNoPr.Text -match 'POST_MERGE_FAILED: missing_pr_number') -and $govShOk) {
         Pass 'governance-and-merge-policy-gates'
     } else {
-        FailCheck 'governance-and-merge-policy-gates' "noPol=$($noPol.Code) authOk=$($authOk.Code)/$($authOk.Text) omitChg=$($omitChangedFail.Code) f2=$($f2ArrObj.Code)/$($f2UpperKey.Code) postNeg=$($postNoMain.Code)/$($postHeadRef.Code)/$($postHeadTilde.Code) sh=$govShOk"
+        FailCheck 'governance-and-merge-policy-gates' "noPol=$($noPol.Code) authOk=$($authOk.Code)/$($authOk.Text) omitChg=$($omitChangedFail.Code) f2=$($f2ArrObj.Code)/$($f2UpperKey.Code) postNeg=$($postNoMain.Code)/$($postHeadRef.Code)/$($postHeadTilde.Code)/$($postNoPr.Code) sh=$govShOk"
     }
 
     # --- 2b. c04-h04-h08-merge-policy-hardening (PS + Bash) ---
-    # (a) Missing -BaseSha or -BaseSha HEAD -> MERGE_BLOCKED
-    $psNoBase = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
-    $shNoBase = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psNoBase }
-    $psBaseHead = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', 'HEAD', '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
-    $shBaseHead = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', 'HEAD', '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psBaseHead }
+    # (a) Missing -PrNumber -> MERGE_BLOCKED: missing_pr_number; -BaseSha HEAD -> MERGE_BLOCKED: base_sha_equals_head
+    $psNoPr = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shNoPr = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psNoPr }
+    $psBaseHead = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', 'HEAD', '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shBaseHead = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', 'HEAD', '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psBaseHead }
 
-    # (b) Missing -LedgerPath or SINGLE_AGENT_LIMIT ledger -> MERGE_BLOCKED
-    $psNoLed = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
-    $shNoLed = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psNoLed }
+    # (b) Missing -LedgerPath, UNKNOWN default ledger, or SINGLE_AGENT_LIMIT ledger -> MERGE_BLOCKED
+    $psNoLed = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shNoLed = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psNoLed }
+    $unkLed = '.b3/research-ship/runs/auth-unk/ledger.md'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'init', '-LedgerPath', $unkLed, '-BaseSha', $authBaseSha))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'update', '-LedgerPath', $unkLed, '-UnitId', 'U01', '-Status', 'REVIEWED'))
+    $psUnkBlk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-LedgerPath', $unkLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shUnkBlk = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--ledger-path', $unkLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psUnkBlk }
     $salLed = '.b3/research-ship/runs/auth-sal/ledger.md'
     [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'init', '-LedgerPath', $salLed, '-BaseSha', $authBaseSha, '-ReviewIndependence', 'SINGLE_AGENT_LIMIT'))
     [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rAuth, '-Action', 'update', '-LedgerPath', $salLed, '-UnitId', 'U01', '-Status', 'REVIEWED'))
-    $psSalBlk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $salLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
-    $shSalBlk = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $salLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psSalBlk }
+    $psSalBlk = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-LedgerPath', $salLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shSalBlk = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--ledger-path', $salLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psSalBlk }
 
     # (c) Dirty working tree outside .b3/ship/ & .b3/research-ship/ -> MERGE_BLOCKED: dirty_worktree
     Set-Content (Join-Path $rAuth 'dirty-scratch.txt') "uncommitted`n"
-    $psDirty = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
-    $shDirty = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psDirty }
+    $psDirty = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shDirty = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psDirty }
     Remove-Item -LiteralPath (Join-Path $rAuth 'dirty-scratch.txt') -Force
 
-    # (d) Policy modified in PR (policy_modified_in_pr) & policy not in base (policy_not_in_base)
+    # (d) Policy modified in PR (policy_modified_in_pr) & policy path substitution blocked (policy_path_override_not_allowed)
     $rPolMod = Join-Path $sandbox 'pol-mod-repo'
     $rPolModPosix = To-PosixPath $rPolMod
     Init-TestRepo $rPolMod
     New-Item -ItemType Directory -Path (Join-Path $rPolMod '.b3'), (Join-Path $rPolMod 'docs') -Force | Out-Null
-    Set-Content (Join-Path $rPolMod '.b3\auth-policy.json') (@{
+    Set-Content (Join-Path $rPolMod '.b3\research-policy.json') (@{
         auto_merge = 'authorized'
         protected_paths = @('releases/')
         allow_protected_paths = $false
@@ -310,10 +417,11 @@ try {
     } | ConvertTo-Json)
     Set-Content (Join-Path $rPolMod 'docs\notes.md') "# Base`n"
     Push-Location $rPolMod
+    & git remote add origin 'https://github.com/octo/rs-polmod.git'
     & git add .; & git commit -qm 'base'
     $pmBaseSha = (& git rev-parse HEAD).Trim()
     & git checkout -qb feat/pol-mod
-    Set-Content (Join-Path $rPolMod '.b3\auth-policy.json') (@{
+    Set-Content (Join-Path $rPolMod '.b3\research-policy.json') (@{
         auto_merge = 'authorized'
         protected_paths = @()
         allow_protected_paths = $true
@@ -321,9 +429,11 @@ try {
         require_review = $true
     } | ConvertTo-Json)
     & git add .; & git commit -qm 'tamper policy'
+    $pmHead1 = (& git rev-parse HEAD).Trim()
     Pop-Location
-    $psPolMod = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rPolMod, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $pmBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
-    $shPolMod = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rPolModPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $pmBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psPolMod }
+    Write-MockPreMergeFixtures $mockDataDir 'octo/rs-polmod' 102 'main' $pmBaseSha 'main' $pmBaseSha 'feat/pol-mod' $pmHead1 '.b3/research-policy.json'
+    $psPolMod = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rPolMod, '-PrNumber', '102', '-BaseSha', $pmBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shPolMod = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rPolModPosix, '--pr-number', '102', '--base-sha', $pmBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psPolMod }
 
     Push-Location $rPolMod
     & git checkout -qb feat/pol-not-in-base $pmBaseSha
@@ -335,18 +445,20 @@ try {
         require_review = $true
     } | ConvertTo-Json)
     Set-Content (Join-Path $rPolMod 'docs\notes.md') "# PR`n"
-    & git add .; & git commit -qm 'add untracked-in-base policy'
+    & git add .; & git commit -qm 'add custom policy'
+    $pmHead2 = (& git rev-parse HEAD).Trim()
     Pop-Location
-    $psPolNotBase = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rPolMod, '-PolicyPath', '.b3/new-auth.json', '-BaseSha', $pmBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
-    $shPolNotBase = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rPolModPosix, '--policy-path', '.b3/new-auth.json', '--base-sha', $pmBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psPolNotBase }
+    Write-MockPreMergeFixtures $mockDataDir 'octo/rs-polmod' 103 'main' $pmBaseSha 'main' $pmBaseSha 'feat/pol-not-in-base' $pmHead2 '.b3/new-auth.json'
+    $psPolNotBase = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rPolMod, '-PolicyPath', '.b3/new-auth.json', '-PrNumber', '103', '-BaseSha', $pmBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
+    $shPolNotBase = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rPolModPosix, '--policy-path', '.b3/new-auth.json', '--pr-number', '103', '--base-sha', $pmBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/notes.md') } else { $psPolNotBase }
 
     # (e) H-04: traversal, dot segment, case mismatch, protected_paths ["./"], and git mv rename bypass
-    $psH04Trav = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/../releases/v3.json')
-    $shH04Trav = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/../releases/v3.json') } else { $psH04Trav }
-    $psH04DotSeg = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'releases/./v3.json')
-    $shH04DotSeg = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'releases/./v3.json') } else { $psH04DotSeg }
-    $psH04Case = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'Releases/v3.json')
-    $shH04Case = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'Releases/v3.json') } else { $psH04Case }
+    $psH04Trav = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/../releases/v3.json')
+    $shH04Trav = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/../releases/v3.json') } else { $psH04Trav }
+    $psH04DotSeg = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'releases/./v3.json')
+    $shH04DotSeg = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'releases/./v3.json') } else { $psH04DotSeg }
+    $psH04Case = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rAuth, '-PrNumber', '101', '-BaseSha', $authBaseSha, '-LedgerPath', $authLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'Releases/v3.json')
+    $shH04Case = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rAuthPosix, '--pr-number', '101', '--base-sha', $authBaseSha, '--ledger-path', $authLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'Releases/v3.json') } else { $psH04Case }
 
     Set-Content (Join-Path $rGov '.b3\dot-slash-policy.json') '{"auto_merge":"disabled","protected_paths":["./"],"allow_protected_paths":false,"require_ci":true,"require_review":true}'
     $psH04DotSlash = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rGov, '-PolicyPath', '.b3/dot-slash-policy.json', '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/notes.md')
@@ -356,7 +468,7 @@ try {
     $rRenPosix = To-PosixPath $rRen
     Init-TestRepo $rRen
     New-Item -ItemType Directory -Path (Join-Path $rRen '.b3'), (Join-Path $rRen 'releases'), (Join-Path $rRen 'docs') -Force | Out-Null
-    Set-Content (Join-Path $rRen '.b3\auth-policy.json') (@{
+    Set-Content (Join-Path $rRen '.b3\research-policy.json') (@{
         auto_merge = 'authorized'
         protected_paths = @('releases/')
         allow_protected_paths = $false
@@ -365,28 +477,32 @@ try {
     } | ConvertTo-Json)
     Set-Content (Join-Path $rRen 'releases\a.json') '{"version":1}'
     Push-Location $rRen
+    & git remote add origin 'https://github.com/octo/rs-ren.git'
     & git add .; & git commit -qm 'base with release file'
     $renBaseSha = (& git rev-parse HEAD).Trim()
     & git checkout -qb feat/rename-release
     & git mv releases/a.json docs/a.md
     & git commit -qm 'rename release file to docs'
+    $renHeadSha = (& git rev-parse HEAD).Trim()
     Pop-Location
     $renLed = '.b3/research-ship/runs/ren/ledger.md'
-    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rRen, '-Action', 'init', '-LedgerPath', $renLed, '-BaseSha', $renBaseSha))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rRen, '-Action', 'init', '-LedgerPath', $renLed, '-BaseSha', $renBaseSha, '-ReviewIndependence', 'INDEPENDENT'))
     $renLedTxt = Get-Content -LiteralPath (Join-Path $rRen '.b3\research-ship\runs\ren\ledger.md') -Raw
     foreach ($rm in [regex]::Matches($renLedTxt, '(?m)^\|\s*(U\d+)\s*\|')) {
         [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $rRen, '-Action', 'update', '-LedgerPath', $renLed, '-UnitId', $rm.Groups[1].Value, '-Status', 'REVIEWED'))
     }
-    $psH04Ren = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rRen, '-PolicyPath', '.b3/auth-policy.json', '-BaseSha', $renBaseSha, '-LedgerPath', $renLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/a.md')
-    $shH04Ren = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rRenPosix, '--policy-path', '.b3/auth-policy.json', '--base-sha', $renBaseSha, '--ledger-path', $renLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/a.md') } else { $psH04Ren }
+    Write-MockPreMergeFixtures $mockDataDir 'octo/rs-ren' 104 'main' $renBaseSha 'main' $renBaseSha 'feat/rename-release' $renHeadSha 'docs/a.md'
+    $psH04Ren = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rRen, '-PrNumber', '104', '-BaseSha', $renBaseSha, '-LedgerPath', $renLed, '-PrState', 'OPEN', '-CiStatus', 'PASS', '-ReviewStatus', 'PASS', '-ChangedPaths', 'docs/a.md')
+    $shH04Ren = if ($script:HasBash) { Invoke-ShGuard @('merge-policy-check', '--repo-root', $rRenPosix, '--pr-number', '104', '--base-sha', $renBaseSha, '--ledger-path', $renLed, '--pr-state', 'OPEN', '--ci-status', 'PASS', '--review-status', 'PASS', '--changed-paths', 'docs/a.md') } else { $psH04Ren }
 
-    $hardOk = ($psNoBase.Code -eq 1 -and $psNoBase.Text -match 'MERGE_BLOCKED: missing_base_sha' -and $shNoBase.Code -eq 1 -and $shNoBase.Text -ceq $psNoBase.Text) -and
+    $hardOk = ($psNoPr.Code -eq 1 -and $psNoPr.Text -match 'MERGE_BLOCKED: missing_pr_number' -and $shNoPr.Code -eq 1 -and $shNoPr.Text -ceq $psNoPr.Text) -and
               ($psBaseHead.Code -eq 1 -and $psBaseHead.Text -match 'MERGE_BLOCKED: base_sha_equals_head' -and $shBaseHead.Code -eq 1 -and $shBaseHead.Text -ceq $psBaseHead.Text) -and
               ($psNoLed.Code -eq 1 -and $psNoLed.Text -match 'MERGE_BLOCKED: missing_ledger_path' -and $shNoLed.Code -eq 1 -and $shNoLed.Text -ceq $psNoLed.Text) -and
+              ($psUnkBlk.Code -eq 1 -and $psUnkBlk.Text -match 'MERGE_BLOCKED: review_independence_unknown' -and $shUnkBlk.Code -eq 1 -and $shUnkBlk.Text -ceq $psUnkBlk.Text) -and
               ($psSalBlk.Code -eq 1 -and $psSalBlk.Text -match 'MERGE_BLOCKED: single_agent_limit' -and $shSalBlk.Code -eq 1 -and $shSalBlk.Text -ceq $psSalBlk.Text) -and
               ($psDirty.Code -eq 1 -and $psDirty.Text -match 'MERGE_BLOCKED: dirty_worktree' -and $shDirty.Code -eq 1 -and $shDirty.Text -ceq $psDirty.Text) -and
               ($psPolMod.Code -eq 1 -and $psPolMod.Text -match 'MERGE_BLOCKED: policy_modified_in_pr' -and $shPolMod.Code -eq 1 -and $shPolMod.Text -ceq $psPolMod.Text) -and
-              ($psPolNotBase.Code -eq 1 -and $psPolNotBase.Text -match 'MERGE_BLOCKED: policy_not_in_base' -and $shPolNotBase.Code -eq 1 -and $shPolNotBase.Text -ceq $psPolNotBase.Text) -and
+              ($psPolNotBase.Code -eq 1 -and $psPolNotBase.Text -match 'MERGE_BLOCKED: policy_path_override_not_allowed' -and $shPolNotBase.Code -eq 1 -and $shPolNotBase.Text -ceq $psPolNotBase.Text) -and
               ($psH04Trav.Code -eq 1 -and $psH04Trav.Text -match 'MERGE_BLOCKED: invalid_changed_path' -and $shH04Trav.Code -eq 1 -and $shH04Trav.Text -ceq $psH04Trav.Text) -and
               ($psH04DotSeg.Code -eq 1 -and $psH04DotSeg.Text -match 'MERGE_BLOCKED: invalid_changed_path' -and $shH04DotSeg.Code -eq 1 -and $shH04DotSeg.Text -ceq $psH04DotSeg.Text) -and
               ($psH04Case.Code -eq 1 -and $psH04Case.Text -match 'MERGE_BLOCKED: protected_paths=Releases/v3\.json' -and $shH04Case.Code -eq 1 -and $shH04Case.Text -ceq $psH04Case.Text) -and
@@ -395,7 +511,7 @@ try {
     if ($hardOk) {
         Pass 'c04-h04-h08-merge-policy-hardening'
     } else {
-        FailCheck 'c04-h04-h08-merge-policy-hardening' "noBase=$($psNoBase.Text)|$($shNoBase.Text) baseHead=$($psBaseHead.Text) noLed=$($psNoLed.Text) sal=$($psSalBlk.Text) dirty=$($psDirty.Text) polMod=$($psPolMod.Text) polNB=$($psPolNotBase.Text) trav=$($psH04Trav.Text) dot=$($psH04DotSeg.Text) case=$($psH04Case.Text) dotSl=$($psH04DotSlash.Text) ren=$($psH04Ren.Text)"
+        FailCheck 'c04-h04-h08-merge-policy-hardening' "noPr=$($psNoPr.Text)|$($shNoPr.Text) baseHead=$($psBaseHead.Text) noLed=$($psNoLed.Text) unk=$($psUnkBlk.Text) sal=$($psSalBlk.Text) dirty=$($psDirty.Text) polMod=$($psPolMod.Text) polOvr=$($psPolNotBase.Text) trav=$($psH04Trav.Text) dot=$($psH04DotSeg.Text) case=$($psH04Case.Text) dotSl=$($psH04DotSlash.Text) ren=$($psH04Ren.Text)"
     }
 
     # --- 3. namespace-isolation-checkpoints-and-waves (PS + Bash) ---
@@ -643,6 +759,8 @@ try {
 }
 finally {
     if ($null -eq $prevModelsPersonal) { Remove-Item Env:B3_MODELS_PERSONAL -ErrorAction SilentlyContinue } else { $env:B3_MODELS_PERSONAL = $prevModelsPersonal }
+    $env:PATH = $prevPathEnv
+    if ($null -eq $prevMockGhDir) { Remove-Item Env:B3_TEST_GH_DIR -ErrorAction SilentlyContinue } else { $env:B3_TEST_GH_DIR = $prevMockGhDir }
     Pop-Location -ErrorAction SilentlyContinue
     Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue

@@ -238,7 +238,7 @@ try {
     & git -C $r4 add .; & git -C $r4 commit -qm 'work'
 
     $lp = '.b3/ship/review-loop/r4/ledger.md'
-    $psLInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r4, '-Action', 'init', '-LedgerPath', $lp, '-BaseSha', $base4, '-MaxConcurrency', '3', '-MaxPasses', '15')
+    $psLInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r4, '-Action', 'init', '-LedgerPath', $lp, '-BaseSha', $base4, '-MaxConcurrency', '3', '-MaxPasses', '15', '-ReviewIndependence', 'INDEPENDENT')
     $chkPending = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r4, '-Action', 'check', '-LedgerPath', $lp)
 
     # Units sorted: U01=docs (LOW), U02=src/auth (CRITICAL), U03=src/contracts (HIGH), U04=src/orders (LOW)
@@ -382,8 +382,8 @@ try {
     }
 
     $trLp = '.b3/ship/tr-ledger.md'
-    $psTrInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r6, '-Action', 'init', '-LedgerPath', $trLp, '-BaseSha', $base6, '-TargetRef', 'pr-target')
-    $shTrInit = if ($script:HasBash) { Invoke-ShCmd "'$guardShPosix' review-ledger --repo-root '$r6Msys' --action init --ledger-path '.b3/ship/tr-ledger-sh.md' --base-sha '$base6' --target-ref 'pr-target'" } else { $psTrInit }
+    $psTrInit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r6, '-Action', 'init', '-LedgerPath', $trLp, '-BaseSha', $base6, '-TargetRef', 'pr-target', '-ReviewIndependence', 'INDEPENDENT')
+    $shTrInit = if ($script:HasBash) { Invoke-ShCmd "'$guardShPosix' review-ledger --repo-root '$r6Msys' --action init --ledger-path '.b3/ship/tr-ledger-sh.md' --base-sha '$base6' --target-ref 'pr-target' --review-independence INDEPENDENT" } else { $psTrInit }
     $trTxt = [IO.File]::ReadAllText((Join-Path $r6 '.b3\ship\tr-ledger.md'))
     $trShTxt = if ($script:HasBash) { [IO.File]::ReadAllText((Join-Path $r6 '.b3\ship\tr-ledger-sh.md')) } else { $trTxt }
     $unitRows6 = @{}
@@ -417,7 +417,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $r6b 'src\pay\calc.ts'), "export const calc = (n: number) => n + 1;`n", $utf8NoBom)
     & git -C $r6b add .; & git -C $r6b commit -qm 'low'
     $escLp = '.b3/ship/esc-ledger.md'
-    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r6b, '-Action', 'init', '-LedgerPath', $escLp, '-BaseSha', $base6b))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r6b, '-Action', 'init', '-LedgerPath', $escLp, '-BaseSha', $base6b, '-ReviewIndependence', 'INDEPENDENT'))
     [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r6b, '-Action', 'update', '-LedgerPath', $escLp, '-UnitId', 'U01', '-Status', 'REVIEWED'))
     $psEscLow = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r6b, '-Action', 'check', '-LedgerPath', $escLp)
 
@@ -516,7 +516,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $r8 'src\security\access.ts'), "export const ok = (x: number) => x > 0;`n", $utf8NoBom)
     & git -C $r8 add .; & git -C $r8 commit -qm 'sec-and-contract'
     $wLp = '.b3/ship/waiver-ledger.md'
-    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'init', '-LedgerPath', $wLp, '-BaseSha', $base8, '-MaxPasses', '10'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r8, '-Action', 'init', '-LedgerPath', $wLp, '-BaseSha', $base8, '-MaxPasses', '10', '-ReviewIndependence', 'INDEPENDENT'))
     [void](Invoke-PsGuard @('verify-run', '-RepoRoot', $r8, '-VerifyCmd', 'echo w-u01', '-ReceiptPath', '.b3/ship/w1.verify', '-RelevantPaths', 'src/contracts/api.ts'))
     [void](Invoke-PsGuard @('verify-run', '-RepoRoot', $r8, '-VerifyCmd', 'echo w-u02', '-ReceiptPath', '.b3/ship/w2.verify', '-RelevantPaths', 'src/security/access.ts'))
     # U01=src/contracts (HIGH): concrete >=15-char multi-word rationale allowed
@@ -914,7 +914,7 @@ try {
     [void](Invoke-PsGuard @('verify-run', '-RepoRoot', $r15, '-VerifyCmd', 'echo main15-ok', '-ReceiptPath', '.b3/ship/main15.verify', '-RelevantPaths', 'src/contracts/api.ts'))
     & git -C $r15 checkout -q -- src/contracts/api.ts
     $lp15 = '.b3/ship/c03.md'
-    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r15, '-Action', 'init', '-LedgerPath', $lp15, '-BaseSha', $base15, '-TargetRef', 'pr-branch'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r15, '-Action', 'init', '-LedgerPath', $lp15, '-BaseSha', $base15, '-TargetRef', 'pr-branch', '-ReviewIndependence', 'INDEPENDENT'))
     [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r15, '-Action', 'update', '-LedgerPath', $lp15, '-UnitId', 'U01', '-Status', 'REVIEWED', '-Specialists', 'b3-architecture-reviewer', '-ReceiptPath', '.b3/ship/main15.verify'))
     $psC03Rej = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r15, '-Action', 'check', '-LedgerPath', $lp15)
     $shC03Rej = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r15Posix, '--action', 'check', '--ledger-path', $lp15) } else { $psC03Rej }
@@ -937,7 +937,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $r16 'src\contracts\api.ts'), "export interface Item { id: string; }`n", $utf8NoBom)
     & git -C $r16 add .; & git -C $r16 commit -qm 'h06-work'
     $lp16 = '.b3/ship/h06.md'
-    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r16, '-Action', 'init', '-LedgerPath', $lp16, '-BaseSha', $base16, '-MaxPasses', '4'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r16, '-Action', 'init', '-LedgerPath', $lp16, '-BaseSha', $base16, '-MaxPasses', '4', '-ReviewIndependence', 'INDEPENDENT'))
     # (a) Raising -MaxPasses before EXHAUSTED must fail closed
     $psPreRaise = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r16, '-Action', 'update', '-LedgerPath', $lp16, '-MaxPasses', '6')
     $shPreRaise = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r16Posix, '--action', 'update', '--ledger-path', $lp16, '--max-passes', '6') } else { $psPreRaise }
@@ -1016,6 +1016,14 @@ try {
     $psSalHigh = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'check', '-LedgerPath', $lp18H)
     $shSalHigh = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r18HPosix, '--action', 'check', '--ledger-path', $lp18H) } else { $psSalHigh }
 
+    # R002: Default init (omitting -ReviewIndependence) writes UNKNOWN and blocks HIGH scopes
+    $lp18Unk = '.b3/ship/h08-unk.md'
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'init', '-LedgerPath', $lp18Unk, '-BaseSha', $base18H))
+    $unkInitTxt = [IO.File]::ReadAllText((Join-Path $r18H '.b3\ship\h08-unk.md'))
+    [void](Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'update', '-LedgerPath', $lp18Unk, '-UnitId', 'U01', '-Status', 'REVIEWED', '-Specialists', 'b3-architecture-reviewer', '-ReceiptPath', '.b3/ship/h08-h.verify'))
+    $psUnkHigh = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'check', '-LedgerPath', $lp18Unk)
+    $shUnkHigh = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r18HPosix, '--action', 'check', '--ledger-path', $lp18Unk) } else { $psUnkHigh }
+
     $r18C = Join-Path $sandbox 'h08-crit-sal'
     $r18CPosix = To-PosixPath $r18C
     Init-Repo $r18C
@@ -1030,22 +1038,33 @@ try {
     $psSalCrit = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18C, '-Action', 'check', '-LedgerPath', $lp18C)
     $shSalCrit = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r18CPosix, '--action', 'check', '--ledger-path', $lp18C) } else { $psSalCrit }
 
-    # Upgrade SINGLE_AGENT_LIMIT -> INDEPENDENT must fail LEDGER_FAIL (exit 1)
+    # Upgrade SINGLE_AGENT_LIMIT -> INDEPENDENT or clearing to UNKNOWN must fail LEDGER_FAIL (exit 1)
     $psUpgFail = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'update', '-LedgerPath', $lp18H, '-ReviewIndependence', 'INDEPENDENT')
     $shUpgFail = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r18HPosix, '--action', 'update', '--ledger-path', $lp18H, '--review-independence', 'INDEPENDENT') } else { $psUpgFail }
+    $psClrFail = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'update', '-LedgerPath', $lp18H, '-ReviewIndependence', 'UNKNOWN')
+    $shClrFail = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r18HPosix, '--action', 'update', '--ledger-path', $lp18H, '--review-independence', 'UNKNOWN') } else { $psClrFail }
 
-    # Stripping review_independence= header must fail LEDGER_CORRUPT (exit 1)
+    # Stripping review_independence= header must fail LEDGER_CORRUPT (exit 1), and normalize backfills UNKNOWN
     $noRiTxt = (([IO.File]::ReadAllText((Join-Path $r18H '.b3\ship\h08-high.md')) -split "`n") | Where-Object { $_ -notmatch '^review_independence=' }) -join "`n"
     [IO.File]::WriteAllText((Join-Path $r18H '.b3\ship\h08-nori.md'), $noRiTxt, $utf8NoBom)
+    [IO.File]::WriteAllText((Join-Path $r18H '.b3\ship\h08-nori-sh.md'), $noRiTxt, $utf8NoBom)
     $psNoRi = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'check', '-LedgerPath', '.b3/ship/h08-nori.md')
     $shNoRi = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r18HPosix, '--action', 'check', '--ledger-path', '.b3/ship/h08-nori.md') } else { $psNoRi }
+    $psMigRi = Invoke-PsGuard @('review-ledger', '-RepoRoot', $r18H, '-Action', 'normalize', '-LedgerPath', '.b3/ship/h08-nori.md')
+    $shMigRi = if ($script:HasBash) { Invoke-ShGuard @('review-ledger', '--repo-root', $r18HPosix, '--action', 'normalize', '--ledger-path', '.b3/ship/h08-nori-sh.md') } else { $psMigRi }
+    $migPsTxt = [IO.File]::ReadAllText((Join-Path $r18H '.b3\ship\h08-nori.md'))
+    $migShTxt = [IO.File]::ReadAllText((Join-Path $r18H '.b3\ship\h08-nori-sh.md'))
 
     $ok18 = ($psSalHigh.Code -eq 2) -and ($shSalHigh.Code -eq 2) -and ($shSalHigh.Text -ceq $psSalHigh.Text) -and ($psSalHigh.Text -match '^LEDGER_INCOMPLETE: single_agent_limit_blocks_high_risk$') -and
+            ($unkInitTxt -match '(?m)^review_independence=UNKNOWN$') -and
+            ($psUnkHigh.Code -eq 2) -and ($shUnkHigh.Code -eq 2) -and ($shUnkHigh.Text -ceq $psUnkHigh.Text) -and ($psUnkHigh.Text -match '^LEDGER_INCOMPLETE: review_independence_unknown_blocks_high_risk$') -and
             ($psSalCrit.Code -eq 2) -and ($shSalCrit.Code -eq 2) -and ($shSalCrit.Text -ceq $psSalCrit.Text) -and ($psSalCrit.Text -match '^LEDGER_INCOMPLETE: single_agent_limit_blocks_high_risk$') -and
             ($psUpgFail.Code -eq 1) -and ($shUpgFail.Code -eq 1) -and ($shUpgFail.Text -ceq $psUpgFail.Text) -and ($psUpgFail.Text -match '^LEDGER_FAIL: cannot upgrade SINGLE_AGENT_LIMIT to INDEPENDENT$') -and
-            ($psNoRi.Code -eq 1) -and ($shNoRi.Code -eq 1) -and ($shNoRi.Text -ceq $psNoRi.Text) -and ($psNoRi.Text -match '^LEDGER_CORRUPT: missing review_independence$')
+            ($psClrFail.Code -eq 1) -and ($shClrFail.Code -eq 1) -and ($shClrFail.Text -ceq $psClrFail.Text) -and ($psClrFail.Text -match '^LEDGER_FAIL: cannot clear SINGLE_AGENT_LIMIT$') -and
+            ($psNoRi.Code -eq 1) -and ($shNoRi.Code -eq 1) -and ($shNoRi.Text -ceq $psNoRi.Text) -and ($psNoRi.Text -match '^LEDGER_CORRUPT: missing review_independence$') -and
+            ($psMigRi.Code -eq 0) -and ($shMigRi.Code -eq 0) -and ($migPsTxt -match '(?m)^review_independence=UNKNOWN$') -and ($migShTxt -match '(?m)^review_independence=UNKNOWN$')
     if ($ok18) { Pass 'h08-review-independence-enforcement' } else {
-        FailCheck 'h08-review-independence-enforcement' "salH=$($psSalHigh.Text) salC=$($psSalCrit.Text) upg=$($psUpgFail.Text) noRi=$($psNoRi.Text)"
+        FailCheck 'h08-review-independence-enforcement' "salH=$($psSalHigh.Text) unkH=$($psUnkHigh.Text) salC=$($psSalCrit.Text) upg=$($psUpgFail.Text) clr=$($psClrFail.Text) noRi=$($psNoRi.Text)"
     }
 }
 finally {
