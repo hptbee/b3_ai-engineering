@@ -68,7 +68,13 @@ param(
     [string]$AnchorPaths = '',
     [string]$ScopePaths = '',
     [string]$GraphIndexSha = '',
-    [string]$SummaryRef = ''
+    [string]$SummaryRef = '',
+    [switch]$Partition,
+    [string]$ProtectedPaths = '',
+    [switch]$CheckDirtyScope,
+    [string]$PeerRoots = '',
+    [string]$WorkerChanges = '',
+    [switch]$RequireIsolated
 )
 
 $ErrorActionPreference = 'Stop'
@@ -124,6 +130,195 @@ function Split-CsvList([string]$Csv, [switch]$AsPaths) {
 function Test-CheckpointPath([string]$PathVal) {
     if (-not $PathVal) { return $false }
     return ($PathVal -match '^\.b3/(ship|research-ship|autodev)(/|$)')
+}
+
+function ConvertTo-WavePaths([string]$Csv, [switch]$RejectProtected, [switch]$RejectDot, [string]$ErrorPrefix = 'WAVE_FAIL') {
+    $list = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    if (-not $Csv) { return @{ Error = ''; Paths = @(); ExplicitEmpty = $false } }
+    $cleaned = $Csv.Trim()
+    if ($cleaned -ceq '[]' -or $cleaned -ceq 'none') {
+        return @{ Error = ''; Paths = @(); ExplicitEmpty = $true }
+    }
+    if ($cleaned.StartsWith('[') -and $cleaned.EndsWith(']')) {
+        $cleaned = $cleaned.Substring(1, $cleaned.Length - 2)
+    }
+    foreach ($part in ($cleaned -split ',')) {
+        if ($part -match '[\x00-\x1F\x7F]') {
+            $disp = $part.Trim()
+            if (-not $disp) { $disp = $part }
+            return @{ Error = "${ErrorPrefix}: invalid path '$disp'"; Paths = @(); ExplicitEmpty = $false }
+        }
+        $tok = $part.Trim()
+        if (-not $tok -or $tok -ceq 'none') { continue }
+        $slash = $tok -replace '\\', '/'
+        if ($slash.Contains('|') -or $slash.Contains(':') -or $slash.StartsWith('/') -or $slash.Contains('//') -or ($slash -match '(^|/)\.\.(/|$)')) {
+            return @{ Error = "${ErrorPrefix}: invalid path '$tok'"; Paths = @(); ExplicitEmpty = $false }
+        }
+        $norm = ''
+        if ($slash -eq '.' -or $slash -eq './') {
+            $norm = '.'
+        } else {
+            if ($slash.Contains('/./') -or $slash.EndsWith('/.')) {
+                return @{ Error = "${ErrorPrefix}: invalid path '$tok'"; Paths = @(); ExplicitEmpty = $false }
+            }
+            $norm = $slash
+            if ($norm.StartsWith('./')) {
+                $norm = $norm.Substring(2)
+            }
+            $norm = $norm.TrimEnd('/')
+            if (-not $norm -or $norm -eq '.' -or $norm -eq '..') {
+                return @{ Error = "${ErrorPrefix}: invalid path '$tok'"; Paths = @(); ExplicitEmpty = $false }
+            }
+            foreach ($seg in ($norm -split '/')) {
+                if (-not $seg -or $seg -eq '.' -or $seg -eq '..' -or $seg.EndsWith('.') -or $seg.EndsWith(' ')) {
+                    return @{ Error = "${ErrorPrefix}: invalid path '$tok'"; Paths = @(); ExplicitEmpty = $false }
+                }
+            }
+        }
+        if ($RejectProtected) {
+            if (($norm -imatch '^\.b3(/|$)') -or ($norm -imatch '(^|/)\.git(/|$)') -or ($norm -imatch '(^|/)\.gitmodules$')) {
+                return @{ Error = "${ErrorPrefix}: protected path '$norm' cannot be worker-owned"; Paths = @(); ExplicitEmpty = $false }
+            }
+        }
+        if ($RejectDot -and ($norm -ceq '.')) {
+            return @{ Error = "${ErrorPrefix}: protected path '.' cannot be worker-owned in parallel partition"; Paths = @(); ExplicitEmpty = $false }
+        }
+        if ($seen.Add($norm)) {
+            $list.Add($norm)
+        }
+    }
+    return @{ Error = ''; Paths = @($list); ExplicitEmpty = $false }
+}
+
+function ConvertTo-WaveTaskMap {
+    param(
+        [string]$Specs,
+        [string]$Root,
+        [string]$ErrorPrefix = 'WAVE_FAIL',
+        [string]$SpecLabel = 'WaveSpecs',
+        [string]$EmptyArgLabel = '-WaveSpecs',
+        [switch]$RejectProtected,
+        [switch]$RejectDot,
+        [switch]$AllowEmpty,
+        [hashtable]$AllowedTaskIds = $null
+    )
+    $order = New-Object System.Collections.Generic.List[string]
+    $map = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    $totalPaths = 0
+    $repoExists = ($Root -and (Test-Path -LiteralPath $Root -PathType Container))
+    $entryLabel = if ($SpecLabel -ceq 'WaveSpecs') { 'entry' } else { "$SpecLabel entry" }
+
+    foreach ($entry in ($Specs -split ';')) {
+        $trimEntry = $entry.Trim()
+        if (-not $trimEntry) { continue }
+        $eqIdx = $trimEntry.IndexOf('=')
+        if ($eqIdx -lt 0) { Fail "${ErrorPrefix}: invalid $entryLabel '$trimEntry' (expected TaskId=path1,path2)" 1 }
+        $tid = $trimEntry.Substring(0, $eqIdx).Trim()
+        $rawCsv = $trimEntry.Substring($eqIdx + 1)
+        if (-not $tid) { Fail "${ErrorPrefix}: empty task id in '$trimEntry'" 1 }
+        if ($tid -cnotmatch '\A[A-Za-z0-9._-]+\z') { Fail "${ErrorPrefix}: invalid task id '$tid'" 1 }
+        if ($map.ContainsKey($tid)) {
+            $dupSuffix = if ($SpecLabel -ceq 'WaveSpecs') { '' } else { " in $SpecLabel" }
+            Fail "${ErrorPrefix}: duplicate task id '$tid'$dupSuffix" 1
+        }
+        if ($null -ne $AllowedTaskIds -and (-not $AllowedTaskIds.ContainsKey($tid))) {
+            Fail "${ErrorPrefix}: unknown task id '$tid' in $SpecLabel" 1
+        }
+        $parsed = ConvertTo-WavePaths $rawCsv -RejectProtected:$RejectProtected -RejectDot:$RejectDot -ErrorPrefix $ErrorPrefix
+        if ($parsed.Error) { Fail $parsed.Error 1 }
+        $paths = @($parsed.Paths)
+        if ($paths.Count -lt 1 -and (-not ($AllowEmpty -and $parsed.ExplicitEmpty))) {
+            Fail "${ErrorPrefix}: task '$tid' has no owned paths" 1
+        }
+        if ($repoExists) {
+            foreach ($wp in $paths) {
+                if (-not (Test-WavePathContained $Root $wp)) {
+                    Fail "${ErrorPrefix}: unsafe symlink or junction alias in path '$wp'" 1
+                }
+            }
+        }
+        $order.Add($tid)
+        $map[$tid] = $paths
+        $totalPaths += $paths.Count
+    }
+    if ($order.Count -lt 1) { Fail "${ErrorPrefix}: no tasks in $EmptyArgLabel" 1 }
+    return @{ Order = $order; Map = $map; TotalPaths = $totalPaths }
+}
+
+function Test-WavePathContained([string]$Root, [string]$NormPath) {
+    if (-not $Root -or -not (Test-Path -LiteralPath $Root -PathType Container)) { return $true }
+    if (-not $NormPath -or $NormPath -ceq '.') { return $true }
+    $full = $null
+    try {
+        $full = Resolve-TargetPath $Root $NormPath
+    } catch {
+        return $false
+    }
+    if (-not $full) { return $false }
+    $rootSlash = ($Root -replace '\\', '/').TrimEnd('/')
+    $fullSlash = ($full -replace '\\', '/').TrimEnd('/')
+    $cmp = if ([IO.Path]::DirectorySeparatorChar -eq '\') {
+        [System.StringComparison]::OrdinalIgnoreCase
+    } else {
+        [System.StringComparison]::Ordinal
+    }
+    if ($rootSlash -eq '') {
+        if (-not $fullSlash.StartsWith('/', $cmp) -or $fullSlash -eq '') { return $false }
+    } else {
+        if ($fullSlash.Equals($rootSlash, $cmp) -or (-not $fullSlash.StartsWith("$rootSlash/", $cmp))) {
+            return $false
+        }
+    }
+    $segCur = $Root
+    foreach ($seg in ($NormPath -split '/')) {
+        if (-not $seg -or $seg -eq '.') { continue }
+        $segCur = Join-Path $segCur $seg
+        $segItem = Get-Item -LiteralPath $segCur -Force -ErrorAction SilentlyContinue
+        if ($segItem) {
+            if (Test-IsReparseItem $segItem) { return $false }
+            try {
+                $attrs = [IO.File]::GetAttributes($segCur)
+                if (($attrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+            } catch {
+                return $false
+            }
+        } elseif (Test-Path -LiteralPath $segCur) {
+            return $false
+        }
+    }
+    if (Test-Path -LiteralPath $full -PathType Container) {
+        $dirStack = New-Object System.Collections.Generic.Stack[string]
+        $dirStack.Push($full)
+        while ($dirStack.Count -gt 0) {
+            $dirCur = $dirStack.Pop()
+            foreach ($child in @(Get-ChildItem -LiteralPath $dirCur -Force -ErrorAction SilentlyContinue)) {
+                if ($null -eq $child) { continue }
+                if ($child.Name -ieq '.git') { continue }
+                if (Test-IsReparseItem $child) { return $false }
+                try {
+                    $cAttrs = [IO.File]::GetAttributes($child.FullName)
+                    if (($cAttrs -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+                } catch {
+                    return $false
+                }
+                if ($child.PSIsContainer) {
+                    $dirStack.Push($child.FullName)
+                }
+            }
+        }
+    }
+    return $true
+}
+
+function Test-WavePathOverlap([string]$PathA, [string]$PathB, [bool]$CaseInsensitive) {
+    $a = if ($CaseInsensitive) { $PathA.ToLowerInvariant() } else { $PathA }
+    $b = if ($CaseInsensitive) { $PathB.ToLowerInvariant() } else { $PathB }
+    if ($a -ceq $b) { return 'equal' }
+    if ($a -ceq '.' -or $b -ceq '.' -or $a.StartsWith("$b/", [System.StringComparison]::Ordinal) -or $b.StartsWith("$a/", [System.StringComparison]::Ordinal)) {
+        return 'prefix'
+    }
+    return 'none'
 }
 
 function Resolve-NamespaceDir([string]$Root, [string]$Ns) {
@@ -201,6 +396,27 @@ function Test-PathMatch([string]$Candidate, [string[]]$Patterns) {
         if ($p -and $Candidate.StartsWith("$p/", [System.StringComparison]::Ordinal)) { return $true }
     }
     return $false
+}
+
+function Test-OwnershipPathMatch([string]$Candidate, [string[]]$Patterns, [bool]$CaseInsensitive) {
+    if (-not $Candidate -or -not $Patterns -or $Patterns.Count -eq 0) { return $false }
+    $cmp = if ($CaseInsensitive) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    foreach ($p in $Patterns) {
+        if ($p -ceq '.') { return $true }
+        if ($Candidate.Equals($p, $cmp)) { return $true }
+        if ($p -and $Candidate.StartsWith("$p/", $cmp)) { return $true }
+    }
+    return $false
+}
+
+function Test-WorktreeRootOverlap([string]$RootA, [string]$RootB, [bool]$CaseInsensitive) {
+    $a = if ($CaseInsensitive) { $RootA.ToLowerInvariant() } else { $RootA }
+    $b = if ($CaseInsensitive) { $RootB.ToLowerInvariant() } else { $RootB }
+    if ($a -ceq $b) { return $true }
+    $aBase = $a.TrimEnd('/')
+    $bBase = $b.TrimEnd('/')
+    if ($aBase -eq '' -or $bBase -eq '') { return $false }
+    return ($a.StartsWith("$bBase/", [System.StringComparison]::Ordinal) -or $b.StartsWith("$aBase/", [System.StringComparison]::Ordinal))
 }
 
 function Format-WinArg([string]$Arg) {
@@ -633,10 +849,7 @@ function Get-ResolvedGitDir([string]$Root) {
     $res = Invoke-GitCommand $Root @('rev-parse', '--git-dir')
     $gd = $res.StdOut.Trim()
     if ($res.ExitCode -ne 0 -or -not $gd) { return $null }
-    if (-not [IO.Path]::IsPathRooted($gd)) {
-        $gd = Join-Path $Root ($gd -replace '/', '\')
-    }
-    return $gd
+    return (Resolve-TargetPath $Root $gd)
 }
 
 function Test-GitMidOperation([string]$Root) {
@@ -653,10 +866,11 @@ function Test-GitMidOperation([string]$Root) {
 function Resolve-TargetPath([string]$Root, [string]$PathArg) {
     $p = $PathArg.Trim()
     if (-not $p) { return $null }
-    if ([IO.Path]::IsPathRooted($p)) {
-        return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p)
+    $pNative = $p -replace '[\\/]', [IO.Path]::DirectorySeparatorChar
+    if ([IO.Path]::IsPathRooted($pNative)) {
+        return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($pNative)
     }
-    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $Root ($p -replace '/', '\')))
+    return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath((Join-Path $Root $pNative))
 }
 
 function Get-RepoRelativePath([string]$Root, [string]$FullPath) {
@@ -1391,10 +1605,116 @@ function Get-CanonicalGitCommonDir([string]$Dir) {
     $res = Invoke-GitCommand $Dir @('rev-parse', '--git-common-dir')
     $gd = $res.StdOut.Trim()
     if ($res.ExitCode -ne 0 -or -not $gd) { return $null }
-    if (-not [IO.Path]::IsPathRooted($gd)) {
-        $gd = Join-Path $Dir ($gd -replace '/', '\')
+    $resolved = Resolve-TargetPath $Dir $gd
+    if (-not $resolved) { return $null }
+    return (Normalize-PathValue $resolved)
+}
+
+function Get-CanonicalGitDir([string]$Dir) {
+    $res = Invoke-GitCommand $Dir @('rev-parse', '--git-dir')
+    $gd = $res.StdOut.Trim()
+    if ($res.ExitCode -ne 0 -or -not $gd) { return $null }
+    $resolved = Resolve-TargetPath $Dir $gd
+    if (-not $resolved) { return $null }
+    return (Normalize-PathValue $resolved)
+}
+
+function Normalize-LogicalPath([string]$RawPath) {
+    $resolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RawPath)
+    $baseRoot = [IO.Path]::GetPathRoot($resolved)
+    if ($resolved -eq '/' -or $resolved -eq '\') {
+        return '/'
+    } elseif ($resolved -match '^([A-Za-z]:)[\\/]?$') {
+        return "$($Matches[1])\"
+    } elseif (-not ($baseRoot -and $resolved.Equals($baseRoot, [System.StringComparison]::OrdinalIgnoreCase))) {
+        $trimmed = $resolved.TrimEnd('\', '/')
+        if (-not $trimmed) { return '/' }
+        return $trimmed
     }
-    return (Normalize-PathValue ([IO.Path]::GetFullPath($gd)))
+    return $resolved
+}
+
+function Find-ReparseInPathHierarchy([string]$AbsPath) {
+    if (-not $AbsPath) { return $null }
+    $clean = $AbsPath.TrimEnd('\', '/')
+    if (-not $clean) { return $null }
+    if ($clean -match '^[A-Za-z]:$') { return $null }
+    $root = [IO.Path]::GetPathRoot($clean)
+    if ($root -and $clean.Equals($root.TrimEnd('\', '/'), [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+    $relPart = if ($root) { $clean.Substring($root.Length).TrimStart('\', '/') } else { $clean.TrimStart('\', '/') }
+    $cur = if ($root) { $root } else { [string][IO.Path]::DirectorySeparatorChar }
+    $isMac = ($IsMacOS -eq $true)
+    foreach ($seg in ($relPart -split '[\\/]')) {
+        if (-not $seg -or $seg -eq '.') { continue }
+        $cur = Join-Path $cur $seg
+        if ($isMac -and ($cur -ceq '/var' -or $cur -ceq '/tmp')) {
+            continue
+        }
+        if (Test-IsReparsePath $cur) {
+            return $cur
+        }
+    }
+    return $null
+}
+
+function Resolve-SafeWorktreeIdentity([string]$RawPath, [string]$MissingCode, [string]$NotGitCode, [switch]$RequireHead) {
+    $logical = Normalize-LogicalPath $RawPath
+    $reparseHit = Find-ReparseInPathHierarchy $logical
+    if ($reparseHit) {
+        Fail "WORKTREE_UNSAFE: unsafe_reparse_root($reparseHit)" 2
+    }
+    if (-not (Test-Path -LiteralPath $logical -PathType Container)) {
+        Fail "WORKTREE_UNSAFE: ${MissingCode}($RawPath)" 2
+    }
+    $dotGit = Join-Path $logical '.git'
+    if (Test-IsReparsePath $dotGit) {
+        Fail "WORKTREE_UNSAFE: unsafe_reparse_root($dotGit)" 2
+    }
+    $topRes = Invoke-GitCommand $logical @('rev-parse', '--show-toplevel')
+    $topRaw = $topRes.StdOut.Trim()
+    if ($topRes.ExitCode -ne 0 -or -not $topRaw) {
+        if ($NotGitCode -ceq 'not_a_git_repo') {
+            Fail 'WORKTREE_UNSAFE: not_a_git_repo' 2
+        }
+        Fail "WORKTREE_UNSAFE: ${NotGitCode}($RawPath)" 2
+    }
+    $headRaw = ''
+    if ($RequireHead) {
+        $headRes = Invoke-GitCommand $logical @('rev-parse', 'HEAD')
+        $headRaw = $headRes.StdOut.Trim()
+        if ($headRes.ExitCode -ne 0 -or $headRaw -cnotmatch '\A[0-9a-f]{40}\z') {
+            Fail 'WORKTREE_UNSAFE: unborn_or_invalid_head' 2
+        }
+    }
+    $topResolved = Resolve-TargetPath $logical $topRaw
+    $topFull = Normalize-LogicalPath $topResolved
+    $topReparseHit = Find-ReparseInPathHierarchy $topFull
+    if ($topReparseHit) {
+        Fail "WORKTREE_UNSAFE: unsafe_reparse_root($topReparseHit)" 2
+    }
+    $topDotGit = Join-Path $topFull '.git'
+    if (Test-IsReparsePath $topDotGit) {
+        Fail "WORKTREE_UNSAFE: unsafe_reparse_root($topDotGit)" 2
+    }
+    $topNorm = Normalize-PathValue $topFull
+    $commonDir = Get-CanonicalGitCommonDir $logical
+    $gitDir = Get-CanonicalGitDir $logical
+    if (-not $commonDir -or -not $gitDir) {
+        if ($NotGitCode -ceq 'not_a_git_repo') {
+            Fail 'WORKTREE_UNSAFE: not_a_git_repo' 2
+        }
+        Fail "WORKTREE_UNSAFE: ${NotGitCode}($RawPath)" 2
+    }
+    return @{
+        Logical = $logical
+        TopFull = $topFull
+        TopNorm = $topNorm
+        CommonDir = $commonDir
+        GitDir = $gitDir
+        Head = $headRaw
+    }
 }
 
 function Get-TShirtSize([int]$FilesCount, [int]$LinesCount) {
@@ -3395,6 +3715,20 @@ switch ($Command) {
     }
 
     'mechanical-check' {
+        $hasWaveSpecs = [bool]($WaveSpecs -and $WaveSpecs.Trim())
+        $hasWorkerChanges = [bool]($WorkerChanges -and $WorkerChanges.Trim())
+        if ($hasWorkerChanges -and -not $hasWaveSpecs) {
+            Fail 'MECHANICAL_FAIL: -WorkerChanges requires -WaveSpecs' 1
+        }
+        $wsParsed = $null
+        $wcParsed = $null
+        if ($hasWaveSpecs) {
+            $wsParsed = ConvertTo-WaveTaskMap -Specs $WaveSpecs -Root $RepoRoot -ErrorPrefix 'MECHANICAL_FAIL' -SpecLabel 'WaveSpecs' -EmptyArgLabel '-WaveSpecs' -RejectProtected -RejectDot -AllowEmpty
+            if ($hasWorkerChanges) {
+                $wcParsed = ConvertTo-WaveTaskMap -Specs $WorkerChanges -Root $RepoRoot -ErrorPrefix 'MECHANICAL_FAIL' -SpecLabel 'WorkerChanges' -EmptyArgLabel '-WorkerChanges' -RejectDot -AllowEmpty -AllowedTaskIds $wsParsed.Map
+            }
+        }
+
         $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
         $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
         $obsoletesList = @(Split-CsvList $Obsoletes)
@@ -3598,6 +3932,69 @@ switch ($Command) {
             }
         }
 
+        $ovStatus = ''
+        $ovViolationsOut = ''
+        if ($hasWaveSpecs) {
+            if (-not $hasWorkerChanges) {
+                $ovStatus = 'UNVERIFIED_COMBINED_ONLY'
+                $ovViolationsOut = 'unverified'
+            } else {
+                $mcCaseInsensitive = ($env:OS -eq 'Windows_NT') -or ($IsMacOS -eq $true)
+                $cmpExact = if ($mcCaseInsensitive) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+                $ovViolations = New-Object System.Collections.Generic.List[string]
+                $attributedPaths = New-Object System.Collections.Generic.List[string]
+                foreach ($tid in $wcParsed.Order) {
+                    $tidOwned = @($wsParsed.Map[$tid])
+                    foreach ($wp in @($wcParsed.Map[$tid])) {
+                        $attributedPaths.Add($wp)
+                        if (($wp -imatch '^\.b3(/|$)') -or ($wp -imatch '(^|/)\.git(/|$)') -or ($wp -imatch '(^|/)\.gitmodules$')) {
+                            $ovViolations.Add("${wp}(${tid}->protected)")
+                            continue
+                        }
+                        if (Test-OwnershipPathMatch $wp $ignored $mcCaseInsensitive) {
+                            $ovViolations.Add("${wp}(${tid}->user_dirty)")
+                            continue
+                        }
+                        if (Test-OwnershipPathMatch $wp $tidOwned $mcCaseInsensitive) {
+                            continue
+                        }
+                        $otherOwners = New-Object System.Collections.Generic.List[string]
+                        foreach ($otherTid in $wsParsed.Order) {
+                            if ($otherTid -ceq $tid) { continue }
+                            if (Test-OwnershipPathMatch $wp @($wsParsed.Map[$otherTid]) $mcCaseInsensitive) {
+                                $otherOwners.Add($otherTid)
+                            }
+                        }
+                        if ($otherOwners.Count -gt 0) {
+                            $sortedOther = @(Sort-Ordinal $otherOwners.ToArray())
+                            $ovViolations.Add("${wp}(${tid}->$($sortedOther[0]))")
+                        } else {
+                            $ovViolations.Add("${wp}(${tid}->unowned)")
+                        }
+                    }
+                }
+                foreach ($gp in $allChanged) {
+                    $isAttrib = $false
+                    foreach ($ap in $attributedPaths) {
+                        if ($gp.Equals($ap, $cmpExact)) {
+                            $isAttrib = $true
+                            break
+                        }
+                    }
+                    if (-not $isAttrib) {
+                        $ovViolations.Add("${gp}(unattributed)")
+                    }
+                }
+                if ($ovViolations.Count -gt 0) {
+                    $ovStatus = 'VIOLATION'
+                    $ovViolationsOut = (Sort-Ordinal $ovViolations.ToArray()) -join ','
+                } else {
+                    $ovStatus = 'VERIFIED_PER_WORKER'
+                    $ovViolationsOut = 'none'
+                }
+            }
+        }
+
         $scOut = if ($scopeCreep.Count -gt 0) { (Sort-Ordinal $scopeCreep.ToArray()) -join ',' } else { 'none' }
         $loOut = if ($leftoverHits.Count -gt 0) { $leftoverHits -join ',' } else { 'none' }
         $obOut = if ($obsoleteHits.Count -gt 0) { (Sort-Ordinal $obsoleteHits.ToArray()) -join ',' } else { 'none' }
@@ -3607,7 +4004,11 @@ switch ($Command) {
         Write-Output "leftovers=$loOut"
         Write-Output "obsolete_hits=$obOut"
         Write-Output "safety_hits=$sfOut"
-        if ($scOut -eq 'none' -and $loOut -eq 'none' -and $obOut -eq 'none' -and $sfOut -eq 'none') {
+        if ($hasWaveSpecs) {
+            Write-Output "ownership_verification=$ovStatus"
+            Write-Output "ownership_violations=$ovViolationsOut"
+        }
+        if ($scOut -eq 'none' -and $loOut -eq 'none' -and $obOut -eq 'none' -and $sfOut -eq 'none' -and (-not $hasWaveSpecs -or $ovStatus -cne 'VIOLATION')) {
             Write-Output 'MECHANICAL_OK'
             exit 0
         }
@@ -3617,6 +4018,14 @@ switch ($Command) {
 
     'check-wave' {
         if (-not $WaveSpecs -or -not $WaveSpecs.Trim()) { Fail 'WAVE_FAIL: missing -WaveSpecs' 1 }
+        if (-not $RepoRoot) { Fail 'WAVE_FAIL: missing -RepoRoot' 1 }
+        $waveMaxConc = if ($PSBoundParameters.ContainsKey('MaxConcurrency')) { $MaxConcurrency } else { 3 }
+        if ($waveMaxConc -lt 1 -or $waveMaxConc -gt 4) {
+            Fail 'WAVE_FAIL: -MaxConcurrency must be between 1 and 4' 1
+        }
+        if (Find-ReparseInPathHierarchy $RepoRoot) {
+            Fail "WAVE_FAIL: unsafe symlink or junction alias in path '.'" 1
+        }
 
         if ($ExpectedBaseSha -and $ExpectedBaseSha.Trim()) {
             $expBase = $ExpectedBaseSha.Trim()
@@ -3634,28 +4043,13 @@ switch ($Command) {
             }
         }
 
-        $taskOrder = New-Object System.Collections.Generic.List[string]
-        $taskPaths = @{}
-        $totalPaths = 0
+        $repoExists = (Test-Path -LiteralPath $RepoRoot -PathType Container)
+        $waveParsed = ConvertTo-WaveTaskMap -Specs $WaveSpecs -Root $RepoRoot -ErrorPrefix 'WAVE_FAIL' -SpecLabel 'WaveSpecs' -EmptyArgLabel '-WaveSpecs' -RejectProtected -RejectDot:$Partition -AllowEmpty
+        $taskOrder = $waveParsed.Order
+        $taskPaths = $waveParsed.Map
+        $totalPaths = $waveParsed.TotalPaths
 
-        foreach ($entry in ($WaveSpecs -split ';')) {
-            $trimEntry = $entry.Trim()
-            if (-not $trimEntry) { continue }
-            $eqIdx = $trimEntry.IndexOf('=')
-            if ($eqIdx -lt 0) { Fail "WAVE_FAIL: invalid entry '$trimEntry' (expected TaskId=path1,path2)" 1 }
-            $tid = $trimEntry.Substring(0, $eqIdx).Trim()
-            $rawCsv = $trimEntry.Substring($eqIdx + 1)
-            if (-not $tid) { Fail "WAVE_FAIL: empty task id in '$trimEntry'" 1 }
-            if ($taskPaths.ContainsKey($tid)) { Fail "WAVE_FAIL: duplicate task id '$tid'" 1 }
-            $paths = @(Split-CsvList $rawCsv -AsPaths)
-            if ($paths.Count -lt 1) { Fail "WAVE_FAIL: task '$tid' has no owned paths" 1 }
-            $taskOrder.Add($tid)
-            $taskPaths[$tid] = $paths
-            $totalPaths += $paths.Count
-        }
-        if ($taskOrder.Count -lt 1) { Fail 'WAVE_FAIL: no tasks in -WaveSpecs' 1 }
-
-        $readPaths = @{}
+        $readPaths = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
         if ($WaveReads -and $WaveReads.Trim()) {
             foreach ($entry in ($WaveReads -split ';')) {
                 $trimEntry = $entry.Trim()
@@ -3665,50 +4059,358 @@ switch ($Command) {
                 $rtid = $trimEntry.Substring(0, $eqIdx).Trim()
                 $rCsv = $trimEntry.Substring($eqIdx + 1)
                 if (-not $rtid) { Fail "WAVE_FAIL: empty task id in WaveReads '$trimEntry'" 1 }
+                if ($rtid -cnotmatch '\A[A-Za-z0-9._-]+\z') { Fail "WAVE_FAIL: invalid task id '$rtid'" 1 }
                 if ($readPaths.ContainsKey($rtid)) { Fail "WAVE_FAIL: duplicate task id '$rtid' in WaveReads" 1 }
-                $rArr = @(Split-CsvList $rCsv -AsPaths)
+                if (-not $taskPaths.ContainsKey($rtid)) { Fail "WAVE_FAIL: unknown task id '$rtid' in WaveReads" 1 }
+                $parsedR = ConvertTo-WavePaths $rCsv
+                if ($parsedR.Error) { Fail $parsedR.Error 1 }
+                $rArr = @($parsedR.Paths)
+                if ($repoExists) {
+                    foreach ($rp in $rArr) {
+                        if (-not (Test-WavePathContained $RepoRoot $rp)) {
+                            Fail "WAVE_FAIL: unsafe symlink or junction alias in path '$rp'" 1
+                        }
+                    }
+                }
                 $readPaths[$rtid] = $rArr
             }
         }
 
-        $conflicts = New-Object System.Collections.Generic.List[string]
-        for ($i = 0; $i -lt $taskOrder.Count; $i++) {
-            for ($j = $i + 1; $j -lt $taskOrder.Count; $j++) {
-                $ti = $taskOrder[$i]
-                $tj = $taskOrder[$j]
-                foreach ($pi in $taskPaths[$ti]) {
-                    foreach ($pj in $taskPaths[$tj]) {
-                        if ($pi -eq $pj) {
-                            $conflicts.Add("${pi}(${ti},${tj})")
-                        } elseif ($pi -eq '.' -or $pj -eq '.' -or $pi.StartsWith("$pj/") -or $pj.StartsWith("$pi/")) {
-                            $conflicts.Add("${pi}<->${pj}(${ti},${tj})")
-                        }
-                    }
+        $waveCaseInsensitive = ($env:OS -eq 'Windows_NT') -or ($IsMacOS -eq $true)
+        $protectedList = @()
+        if ($ProtectedPaths -and $ProtectedPaths.Trim()) {
+            $parsedProt = ConvertTo-WavePaths $ProtectedPaths
+            if ($parsedProt.Error) { Fail $parsedProt.Error 1 }
+            $protectedList = @($parsedProt.Paths)
+            foreach ($prot in $protectedList) {
+                if ($prot -ceq '.') {
+                    Fail "WAVE_FAIL: invalid protected path '.'" 1
+                }
+                if ($repoExists -and (-not (Test-WavePathContained $RepoRoot $prot))) {
+                    Fail "WAVE_FAIL: unsafe symlink or junction alias in path '$prot'" 1
                 }
             }
         }
 
         foreach ($ti in $taskOrder) {
-            foreach ($tj in @($readPaths.Keys)) {
-                if ($ti -ceq $tj) { continue }
+            foreach ($pi in $taskPaths[$ti]) {
+                foreach ($prot in $protectedList) {
+                    $ovProt = Test-WavePathOverlap $pi $prot $waveCaseInsensitive
+                    if ($ovProt -eq 'equal' -or $ovProt -eq 'prefix') {
+                        Fail "WAVE_FAIL: protected path '$pi' overlaps single-writer boundary '$prot'" 1
+                    }
+                }
+            }
+        }
+
+        $nTasks = $taskOrder.Count
+        $taskIndexMap = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        for ($idx = 0; $idx -lt $nTasks; $idx++) {
+            $taskIndexMap[$taskOrder[$idx]] = $idx
+        }
+        $hasConflict = New-Object 'bool[,]' $nTasks, $nTasks
+        $conflicts = New-Object System.Collections.Generic.List[string]
+
+        for ($i = 0; $i -lt $nTasks; $i++) {
+            for ($j = $i + 1; $j -lt $nTasks; $j++) {
+                $ti = $taskOrder[$i]
+                $tj = $taskOrder[$j]
                 foreach ($pi in $taskPaths[$ti]) {
-                    foreach ($rj in $readPaths[$tj]) {
-                        if ($pi -eq $rj) {
-                            $conflicts.Add("rw:${pi}(${ti}->${tj})")
-                        } elseif ($pi -eq '.' -or $rj -eq '.' -or $pi.StartsWith("$rj/") -or $rj.StartsWith("$pi/")) {
-                            $conflicts.Add("rw:${pi}<->${rj}(${ti}->${tj})")
+                    foreach ($pj in $taskPaths[$tj]) {
+                        $ov = Test-WavePathOverlap $pi $pj $waveCaseInsensitive
+                        if ($ov -eq 'equal') {
+                            $conflicts.Add("${pi}(${ti},${tj})")
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
+                        } elseif ($ov -eq 'prefix') {
+                            $conflicts.Add("${pi}<->${pj}(${ti},${tj})")
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
                         }
                     }
                 }
             }
         }
 
-        if ($conflicts.Count -gt 0) {
-            $sortedConflicts = (Sort-Ordinal $conflicts.ToArray()) -join ', '
-            Fail "WAVE_CONFLICT: $sortedConflicts" 2
+        for ($i = 0; $i -lt $nTasks; $i++) {
+            $ti = $taskOrder[$i]
+            foreach ($tj in @($readPaths.Keys)) {
+                if ($ti -ceq $tj) { continue }
+                $j = [int]$taskIndexMap[$tj]
+                foreach ($pi in $taskPaths[$ti]) {
+                    foreach ($rj in $readPaths[$tj]) {
+                        $ov = Test-WavePathOverlap $pi $rj $waveCaseInsensitive
+                        if ($ov -eq 'equal') {
+                            $conflicts.Add("rw:${pi}(${ti}->${tj})")
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
+                        } elseif ($ov -eq 'prefix') {
+                            $conflicts.Add("rw:${pi}<->${rj}(${ti}->${tj})")
+                            $hasConflict[$i, $j] = $true
+                            $hasConflict[$j, $i] = $true
+                        }
+                    }
+                }
+            }
         }
-        Write-Output "WAVE_OK: disjoint ($($taskOrder.Count) tasks, $totalPaths paths)"
-        exit 0
+
+        $runDirtyCheck = [bool]($CheckDirtyScope -or ($IgnoreDirtyPaths -and $IgnoreDirtyPaths.Trim()) -or ($Partition -and $ExpectedBaseSha -and $ExpectedBaseSha.Trim()))
+        $dirtyBlocked = New-Object 'bool[]' $nTasks
+        $userDirtyList = New-Object System.Collections.Generic.List[string]
+        $unexpectedDirtyList = New-Object System.Collections.Generic.List[string]
+        $dirtyScopeVal = 'not_checked'
+        $userDirtyCsv = 'none'
+        $unexpectedDirtyCsv = 'none'
+        $blockedTasksCsv = 'none'
+
+        if ($runDirtyCheck) {
+            $ignoreList = @()
+            if ($IgnoreDirtyPaths -and $IgnoreDirtyPaths.Trim()) {
+                $parsedIgn = ConvertTo-WavePaths $IgnoreDirtyPaths
+                if ($parsedIgn.Error) { Fail $parsedIgn.Error 1 }
+                $ignoreList = @($parsedIgn.Paths)
+                foreach ($ign in $ignoreList) {
+                    if ($ign -ceq '.') {
+                        Fail "WAVE_FAIL: invalid ignore-dirty path '.'" 1
+                    }
+                    if ($repoExists -and (-not (Test-WavePathContained $RepoRoot $ign))) {
+                        Fail "WAVE_FAIL: unsafe symlink or junction alias in path '$ign'" 1
+                    }
+                }
+            }
+
+            $midOpDirty = Test-GitMidOperation $RepoRoot
+            if ($midOpDirty) {
+                Fail "WAVE_BASE_MISMATCH: git_op_in_progress($midOpDirty)" 2
+            }
+
+            $diffHeadRes = Invoke-GitCommand $RepoRoot @('diff', '--no-renames', '--name-only', 'HEAD', '--')
+            if ($diffHeadRes.ExitCode -ne 0) {
+                Fail 'WAVE_BASE_MISMATCH: git diff HEAD failed' 2
+            }
+            $diffCachedRes = Invoke-GitCommand $RepoRoot @('diff', '--no-renames', '--cached', '--name-only', '--')
+            if ($diffCachedRes.ExitCode -ne 0) {
+                Fail 'WAVE_BASE_MISMATCH: git diff HEAD failed' 2
+            }
+            $lsUntrackedRes = Invoke-GitCommand $RepoRoot @('ls-files', '--others', '--exclude-standard')
+            if ($lsUntrackedRes.ExitCode -ne 0) {
+                Fail 'WAVE_BASE_MISMATCH: git diff HEAD failed' 2
+            }
+
+            $dirtySeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+            foreach ($chunk in @($diffHeadRes.StdOut, $diffCachedRes.StdOut, $lsUntrackedRes.StdOut)) {
+                if (-not $chunk) { continue }
+                foreach ($rawLine in ($chunk -split "\r?\n")) {
+                    $dp = Normalize-PathValue $rawLine
+                    if (-not $dp) { continue }
+                    if (Test-CheckpointPath $dp) { continue }
+                    [void]$dirtySeen.Add($dp)
+                }
+            }
+
+            $allDirtySorted = Sort-Ordinal ([string[]]$dirtySeen)
+            $dirtyEntries = New-Object System.Collections.Generic.List[hashtable]
+            foreach ($d in $allDirtySorted) {
+                $dCmp = if ($waveCaseInsensitive) { $d.ToLowerInvariant() } else { $d }
+                $isUserDirty = $false
+                foreach ($ign in $ignoreList) {
+                    $ignCmp = if ($waveCaseInsensitive) { $ign.ToLowerInvariant() } else { $ign }
+                    if ($dCmp -ceq $ignCmp -or (($ign -cne '.') -and $dCmp.StartsWith("$ignCmp/", [System.StringComparison]::Ordinal))) {
+                        $isUserDirty = $true
+                        break
+                    }
+                }
+                if ($isUserDirty) {
+                    $userDirtyList.Add($d)
+                    $dirtyEntries.Add(@{ Path = $d; Tag = 'USER_DIRTY' })
+                } else {
+                    $unexpectedDirtyList.Add($d)
+                    $dirtyEntries.Add(@{ Path = $d; Tag = 'UNEXPECTED_DIRTY' })
+                }
+            }
+
+            for ($i = 0; $i -lt $nTasks; $i++) {
+                $ti = $taskOrder[$i]
+                $taskAllPaths = New-Object System.Collections.Generic.List[string]
+                foreach ($wp in $taskPaths[$ti]) { $taskAllPaths.Add($wp) }
+                if ($readPaths.ContainsKey($ti)) {
+                    foreach ($rp in $readPaths[$ti]) { $taskAllPaths.Add($rp) }
+                }
+                foreach ($de in $dirtyEntries) {
+                    foreach ($tp in $taskAllPaths) {
+                        $ov = Test-WavePathOverlap $de.Path $tp $waveCaseInsensitive
+                        if ($ov -eq 'equal' -or $ov -eq 'prefix') {
+                            $dirtyBlocked[$i] = $true
+                            $conflicts.Add("dirty:$($de.Path)($($de.Tag)->${ti})")
+                            break
+                        }
+                    }
+                }
+            }
+
+            if ($unexpectedDirtyList.Count -gt 0) {
+                $dirtyScopeVal = 'unexpected'
+            } elseif ($userDirtyList.Count -gt 0) {
+                $dirtyScopeVal = 'user_only'
+            } else {
+                $dirtyScopeVal = 'clean'
+            }
+            if ($userDirtyList.Count -gt 0) {
+                $userDirtyCsv = ($userDirtyList.ToArray()) -join ','
+            }
+            if ($unexpectedDirtyList.Count -gt 0) {
+                $unexpectedDirtyCsv = ($unexpectedDirtyList.ToArray()) -join ','
+            }
+            $blockedNames = New-Object System.Collections.Generic.List[string]
+            for ($i = 0; $i -lt $nTasks; $i++) {
+                if ($dirtyBlocked[$i]) { $blockedNames.Add($taskOrder[$i]) }
+            }
+            if ($blockedNames.Count -gt 0) {
+                $blockedTasksCsv = ($blockedNames.ToArray()) -join ','
+            }
+        }
+
+        if (-not $Partition) {
+            if ($runDirtyCheck -and $unexpectedDirtyList.Count -gt 0) {
+                Fail "WAVE_BASE_MISMATCH: unexpected_dirty($unexpectedDirtyCsv)" 2
+            }
+            $anyDirtyBlocked = $false
+            for ($i = 0; $i -lt $nTasks; $i++) {
+                if ($dirtyBlocked[$i]) { $anyDirtyBlocked = $true; break }
+            }
+            if ($anyDirtyBlocked -or $conflicts.Count -gt 0) {
+                $sortedConflicts = (Sort-Ordinal $conflicts.ToArray()) -join ', '
+                Fail "WAVE_CONFLICT: $sortedConflicts" 2
+            }
+            Write-Output "WAVE_OK: disjoint ($nTasks tasks, $totalPaths paths)"
+            exit 0
+        }
+
+        $eligibleIndices = New-Object System.Collections.Generic.List[int]
+        for ($i = 0; $i -lt $nTasks; $i++) {
+            if (-not $dirtyBlocked[$i]) { $eligibleIndices.Add($i) }
+        }
+        $eligibleCount = $eligibleIndices.Count
+        $blockedCount = $nTasks - $eligibleCount
+
+        $waves = New-Object System.Collections.Generic.List[object]
+        foreach ($i in $eligibleIndices) {
+            $placed = $false
+            for ($w = 0; $w -lt $waves.Count; $w++) {
+                $members = $waves[$w]
+                if ($members.Count -ge $waveMaxConc) { continue }
+                $ok = $true
+                foreach ($m in $members) {
+                    if ($hasConflict[$i, $m]) { $ok = $false; break }
+                }
+                if ($ok) {
+                    $members.Add($i)
+                    $placed = $true
+                    break
+                }
+            }
+            if (-not $placed) {
+                $newWave = New-Object System.Collections.Generic.List[int]
+                $newWave.Add($i)
+                $waves.Add($newWave)
+            }
+        }
+
+        $wCount = $waves.Count
+        $maxParallel = 0
+        foreach ($waveMembers in $waves) {
+            if ($waveMembers.Count -gt $maxParallel) { $maxParallel = $waveMembers.Count }
+        }
+        $conflictsCsv = if ($conflicts.Count -gt 0) { (Sort-Ordinal $conflicts.ToArray()) -join ',' } else { 'none' }
+
+        Write-Output "dirty_scope=$dirtyScopeVal"
+        Write-Output "user_dirty=$userDirtyCsv"
+        Write-Output "unexpected_dirty=$unexpectedDirtyCsv"
+        Write-Output "blocked_tasks=$blockedTasksCsv"
+        Write-Output "wave_count=$wCount"
+        Write-Output "max_concurrency=$waveMaxConc"
+        Write-Output "max_parallel=$maxParallel"
+        Write-Output "conflicts=$conflictsCsv"
+
+        for ($w = 0; $w -lt $wCount; $w++) {
+            $waveMembers = $waves[$w]
+            $cnt = $waveMembers.Count
+            $tNames = @()
+            foreach ($m in $waveMembers) { $tNames += $taskOrder[$m] }
+            $tasksCsv = $tNames -join ','
+            if ($cnt -ge 2) {
+                Write-Output "wave|$($w + 1)|PARALLEL|agents=$cnt|tasks=$tasksCsv|reason=independent_ready_tasks"
+            } else {
+                $t = $waveMembers[0]
+                if ($eligibleCount -eq 1) {
+                    $wReason = 'single_ready_task'
+                } else {
+                    $bounded = $false
+                    for ($k = 0; $k -lt $w; $k++) {
+                        $prior = $waves[$k]
+                        if ($prior.Count -eq $waveMaxConc) {
+                            $priorConflict = $false
+                            foreach ($pm in $prior) {
+                                if ($hasConflict[$t, $pm]) { $priorConflict = $true; break }
+                            }
+                            if (-not $priorConflict) {
+                                $bounded = $true
+                                break
+                            }
+                        }
+                    }
+                    if (-not $bounded -and $waveMaxConc -eq 1) {
+                        $anyConf = $false
+                        foreach ($u in $eligibleIndices) {
+                            if ($u -ne $t -and $hasConflict[$t, $u]) { $anyConf = $true; break }
+                        }
+                        if (-not $anyConf) { $bounded = $true }
+                    }
+                    $wReason = if ($bounded) { 'bounded_concurrency' } else { 'shared_write_conflict' }
+                }
+                Write-Output "wave|$($w + 1)|SEQUENTIAL|agents=1|tasks=$tasksCsv|reason=$wReason"
+            }
+        }
+
+        $eligibleHasPairConflict = $false
+        for ($ei = 0; $ei -lt $eligibleCount; $ei++) {
+            for ($ej = $ei + 1; $ej -lt $eligibleCount; $ej++) {
+                if ($hasConflict[$eligibleIndices[$ei], $eligibleIndices[$ej]]) {
+                    $eligibleHasPairConflict = $true
+                    break
+                }
+            }
+            if ($eligibleHasPairConflict) { break }
+        }
+
+        if ($runDirtyCheck -and $unexpectedDirtyList.Count -gt 0) {
+            Write-Output "WAVE_BASE_MISMATCH: unexpected_dirty($unexpectedDirtyCsv)"
+            exit 2
+        } elseif ($eligibleCount -eq 0) {
+            Write-Output "WAVE_SEQUENTIAL: waves=0 max_parallel=0 reason=dirty_scope_conflict"
+            exit 2
+        } elseif ($blockedCount -gt 0) {
+            if ($maxParallel -ge 2) {
+                Write-Output "WAVE_PARTITIONED: waves=$wCount max_parallel=$maxParallel reason=dirty_scope_partial_split"
+                exit 0
+            } else {
+                Write-Output "WAVE_SEQUENTIAL: waves=$wCount max_parallel=1 reason=dirty_scope_partial_split"
+                if (-not $eligibleHasPairConflict) { exit 0 } else { exit 2 }
+            }
+        } elseif ($wCount -eq 1 -and $conflictsCsv -eq 'none') {
+            Write-Output "WAVE_OK: disjoint ($nTasks tasks, $totalPaths paths)"
+            exit 0
+        } elseif ($maxParallel -ge 2) {
+            $termReason = if ($conflictsCsv -eq 'none') { 'bounded_concurrency_split' } else { 'conflicting_wave_split' }
+            Write-Output "WAVE_PARTITIONED: waves=$wCount max_parallel=$maxParallel reason=$termReason"
+            exit 0
+        } elseif ($conflictsCsv -eq 'none') {
+            Write-Output "WAVE_SEQUENTIAL: waves=$wCount max_parallel=1 reason=bounded_concurrency"
+            exit 0
+        } else {
+            Write-Output "WAVE_SEQUENTIAL: waves=$wCount max_parallel=1 reason=shared_write_conflict"
+            exit 2
+        }
     }
 
     'new-run' {
@@ -4227,48 +4929,89 @@ switch ($Command) {
     }
 
     'check-worktree' {
-        if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
-            Fail "WORKTREE_UNSAFE: missing_repo_root($RepoRoot)" 2
-        }
-        $topRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--show-toplevel')
-        $topRaw = $topRes.StdOut.Trim()
-        $headRes = Invoke-GitCommand $RepoRoot @('rev-parse', 'HEAD')
-        $headRaw = $headRes.StdOut.Trim()
-        if ($topRes.ExitCode -ne 0 -or -not $topRaw) {
-            Fail 'WORKTREE_UNSAFE: not_a_git_repo' 2
-        }
-        if ($headRes.ExitCode -ne 0 -or $headRaw -notmatch '^[0-9a-f]{40}$') {
-            Fail 'WORKTREE_UNSAFE: unborn_or_invalid_head' 2
-        }
-        $actualRootNorm = Normalize-PathValue $topRaw
+        $repoId = Resolve-SafeWorktreeIdentity $RepoRoot 'missing_repo_root' 'not_a_git_repo' -RequireHead
+        $actualRootNorm = $repoId.TopNorm
+        $actCommon = $repoId.CommonDir
+        $actGitDir = $repoId.GitDir
+        $headRaw = $repoId.Head
 
-        $midOp = Test-GitMidOperation $RepoRoot
+        $midOp = Test-GitMidOperation $repoId.Logical
         if ($midOp) {
             Fail "WORKTREE_UNSAFE: git_op_in_progress($midOp)" 2
         }
 
-        if ($ExpectedRoot -and $ExpectedRoot.Trim()) {
-            $expDir = $ExpectedRoot.Trim()
-            if (-not (Test-Path -LiteralPath $expDir -PathType Container)) {
-                Fail "WORKTREE_UNSAFE: expected_root_missing($expDir)" 2
-            }
-            $expTopRes = Invoke-GitCommand $expDir @('rev-parse', '--show-toplevel')
-            $expTopRaw = $expTopRes.StdOut.Trim()
-            if ($expTopRes.ExitCode -ne 0 -or -not $expTopRaw) {
-                Fail "WORKTREE_UNSAFE: expected_root_not_git($expDir)" 2
-            }
-            $expTopNorm = Normalize-PathValue $expTopRaw
-            $actCommon = Get-CanonicalGitCommonDir $RepoRoot
-            $expCommon = Get-CanonicalGitCommonDir $expDir
+        $isWin = ([IO.Path]::DirectorySeparatorChar -eq '\')
+        $isCaseInsensitive = $isWin -or ($IsMacOS -eq $true)
+        $sameGitDir = if ($isCaseInsensitive) { $actGitDir -ieq $actCommon } else { $actGitDir -ceq $actCommon }
+        $isLinked = if (-not $sameGitDir) { 'true' } else { 'false' }
 
-            $isWin = ([IO.Path]::DirectorySeparatorChar -eq '\')
-            $topSame = if ($isWin) { $actualRootNorm -ieq $expTopNorm } else { $actualRootNorm -ceq $expTopNorm }
-            $commonSame = $false
+        $peerRawTrim = if ($PeerRoots) { $PeerRoots.Trim() } else { '' }
+        $peerList = New-Object System.Collections.Generic.List[string]
+        if ($peerRawTrim -and $peerRawTrim -cne '[]' -and $peerRawTrim -cne 'none') {
+            $peerInner = if ($peerRawTrim.StartsWith('[') -and $peerRawTrim.EndsWith(']')) {
+                $peerRawTrim.Substring(1, $peerRawTrim.Length - 2)
+            } else {
+                $peerRawTrim
+            }
+            foreach ($pPart in ($peerInner -split ',')) {
+                $pTok = $pPart.Trim()
+                if (-not $pTok -or $pTok -ceq 'none') { continue }
+                $peerList.Add($pTok)
+            }
+        }
+
+        $hasExpectedRoot = [bool]($ExpectedRoot -and $ExpectedRoot.Trim())
+        if ($RequireIsolated -and -not $hasExpectedRoot) {
+            Fail 'WORKTREE_UNSAFE: missing_expected_root_for_isolation' 2
+        }
+        $checkIsolation = [bool]($RequireIsolated -or ($hasExpectedRoot -and $peerList.Count -gt 0))
+
+        $expTopNorm = ''
+        $commonSame = $false
+        if ($hasExpectedRoot) {
+            $expId = Resolve-SafeWorktreeIdentity ($ExpectedRoot.Trim()) 'expected_root_missing' 'expected_root_not_git'
+            $expTopNorm = $expId.TopNorm
+            $expCommon = $expId.CommonDir
+
+            $topSame = if ($isCaseInsensitive) { $actualRootNorm -ieq $expTopNorm } else { $actualRootNorm -ceq $expTopNorm }
             if ($actCommon -and $expCommon) {
-                $commonSame = if ($isWin) { $actCommon -ieq $expCommon } else { $actCommon -ceq $expCommon }
+                $commonSame = if ($isCaseInsensitive) { $actCommon -ieq $expCommon } else { $actCommon -ceq $expCommon }
             }
             if (-not $topSame -and -not $commonSame) {
                 Fail "WORKTREE_UNSAFE: root_mismatch(expected=$expTopNorm,actual=$actualRootNorm)" 2
+            }
+            if ($checkIsolation) {
+                if (Test-WorktreeRootOverlap $actualRootNorm $expTopNorm $isCaseInsensitive) {
+                    Fail "WORKTREE_UNSAFE: parent_root_reused_or_nested(parent=$expTopNorm,worker=$actualRootNorm)" 2
+                }
+                if ($isLinked -cne 'true' -or -not $commonSame) {
+                    Fail "WORKTREE_UNSAFE: not_isolated_linked_worktree(parent=$expTopNorm,worker=$actualRootNorm)" 2
+                }
+            }
+        }
+
+        if ($peerList.Count -gt 0) {
+            $seenTops = New-Object System.Collections.Generic.List[string]
+            $seenTops.Add($actualRootNorm)
+            foreach ($peer in $peerList) {
+                $peerId = Resolve-SafeWorktreeIdentity $peer 'missing_peer_root' 'peer_not_git'
+                $peerTopNorm = $peerId.TopNorm
+                $peerCommon = $peerId.CommonDir
+                $peerCommonSame = if ($isCaseInsensitive) { $actCommon -ieq $peerCommon } else { $actCommon -ceq $peerCommon }
+                if (-not $peerCommonSame) {
+                    Fail "WORKTREE_UNSAFE: peer_repo_mismatch(expected=$actCommon,actual=$peerCommon)" 2
+                }
+                if ($checkIsolation -and $hasExpectedRoot) {
+                    if (Test-WorktreeRootOverlap $peerTopNorm $expTopNorm $isCaseInsensitive) {
+                        Fail "WORKTREE_UNSAFE: parent_root_reused_or_nested(parent=$expTopNorm,worker=$peerTopNorm)" 2
+                    }
+                }
+                foreach ($prevTop in $seenTops) {
+                    if (Test-WorktreeRootOverlap $peerTopNorm $prevTop $isCaseInsensitive) {
+                        Fail "WORKTREE_UNSAFE: duplicate_or_nested_worktree($peerTopNorm)" 2
+                    }
+                }
+                $seenTops.Add($peerTopNorm)
             }
         }
 
@@ -4279,7 +5022,12 @@ switch ($Command) {
             }
         }
 
-        Write-Output "WORKTREE_OK: root=$actualRootNorm head=$headRaw"
+        $isIsolated = if ($hasExpectedRoot -and $commonSame -and ($isLinked -ceq 'true') -and (-not (Test-WorktreeRootOverlap $actualRootNorm $expTopNorm $isCaseInsensitive))) {
+            'true'
+        } else {
+            'false'
+        }
+        Write-Output "WORKTREE_OK: root=$actualRootNorm head=$headRaw common_dir=$actCommon linked=$isLinked isolated=$isIsolated"
         exit 0
     }
 
@@ -4911,7 +5659,7 @@ switch ($Command) {
         }
 
         $autoMerge = 'disabled'
-        $protectedPaths = @()
+        $polProtectedPaths = @()
         $allowProtected = $false
         $requireCi = $true
         $requireReview = $true
@@ -4944,7 +5692,7 @@ switch ($Command) {
             $allowProtected = $polParsed.AllowProtected
             $requireCi = $polParsed.RequireCi
             $requireReview = $polParsed.RequireReview
-            $protectedPaths = $polParsed.ProtectedPaths
+            $polProtectedPaths = $polParsed.ProtectedPaths
             $allowedTargetBranches = $polParsed.AllowedTargetBranches
         }
 
@@ -4976,10 +5724,10 @@ switch ($Command) {
         }
         $policyProtectedArr = @($policyProtected)
 
-        if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -gt 0) {
+        if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -gt 0) {
             $protHits = New-Object System.Collections.Generic.List[string]
             foreach ($cp in $changedArr) {
-                if (Test-ProtectedPathMatchCI $cp $protectedPaths) {
+                if (Test-ProtectedPathMatchCI $cp $polProtectedPaths) {
                     if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
                 }
             }
@@ -5009,7 +5757,7 @@ switch ($Command) {
             if ($prSt -cne 'OPEN') { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
 
             if ($autoMerge -cne 'authorized') {
-                if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
+                if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
                     Fail 'MERGE_BLOCKED: missing_changed_paths' 1
                 }
                 if ($BaseSha -and $BaseSha.Trim()) {

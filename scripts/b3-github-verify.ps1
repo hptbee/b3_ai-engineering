@@ -344,7 +344,7 @@ if ($rulesRes.ExitCode -eq 0) {
             }
         }
     }
-} elseif (-not (Test-HttpStatus $rulesRes 404)) {
+} elseif (-not (Test-HttpStatus $rulesRes 404) -and -not (Test-HttpStatus $rulesRes 403)) {
     Fail-GhVerify 'branch_rules_unavailable'
 }
 
