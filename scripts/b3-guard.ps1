@@ -5502,7 +5502,7 @@ switch ($Command) {
         }
 
         $autoMerge = 'disabled'
-        $protectedPaths = @()
+        $polProtectedPaths = @()
         $allowProtected = $false
         $requireCi = $true
         $requireReview = $true
@@ -5535,7 +5535,7 @@ switch ($Command) {
             $allowProtected = $polParsed.AllowProtected
             $requireCi = $polParsed.RequireCi
             $requireReview = $polParsed.RequireReview
-            $protectedPaths = $polParsed.ProtectedPaths
+            $polProtectedPaths = $polParsed.ProtectedPaths
             $allowedTargetBranches = $polParsed.AllowedTargetBranches
         }
 
@@ -5567,10 +5567,10 @@ switch ($Command) {
         }
         $policyProtectedArr = @($policyProtected)
 
-        if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -gt 0) {
+        if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -gt 0) {
             $protHits = New-Object System.Collections.Generic.List[string]
             foreach ($cp in $changedArr) {
-                if (Test-ProtectedPathMatchCI $cp $protectedPaths) {
+                if (Test-ProtectedPathMatchCI $cp $polProtectedPaths) {
                     if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
                 }
             }
@@ -5600,7 +5600,7 @@ switch ($Command) {
             if ($prSt -cne 'OPEN') { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
 
             if ($autoMerge -cne 'authorized') {
-                if ($protectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
+                if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
                     Fail 'MERGE_BLOCKED: missing_changed_paths' 1
                 }
                 if ($BaseSha -and $BaseSha.Trim()) {
