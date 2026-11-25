@@ -42,7 +42,8 @@ In practice:
 
 - **Context minimization:** Load only the smallest relevant skill, diff/delta, or context packet rather than full-repo dumps.
 - **Total-cost awareness:** Account for orchestrator coordination, wave checks, retries, verification, independent review, and merge/integration—not just worker build time.
-- **Safe bounded parallelism:** Dispatch parallel workers only when tasks are dependency-free, write/read-disjoint, isolated, and large enough to amortize orchestration overhead; fall back to sequential execution otherwise.
+- **Safe bounded parallelism:** Dispatch parallel workers only when tasks are dependency-free, write/read-disjoint, verified safe, and large enough to amortize orchestration overhead; fall back to sequential execution otherwise.
+- **Adaptive least-expensive-safe isolation:** Select the lightest mode that satisfies safety (`SHARED_READ_ONLY` for read-only work, `SHARED_DISJOINT_WRITES` in one worktree only when strictly disjoint and parent-validated, `ISOLATED_WRITES` via verified worktrees when risk or side effects require it, or `SEQUENTIAL` fallback) — never create worktrees for read-only agents or claim stronger isolation than the host enforces.
 
 ## Operational Cross-Links
 

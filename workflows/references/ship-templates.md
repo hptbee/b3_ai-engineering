@@ -15,15 +15,15 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Invariants
 - INV1: <cross-task invariant>
 ## Shared contracts
-- <none, or exact verbatim API/type/event block copied to dependent tasks>
+- <none, or verbatim API/type/event contract block>
 ## Technical context
-- canonical_checks: <CI / hook / manifest build+typecheck+lint+test commands>
+- canonical_checks: <CI / manifest build+typecheck+lint+test commands>
 ## Architecture
 ## Assumptions
 ## Risks
 ## Size and split check
 - estimate: <XS|S|M|L|XL|XXL> (~<files>f, ~<lines>L, <areas> areas) | risk: <LOW|MEDIUM|HIGH|CRITICAL>
-- warning: <none, or 1-line split note when > ~800L or >= 2 independent areas>
+- warning: <none, or 1L split note if >~800L or >=2 areas>
 
 ## Tasks
 
@@ -40,7 +40,7 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Plan changes
 ```
 
-**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 commit/task; hotspots (manifests, index, migrations, contracts) in T001; scope change → bump `version` + log in `Plan changes` (never weaken ACs → `BLOCKED`).
+**Rules:** `id` (`T001`…) never recycled; `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 commit/task; hotspots in T001; scope change → bump `version` + log `Plan changes` (never weaken ACs → `BLOCKED`).
 
 ## 2. Progress & inline approach (`{RUN_DIR}/progress.md`)
 
@@ -58,14 +58,14 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 - current_task: T001
 - current_task_base_sha: <SHA>
 - pre_fix_object: <SHA or none>
-- last_wave: <none or dispatch=PARALLEL|SEQUENTIAL ...>
+- last_wave: <none or dispatch=PARALLEL agents=<N> isolation=<mode> | dispatch=SEQUENTIAL reason=<reason>>
 - run_status: running
 - updated: <ISO-8601>
 
 ## Tasks
-| id | status | task_base | commit | verification | review | depth | readiness | impl_agent |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| T001 | in_progress | | | | | | | |
+| id | status | mode | worker_root | task_base | scope | commit | verification | review | integration | impl_agent |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| T001 | in_progress | | | | | | | | | |
 
 ## Approach
 ### T001
@@ -116,5 +116,5 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Architecture
 ```
 
-**Risk-Adaptive (`detailed`):** fill ONLY when triggered (`n/a` else): `failure_matrix`, `write_paths:` (`>=2` stores+invalidation), `io_budget:` (loops).
-**Context Packet:** stable prefix (role+task/contract) + volatile suffix (`delta_files`, findings, verify receipt); never dump files/logs.
+**Risk-Adaptive (`detailed`):** fill only if triggered (`n/a` else): `failure_matrix`, `write_paths:` (`>=2` stores+invalidation), `io_budget:` (loops).
+**Context Packet:** stable prefix (role+contract) + volatile suffix (`delta_files`, findings, receipt); never dump files/logs.

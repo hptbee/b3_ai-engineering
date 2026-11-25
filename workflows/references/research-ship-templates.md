@@ -12,16 +12,17 @@ Schemas for [`../research-ship.md`](../research-ship.md). Active `{RUN_DIR}` = `
 - product_root: <abs path>
 - branch: <branch>
 - run_base_sha: <SHA>
+- initial_dirty_paths: <csv or none>
 - pr_number: <num or none>
 - merge_status: <NONE|PR_READY|MERGE_BLOCKED|MERGED_VERIFIED>
-- last_wave: <none or dispatch=PARALLEL|SEQUENTIAL ...>
+- last_wave: <none or dispatch=PARALLEL agents=<N> isolation=<mode> | dispatch=SEQUENTIAL reason=<reason>>
 - run_status: running
 - updated: <ISO-8601>
 
 ## Units
-| id | status | mode | readiness | evidence_manifest | subagent_id | notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| U001 | in_progress | research | draft | evidence/sources.manifest | | |
+| id | status | exec_mode | worker_root | base_sha | scope | integration | readiness | evidence_manifest | subagent_id | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| U001 | in_progress | SHARED_READ_ONLY | . | | | pending | draft | evidence/sources.manifest | | |
 
 ## Blockers
 ## Next action
