@@ -280,7 +280,7 @@ if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
   fi
   if [[ -n "$_b3_bin" ]]; then
     case "$CMD" in
-      fingerprint|check-freshness|snapshot|new-run|resolve-run|list-runs|prune|precommit|verify-run|verify-check|check-worktree|check-wave|symbol-check|diff-scope|mechanical-check|review-inventory|review-ledger|context-cache)
+      fingerprint|check-freshness|snapshot|new-run|resolve-run|list-runs|prune|precommit|verify-run|verify-check|check-worktree|check-wave|symbol-check|diff-scope|mechanical-check|review-inventory|review-ledger|context-cache|evidence-check|merge-policy-check)
         _lpwd="$(pwd -L 2>/dev/null || pwd)"
         case "$(uname -s 2>/dev/null || true)" in
           MINGW*|MSYS*|CYGWIN*)
@@ -292,7 +292,7 @@ if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
             ;;
         esac
         _cleanup_tmp
-        B3_LOGICAL_PWD="$_lpwd" exec "$_b3_bin" guard "$CMD" "$@"
+        B3_LOGICAL_PWD="$_lpwd" B3_GITHUB_VERIFY_ADAPTER="${B3_GITHUB_VERIFY_ADAPTER:-${_B3_GUARD_DIR}/b3-github-verify.sh}" exec "$_b3_bin" guard "$CMD" "$@"
         ;;
     esac
   fi

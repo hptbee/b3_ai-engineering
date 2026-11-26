@@ -119,6 +119,9 @@ function Invoke-B3Native([string]$ExePath, [string[]]$B3Args) {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $psi.StandardOutputEncoding = $utf8
     $psi.StandardErrorEncoding = $utf8
+    if (-not $env:B3_GITHUB_VERIFY_ADAPTER) {
+        $psi.EnvironmentVariables['B3_GITHUB_VERIFY_ADAPTER'] = Join-Path $PSScriptRoot 'b3-github-verify.ps1'
+    }
     if ($psi.PSObject.Properties['ArgumentList']) {
         foreach ($a in $B3Args) { [void]$psi.ArgumentList.Add($a) }
     } else {
@@ -163,7 +166,7 @@ if ($Command -cne 'fingerprint') {
         if (-not $RepoRoot) { $RepoRoot = '/' }
     }
 }
-if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshness', 'snapshot', 'new-run', 'resolve-run', 'list-runs', 'prune', 'precommit', 'verify-run', 'verify-check', 'check-worktree', 'check-wave', 'symbol-check', 'diff-scope', 'mechanical-check')) {
+if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshness', 'snapshot', 'new-run', 'resolve-run', 'list-runs', 'prune', 'precommit', 'verify-run', 'verify-check', 'check-worktree', 'check-wave', 'symbol-check', 'diff-scope', 'mechanical-check', 'review-inventory', 'review-ledger', 'context-cache', 'evidence-check', 'merge-policy-check')) {
     $b3Home = Split-Path -Parent $PSScriptRoot
     $b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
     $b3Candidate = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
@@ -308,6 +311,35 @@ if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshne
                 if ($PSBoundParameters.ContainsKey('GraphIndexSha')) { [void]$fwdArgs.Add("--graph-index-sha=$GraphIndexSha") }
                 if ($PSBoundParameters.ContainsKey('SummaryRef')) { [void]$fwdArgs.Add("--summary-ref=$SummaryRef") }
                 if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+            }
+            'evidence-check' {
+                if ($PSBoundParameters.ContainsKey('SourcePaths')) { [void]$fwdArgs.Add("--source-paths=$SourcePaths") }
+                if ($PSBoundParameters.ContainsKey('ManifestPath')) { [void]$fwdArgs.Add("--manifest-path=$ManifestPath") }
+                if ($WriteManifest) { [void]$fwdArgs.Add('--write-manifest') }
+            }
+            'merge-policy-check' {
+                if ($PSBoundParameters.ContainsKey('PolicyPath')) { [void]$fwdArgs.Add("--policy-path=$PolicyPath") }
+                if ($PSBoundParameters.ContainsKey('PrState')) { [void]$fwdArgs.Add("--pr-state=$PrState") }
+                if ($PSBoundParameters.ContainsKey('CiStatus')) { [void]$fwdArgs.Add("--ci-status=$CiStatus") }
+                if ($PSBoundParameters.ContainsKey('ReviewStatus')) { [void]$fwdArgs.Add("--review-status=$ReviewStatus") }
+                if ($PSBoundParameters.ContainsKey('BlockingFindings')) { [void]$fwdArgs.Add("--blocking-findings=$BlockingFindings") }
+                if ($PSBoundParameters.ContainsKey('GovernanceStatus')) { [void]$fwdArgs.Add("--governance-status=$GovernanceStatus") }
+                if ($PSBoundParameters.ContainsKey('ChangedPaths')) { [void]$fwdArgs.Add("--changed-paths=$ChangedPaths") }
+                if ($PostMerge) { [void]$fwdArgs.Add('--post-merge') }
+                if ($PSBoundParameters.ContainsKey('MergedSha')) { [void]$fwdArgs.Add("--merged-sha=$MergedSha") }
+                if ($PSBoundParameters.ContainsKey('MainRef')) { [void]$fwdArgs.Add("--main-ref=$MainRef") }
+                if ($PSBoundParameters.ContainsKey('TargetRef')) { [void]$fwdArgs.Add("--target-ref=$TargetRef") }
+                if ($PSBoundParameters.ContainsKey('AuthorityRef')) { [void]$fwdArgs.Add("--authority-ref=$AuthorityRef") }
+                if ($PSBoundParameters.ContainsKey('BaseSha')) { [void]$fwdArgs.Add("--base-sha=$BaseSha") }
+                if ($PSBoundParameters.ContainsKey('HeadSha')) { [void]$fwdArgs.Add("--head-sha=$HeadSha") }
+                if ($PSBoundParameters.ContainsKey('LedgerPath')) { [void]$fwdArgs.Add("--ledger-path=$LedgerPath") }
+                if ($PSBoundParameters.ContainsKey('ReceiptPath')) { [void]$fwdArgs.Add("--receipt-path=$ReceiptPath") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+                if ($PSBoundParameters.ContainsKey('PrNumber')) { [void]$fwdArgs.Add("--pr-number=$PrNumber") }
+                if ($PSBoundParameters.ContainsKey('Repo')) { [void]$fwdArgs.Add("--repo=$Repo") }
+                if ($PSBoundParameters.ContainsKey('TargetBranch')) { [void]$fwdArgs.Add("--target-branch=$TargetBranch") }
+                if ($LocalOnly) { [void]$fwdArgs.Add('--local-only') }
+                if ($RequireRemoteCi) { [void]$fwdArgs.Add('--require-remote-ci') }
             }
         }
         $b3Res = Invoke-B3Native $b3Candidate @($fwdArgs.ToArray())

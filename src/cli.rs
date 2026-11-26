@@ -158,6 +158,37 @@ pub enum GuardSubcommand {
         summary_ref: String,
         ignore_dirty_paths: String,
     },
+    EvidenceCheck {
+        repo_root: String,
+        source_paths: String,
+        manifest_path: String,
+        write_manifest: bool,
+    },
+    MergePolicyCheck {
+        repo_root: String,
+        policy_path: String,
+        pr_state: Option<String>,
+        ci_status: Option<String>,
+        review_status: Option<String>,
+        blocking_findings: i32,
+        governance_status: String,
+        changed_paths: String,
+        post_merge: bool,
+        merged_sha: String,
+        main_ref: String,
+        target_ref: String,
+        authority_ref: String,
+        base_sha: String,
+        head_sha: String,
+        ledger_path: String,
+        receipt_path: String,
+        ignore_dirty_paths: String,
+        pr_number: String,
+        repo: String,
+        target_branch: String,
+        local_only: bool,
+        require_remote_ci: bool,
+    },
 }
 
 pub fn help_text() -> &'static str {
@@ -184,6 +215,8 @@ GUARD SUBCOMMANDS:
   review-inventory  Build scope inventory, specialists dispatch, and cohesive review units
   review-ledger     Manage tamper-evident b3-review-ledger-v1 coverage state and pass chain
   context-cache     Record and verify b3-context-v1 anchor/graph/summary cache freshness
+  evidence-check    Write or validate SHA-256 b3-evidence-v1 manifests
+  merge-policy-check Enforce provider-neutral pre-merge and post-merge governance policy
   new-run           Create a timestamped run directory and update CURRENT
   resolve-run       Resolve active or named run path
   list-runs         List runs for a namespace
@@ -1134,6 +1167,183 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                 graph_index_sha,
                 summary_ref,
                 ignore_dirty_paths,
+            })
+        }
+        "evidence-check" => {
+            let mut repo_root = ".".to_string();
+            let mut source_paths = String::new();
+            let mut manifest_path = String::new();
+            let mut write_manifest = false;
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "EVIDENCE_MISSING")?;
+                    }
+                    "--source-paths" => {
+                        source_paths =
+                            take_val(rest, &mut i, "--source-paths", iv, "EVIDENCE_MISSING")?;
+                    }
+                    "--manifest-path" => {
+                        manifest_path =
+                            take_val(rest, &mut i, "--manifest-path", iv, "EVIDENCE_MISSING")?;
+                    }
+                    "--write-manifest" if iv.is_none() => write_manifest = true,
+                    other => {
+                        return Err(fail(
+                            format!("EVIDENCE_MISSING: unknown option '{other}'"),
+                            1,
+                        ));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::EvidenceCheck {
+                repo_root,
+                source_paths,
+                manifest_path,
+                write_manifest,
+            })
+        }
+        "merge-policy-check" => {
+            let mut repo_root = ".".to_string();
+            let mut policy_path = String::new();
+            let mut pr_state: Option<String> = None;
+            let mut ci_status: Option<String> = None;
+            let mut review_status: Option<String> = None;
+            let mut blocking_findings = 0i32;
+            let mut governance_status = "CLEAR".to_string();
+            let mut changed_paths = String::new();
+            let mut post_merge = false;
+            let mut merged_sha = String::new();
+            let mut main_ref = String::new();
+            let mut target_ref = String::new();
+            let mut authority_ref = String::new();
+            let mut base_sha = String::new();
+            let mut head_sha = String::new();
+            let mut ledger_path = String::new();
+            let mut receipt_path = String::new();
+            let mut ignore_dirty_paths = String::new();
+            let mut pr_number = String::new();
+            let mut repo = String::new();
+            let mut target_branch = String::new();
+            let mut local_only = false;
+            let mut require_remote_ci = false;
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--policy-path" => {
+                        policy_path = take_val(rest, &mut i, "--policy-path", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--pr-state" => {
+                        pr_state = Some(take_val(rest, &mut i, "--pr-state", iv, "MERGE_BLOCKED")?);
+                    }
+                    "--ci-status" => {
+                        ci_status =
+                            Some(take_val(rest, &mut i, "--ci-status", iv, "MERGE_BLOCKED")?);
+                    }
+                    "--review-status" => {
+                        review_status = Some(take_val(
+                            rest,
+                            &mut i,
+                            "--review-status",
+                            iv,
+                            "MERGE_BLOCKED",
+                        )?);
+                    }
+                    "--blocking-findings" => {
+                        let raw =
+                            take_val(rest, &mut i, "--blocking-findings", iv, "MERGE_BLOCKED")?;
+                        blocking_findings = raw.trim().parse::<i32>().map_err(|_| {
+                            fail(format!("MERGE_BLOCKED: invalid_blocking_findings={raw}"), 1)
+                        })?;
+                    }
+                    "--governance-status" => {
+                        governance_status =
+                            take_val(rest, &mut i, "--governance-status", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--changed-paths" => {
+                        changed_paths =
+                            take_val(rest, &mut i, "--changed-paths", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--post-merge" if iv.is_none() => post_merge = true,
+                    "--merged-sha" => {
+                        merged_sha = take_val(rest, &mut i, "--merged-sha", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--main-ref" => {
+                        main_ref = take_val(rest, &mut i, "--main-ref", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--target-ref" => {
+                        target_ref = take_val(rest, &mut i, "--target-ref", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--authority-ref" => {
+                        authority_ref =
+                            take_val(rest, &mut i, "--authority-ref", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--base-sha" => {
+                        base_sha = take_val(rest, &mut i, "--base-sha", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--head-sha" => {
+                        head_sha = take_val(rest, &mut i, "--head-sha", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--ledger-path" => {
+                        ledger_path = take_val(rest, &mut i, "--ledger-path", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--receipt-path" => {
+                        receipt_path =
+                            take_val(rest, &mut i, "--receipt-path", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--pr-number" => {
+                        pr_number = take_val(rest, &mut i, "--pr-number", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--repo" => {
+                        repo = take_val(rest, &mut i, "--repo", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--target-branch" => {
+                        target_branch =
+                            take_val(rest, &mut i, "--target-branch", iv, "MERGE_BLOCKED")?;
+                    }
+                    "--local-only" if iv.is_none() => local_only = true,
+                    "--require-remote-ci" if iv.is_none() => require_remote_ci = true,
+                    other => {
+                        return Err(fail(format!("MERGE_BLOCKED: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::MergePolicyCheck {
+                repo_root,
+                policy_path,
+                pr_state,
+                ci_status,
+                review_status,
+                blocking_findings,
+                governance_status,
+                changed_paths,
+                post_merge,
+                merged_sha,
+                main_ref,
+                target_ref,
+                authority_ref,
+                base_sha,
+                head_sha,
+                ledger_path,
+                receipt_path,
+                ignore_dirty_paths,
+                pr_number,
+                repo,
+                target_branch,
+                local_only,
+                require_remote_ci,
             })
         }
         other => Err(fail(

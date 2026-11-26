@@ -3,6 +3,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use std::time::{Duration, Instant};
+
 use crate::error::{fail, B3Error};
 
 /// Captured output from a child process.
@@ -22,6 +24,24 @@ pub fn run_command<S, K, V>(
     extra_env: &[(K, V)],
     remove_env: &[&str],
     stdin_bytes: Option<&[u8]>,
+) -> Result<CmdOutput, B3Error>
+where
+    S: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    run_command_timeout(program, args, cwd, extra_env, remove_env, stdin_bytes, None)
+}
+
+/// Runs a program with an optional wall-clock timeout in milliseconds.
+pub fn run_command_timeout<S, K, V>(
+    program: &OsStr,
+    args: &[S],
+    cwd: Option<&Path>,
+    extra_env: &[(K, V)],
+    remove_env: &[&str],
+    stdin_bytes: Option<&[u8]>,
+    timeout_ms: Option<u64>,
 ) -> Result<CmdOutput, B3Error>
 where
     S: AsRef<OsStr>,
@@ -96,6 +116,34 @@ where
         if let Some(h) = stdin_handle {
             let _ = h.join();
         }
+        let status = match timeout_ms {
+            None => child
+                .wait()
+                .map_err(|e| fail(format!("GIT_ERROR: failed waiting for process: {e}"), 1))?,
+            Some(ms) => {
+                let deadline = Instant::now() + Duration::from_millis(ms);
+                loop {
+                    if let Some(st) = child
+                        .try_wait()
+                        .map_err(|e| fail(format!("GIT_ERROR: failed polling process: {e}"), 1))?
+                    {
+                        break st;
+                    }
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = stdout_handle.join();
+                        let _ = stderr_handle.join();
+                        return Ok(CmdOutput {
+                            exit_code: 124,
+                            stdout: Vec::new(),
+                            stderr: Vec::new(),
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        };
         let stdout = stdout_handle
             .join()
             .map_err(|_| fail("GIT_ERROR: stdout reader thread panicked", 1))?
@@ -104,10 +152,6 @@ where
             .join()
             .map_err(|_| fail("GIT_ERROR: stderr reader thread panicked", 1))?
             .map_err(|e| fail(format!("GIT_ERROR: failed to read stderr: {e}"), 1))?;
-
-        let status = child
-            .wait()
-            .map_err(|e| fail(format!("GIT_ERROR: failed waiting for process: {e}"), 1))?;
 
         Ok(CmdOutput {
             exit_code: status.code().unwrap_or(1),

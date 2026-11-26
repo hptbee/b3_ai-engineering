@@ -1,9 +1,11 @@
 pub mod cache;
+pub mod evidence;
 pub mod fingerprint;
 pub mod freshness;
 pub mod inventory;
 pub mod ledger;
 pub mod mechanical;
+pub mod merge_policy;
 pub mod precommit;
 pub mod runs;
 pub mod scope;

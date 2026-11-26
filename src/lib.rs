@@ -4,6 +4,7 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod guard;
+pub mod json;
 pub mod process;
 
 use cli::{help_text, parse_args, Command, GuardSubcommand};
@@ -288,6 +289,70 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                         &graph_index_sha,
                         &summary_ref,
                         &ignore_dirty_paths,
+                    );
+                }
+                GuardSubcommand::EvidenceCheck {
+                    repo_root,
+                    source_paths,
+                    manifest_path,
+                    write_manifest,
+                } => {
+                    return guard::evidence::run(
+                        &repo_root,
+                        &source_paths,
+                        &manifest_path,
+                        write_manifest,
+                    );
+                }
+                GuardSubcommand::MergePolicyCheck {
+                    repo_root,
+                    policy_path,
+                    pr_state,
+                    ci_status,
+                    review_status,
+                    blocking_findings,
+                    governance_status,
+                    changed_paths,
+                    post_merge,
+                    merged_sha,
+                    main_ref,
+                    target_ref,
+                    authority_ref,
+                    base_sha,
+                    head_sha,
+                    ledger_path,
+                    receipt_path,
+                    ignore_dirty_paths,
+                    pr_number,
+                    repo,
+                    target_branch,
+                    local_only,
+                    require_remote_ci,
+                } => {
+                    return guard::merge_policy::run(
+                        &repo_root,
+                        &policy_path,
+                        pr_state.as_deref(),
+                        ci_status.as_deref(),
+                        review_status.as_deref(),
+                        blocking_findings,
+                        &governance_status,
+                        &changed_paths,
+                        post_merge,
+                        &merged_sha,
+                        &main_ref,
+                        &target_ref,
+                        &authority_ref,
+                        &base_sha,
+                        &head_sha,
+                        &ledger_path,
+                        &receipt_path,
+                        &ignore_dirty_paths,
+                        &pr_number,
+                        &repo,
+                        &target_branch,
+                        local_only,
+                        require_remote_ci,
                     );
                 }
             };

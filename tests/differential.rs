@@ -1962,3 +1962,326 @@ fn differential_context_cache_matches_powershell() {
     assert_eq!(pcf, 1);
     assert_eq!(rcfo, pcfo);
 }
+
+#[test]
+fn differential_evidence_check_matches_powershell() {
+    let tmp = TempDirGuard::new("evidence");
+    let root = &tmp.path;
+    let _head = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Missing manifest -> exit 1 parity
+    let (rm, rom) = run_b3(&[
+        "guard",
+        "evidence-check",
+        "--repo-root",
+        root_str,
+        "--manifest-path",
+        ".b3/research-ship/ev.txt",
+    ]);
+    let (pm, pom) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "evidence-check",
+            "-RepoRoot",
+            root_str,
+            "-ManifestPath",
+            ".b3/research-ship/ev.txt",
+        ],
+    );
+    assert_eq!(rm, 1);
+    assert_eq!(pm, 1);
+    assert_eq!(rom, pom);
+
+    // Write manifest via Rust and via PS, verify both fresh across both implementations
+    let (rw, rwo) = run_b3(&[
+        "guard",
+        "evidence-check",
+        "--repo-root",
+        root_str,
+        "--manifest-path",
+        ".b3/research-ship/ev-r.txt",
+        "--source-paths",
+        "docs/guide.md,src/app.txt",
+        "--write-manifest",
+    ]);
+    let (pw, pwo) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "evidence-check",
+            "-RepoRoot",
+            root_str,
+            "-ManifestPath",
+            ".b3/research-ship/ev-p.txt",
+            "-SourcePaths",
+            "docs/guide.md,src/app.txt",
+            "-WriteManifest",
+        ],
+    );
+    assert_eq!(rw, 0);
+    assert_eq!(pw, 0);
+    assert_eq!(rwo.replace("ev-r.txt", "E"), pwo.replace("ev-p.txt", "E"));
+
+    let (rf, rfo) = run_b3(&[
+        "guard",
+        "evidence-check",
+        "--repo-root",
+        root_str,
+        "--manifest-path",
+        ".b3/research-ship/ev-p.txt",
+        "--source-paths",
+        "src/app.txt",
+    ]);
+    let (pf, pfo) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "evidence-check",
+            "-RepoRoot",
+            root_str,
+            "-ManifestPath",
+            ".b3/research-ship/ev-r.txt",
+            "-SourcePaths",
+            "src/app.txt",
+        ],
+    );
+    assert_eq!(rf, 0);
+    assert_eq!(pf, 0);
+    assert_eq!(rfo, pfo);
+
+    // Stale after file modification -> exit 2 parity
+    fs::write(root.join("src/app.txt"), "modified\n").unwrap();
+    let (rs, rso) = run_b3(&[
+        "guard",
+        "evidence-check",
+        "--repo-root",
+        root_str,
+        "--manifest-path",
+        ".b3/research-ship/ev-r.txt",
+    ]);
+    let (ps_c, pso) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "evidence-check",
+            "-RepoRoot",
+            root_str,
+            "-ManifestPath",
+            ".b3/research-ship/ev-r.txt",
+        ],
+    );
+    assert_eq!(rs, 2);
+    assert_eq!(ps_c, 2);
+    assert_eq!(rso, pso);
+}
+
+#[test]
+fn differential_merge_policy_check_matches_powershell() {
+    let tmp = TempDirGuard::new("merge-pol");
+    let root = &tmp.path;
+    let _init_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Ensure canonical branch is named main
+    git_in(root, &["branch", "-M", "main"]);
+    fs::create_dir_all(root.join(".b3")).unwrap();
+    fs::write(
+        root.join(".b3/research-policy.json"),
+        "{\"auto_merge\":\"authorized\",\"require_ci\":true,\"require_review\":true}\n",
+    )
+    .unwrap();
+    git_in(root, &["add", ".b3/research-policy.json"]);
+    git_in(root, &["commit", "-q", "-m", "add policy on main"]);
+    let main_sha = git_in(root, &["rev-parse", "HEAD"]);
+
+    // Feature branch commit
+    git_in(root, &["checkout", "-q", "-b", "feat/work"]);
+    fs::write(root.join("src/app.txt"), "v2 feature\n").unwrap();
+    git_in(root, &["add", "src/app.txt"]);
+    git_in(root, &["commit", "-q", "-m", "feat work"]);
+    let feat_sha = git_in(root, &["rev-parse", "HEAD"]);
+
+    // R001: caller CiStatus=PASS without local receipt or ledger cannot authorize disabled policy
+    fs::write(
+        root.join(".b3/dis-policy.json"),
+        "{\"auto_merge\":\"disabled\",\"require_ci\":true,\"require_review\":false}\n",
+    )
+    .unwrap();
+    git_in(root, &["add", ".b3/dis-policy.json"]);
+    git_in(root, &["commit", "-q", "-m", "add dis policy"]);
+    let dis_head = git_in(root, &["rev-parse", "HEAD"]);
+    // Wait: test local_only / disabled requires default path if branch differs; switch temporarily to test disabled on clean tree vs trunk
+    git_in(root, &["reset", "--hard", "-q", &feat_sha]);
+
+    // Missing ledger blocks authorized merge -> exit 1 parity
+    let (rb, rbo) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        root_str,
+        "--target-branch",
+        "main",
+    ]);
+    let (pb, pbo) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "merge-policy-check",
+            "-RepoRoot",
+            root_str,
+            "-TargetBranch",
+            "main",
+        ],
+    );
+    assert_eq!(rb, 1);
+    assert_eq!(pb, 1);
+    assert_eq!(rbo, pbo);
+
+    // Build valid ledger + verify receipt -> MERGE_AUTHORIZED exit 0 parity
+    let (vr_c, _) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        root_str,
+        "--verify-cmd",
+        "exit 0",
+        "--receipt-path",
+        ".b3/ship/v.txt",
+        "--relevant-paths",
+        "src/app.txt",
+    ]);
+    assert_eq!(vr_c, 0);
+    let (li_c, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "init",
+        "--ledger-path",
+        ".b3/ship/l.md",
+        "--base-sha",
+        &main_sha,
+        "--target-ref",
+        &dis_head[..0],
+    ]);
+    assert_eq!(li_c, 0);
+    let (lu_c, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "update",
+        "--ledger-path",
+        ".b3/ship/l.md",
+        "--unit-id",
+        "U01",
+        "--status",
+        "REVIEWED",
+        "--findings",
+        "none",
+        "--receipt-path",
+        ".b3/ship/v.txt",
+        "--review-independence",
+        "INDEPENDENT",
+    ]);
+    assert_eq!(lu_c, 0);
+
+    // Test R001 with caller CiStatus=PASS on a local disabled policy repo
+    {
+        let tmp_dis = TempDirGuard::new("merge-pol-dis");
+        let dr = &tmp_dis.path;
+        let _d_init = init_git_repo(dr);
+        let dr_str = dr.to_str().unwrap();
+        fs::create_dir_all(dr.join(".b3")).unwrap();
+        fs::write(
+            dr.join(".b3/research-policy.json"),
+            "{\"auto_merge\":\"disabled\",\"require_ci\":true,\"require_review\":false}\n",
+        )
+        .unwrap();
+        let (rd, rdo) = run_b3(&[
+            "guard",
+            "merge-policy-check",
+            "--repo-root",
+            dr_str,
+            "--ci-status",
+            "PASS",
+        ]);
+        let (pd, pdo) = run_ps_script(
+            "scripts/b3-guard.ps1",
+            &[
+                "merge-policy-check",
+                "-RepoRoot",
+                dr_str,
+                "-CiStatus",
+                "PASS",
+            ],
+        );
+        assert_eq!(rd, 1);
+        assert_eq!(pd, 1);
+        assert_eq!(
+            rdo,
+            "MERGE_BLOCKED: ci_evidence_unverified(caller_reported_ci_cannot_authorize)"
+        );
+        assert_eq!(rdo, pdo);
+    }
+
+    let (ra, rao) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        root_str,
+        "--target-branch",
+        "main",
+        "--ledger-path",
+        ".b3/ship/l.md",
+    ]);
+    let (pa, pao) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "merge-policy-check",
+            "-RepoRoot",
+            root_str,
+            "-TargetBranch",
+            "main",
+            "-LedgerPath",
+            ".b3/ship/l.md",
+        ],
+    );
+    assert_eq!(ra, 0);
+    assert_eq!(pa, 0);
+    assert_eq!(rao, pao);
+
+    // Post-merge fast-forward verification -> POST_MERGE_VERIFIED exit 0 parity
+    git_in(root, &["checkout", "-q", "main"]);
+    git_in(root, &["merge", "--ff-only", "-q", "feat/work"]);
+    let (rp, rpo) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        root_str,
+        "--post-merge",
+        "--main-ref",
+        "refs/heads/main",
+        "--merged-sha",
+        &feat_sha,
+        "--head-sha",
+        &feat_sha,
+    ]);
+    let (pp, ppo) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "merge-policy-check",
+            "-RepoRoot",
+            root_str,
+            "-PostMerge",
+            "-MainRef",
+            "refs/heads/main",
+            "-MergedSha",
+            &feat_sha,
+            "-HeadSha",
+            &feat_sha,
+        ],
+    );
+    assert_eq!(rp, 0);
+    assert_eq!(pp, 0);
+    assert_eq!(rpo, ppo);
+}
