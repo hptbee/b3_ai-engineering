@@ -1,6 +1,7 @@
 use crate::error::{fail, B3Error};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     Version,
     Help,
@@ -95,6 +96,28 @@ pub enum GuardSubcommand {
         target_ref: String,
         ignore_dirty_paths: String,
     },
+    DiffScope {
+        repo_root: String,
+        base_sha: String,
+        prev_sha: String,
+        target_ref: String,
+        ignore_dirty_paths: String,
+    },
+    MechanicalCheck {
+        repo_root: String,
+        base_sha: String,
+        target_ref: String,
+        allowed_paths: String,
+        ignore_dirty_paths: String,
+        obsoletes: String,
+        allow_mass_delete: bool,
+        wave_specs: String,
+        worker_changes: String,
+        worker_roots: String,
+        protected_paths: String,
+        dirty_digests: String,
+        has_dirty_digests: bool,
+    },
 }
 
 pub fn help_text() -> &'static str {
@@ -116,6 +139,8 @@ GUARD SUBCOMMANDS:
   check-worktree    Validate worktree identity, isolation, and peer non-overlap
   check-wave        Validate wave task ownership conflicts, reads, and partition plan
   symbol-check      Detect removed symbols with dangling refs or orphan internal symbols
+  diff-scope        Classify T-shirt size, changed/noise files, delta files, and risk signals
+  mechanical-check  Run mechanical scope, leftover, obsolete, safety, and ownership gates
   new-run           Create a timestamped run directory and update CURRENT
   resolve-run       Resolve active or named run path
   list-runs         List runs for a namespace
@@ -706,6 +731,133 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                 base_sha,
                 target_ref,
                 ignore_dirty_paths,
+            })
+        }
+        "diff-scope" => {
+            let mut repo_root = ".".to_string();
+            let mut base_sha = String::new();
+            let mut prev_sha = String::new();
+            let mut target_ref = String::new();
+            let mut ignore_dirty_paths = String::new();
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "DIFF_SCOPE_FAIL")?;
+                    }
+                    "--base-sha" => {
+                        base_sha = take_val(rest, &mut i, "--base-sha", iv, "DIFF_SCOPE_FAIL")?;
+                    }
+                    "--prev-sha" => {
+                        prev_sha = take_val(rest, &mut i, "--prev-sha", iv, "DIFF_SCOPE_FAIL")?;
+                    }
+                    "--target-ref" => {
+                        target_ref = take_val(rest, &mut i, "--target-ref", iv, "DIFF_SCOPE_FAIL")?;
+                    }
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "DIFF_SCOPE_FAIL")?;
+                    }
+                    other => {
+                        return Err(fail(
+                            format!("DIFF_SCOPE_FAIL: unknown option '{other}'"),
+                            1,
+                        ));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::DiffScope {
+                repo_root,
+                base_sha,
+                prev_sha,
+                target_ref,
+                ignore_dirty_paths,
+            })
+        }
+        "mechanical-check" => {
+            let mut repo_root = ".".to_string();
+            let mut base_sha = String::new();
+            let mut target_ref = String::new();
+            let mut allowed_paths = String::new();
+            let mut ignore_dirty_paths = String::new();
+            let mut obsoletes = String::new();
+            let mut allow_mass_delete = false;
+            let mut wave_specs = String::new();
+            let mut worker_changes = String::new();
+            let mut worker_roots = String::new();
+            let mut protected_paths = String::new();
+            let mut dirty_digests = String::new();
+            let mut has_dirty_digests = false;
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--base-sha" => {
+                        base_sha = take_val(rest, &mut i, "--base-sha", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--target-ref" => {
+                        target_ref = take_val(rest, &mut i, "--target-ref", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--allowed-paths" => {
+                        allowed_paths =
+                            take_val(rest, &mut i, "--allowed-paths", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--obsoletes" => {
+                        obsoletes = take_val(rest, &mut i, "--obsoletes", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--allow-mass-delete" if iv.is_none() => allow_mass_delete = true,
+                    "--wave-specs" => {
+                        wave_specs = take_val(rest, &mut i, "--wave-specs", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--worker-changes" => {
+                        worker_changes =
+                            take_val(rest, &mut i, "--worker-changes", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--worker-roots" => {
+                        worker_roots =
+                            take_val(rest, &mut i, "--worker-roots", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--protected-paths" => {
+                        protected_paths =
+                            take_val(rest, &mut i, "--protected-paths", iv, "MECHANICAL_FAIL")?;
+                    }
+                    "--dirty-digests" => {
+                        has_dirty_digests = true;
+                        dirty_digests =
+                            take_val(rest, &mut i, "--dirty-digests", iv, "MECHANICAL_FAIL")?;
+                    }
+                    other => {
+                        return Err(fail(
+                            format!("MECHANICAL_FAIL: unknown option '{other}'"),
+                            1,
+                        ));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::MechanicalCheck {
+                repo_root,
+                base_sha,
+                target_ref,
+                allowed_paths,
+                ignore_dirty_paths,
+                obsoletes,
+                allow_mass_delete,
+                wave_specs,
+                worker_changes,
+                worker_roots,
+                protected_paths,
+                dirty_digests,
+                has_dirty_digests,
             })
         }
         other => Err(fail(

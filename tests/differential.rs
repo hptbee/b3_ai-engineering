@@ -1301,3 +1301,199 @@ fn differential_symbol_check_matches_powershell() {
     assert_eq!(pc_ok, 0);
     assert_eq!(ro_ok, po_ok);
 }
+
+#[test]
+fn differential_diff_scope_matches_powershell() {
+    let tmp = TempDirGuard::new("diffscope");
+    let root = &tmp.path;
+    let base_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Clean tree -> EMPTY_DIFF (exit 2)
+    let (re, roe) = run_b3(&[
+        "guard",
+        "diff-scope",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+    ]);
+    let (pe, poe) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &["diff-scope", "-RepoRoot", root_str, "-BaseSha", &base_sha],
+    );
+    assert_eq!(re, 2);
+    assert_eq!(pe, 2);
+    assert_eq!(roe, poe);
+
+    // Dirty tree with noise + code + auth risk signal
+    fs::create_dir_all(root.join("src/auth")).unwrap();
+    fs::write(root.join("package-lock.json"), "{}\n").unwrap();
+    fs::write(
+        root.join("src/auth/login.ts"),
+        "export function login() { return verifyToken(); }\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/app.txt"), "v2\n").unwrap();
+
+    let (rd, rod) = run_b3(&[
+        "guard",
+        "diff-scope",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+    ]);
+    let (pd, pod) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &["diff-scope", "-RepoRoot", root_str, "-BaseSha", &base_sha],
+    );
+    assert_eq!(rd, 0);
+    assert_eq!(pd, 0);
+    assert_eq!(rod, pod);
+
+    // PrevSha delta + CLEAN_AFTER_FIX
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-m", "work"]);
+    let work_sha = git_in(root, &["rev-parse", "HEAD"]);
+
+    // Commit target-ref check
+    let (rt, rot) = run_b3(&[
+        "guard",
+        "diff-scope",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+        "--target-ref",
+        &work_sha,
+        "--prev-sha",
+        &base_sha,
+    ]);
+    let (pt, pot) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "diff-scope",
+            "-RepoRoot",
+            root_str,
+            "-BaseSha",
+            &base_sha,
+            "-TargetRef",
+            &work_sha,
+            "-PrevSha",
+            &base_sha,
+        ],
+    );
+    assert_eq!(rt, 0);
+    assert_eq!(pt, 0);
+    assert_eq!(rot, pot);
+
+    // Compare work_sha vs work_sha with prev_sha=base_sha -> CLEAN_AFTER_FIX
+    let (rcaf, rocaf) = run_b3(&[
+        "guard",
+        "diff-scope",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &work_sha,
+        "--prev-sha",
+        &base_sha,
+    ]);
+    let (pcaf, pocaf) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "diff-scope",
+            "-RepoRoot",
+            root_str,
+            "-BaseSha",
+            &work_sha,
+            "-PrevSha",
+            &base_sha,
+        ],
+    );
+    assert_eq!(rcaf, 0);
+    assert_eq!(pcaf, 0);
+    assert_eq!(rocaf, pocaf);
+}
+
+#[test]
+fn differential_mechanical_check_matches_powershell() {
+    let tmp = TempDirGuard::new("mechanical");
+    let root = &tmp.path;
+    let base_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Clean allowed change -> MECHANICAL_OK
+    fs::write(root.join("src/app.txt"), "v2\n").unwrap();
+    let (r0, ro0) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+        "--allowed-paths",
+        "src",
+    ]);
+    let (p0, po0) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "mechanical-check",
+            "-RepoRoot",
+            root_str,
+            "-BaseSha",
+            &base_sha,
+            "-AllowedPaths",
+            "src",
+        ],
+    );
+    assert_eq!(r0, 0);
+    assert_eq!(p0, 0);
+    assert_eq!(ro0, po0);
+
+    // Scope creep + leftover + destructive SQL + protected path + worker-changes attribution -> exit 2 parity
+    fs::write(
+        root.join("src/bad.ts"),
+        "// @ts-ignore\ndebugger;\nconst sql = 'DROP TABLE users';\n",
+    )
+    .unwrap();
+    fs::write(root.join("docs/guide.md"), "touched outside allowed\n").unwrap();
+
+    let (rf, rof) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+        "--allowed-paths",
+        "src",
+        "--protected-paths",
+        "docs",
+        "--wave-specs",
+        "T001=src/app.txt;T002=src/bad.ts",
+        "--worker-changes",
+        "T001=src/app.txt;T002=src/bad.ts",
+    ]);
+    let (pf, pof) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "mechanical-check",
+            "-RepoRoot",
+            root_str,
+            "-BaseSha",
+            &base_sha,
+            "-AllowedPaths",
+            "src",
+            "-ProtectedPaths",
+            "docs",
+            "-WaveSpecs",
+            "T001=src/app.txt;T002=src/bad.ts",
+            "-WorkerChanges",
+            "T001=src/app.txt;T002=src/bad.ts",
+        ],
+    );
+    assert_eq!(rf, 2);
+    assert_eq!(pf, 2);
+    assert_eq!(rof, pof);
+}

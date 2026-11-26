@@ -7,15 +7,15 @@ use crate::fs::{
 };
 use crate::git::{get_canonical_git_path, is_hex40, run_git, test_git_mid_operation};
 
-struct WorktreeIdentity {
-    logical: PathBuf,
-    top_norm: String,
-    common_dir: String,
-    git_dir: String,
-    head: String,
+pub(crate) struct WorktreeIdentity {
+    pub logical: PathBuf,
+    pub top_norm: String,
+    pub common_dir: String,
+    pub git_dir: String,
+    pub head: String,
 }
 
-fn resolve_safe_worktree_identity(
+pub(crate) fn resolve_safe_worktree_identity(
     raw_path: &str,
     missing_code: &str,
     not_git_code: &str,

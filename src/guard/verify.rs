@@ -134,7 +134,7 @@ fn git_hash_object_file(root: &Path, rel_path: &str, err_ctx: &str) -> Result<St
     Ok(sha)
 }
 
-fn get_symlink_blob_oid(root: &Path, rel_path: &str) -> Result<Option<String>, B3Error> {
+pub(crate) fn get_symlink_blob_oid(root: &Path, rel_path: &str) -> Result<Option<String>, B3Error> {
     let full = root.join(rel_path.replace('/', std::path::MAIN_SEPARATOR_STR));
     if is_reparse_or_symlink(&full) {
         if let Ok(target) = std::fs::read_link(&full) {
@@ -159,7 +159,7 @@ fn get_symlink_blob_oid(root: &Path, rel_path: &str) -> Result<Option<String>, B
     Ok(None)
 }
 
-fn get_submodule_entry_identity(
+pub(crate) fn get_submodule_entry_identity(
     root: &Path,
     rel_path: &str,
     fallback_oid: &str,

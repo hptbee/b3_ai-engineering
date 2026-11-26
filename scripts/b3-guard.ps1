@@ -163,7 +163,7 @@ if ($Command -cne 'fingerprint') {
         if (-not $RepoRoot) { $RepoRoot = '/' }
     }
 }
-if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshness', 'snapshot', 'new-run', 'resolve-run', 'list-runs', 'prune', 'precommit', 'verify-run', 'verify-check', 'check-worktree', 'check-wave', 'symbol-check')) {
+if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshness', 'snapshot', 'new-run', 'resolve-run', 'list-runs', 'prune', 'precommit', 'verify-run', 'verify-check', 'check-worktree', 'check-wave', 'symbol-check', 'diff-scope', 'mechanical-check')) {
     $b3Home = Split-Path -Parent $PSScriptRoot
     $b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
     $b3Candidate = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
@@ -252,6 +252,25 @@ if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshne
                 if ($PSBoundParameters.ContainsKey('BaseSha')) { [void]$fwdArgs.Add("--base-sha=$BaseSha") }
                 if ($PSBoundParameters.ContainsKey('TargetRef')) { [void]$fwdArgs.Add("--target-ref=$TargetRef") }
                 if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+            }
+            'diff-scope' {
+                if ($PSBoundParameters.ContainsKey('BaseSha')) { [void]$fwdArgs.Add("--base-sha=$BaseSha") }
+                if ($PSBoundParameters.ContainsKey('PrevSha')) { [void]$fwdArgs.Add("--prev-sha=$PrevSha") }
+                if ($PSBoundParameters.ContainsKey('TargetRef')) { [void]$fwdArgs.Add("--target-ref=$TargetRef") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+            }
+            'mechanical-check' {
+                if ($PSBoundParameters.ContainsKey('BaseSha')) { [void]$fwdArgs.Add("--base-sha=$BaseSha") }
+                if ($PSBoundParameters.ContainsKey('TargetRef')) { [void]$fwdArgs.Add("--target-ref=$TargetRef") }
+                if ($PSBoundParameters.ContainsKey('AllowedPaths')) { [void]$fwdArgs.Add("--allowed-paths=$AllowedPaths") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+                if ($PSBoundParameters.ContainsKey('Obsoletes')) { [void]$fwdArgs.Add("--obsoletes=$Obsoletes") }
+                if ($AllowMassDelete) { [void]$fwdArgs.Add('--allow-mass-delete') }
+                if ($PSBoundParameters.ContainsKey('WaveSpecs')) { [void]$fwdArgs.Add("--wave-specs=$WaveSpecs") }
+                if ($PSBoundParameters.ContainsKey('WorkerChanges')) { [void]$fwdArgs.Add("--worker-changes=$WorkerChanges") }
+                if ($PSBoundParameters.ContainsKey('WorkerRoots')) { [void]$fwdArgs.Add("--worker-roots=$WorkerRoots") }
+                if ($PSBoundParameters.ContainsKey('ProtectedPaths')) { [void]$fwdArgs.Add("--protected-paths=$ProtectedPaths") }
+                if ($PSBoundParameters.ContainsKey('DirtyDigests')) { [void]$fwdArgs.Add("--dirty-digests=$DirtyDigests") }
             }
         }
         $b3Res = Invoke-B3Native $b3Candidate @($fwdArgs.ToArray())

@@ -106,6 +106,79 @@ pub fn is_reparse_or_symlink(path: &Path) -> bool {
     false
 }
 
+/// On Windows, returns `true` when `path` has a reparse point that is a non-symlink
+/// mount point / NTFS Junction (`IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003`).
+#[cfg(windows)]
+pub fn is_windows_junction(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+    const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
+
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) == 0 {
+        return false;
+    }
+
+    #[repr(C)]
+    struct Win32FindDataW {
+        dw_file_attributes: u32,
+        ft_creation_time: [u32; 2],
+        ft_last_access_time: [u32; 2],
+        ft_last_write_time: [u32; 2],
+        n_file_size_high: u32,
+        n_file_size_low: u32,
+        dw_reserved0: u32,
+        dw_reserved1: u32,
+        c_file_name: [u16; 260],
+        c_alternate_file_name: [u16; 14],
+    }
+
+    extern "system" {
+        fn FindFirstFileW(
+            lp_file_name: *const u16,
+            lp_find_file_data: *mut Win32FindDataW,
+        ) -> isize;
+        fn FindClose(h_find_file: isize) -> i32;
+    }
+
+    const INVALID_HANDLE_VALUE: isize = -1;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut data = Win32FindDataW {
+        dw_file_attributes: 0,
+        ft_creation_time: [0; 2],
+        ft_last_access_time: [0; 2],
+        ft_last_write_time: [0; 2],
+        n_file_size_high: 0,
+        n_file_size_low: 0,
+        dw_reserved0: 0,
+        dw_reserved1: 0,
+        c_file_name: [0; 260],
+        c_alternate_file_name: [0; 14],
+    };
+    // SAFETY: `wide` is NUL-terminated UTF-16 and `data` is zero-initialized on the stack.
+    let handle = unsafe { FindFirstFileW(wide.as_ptr(), &mut data) };
+    if handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    // SAFETY: `handle` is valid and non-INVALID_HANDLE_VALUE from `FindFirstFileW`.
+    unsafe {
+        FindClose(handle);
+    }
+    data.dw_reserved0 == IO_REPARSE_TAG_MOUNT_POINT
+}
+
+#[cfg(not(windows))]
+pub fn is_windows_junction(_path: &Path) -> bool {
+    false
+}
+
 /// Writes `text` with LF (`\n`) line endings atomically via a sibling temporary file.
 /// Refuses to overwrite a directory or a symlink/reparse point.
 pub fn write_atomic_lf(dest: &Path, text: &str) -> Result<(), B3Error> {
@@ -1097,4 +1170,146 @@ pub fn convert_to_wave_task_map(
         map,
         total_paths,
     })
+}
+
+/// Returns `true` if the first 8 KiB of `full_path` contains a NUL byte (`0x00`).
+pub fn test_binary_file(full_path: &Path) -> bool {
+    if !full_path.is_file() {
+        return false;
+    }
+    use std::io::Read;
+    let Ok(mut file) = fs::File::open(full_path) else {
+        return false;
+    };
+    let mut buf = [0u8; 8192];
+    let Ok(n) = file.read(&mut buf) else {
+        return false;
+    };
+    buf[..n].contains(&0)
+}
+
+/// Case-sensitive or case-insensitive prefix/exact ownership matching,
+/// matching `Test-OwnershipPathMatch`.
+pub fn test_ownership_path_match(
+    candidate: &str,
+    patterns: &[String],
+    case_insensitive: bool,
+) -> bool {
+    if candidate.is_empty() || patterns.is_empty() {
+        return false;
+    }
+    let cand_cmp = if case_insensitive {
+        candidate.to_ascii_lowercase()
+    } else {
+        candidate.to_string()
+    };
+    for p in patterns {
+        if p == "." {
+            return true;
+        }
+        let p_cmp = if case_insensitive {
+            p.to_ascii_lowercase()
+        } else {
+            p.clone()
+        };
+        if cand_cmp == p_cmp {
+            return true;
+        }
+        if !p_cmp.is_empty()
+            && cand_cmp.len() > p_cmp.len()
+            && cand_cmp.starts_with(&p_cmp)
+            && cand_cmp.as_bytes()[p_cmp.len()] == b'/'
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Computes lowercase hex SHA-256 digest of a file (FIPS 180-4, pure `std`).
+pub fn sha256_file_hex(path: &Path) -> Result<String, B3Error> {
+    let bytes = fs::read(path).map_err(|e| {
+        fail(
+            format!(
+                "MECHANICAL_FAIL: failed reading {} for sha256: {e}",
+                path.display()
+            ),
+            1,
+        )
+    })?;
+    Ok(sha256_bytes_hex(&bytes))
+}
+
+fn sha256_bytes_hex(data: &[u8]) -> String {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let mut h: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+
+    let bit_len = (data.len() as u64) * 8;
+    let mut padded = Vec::with_capacity((data.len() + 9).div_ceil(64) * 64);
+    padded.extend_from_slice(data);
+    padded.push(0x80);
+    while (padded.len() % 64) != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    for block in padded.chunks_exact(64) {
+        let mut w = [0u32; 64];
+        for (i, chunk) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut hh] = h;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = hh
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            hh = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+        for (acc, val) in h.iter_mut().zip([a, b, c, d, e, f, g, hh]) {
+            *acc = acc.wrapping_add(val);
+        }
+    }
+
+    let mut hex = String::with_capacity(64);
+    for word in h {
+        hex.push_str(&format!("{word:08x}"));
+    }
+    hex
 }

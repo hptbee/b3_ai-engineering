@@ -10,7 +10,7 @@ pub fn run(repo_root_raw: &str) -> Result<String, B3Error> {
     let head_tree =
         assert_valid_git_rev(&repo_root, "HEAD", "tree", "SNAPSHOT_FAIL", "HEAD^{tree}")?;
 
-    let cur_tree = new_working_tree_oid(&repo_root, "SNAPSHOT_FAIL")?;
+    let cur_tree = new_working_tree_oid(&repo_root, "SNAPSHOT_FAIL", false)?;
     let no_env: [(&str, &str); 0] = [];
     let sha = if cur_tree == head_tree {
         head_sha

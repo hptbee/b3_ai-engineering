@@ -1,7 +1,9 @@
 pub mod fingerprint;
 pub mod freshness;
+pub mod mechanical;
 pub mod precommit;
 pub mod runs;
+pub mod scope;
 pub mod snapshot;
 pub mod symbol;
 pub mod verify;

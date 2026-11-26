@@ -502,10 +502,62 @@ fn run_chunked_git_with_index(
 }
 
 /// Builds a Git tree OID representing the working tree while excluding `.b3/`
-/// checkpoint directories (and validating secrets/submodules unless handled).
-pub fn new_working_tree_oid(root: &Path, fail_prefix: &str) -> Result<String, B3Error> {
+/// checkpoint directories (and validating or excluding secrets).
+pub fn new_working_tree_oid(
+    root: &Path,
+    fail_prefix: &str,
+    exclude_sensitive: bool,
+) -> Result<String, B3Error> {
     let no_env: [(&str, &str); 0] = [];
-    assert_snapshot_safe(root, fail_prefix)?;
+    let has_head = run_git(
+        root,
+        &["rev-parse", "--verify", "--quiet", "HEAD"],
+        &no_env,
+        None,
+    )
+    .map(|r| r.exit_code == 0)
+    .unwrap_or(false);
+
+    let mut tracked_secrets = Vec::new();
+    let mut unborn_staged_secrets = Vec::new();
+    if exclude_sensitive {
+        if has_head {
+            for sp in run_git_paths_z(
+                root,
+                &[
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-renames",
+                    "--diff-filter=d",
+                    "--name-only",
+                    "-z",
+                    "HEAD",
+                    "--",
+                ],
+                GitZMode::Names,
+                fail_prefix,
+                &no_env,
+            )? {
+                if !sp.is_empty() && test_secret_path(&sp) {
+                    tracked_secrets.push(sp);
+                }
+            }
+        } else {
+            for sp in run_git_paths_z(
+                root,
+                &["ls-files", "--cached", "-z"],
+                GitZMode::Names,
+                fail_prefix,
+                &no_env,
+            )? {
+                if !sp.is_empty() && test_secret_path(&sp) {
+                    unborn_staged_secrets.push(sp);
+                }
+            }
+        }
+    } else {
+        assert_snapshot_safe(root, fail_prefix)?;
+    }
 
     let untracked_all = run_git_paths_z(
         root,
@@ -516,7 +568,9 @@ pub fn new_working_tree_oid(root: &Path, fail_prefix: &str) -> Result<String, B3
     )?;
     let untracked_to_add: Vec<String> = untracked_all
         .into_iter()
-        .filter(|p| !p.is_empty() && !test_checkpoint_path(p))
+        .filter(|p| {
+            !(p.is_empty() || test_checkpoint_path(p) || (exclude_sensitive && test_secret_path(p)))
+        })
         .collect();
 
     let idx_res = run_git(root, &["rev-parse", "--git-path", "index"], &no_env, None)?;
@@ -540,15 +594,64 @@ pub fn new_working_tree_oid(root: &Path, fail_prefix: &str) -> Result<String, B3
         tmp_guard.path.as_os_str().to_os_os_string_or_lossy(),
     )];
 
-    let add_u_res = run_git(root, &["add", "-u"], &env_map, None)?;
-    if add_u_res.exit_code != 0 {
-        return Err(fail(
-            format!(
-                "{fail_prefix}: git add -u failed: {}",
-                git_err_detail(&add_u_res)
-            ),
-            1,
-        ));
+    if exclude_sensitive && !unborn_staged_secrets.is_empty() {
+        run_chunked_git_with_index(
+            root,
+            &env_map,
+            fail_prefix,
+            "git rm cached secrets failed",
+            &["rm", "-r", "--cached", "--ignore-unmatch", "-q", "--"],
+            &unborn_staged_secrets,
+        )?;
+    }
+
+    if exclude_sensitive && !tracked_secrets.is_empty() {
+        let wt_diff_paths = run_git_paths_z(
+            root,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                "--",
+            ],
+            GitZMode::Names,
+            fail_prefix,
+            &env_map,
+        )?;
+        let secret_set: HashSet<String> = tracked_secrets.iter().cloned().collect();
+        let non_secret_tracked: Vec<String> = wt_diff_paths
+            .into_iter()
+            .filter(|sp| !sp.is_empty() && !secret_set.contains(sp))
+            .collect();
+        run_chunked_git_with_index(
+            root,
+            &env_map,
+            fail_prefix,
+            "git add -u filtered failed",
+            &["add", "-u", "--"],
+            &non_secret_tracked,
+        )?;
+        run_chunked_git_with_index(
+            root,
+            &env_map,
+            fail_prefix,
+            "git reset HEAD failed",
+            &["reset", "-q", "HEAD", "--"],
+            &tracked_secrets,
+        )?;
+    } else {
+        let add_u_res = run_git(root, &["add", "-u"], &env_map, None)?;
+        if add_u_res.exit_code != 0 {
+            return Err(fail(
+                format!(
+                    "{fail_prefix}: git add -u failed: {}",
+                    git_err_detail(&add_u_res)
+                ),
+                1,
+            ));
+        }
     }
 
     run_chunked_git_with_index(

@@ -161,6 +161,52 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                         &ignore_dirty_paths,
                     );
                 }
+                GuardSubcommand::DiffScope {
+                    repo_root,
+                    base_sha,
+                    prev_sha,
+                    target_ref,
+                    ignore_dirty_paths,
+                } => {
+                    return guard::scope::run_diff_scope(
+                        &repo_root,
+                        &base_sha,
+                        &prev_sha,
+                        &target_ref,
+                        &ignore_dirty_paths,
+                    );
+                }
+                GuardSubcommand::MechanicalCheck {
+                    repo_root,
+                    base_sha,
+                    target_ref,
+                    allowed_paths,
+                    ignore_dirty_paths,
+                    obsoletes,
+                    allow_mass_delete,
+                    wave_specs,
+                    worker_changes,
+                    worker_roots,
+                    protected_paths,
+                    dirty_digests,
+                    has_dirty_digests,
+                } => {
+                    return guard::mechanical::run(
+                        &repo_root,
+                        &base_sha,
+                        &target_ref,
+                        &allowed_paths,
+                        &ignore_dirty_paths,
+                        &obsoletes,
+                        allow_mass_delete,
+                        &wave_specs,
+                        &worker_changes,
+                        &worker_roots,
+                        &protected_paths,
+                        &dirty_digests,
+                        has_dirty_digests,
+                    );
+                }
             };
             Ok((out, 0))
         }
