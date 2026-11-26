@@ -10,7 +10,7 @@ use common::{
     run_b3_env as raw_run_b3_env, write_lf, write_mock_gh, TempDirGuard,
 };
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn combine_output(code: i32, out: String, err: String) -> (i32, String, String) {
     let msg = if err.is_empty() {
@@ -146,7 +146,7 @@ fn parse_unit_ids_by_files(ledger_text: &str) -> std::collections::HashMap<Strin
 }
 
 #[cfg(windows)]
-fn to_windows_short_path(path: &Path) -> Option<PathBuf> {
+fn to_windows_short_path(path: &Path) -> Option<std::path::PathBuf> {
     use std::ffi::OsString;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
@@ -172,7 +172,9 @@ fn to_windows_short_path(path: &Path) -> Option<PathBuf> {
     if written == 0 || written >= needed {
         return None;
     }
-    Some(PathBuf::from(OsString::from_wide(&buf[..written as usize])))
+    Some(std::path::PathBuf::from(OsString::from_wide(
+        &buf[..written as usize],
+    )))
 }
 
 #[test]
