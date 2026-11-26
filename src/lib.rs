@@ -5,9 +5,10 @@ pub mod fs;
 pub mod git;
 pub mod guard;
 pub mod json;
+pub mod pr;
 pub mod process;
 
-use cli::{help_text, parse_args, Command, GuardSubcommand};
+use cli::{help_text, parse_args, Command, GuardSubcommand, PrSubcommand};
 use error::B3Error;
 
 /// Executes a parsed `b3` CLI invocation and returns `(stdout_text, exit_code)`.
@@ -19,6 +20,25 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
         Command::ContextMeasure { repo_root, strict } => {
             context::measure_context(&repo_root, strict)
         }
+        Command::Pr(pr_cmd) => match pr_cmd {
+            PrSubcommand::Verify {
+                mode,
+                repo_root,
+                has_repo_root,
+                repo,
+                pr_number,
+                gh_bin,
+                bash_bin,
+            } => pr::verify::run(
+                &mode,
+                &repo_root,
+                has_repo_root,
+                &repo,
+                &pr_number,
+                &gh_bin,
+                &bash_bin,
+            ),
+        },
         Command::Guard(sub) => {
             let out = match sub {
                 GuardSubcommand::Fingerprint {

@@ -7,6 +7,20 @@ pub enum Command {
     Help,
     ContextMeasure { repo_root: String, strict: bool },
     Guard(GuardSubcommand),
+    Pr(PrSubcommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrSubcommand {
+    Verify {
+        mode: String,
+        repo_root: String,
+        has_repo_root: bool,
+        repo: String,
+        pr_number: String,
+        gh_bin: String,
+        bash_bin: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +212,7 @@ b3 - B3 AI Engineering deterministic native core
 USAGE:
   b3 --version | --help
   b3 context measure [--repo-root <path>] [--strict]
+  b3 pr verify --mode pre-merge|post-merge [--repo-root <dir>] [--repo <owner/name>] --pr-number <N>
   b3 guard <subcommand> [flags]
 
 GUARD SUBCOMMANDS:
@@ -258,8 +273,67 @@ pub fn parse_args(args: &[String]) -> Result<Command, B3Error> {
         "-h" | "--help" | "help" => Ok(Command::Help),
         "context" => parse_context(&args[1..]),
         "guard" => parse_guard(&args[1..]).map(Command::Guard),
+        "pr" => parse_pr(&args[1..]).map(Command::Pr),
         other => Err(fail(format!("B3_CLI_FAIL: unknown command '{other}'"), 1)),
     }
+}
+
+fn parse_pr(args: &[String]) -> Result<PrSubcommand, B3Error> {
+    if args.is_empty() {
+        return Err(fail("PR_FAIL: missing pr subcommand", 1));
+    }
+    match args[0].as_str() {
+        "verify" => parse_pr_verify(&args[1..]),
+        other => Err(fail(format!("PR_FAIL: unknown pr subcommand '{other}'"), 1)),
+    }
+}
+
+fn parse_pr_verify(rest: &[String]) -> Result<PrSubcommand, B3Error> {
+    let mut mode = String::new();
+    let mut repo_root = String::new();
+    let mut has_repo_root = false;
+    let mut repo = String::new();
+    let mut pr_number = String::new();
+    let mut gh_bin = String::new();
+    let mut bash_bin = String::new();
+    let mut i = 0usize;
+    while i < rest.len() {
+        let (flag, iv) = parse_opt(&rest[i]);
+        let take = |idx: &mut usize| -> Result<String, B3Error> {
+            if let Some(v) = iv {
+                return Ok(v.to_string());
+            }
+            if *idx + 1 >= rest.len() {
+                return Err(fail(format!("GH_VERIFY_ERROR: missing_value({flag})"), 1));
+            }
+            *idx += 1;
+            Ok(rest[*idx].clone())
+        };
+        match flag {
+            "--mode" | "-Mode" => mode = take(&mut i)?,
+            "--repo-root" | "-RepoRoot" => {
+                repo_root = take(&mut i)?;
+                has_repo_root = true;
+            }
+            "--repo" | "-Repo" => repo = take(&mut i)?,
+            "--pr-number" | "-PrNumber" => pr_number = take(&mut i)?,
+            "--gh-bin" | "-GhBin" => gh_bin = take(&mut i)?,
+            "--bash-bin" | "-BashBin" => bash_bin = take(&mut i)?,
+            other => {
+                return Err(fail(format!("GH_VERIFY_ERROR: unknown_option({other})"), 1));
+            }
+        }
+        i += 1;
+    }
+    Ok(PrSubcommand::Verify {
+        mode,
+        repo_root,
+        has_repo_root,
+        repo,
+        pr_number,
+        gh_bin,
+        bash_bin,
+    })
 }
 
 fn parse_context(args: &[String]) -> Result<Command, B3Error> {

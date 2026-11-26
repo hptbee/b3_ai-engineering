@@ -1172,6 +1172,7 @@ console.log(JSON.stringify({
         $noNodePsi.RedirectStandardError = $true
         $noNodePsi.CreateNoWindow = $true
         $noNodePsi.EnvironmentVariables['PATH'] = $emptyDir
+        $noNodePsi.EnvironmentVariables['B3_USE_LEGACY'] = '1'
         $noNodePsi.EnvironmentVariables['B3_GH_BIN'] = $echoCmd
         $noNodePsi.EnvironmentVariables.Remove('B3_NODE_BIN')
         $pNn = [System.Diagnostics.Process]::Start($noNodePsi)
@@ -1199,7 +1200,7 @@ console.log(JSON.stringify({
         if ($ctx.gitBash) {
             $nnShPsi = New-Object System.Diagnostics.ProcessStartInfo
             $nnShPsi.FileName = $ctx.gitBash
-            $nnShPsi.Arguments = "-c `"PATH='/usr/bin:/bin'; unset B3_NODE_BIN; B3_GH_BIN='$($echoCmd -replace '\\','/')' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
+            $nnShPsi.Arguments = "-c `"PATH='/usr/bin:/bin'; unset B3_NODE_BIN; B3_USE_LEGACY=1 B3_GH_BIN='$($echoCmd -replace '\\','/')' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
             $nnShPsi.UseShellExecute = $false; $nnShPsi.RedirectStandardOutput = $true; $nnShPsi.RedirectStandardError = $true; $nnShPsi.CreateNoWindow = $true
             $pNnSh = [System.Diagnostics.Process]::Start($nnShPsi)
             $nnShOut = $pNnSh.StandardOutput.ReadToEnd() + $pNnSh.StandardError.ReadToEnd(); $pNnSh.WaitForExit()

@@ -2285,3 +2285,180 @@ fn differential_merge_policy_check_matches_powershell() {
     assert_eq!(pp, 0);
     assert_eq!(rpo, ppo);
 }
+
+#[test]
+fn differential_pr_verify_matches_node() {
+    let tmp = TempDirGuard::new("pr-verify");
+    let root = &tmp.path;
+    let _init_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Non-GitHub origin remote -> origin_remote_not_github parity
+    git_in(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.com/acme/demo.git",
+        ],
+    );
+    let (rn, rno) = run_b3(&[
+        "pr",
+        "verify",
+        "--mode",
+        "pre-merge",
+        "--repo-root",
+        root_str,
+        "--pr-number",
+        "42",
+    ]);
+    let (pn, pno) = run_ps_script(
+        "scripts/b3-github-verify.ps1",
+        &[
+            "-Mode",
+            "pre-merge",
+            "-RepoRoot",
+            root_str,
+            "-PrNumber",
+            "42",
+        ],
+    );
+    assert_eq!(rn, 1);
+    assert_eq!(pn, 1);
+    assert_eq!(rno, pno);
+
+    // Switch to GitHub origin + set up mock gh.cmd
+    git_in(
+        root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/acme/demo.git",
+        ],
+    );
+    let base_sha = "1111111111111111111111111111111111111111";
+    let head_sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let merge_sha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    let mock_dir = root.join(".b3/mock");
+    fs::create_dir_all(&mock_dir).unwrap();
+    fs::write(
+        mock_dir.join("pull_open.json"),
+        format!(
+            "{{\"number\":42,\"state\":\"open\",\"merged\":false,\"draft\":false,\"mergeable\":true,\"mergeable_state\":\"clean\",\"base\":{{\"ref\":\"main\",\"sha\":\"{base_sha}\",\"repo\":{{\"full_name\":\"acme/demo\",\"default_branch\":\"main\"}}}},\"head\":{{\"ref\":\"feat/x\",\"sha\":\"{head_sha}\",\"repo\":{{\"full_name\":\"acme/demo\"}}}}}}"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        mock_dir.join("pull_merged.json"),
+        format!(
+            "{{\"number\":42,\"state\":\"closed\",\"merged\":true,\"merged_at\":\"2026-11-26T10:00:00Z\",\"merge_commit_sha\":\"{merge_sha}\",\"commits\":2,\"base\":{{\"ref\":\"main\",\"sha\":\"{base_sha}\",\"repo\":{{\"full_name\":\"acme/demo\",\"default_branch\":\"main\"}}}},\"head\":{{\"ref\":\"feat/x\",\"sha\":\"{head_sha}\",\"repo\":{{\"full_name\":\"acme/demo\"}}}}}}"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        mock_dir.join("branch.json"),
+        format!("{{\"name\":\"main\",\"commit\":{{\"sha\":\"{base_sha}\"}}}}"),
+    )
+    .unwrap();
+    fs::write(
+        mock_dir.join("files.json"),
+        "[{\"filename\":\"src/b.ts\",\"previous_filename\":\"src/a.ts\"},{\"filename\":\"README.md\"}]",
+    )
+    .unwrap();
+    fs::write(
+        mock_dir.join("checks.json"),
+        format!(
+            "[{{\"check_runs\":[{{\"id\":10,\"name\":\"ci\",\"status\":\"completed\",\"conclusion\":\"success\",\"head_sha\":\"{head_sha}\",\"app\":{{\"id\":1}}}}]}}]"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        mock_dir.join("status.json"),
+        format!(
+            "[{{\"sha\":\"{head_sha}\",\"total_count\":1,\"state\":\"success\",\"statuses\":[{{\"context\":\"lint\",\"state\":\"success\"}}]}}]"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        mock_dir.join("compare.json"),
+        "{\"status\":\"identical\",\"behind_by\":0}",
+    )
+    .unwrap();
+
+    let gh_cmd = mock_dir.join("gh.cmd");
+    let gh_bat = "@echo off\r\nif \"%B3_MOCK_MODE%\"==\"auth401\" (\r\n  echo HTTP 401 Unauthorized 1>&2\r\n  exit /b 1\r\n)\r\nset \"EP=%~2\"\r\nif \"%~2\"==\"--paginate\" set \"EP=%~4\"\r\nif \"%EP%\"==\"repos/acme/demo/pulls/42\" (\r\n  if \"%B3_MOCK_MODE%\"==\"notfound\" (\r\n    echo HTTP 404 Not Found 1>&2\r\n    exit /b 1\r\n  )\r\n  if \"%B3_MOCK_MODE%\"==\"merged\" (\r\n    type \"%~dp0pull_merged.json\"\r\n  ) else (\r\n    type \"%~dp0pull_open.json\"\r\n  )\r\n  exit /b 0\r\n)\r\nif \"%EP%\"==\"repos/acme/demo/branches/main\" (\r\n  type \"%~dp0branch.json\"\r\n  exit /b 0\r\n)\r\nif \"%EP%\"==\"repos/acme/demo/pulls/42/files?per_page=100\" (\r\n  type \"%~dp0files.json\"\r\n  exit /b 0\r\n)\r\nif \"%EP%\"==\"repos/acme/demo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/check-runs?per_page=100\" (\r\n  type \"%~dp0checks.json\"\r\n  exit /b 0\r\n)\r\nif \"%EP%\"==\"repos/acme/demo/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/status?per_page=100\" (\r\n  type \"%~dp0status.json\"\r\n  exit /b 0\r\n)\r\nif \"%EP%\"==\"repos/acme/demo/compare/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb...1111111111111111111111111111111111111111\" (\r\n  type \"%~dp0compare.json\"\r\n  exit /b 0\r\n)\r\necho Unexpected endpoint: %EP% 1>&2\r\nexit /b 1\r\n";
+    fs::write(&gh_cmd, gh_bat).unwrap();
+    let gh_cmd_str = gh_cmd.to_str().unwrap();
+
+    let run_both = |mode_val: &str, mock_env: &str| -> ((i32, String), (i32, String)) {
+        let r_out = Command::new(b3_bin())
+            .env("B3_GH_BIN", gh_cmd_str)
+            .env("B3_MOCK_MODE", mock_env)
+            .args([
+                "pr",
+                "verify",
+                "--mode",
+                mode_val,
+                "--repo-root",
+                root_str,
+                "--pr-number",
+                "42",
+            ])
+            .output()
+            .expect("run b3 pr verify");
+        let r_res = (
+            r_out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&r_out.stdout)
+                .trim_end_matches(&['\r', '\n'][..])
+                .replace("\r\n", "\n"),
+        );
+
+        let ps_path = repo_root().join("scripts/b3-github-verify.ps1");
+        let p_out = Command::new("powershell")
+            .env("B3_USE_LEGACY", "1")
+            .env("B3_GH_BIN", gh_cmd_str)
+            .env("B3_MOCK_MODE", mock_env)
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&ps_path)
+            .args(["-Mode", mode_val, "-RepoRoot", root_str, "-PrNumber", "42"])
+            .output()
+            .expect("run legacy ps verify");
+        let p_res = (
+            p_out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&p_out.stdout)
+                .trim_end_matches(&['\r', '\n'][..])
+                .replace("\r\n", "\n"),
+        );
+        (r_res, p_res)
+    };
+
+    // 1. pre-merge open PR -> exact exit 0 + schema=b3-gh-verify-v2 output parity
+    let ((r1c, r1o), (p1c, p1o)) = run_both("pre-merge", "open");
+    assert_eq!(r1c, 0);
+    assert_eq!(p1c, 0);
+    assert_eq!(r1o, p1o);
+
+    // 2. post-merge merged PR -> exact exit 0 parity
+    let ((r2c, r2o), (p2c, p2o)) = run_both("post-merge", "merged");
+    assert_eq!(r2c, 0);
+    assert_eq!(p2c, 0);
+    assert_eq!(r2o, p2o);
+
+    // 3. 404 pr_not_found -> exit 1 parity
+    let ((r3c, r3o), (p3c, p3o)) = run_both("pre-merge", "notfound");
+    assert_eq!(r3c, 1);
+    assert_eq!(p3c, 1);
+    assert_eq!(r3o, p3o);
+
+    // 4. 401 github_auth_failed -> exit 2 parity
+    let ((r4c, r4o), (p4c, p4o)) = run_both("pre-merge", "auth401");
+    assert_eq!(r4c, 2);
+    assert_eq!(p4c, 2);
+    assert_eq!(r4o, p4o);
+}

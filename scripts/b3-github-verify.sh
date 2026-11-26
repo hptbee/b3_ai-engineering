@@ -4,6 +4,20 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
+  _b3_bin=""
+  if [[ -n "${B3_BIN:-}" && -f "$B3_BIN" ]]; then
+    _b3_bin="$B3_BIN"
+  elif [[ -f "${SCRIPT_DIR}/../target/release/b3.exe" ]]; then
+    _b3_bin="${SCRIPT_DIR}/../target/release/b3.exe"
+  elif [[ -f "${SCRIPT_DIR}/../target/release/b3" ]]; then
+    _b3_bin="${SCRIPT_DIR}/../target/release/b3"
+  fi
+  if [[ -n "$_b3_bin" ]]; then
+    exec "$_b3_bin" pr verify "$@"
+  fi
+fi
+
 MJS_RAW="${SCRIPT_DIR}/lib/b3-github-verify.mjs"
 if [[ ! -f "$MJS_RAW" ]]; then
   echo "GH_VERIFY_ERROR: missing_verifier_module"

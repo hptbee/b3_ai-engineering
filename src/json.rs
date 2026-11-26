@@ -26,6 +26,55 @@ impl JsonValue {
         }
         Ok(found)
     }
+
+    pub fn is_object(&self) -> bool {
+        matches!(self, JsonValue::Object(_))
+    }
+
+    pub fn get(&self, key: &str) -> Option<&JsonValue> {
+        let JsonValue::Object(entries) = self else {
+            return None;
+        };
+        entries.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v)
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            JsonValue::String(s) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            JsonValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            JsonValue::Number(s) => s.parse::<i64>().ok(),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&[JsonValue]> {
+        match self {
+            JsonValue::Array(arr) => Some(arr.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Converts JSON string/number/bool scalars to string (`None` for Null/Object/Array).
+    pub fn to_text_string(&self) -> Option<String> {
+        match self {
+            JsonValue::String(s) => Some(s.clone()),
+            JsonValue::Number(n) => Some(n.clone()),
+            JsonValue::Bool(b) => Some(if *b { "true" } else { "false" }.to_string()),
+            JsonValue::Null | JsonValue::Object(_) | JsonValue::Array(_) => None,
+        }
+    }
 }
 
 struct Parser<'a> {
