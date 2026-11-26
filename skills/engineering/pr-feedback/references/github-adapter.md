@@ -1,10 +1,10 @@
 # GitHub SCM Adapter (`b3-pr-github`)
 
-Thin GitHub provider adapter for `skills/engineering/pr-feedback/SKILL.md`. Read-only PR inspection guidelines remain in [`github-pr-review.md`](../../code-review/references/github-pr-review.md); all PR feedback reads and authorized writes route through `scripts/b3-pr-github.{ps1,sh}` (thin shims over `scripts/lib/b3-pr-github.mjs`).
+Thin GitHub provider adapter for `skills/engineering/pr-feedback/SKILL.md`. Read-only PR inspection guidelines remain in [`github-pr-review.md`](../../code-review/references/github-pr-review.md); all PR feedback reads and authorized writes route through `b3 pr <fetch|reconcile|reply|resolve|comment>` (invoked directly or via `scripts/b3-pr-github.{ps1,sh}` compatibility shims).
 
 ## Prerequisites, Transport, State & Limitations
 
-- Requires authenticated `gh` CLI and `node` (built-in modules only — zero npm packages, zero new MCP servers).
+- Requires authenticated `gh` CLI (all PR feedback & verification commands execute in native `b3` with zero Node.js or runtime dependencies, zero npm packages, and zero new MCP servers).
 - **Safe transport & stdout:** All GraphQL queries/mutations and REST POSTs pass structured JSON via `gh api ... --input -` (`stdin`). Exit uses `process.exitCode` + natural stdout drain (never `process.exit()`, preventing pipe truncation).
 - **Unified file & path guards:** Rejects symlinks/reparse points on leaf and ancestor directories, `..` traversal, UNC/mixed-slash `^[\\/]{2}`, drive-relative paths, ADS `:`, Windows reserved device names (`CON`, `NUL .`, `CON .txt`), oversized inputs (`>256 KiB` / `>65536` chars), and corrupt state JSON; strips UTF-8 BOM.
 - **State, single writer & provider limits:** Enforces `thread-lifecycle.md` §4 & §6 via canonical `<git-common-dir>/b3/pr-feedback/<owner>__<repo>__pr-<pr>.state.json` (`--state-file` rejected, `PR_FILE_GUARD` outside git), `PR_MUTATION_OWNER_REQUIRED` (`git-dir != git-common-dir` or `B3_PR_MUTATION_ROLE=worker` / `B3_SUBAGENT=1`), PID/`ESRCH` + `.reclaim` lock, pre/post `OPEN`+`HEAD` checks, `<!-- b3-pr-key:<key>;op=<16hex> -->` revalidation, and explicit `reconcile`. Note: full clones or unflagged processes in the primary checkout share only local lockfile serialization.

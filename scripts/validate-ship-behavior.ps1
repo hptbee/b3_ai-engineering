@@ -2234,12 +2234,12 @@ try {
     Remove-Item -LiteralPath (Join-Path $advRepo '.env') -Force
     & git -C $advRepo checkout -- src/a.ts | Out-Null
 
-    # C-02: Static check asserting ZERO AWK {6}/{40} interval quantifiers in scripts/b3-guard.sh
+    # C-02: Static check asserting ZERO AWK blocks / {6}/{40} interval quantifiers in thin scripts/b3-guard.sh
     $guardShRaw = [IO.File]::ReadAllText((Join-Path $root 'scripts\b3-guard.sh'))
     $awkBlocks = [regex]::Matches($guardShRaw, "(?s)(?:\bawk\b(?:[^\n']|-F'[^']*'|\\\r?\n)*|_B3_RISK_AWK_LIB=)'(?:[^']*)'")
     $awkIntervalHits = @($awkBlocks | Where-Object { $_.Value -match '\{6\}|\{40\}' })
-    if ($awkBlocks.Count -lt 1 -or $awkIntervalHits.Count -gt 0) {
-        $advErrs.Add("C-02 awk interval check failed: blocks=$($awkBlocks.Count) hits=$($awkIntervalHits.Count)")
+    if ($awkIntervalHits.Count -gt 0 -or ($guardShRaw -notmatch 'exec "\$_b3_bin" guard "\$CMD"')) {
+        $advErrs.Add("C-02 awk interval / native forward check failed: blocks=$($awkBlocks.Count) hits=$($awkIntervalHits.Count)")
     }
 
     # H-01: verify-run rejects .git./hooks/probe, sub/.git/config, and absolute C:\...\file. & /c/.../.git./x in both PS and Bash

@@ -4,6 +4,13 @@
 $script:HelpersRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:FailedCount = 0
 $script:PassedCount = 0
+if (-not $env:B3_BIN) {
+    $b3BinNameH = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
+    $relB3H = [IO.Path]::Combine($script:HelpersRepoRoot, 'target', 'release', $b3BinNameH)
+    if (Test-Path -LiteralPath $relB3H -PathType Leaf) {
+        $env:B3_BIN = $relB3H
+    }
+}
 
 function Resolve-B3BashPath {
     $candidates = New-Object System.Collections.Generic.List[string]
@@ -296,7 +303,7 @@ function Copy-B3Snapshot {
         $seedSnap = Join-Path $script:RepoSeedRoot ('snap-' + [guid]::NewGuid().ToString('N').Substring(0, 10))
         New-Item -ItemType Directory -Path $seedSnap -Force | Out-Null
 
-        $dirs = @('skills', 'commands', 'agents', 'rules', 'workflows', 'adapters\lib')
+        $dirs = @('skills', 'commands', 'agents', 'rules', 'workflows')
         if ($IncludeCommandSkills) {
             $dirs += 'adapters\command-skills'
         }
@@ -342,12 +349,10 @@ function New-B3SyncFixture {
         [switch]$IncludeBash,
         [switch]$IncludeModelsExample
     )
-    New-Item -ItemType Directory -Path (Join-Path $FixtureDir 'adapters\lib'), (Join-Path $FixtureDir 'skills\eng\demo') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $FixtureDir 'adapters'), (Join-Path $FixtureDir 'skills\eng\demo') -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\sync-skills.ps1') -Destination (Join-Path $FixtureDir 'adapters\sync-skills.ps1') -Force
-    Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\lib\global-common.ps1') -Destination (Join-Path $FixtureDir 'adapters\lib\global-common.ps1') -Force
     if ($IncludeBash) {
         Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\sync-skills.sh') -Destination (Join-Path $FixtureDir 'adapters\sync-skills.sh') -Force
-        Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\lib\global-common.sh') -Destination (Join-Path $FixtureDir 'adapters\lib\global-common.sh') -Force
     }
     Write-B3LfFile (Join-Path $FixtureDir 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
     if ($IncludeCommands) {

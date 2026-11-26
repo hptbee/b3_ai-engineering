@@ -2,7 +2,9 @@
 
 B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `review-loop/`) mapped onto **Cursor**, **Codex**, **Claude Code**, and **Antigravity** without duplicating prose.
 
-Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only thin committed entrypoints (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json`) are committed; local discovery links are gitignored and managed by `adapters/sync-skills.{ps1,sh}`.
+> **Native CLI & distribution:** `b3 sync` and `b3 install <product|cursor|antigravity|global>` execute all sync, product-attach, NTFS junction (`DeviceIoControl`), symlink, manifest, and uninstall flows natively via the zero-dependency `b3` binary (`cargo build --release` for contributors, or checksum-verified `./scripts/bootstrap-b3.{ps1,sh}` from GitHub Releases with `--rollback` support). The `adapters/*.{ps1,sh}` wrapper scripts forward to `b3` automatically (`B3_BIN` or `target/release/b3*`). Release targets (`.github/workflows/release.yml`): `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`.
+
+Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only thin committed entrypoints (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json`) are committed; local discovery links are gitignored and managed by `b3 sync` (`adapters/sync-skills.{ps1,sh}`).
 
 ## Host path matrix
 
@@ -89,6 +91,6 @@ Install, verify, update, or uninstall global B3 integration across **Cursor** (`
 ./adapters/install-global.sh verify --host all
 ```
 
-Host-specific installers ([`cursor/install-global.ps1`](cursor/install-global.ps1) / [`cursor/install-global.sh`](cursor/install-global.sh) and [`antigravity/install-plugin.ps1`](antigravity/install-plugin.ps1) / [`antigravity/install-plugin.sh`](antigravity/install-plugin.sh)) stay independent, share filesystem/hashing/manifest/discovery primitives via [`lib/global-common.ps1`](lib/global-common.ps1) / [`lib/global-common.sh`](lib/global-common.sh), support `install`, `verify`, `update`, `uninstall`, `-DryRun`/`--dry-run`, and `-Force`/`--force`, and are documented in [`cursor/README.md`](cursor/README.md) and [`antigravity/README.md`](antigravity/README.md).
+Host-specific installers ([`cursor/install-global.ps1`](cursor/install-global.ps1) / [`cursor/install-global.sh`](cursor/install-global.sh) and [`antigravity/install-plugin.ps1`](antigravity/install-plugin.ps1) / [`antigravity/install-plugin.sh`](antigravity/install-plugin.sh)) stay independent, share filesystem/hashing/manifest/discovery primitives via the native `b3 install` Rust core (`src/adapters/`), support `install`, `verify`, `update`, `uninstall`, `-DryRun`/`--dry-run`, and `-Force`/`--force`, and are documented in [`cursor/README.md`](cursor/README.md) and [`antigravity/README.md`](antigravity/README.md).
 
 Layout decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`), global host integration: [`../research/decisions/decision-017-global-cursor-integration.md`](../research/decisions/decision-017-global-cursor-integration.md).

@@ -120,16 +120,22 @@ dir_has_gh() {
 GUARD_PS_WIN="$(to_win_path "$GUARD_PS")"
 GH_VERIFY_PS_WIN="$(to_win_path "$GH_VERIFY_PS")"
 
-# Build a clean PATH for PowerShell `nogh` runs (preserving System32, Git cmd/bin, and Node without any real `gh`)
+# Build a clean PATH for PowerShell / native b3 `nogh` runs (preserving System32, Git cmd/bin, and Node without any real `gh`)
 PS_NOGH_PATH="$NOGH_BIN"
-if $HAS_PWSH && $HAS_CYGPATH; then
+if $HAS_CYGPATH; then
   _ps_dirs=("$NOGH_WIN_SHIMS")
   _sysroot_u="$(cygpath -u "${SYSTEMROOT:-C:\\Windows}" 2>/dev/null || printf '/c/Windows')"
-  for _sd in "${_sysroot_u}/System32" "${_sysroot_u}" "$(dirname "$PWSH_BIN")"; do
+  for _sd in "${_sysroot_u}/System32" "${_sysroot_u}"; do
     if [[ -d "$_sd" ]] && ! dir_has_gh "$_sd"; then
       _ps_dirs+=("$_sd")
     fi
   done
+  if $HAS_PWSH; then
+    _pw_dir="$(dirname "$PWSH_BIN")"
+    if [[ -d "$_pw_dir" ]] && ! dir_has_gh "$_pw_dir"; then
+      _ps_dirs+=("$_pw_dir")
+    fi
+  fi
   for _git_cmd_cand in "/cmd" "$(cygpath -u "${PROGRAMFILES:-C:\\Program Files}\\Git\\cmd" 2>/dev/null || true)"; do
     if [[ -n "$_git_cmd_cand" && -d "$_git_cmd_cand" && -f "${_git_cmd_cand}/git.exe" ]] && ! dir_has_gh "$_git_cmd_cand"; then
       _ps_dirs+=("$_git_cmd_cand")
@@ -255,7 +261,11 @@ run_dual() {
     sh_path="${MOCK_BIN}:${PATH}"
     ps_path="${MOCK_BIN}:${PATH}"
   elif [[ "$use_mock_path" == "nogh" ]]; then
-    sh_path="$NOGH_BIN"
+    if $HAS_CYGPATH; then
+      sh_path="${NOGH_BIN}:${PS_NOGH_PATH}"
+    else
+      sh_path="$NOGH_BIN"
+    fi
     ps_path="$PS_NOGH_PATH"
   fi
 
@@ -1562,17 +1572,26 @@ assert_dual "15c-safe-unicode-bracket-space-authorized" 0 "^MERGE_AUTHORIZED: mo
 
 $t15_ok && pass "15-r002-literal-unicode-space-bracket-rename"
 
-printf '\nSummary: passed=%d failed=%d pwsh=%s\n' "$PASS_CNT" "$FAIL_CNT" "$HAS_PWSH"
 if [[ "$FAIL_CNT" -gt 0 ]]; then
+  if $HAS_PWSH; then
+    printf '\nSummary: passed=%d failed=%d native_contract=FAILED pwsh_wrapper_compat=FAILED\n' "$PASS_CNT" "$FAIL_CNT"
+  elif $ALLOW_INCOMPLETE_PWSH; then
+    printf '\nSummary: passed=%d failed=%d native_contract=FAILED pwsh_wrapper_compat=SKIPPED (--allow-incomplete-pwsh)\n' "$PASS_CNT" "$FAIL_CNT"
+  else
+    printf '\nSummary: passed=%d failed=%d native_contract=FAILED pwsh_wrapper_compat=UNAVAILABLE\n' "$PASS_CNT" "$FAIL_CNT"
+  fi
   exit 1
 fi
 if ! $HAS_PWSH; then
   if $ALLOW_INCOMPLETE_PWSH; then
-    echo "ok (bash-only; pwsh skipped - --allow-incomplete-pwsh)"
+    printf '\nSummary: passed=%d failed=%d native_contract=VERIFIED (bash->b3) pwsh_wrapper_compat=SKIPPED (--allow-incomplete-pwsh)\n' "$PASS_CNT" "$FAIL_CNT"
+    echo "ok (native contract verified via bash; pwsh compatibility skipped)"
     exit 0
   fi
+  printf '\nSummary: passed=%d failed=%d native_contract=VERIFIED (bash->b3) pwsh_wrapper_compat=UNAVAILABLE\n' "$PASS_CNT" "$FAIL_CNT"
   echo "INCOMPLETE: pwsh unavailable (use --allow-incomplete-pwsh to accept bash-only)"
   exit 2
 fi
+printf '\nSummary: passed=%d failed=%d native_contract=VERIFIED pwsh_wrapper_compat=VERIFIED\n' "$PASS_CNT" "$FAIL_CNT"
 echo "ok"
 exit 0

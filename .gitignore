@@ -37,3 +37,7 @@ venv/
 
 # /ship run checkpoints inside this system repo
 .b3/
+
+# Rust build artifacts
+/target/
+

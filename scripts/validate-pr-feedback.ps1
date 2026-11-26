@@ -8,10 +8,22 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
+$b3Bin = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
+    $env:B3_BIN
+} else {
+    $relB3 = [IO.Path]::Combine($repoRoot, 'target', 'release', $b3BinName)
+    if (Test-Path -LiteralPath $relB3 -PathType Leaf) { $relB3 } else { $null }
+}
+if ($b3Bin -and -not $env:B3_BIN) {
+    $env:B3_BIN = $b3Bin
+}
+if (-not $b3Bin) {
+    throw "b3 native binary not found; build with 'cargo build --release' or set B3_BIN"
+}
 $psAdapter = Join-Path $repoRoot 'scripts\b3-pr-github.ps1'
 $shAdapter = Join-Path $repoRoot 'scripts\b3-pr-github.sh'
 $guardPs = Join-Path $repoRoot 'scripts\b3-guard.ps1'
-$coreMjs = Join-Path $repoRoot 'scripts\lib\b3-pr-github.mjs'
 $nodeExe = (Get-Command node -CommandType Application | Select-Object -First 1).Source
 $psExe = (Get-Command powershell -CommandType Application | Select-Object -First 1).Source
 
@@ -414,9 +426,10 @@ child.on('close', (code) => {
 
     $shells = @('ps')
     if ($gitBash) { $shells += 'sh' }
+    $matrixLabel = 'native b3 pr matrix'
 
     Write-Output "=== B3 PR Feedback Lifecycle Hardening & Simplification Suite ==="
-    Write-Output "[SIMULATED: mocked gh CLI + real isolated sandbox b3-guard verify-run/check (node matrix + $($shells -join '/') wrapper parity)]"
+    Write-Output "[SIMULATED: mocked gh CLI + real isolated sandbox b3-guard verify-run/check ($matrixLabel + $($shells -join '/') wrapper parity)]"
     Write-Output "[LIVE EXTERNAL WRITES: NOT_VERIFIED (no remote PR mutations executed)]"
 
     # Shared helper block injected into each isolated RunspacePool worker (thread-safe ProcessStartInfo execution)
@@ -527,8 +540,8 @@ function Invoke-Adapter([string]$Shell, [string]$StatePath, [string[]]$CliArgs, 
     }
 
     if ($Shell -eq 'node') {
-        $psi.FileName = $ctx.nodeExe
-        $allArgs = @($ctx.coreMjs) + @($CliArgs)
+        $psi.FileName = $ctx.b3Bin
+        $allArgs = @('pr') + @($CliArgs)
         $psi.Arguments = ($allArgs | ForEach-Object { ConvertTo-Win32Arg $_ }) -join ' '
     } elseif ($Shell -eq 'ps') {
         $psi.FileName = $ctx.psExe
@@ -565,6 +578,7 @@ function Invoke-Adapter([string]$Shell, [string]$StatePath, [string[]]$CliArgs, 
 
     $sharedCtx = @{
         repoRoot = $repoRoot
+        b3Bin = $b3Bin
         psAdapter = $psAdapter
         shAdapter = $shAdapter
         coreMjs = $coreMjs
@@ -1079,106 +1093,34 @@ function Invoke-Adapter([string]$Shell, [string]$StatePath, [string[]]$CliArgs, 
                ($pfLife -match 'server-side atomic') -and ($pfGh -match 'verify-check'))
         return @{ Ok = $ok; Name = "S14-S15-context-headroom-and-governance (SKILL.md=${pfSkillBytes}B)"; Reason = "bytes=$pfSkillBytes ctxPs=$ctxPs ctxSh=$ctxSh" }
 '@,
-        # Block 15: R004 .cmd/.bat round-trip safety & LOW #1 missing node / missing gh on b3-github-verify
+        # Block 15: R004 missing b3 binary & missing gh on b3-github-verify.{ps1,sh} (.cmd roundtrip tested in cargo unit tests)
         @'
-        $ghExecMjsFwd = (Join-Path $ctx.repoRoot 'scripts\lib\b3-gh-exec.mjs') -replace '\\', '/'
         $ghVerifyPs = Join-Path $ctx.repoRoot 'scripts\b3-github-verify.ps1'
         $ghVerifySh = (Join-Path $ctx.repoRoot 'scripts\b3-github-verify.sh') -replace '\\', '/'
         $r4Work = Join-Path $ctx.workDir 'r004-work'
         New-Item -ItemType Directory -Path $r4Work -Force | Out-Null
         $echoCmd = Join-Path $r4Work 'gh-echo.cmd'
-        $sleepCmd = Join-Path $r4Work 'gh-sleep.cmd'
-        $parenCmd = Join-Path $r4Work 'gh-(paren).cmd'
-        [IO.File]::WriteAllText($echoCmd, "@echo off`r`nnode -e ""const fs=require('fs');const s=fs.readFileSync(0,'utf8');console.log(JSON.stringify({argv:process.argv.slice(1),stdin:s}));"" ""%~1"" ""%~2"" ""%~3"" ""%~4"" ""%~5"" ""%~6"" ""%~7"" ""%~8"" ""%~9""`r`n", $utf8NoBom)
-        [IO.File]::WriteAllText($sleepCmd, "@echo off`r`nnode -e ""setTimeout(() => {}, 5000);""`r`n", $utf8NoBom)
-        [IO.File]::WriteAllText($parenCmd, "@echo off`r`necho SHOULD_NOT_RUN`r`n", $utf8NoBom)
+        [IO.File]::WriteAllText($echoCmd, "@echo off`r`necho {}`r`n", $utf8NoBom)
 
-        $r4Driver = Join-Path $r4Work 'r004-driver.mjs'
-        $echoCmdWin = $echoCmd
-        $sleepCmdWin = $sleepCmd
-        $parenCmdWin = $parenCmd
-        [IO.File]::WriteAllText($r4Driver, @"
-import { execGh } from 'file:///$ghExecMjsFwd';
-const injEnv = { ...process.env, B3_TEST_INJ: 'PWNED', B3_DELAYED: 'DELAYED_PWN' };
-const batch1Args = [
-  'api',
-  'repos/acme/demo/branches/feat%2Fa%2Fb',
-  '%B3_TEST_INJ%',
-  '%PATH%',
-  '!B3_DELAYED!',
-  'a&echo PWNED',
-  'a|b',
-  'a^b',
-  '(x)'
-];
-const batch2Args = ['a<b', 'a>b', '', 'literal-ok'];
-const ok1 = execGh(batch1Args, { ghBin: $(ConvertTo-Json $echoCmdWin), env: injEnv, stdin: JSON.stringify({ ok: true, nested: '%B3_TEST_INJ%' }) });
-const ok1Parsed = JSON.parse(ok1.stdout.trim());
-const ok2 = execGh(batch2Args, { ghBin: $(ConvertTo-Json $echoCmdWin), env: injEnv });
-const ok2Parsed = JSON.parse(ok2.stdout.trim());
-const errTrail = execGh(['api', 'bad\\'], { ghBin: $(ConvertTo-Json $echoCmdWin) });
-const errQuote = execGh(['api', 'bad"q'], { ghBin: $(ConvertTo-Json $echoCmdWin) });
-const errParen = execGh(['api', 'ok'], { ghBin: $(ConvertTo-Json $parenCmdWin) });
-const errComspec = execGh(['api', 'ok'], { ghBin: $(ConvertTo-Json $echoCmdWin), env: { ...process.env, ComSpec: 'cmd' + '.exe&echo PWN' } });
-const toRes = execGh(['api', 'slow'], { ghBin: $(ConvertTo-Json $sleepCmdWin), env: injEnv, timeout: 250 });
-console.log(JSON.stringify({
-  ok1Status: ok1.status,
-  argv1: ok1Parsed.argv,
-  stdin1: JSON.parse(ok1Parsed.stdin),
-  ok2Status: ok2.status,
-  argv2: ok2Parsed.argv.slice(0, 4),
-  errTrail: errTrail.reason,
-  errQuote: errQuote.reason,
-  errParen: errParen.reason,
-  errComspec: errComspec.reason,
-  toOk: toRes.ok,
-  toReason: toRes.reason
-}));
-"@, $utf8NoBom)
-
-        $r4Raw = & $ctx.nodeExe $r4Driver 2>&1
-        $r4Obj = ($r4Raw -join "`n") | ConvertFrom-Json
-        $rtMatch = ($r4Obj.ok1Status -eq 0) -and
-                   ($r4Obj.ok2Status -eq 0) -and
-                   ($r4Obj.argv1[0] -ceq 'api') -and
-                   ($r4Obj.argv1[1] -ceq 'repos/acme/demo/branches/feat%2Fa%2Fb') -and
-                   ($r4Obj.argv1[2] -ceq '%B3_TEST_INJ%') -and
-                   ($r4Obj.argv1[3] -ceq '%PATH%') -and
-                   ($r4Obj.argv1[4] -ceq '!B3_DELAYED!') -and
-                   ($r4Obj.argv1[5] -ceq 'a&echo PWNED') -and
-                   ($r4Obj.argv1[6] -ceq 'a|b') -and
-                   ($r4Obj.argv1[7] -ceq 'a^b') -and
-                   ($r4Obj.argv1[8] -ceq '(x)') -and
-                   ($r4Obj.argv2[0] -ceq 'a<b') -and
-                   ($r4Obj.argv2[1] -ceq 'a>b') -and
-                   ($r4Obj.argv2[2] -ceq '') -and
-                   ($r4Obj.argv2[3] -ceq 'literal-ok') -and
-                   ($r4Obj.stdin1.ok -eq $true) -and
-                   ($r4Obj.stdin1.nested -ceq '%B3_TEST_INJ%') -and
-                   ($r4Obj.errTrail -eq 'unsafe_gh_arg') -and
-                   ($r4Obj.errQuote -eq 'unsafe_gh_arg') -and
-                   ($r4Obj.errParen -eq 'unsafe_gh_path') -and
-                   ($r4Obj.errComspec -eq 'unsafe_comspec') -and
-                   ($r4Obj.toOk -eq $false) -and ($r4Obj.toReason -eq 'timeout')
-
-        # LOW #1: Missing node (with gh present) & missing gh (with node + coreutils present) on b3-github-verify.{ps1,sh}
         $emptyDir = Join-Path $r4Work 'empty-bin'
         New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
-        $noNodePsi = New-Object System.Diagnostics.ProcessStartInfo
-        $noNodePsi.FileName = $ctx.psExe
-        $noNodePsi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ghVerifyPs`" -Mode pre-merge -Repo acme/demo -PrNumber 1"
-        $noNodePsi.UseShellExecute = $false
-        $noNodePsi.RedirectStandardOutput = $true
-        $noNodePsi.RedirectStandardError = $true
-        $noNodePsi.CreateNoWindow = $true
-        $noNodePsi.EnvironmentVariables['PATH'] = $emptyDir
-        $noNodePsi.EnvironmentVariables['B3_GH_BIN'] = $echoCmd
-        $noNodePsi.EnvironmentVariables.Remove('B3_NODE_BIN')
-        $pNn = [System.Diagnostics.Process]::Start($noNodePsi)
-        $nnOut = $pNn.StandardOutput.ReadToEnd() + $pNn.StandardError.ReadToEnd()
-        $pNn.WaitForExit()
-        $nnPsOk = ($pNn.ExitCode -eq 2 -and $nnOut -match 'GH_VERIFY_UNAVAILABLE: node_runtime_unavailable')
-        $pNn.Dispose()
+        $missingB3 = Join-Path $emptyDir 'nonexistent-b3.exe'
+
+        $noB3Psi = New-Object System.Diagnostics.ProcessStartInfo
+        $noB3Psi.FileName = $ctx.psExe
+        $noB3Psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$ghVerifyPs`" -Mode pre-merge -Repo acme/demo -PrNumber 1"
+        $noB3Psi.UseShellExecute = $false
+        $noB3Psi.RedirectStandardOutput = $true
+        $noB3Psi.RedirectStandardError = $true
+        $noB3Psi.CreateNoWindow = $true
+        $noB3Psi.EnvironmentVariables['PATH'] = $emptyDir
+        $noB3Psi.EnvironmentVariables['B3_BIN'] = $missingB3
+        $noB3Psi.EnvironmentVariables['B3_GH_BIN'] = $echoCmd
+        $pNb = [System.Diagnostics.Process]::Start($noB3Psi)
+        $nbOut = $pNb.StandardOutput.ReadToEnd() + $pNb.StandardError.ReadToEnd()
+        $pNb.WaitForExit()
+        $nbPsOk = ($pNb.ExitCode -eq 2 -and $nbOut -match 'GH_VERIFY_UNAVAILABLE: b3_binary_unavailable')
+        $pNb.Dispose()
 
         $noGhPsi = New-Object System.Diagnostics.ProcessStartInfo
         $noGhPsi.FileName = $ctx.psExe
@@ -1187,7 +1129,8 @@ console.log(JSON.stringify({
         $noGhPsi.RedirectStandardOutput = $true
         $noGhPsi.RedirectStandardError = $true
         $noGhPsi.CreateNoWindow = $true
-        $noGhPsi.EnvironmentVariables['PATH'] = "$(Split-Path -Parent $ctx.nodeExe);$emptyDir"
+        $noGhPsi.EnvironmentVariables['PATH'] = $emptyDir
+        $noGhPsi.EnvironmentVariables['B3_BIN'] = $ctx.b3Bin
         $noGhPsi.EnvironmentVariables['B3_GH_BIN'] = Join-Path $emptyDir 'missing-gh.exe'
         $pNg = [System.Diagnostics.Process]::Start($noGhPsi)
         $ngOut = $pNg.StandardOutput.ReadToEnd() + $pNg.StandardError.ReadToEnd()
@@ -1197,30 +1140,29 @@ console.log(JSON.stringify({
 
         $shVerifyOk = $true
         if ($ctx.gitBash) {
-            $nnShPsi = New-Object System.Diagnostics.ProcessStartInfo
-            $nnShPsi.FileName = $ctx.gitBash
-            $nnShPsi.Arguments = "-c `"PATH='/usr/bin:/bin'; unset B3_NODE_BIN; B3_GH_BIN='$($echoCmd -replace '\\','/')' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
-            $nnShPsi.UseShellExecute = $false; $nnShPsi.RedirectStandardOutput = $true; $nnShPsi.RedirectStandardError = $true; $nnShPsi.CreateNoWindow = $true
-            $pNnSh = [System.Diagnostics.Process]::Start($nnShPsi)
-            $nnShOut = $pNnSh.StandardOutput.ReadToEnd() + $pNnSh.StandardError.ReadToEnd(); $pNnSh.WaitForExit()
-            $nnShEx = $pNnSh.ExitCode; $pNnSh.Dispose()
+            $nbShPsi = New-Object System.Diagnostics.ProcessStartInfo
+            $nbShPsi.FileName = $ctx.gitBash
+            $nbShPsi.Arguments = "-c `"PATH='/usr/bin:/bin'; B3_BIN='/nonexistent/b3' B3_GH_BIN='$($echoCmd -replace '\\','/')' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
+            $nbShPsi.UseShellExecute = $false; $nbShPsi.RedirectStandardOutput = $true; $nbShPsi.RedirectStandardError = $true; $nbShPsi.CreateNoWindow = $true
+            $pNbSh = [System.Diagnostics.Process]::Start($nbShPsi)
+            $nbShOut = $pNbSh.StandardOutput.ReadToEnd() + $pNbSh.StandardError.ReadToEnd(); $pNbSh.WaitForExit()
+            $nbShEx = $pNbSh.ExitCode; $pNbSh.Dispose()
 
-            $nodeDirRaw = Split-Path -Parent $ctx.nodeExe
-            $nodeDirPosix = if ($nodeDirRaw -match '^([A-Za-z]):[\\/](.*)$') { "/$($Matches[1].ToLowerInvariant())/$($Matches[2] -replace '\\','/')" } else { $nodeDirRaw -replace '\\','/' }
+            $b3BinFwd = $ctx.b3Bin -replace '\\', '/'
             $ngShPsi = New-Object System.Diagnostics.ProcessStartInfo
             $ngShPsi.FileName = $ctx.gitBash
-            $ngShPsi.Arguments = "-c `"PATH='${nodeDirPosix}:/usr/bin:/bin'; B3_GH_BIN='/nonexistent/gh' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
+            $ngShPsi.Arguments = "-c `"PATH='/usr/bin:/bin'; B3_BIN='$b3BinFwd' B3_GH_BIN='/nonexistent/gh' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
             $ngShPsi.UseShellExecute = $false; $ngShPsi.RedirectStandardOutput = $true; $ngShPsi.RedirectStandardError = $true; $ngShPsi.CreateNoWindow = $true
             $pNgSh = [System.Diagnostics.Process]::Start($ngShPsi)
             $ngShOut = $pNgSh.StandardOutput.ReadToEnd() + $pNgSh.StandardError.ReadToEnd(); $pNgSh.WaitForExit()
             $ngShEx = $pNgSh.ExitCode; $pNgSh.Dispose()
 
-            $shVerifyOk = ($nnShEx -eq 2 -and $nnShOut -match 'GH_VERIFY_UNAVAILABLE: node_runtime_unavailable' -and
+            $shVerifyOk = ($nbShEx -eq 2 -and $nbShOut -match 'GH_VERIFY_UNAVAILABLE: b3_binary_unavailable' -and
                            $ngShEx -eq 2 -and $ngShOut -match 'gh_cli_unavailable')
         }
 
-        $ok = $rtMatch -and $nnPsOk -and $ngPsOk -and $shVerifyOk
-        return @{ Ok = $ok; Name = 'R004-cmd-roundtrip-and-missing-node-gh-verify'; Reason = "rt=$rtMatch nnPs=$nnPsOk ngPs=$ngPsOk sh=$shVerifyOk raw=$($r4Raw -join ' ')" }
+        $ok = $nbPsOk -and $ngPsOk -and $shVerifyOk
+        return @{ Ok = $ok; Name = 'R004-missing-b3-and-gh-verify'; Reason = "nbPs=$nbPsOk ngPs=$ngPsOk sh=$shVerifyOk nbOut=$nbOut ngOut=$ngOut" }
 '@
     )
 
