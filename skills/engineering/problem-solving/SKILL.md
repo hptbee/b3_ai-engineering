@@ -5,65 +5,36 @@ description: Use for end-to-end product changes (understand -> plan -> implement
 
 # Problem solving
 
-Default engineering loop for this system:
+Default engineering loop:
 
 ```text
 Scope → Plan → Build → Verify → Review → Fix → Verify
 ```
 
-## When to use
+## When to use / not use
 
-- Feature or bug **implementation** after the cause is known or the spec is clear
-- Tasks that mix investigation and change **once debugging has a cause**
-- When the agent is about to jump to coding without a problem statement
-
-## When not to use
-
-- “Review this diff” with no implementation mandate → `code-review`
-- Failure with unknown cause, before a patch → `debugging`
-- “Research how other repos do X” → `research-engineering-patterns`
-- Pure knowledge questions with no change
-- Running the full independent review loop after work is already implemented → `review-loop/strategy.md` (not a substitute for this skill’s lighter review step)
-
-Near miss: “is this design sound?” with no code change yet → stay in Scope/Plan; do not skip to Build.
+- **Use:** feature/bug implementation once cause is known or spec is clear, or mixed investigation+change after debugging finds a cause.
+- **Do not use:** review-only (`code-review`), unknown-cause failures before patching (`debugging`), external pattern mining (`research-engineering-patterns`), pure Q&A, or full independent loop (`review-loop/strategy.md`).
+- Near miss: “is this design sound?” without code changes → stay in Scope/Plan.
 
 ## Procedure
 
-1. **Scope**  
-   Restate the problem, current/desired behavior, and constraints. Read known targets directly; load `workflows/references/context-routing.md` on demand for unfamiliar arch/symbols. If incomplete, gather; do not guess.
-
-2. **Plan**  
-   Write a short plan: approach, files likely touched, risks, and verification. Prefer the smallest change; call out open questions. Inside `/b3-ship`, this is `Scope` + `Gate` (inspect first, persist by `inline`/`notes`/`detailed`; do not skip or stop for the user).
-
-3. **Build**  
-   Execute the plan without silent scope expansion. If wrong, update the plan and continue.
-
-4. **Verify**
-   Run executed verification (`verification`; `b3-guard verify-run` to `.b3/ship/verify/<slug>.verify` for non-trivial changes) on current `HEAD` + tree. Missing evidence → `UNKNOWN / INCOMPLETE`.
-
-5. **Review (risk-sensitive)**
-   Run `b3-guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) first; check plan alignment, callers, tests, and `CONFIRMED` residue:
-   - **Low-risk:** 1 independent `b3-reviewer` pass if subagents exist (else self-review noting `SINGLE_AGENT_LIMIT`).
-   - **High-risk** (authz, schema, concurrency, hot perf, cross-module contracts): add matching `b3-{security,architecture,performance}-reviewer` (`SINGLE_AGENT_LIMIT` caps to `INCOMPLETE`). Not `/b3-review-loop` or `/b3-ship`.
-
-6. **Fix**
-   Fix confirmed causes in scope, add regression tests, delete only `CONFIRMED` redundancy (`LIKELY REDUNDANT`/`INTENTIONAL COMPLEXITY` untouched); map each edit to a finding.
-
-7. **Verify (re-run)**
-   Re-run checks + fresh delta review if blockers existed (max 2 fix-verify rounds). Still blocked → `FAIL`/`INCOMPLETE` or suggest `/b3-review-loop` (never silently escalate).
+1. **Scope** — Restate problem, current/desired behavior, and constraints. Read known targets directly; load `workflows/references/context-routing.md` on demand for unfamiliar arch/symbols. Gather gaps; do not guess.
+2. **Plan** — Write a short plan: approach, disjoint `files`/`depends_on`, risks, and verification (smallest change; flag open questions). Inside `/b3-ship`, this is `Scope` + `Gate`.
+3. **Build** — Execute without silent scope expansion (`dispatch-naming.md`): 1-slice `XS` runs inline; for independent impl/test/doc slices, validate via `b3 guard check-wave --partition` and dispatch concurrent disjoint workers (single-writer parent integration). Do not force `/b3-ship`.
+4. **Verify** — Run executed checks (`verification`; `b3 guard verify-run` to `.b3/ship/verify/<slug>.verify` for non-trivial changes) on current `HEAD` + tree. Missing evidence → `UNKNOWN / INCOMPLETE`.
+5. **Review (risk-sensitive)** — Run `b3 guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) first; check plan alignment, callers, tests, and `CONFIRMED` residue:
+   - **Low-risk:** 1 `b3-reviewer` pass if subagents exist (else self-review noting `SINGLE_AGENT_LIMIT`).
+   - **High-risk** (authz, schema, concurrency, hot perf, shared contracts): fan out `b3-reviewer` + matching `b3-{security,architecture,performance}-reviewer` concurrently in `SHARED_READ_ONLY` (`SINGLE_AGENT_LIMIT` caps to `INCOMPLETE`). Not `/b3-review-loop` or `/b3-ship`.
+6. **Fix** — Fix confirmed causes in scope, add regression tests, delete only `CONFIRMED` redundancy (`LIKELY REDUNDANT`/`INTENTIONAL COMPLEXITY` untouched); map each edit to a finding.
+7. **Verify (re-run)** — Re-run checks + fresh delta review if blockers existed (max 2 fix-verify rounds). Still blocked → `FAIL`/`INCOMPLETE` or suggest `/b3-review-loop` (never silently escalate).
 
 ## Progressive disclosure
 
-- Constraints: `rules/engineering-principles.md`, `rules/verification.md`
+- Constraints & orchestration: `rules/engineering-principles.md`, `rules/verification.md`, `workflows/references/dispatch-naming.md`
 - Full loop / review: `review-loop/strategy.md`, `skills/engineering/code-review/SKILL.md`
 
-## Verification
+## Verification & failure handling
 
-Done only when the success condition is checked with evidence, or gaps are labeled incomplete. Untested code is not done.
-
-## Failure handling
-
-- Cannot reproduce → debug with evidence; do not patch by folklore
-- Multiple plausible causes → test the cheapest distinguishing hypothesis
-- Fix unverified because tools are missing → incomplete, not success
-- Problem is out of scope (needs a specialist skill that does not exist yet) → say so; do not invent a giant ad-hoc skill in-line
+- Done only when success conditions are checked with evidence, or gaps are labeled `UNKNOWN / INCOMPLETE`. Untested code is not done.
+- Cannot reproduce → `debugging`; multiple plausible causes → test cheapest distinguishing hypothesis; missing tools → `INCOMPLETE`; missing specialist skill → say so cleanly.

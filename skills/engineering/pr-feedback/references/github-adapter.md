@@ -1,36 +1,33 @@
-# GitHub SCM Adapter (`b3-pr-github`)
+# GitHub SCM Adapter (`b3 pr`)
 
-Thin GitHub provider adapter for `skills/engineering/pr-feedback/SKILL.md`. Read-only PR inspection guidelines remain in [`github-pr-review.md`](../../code-review/references/github-pr-review.md); all PR feedback reads and authorized writes route through `b3 pr <fetch|reconcile|reply|resolve|comment>` (invoked directly or via `scripts/b3-pr-github.{ps1,sh}` compatibility shims).
+Native GitHub provider CLI for `skills/engineering/pr-feedback/SKILL.md`. Read-only PR inspection guidelines remain in [`github-pr-review.md`](../../code-review/references/github-pr-review.md); all PR feedback reads and authorized writes route directly through `b3 pr <fetch|reconcile|reply|resolve|comment>`.
 
 ## Prerequisites, Transport, State & Limitations
 
 - Requires authenticated `gh` CLI (all PR feedback & verification commands execute in native `b3` with zero Node.js or runtime dependencies, zero npm packages, and zero new MCP servers).
-- **Safe transport & stdout:** All GraphQL queries/mutations and REST POSTs pass structured JSON via `gh api ... --input -` (`stdin`). Exit uses `process.exitCode` + natural stdout drain (never `process.exit()`, preventing pipe truncation).
+- **Safe transport & stdout:** All GraphQL queries/mutations and REST POSTs pass structured JSON via `gh api ... --input -` (`stdin`).
 - **Unified file & path guards:** Rejects symlinks/reparse points on leaf and ancestor directories, `..` traversal, UNC/mixed-slash `^[\\/]{2}`, drive-relative paths, ADS `:`, Windows reserved device names (`CON`, `NUL .`, `CON .txt`), oversized inputs (`>256 KiB` / `>65536` chars), and corrupt state JSON; strips UTF-8 BOM.
 - **State, single writer & provider limits:** Enforces `thread-lifecycle.md` §4 & §6 via canonical `<git-common-dir>/b3/pr-feedback/<owner>__<repo>__pr-<pr>.state.json` (`--state-file` rejected, `PR_FILE_GUARD` outside git), `PR_MUTATION_OWNER_REQUIRED` (`git-dir != git-common-dir` or `B3_PR_MUTATION_ROLE=worker` / `B3_SUBAGENT=1`), PID/`ESRCH` + `.reclaim` lock, pre/post `OPEN`+`HEAD` checks, `<!-- b3-pr-key:<key>;op=<16hex> -->` revalidation, and explicit `reconcile`. Note: full clones or unflagged processes in the primary checkout share only local lockfile serialization.
 
-## Subcommands & Flags
+## Subcommands & Flags (`b3 pr <cmd> ...`)
 
-PowerShell: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/b3-pr-github.ps1 <cmd> ...`
-Bash: `./scripts/b3-pr-github.sh <cmd> ...`
-
-### 1. `fetch` (read-only; never clears pending state)
+### 1. `fetch` (read-only; share across parallel analyzers; never clears pending state)
 ```text
-fetch --repo <owner/repo> --pr <N> [--include-resolved] [--include-bodies] [--thread-id <id[,id...]>] [--max-pages <M>]
+b3 pr fetch --repo <owner/repo> --pr <N> [--include-resolved] [--include-bodies] [--thread-id <id[,id...]>] [--max-pages <M>]
 ```
 - Metadata-first default (`reviewThreads` with `totalCount`, omitting bodies/nested comment pages). `--thread-id` fetches only the named thread(s) via `node(id)`.
 - Sanitizes all PR text (control/bidi/tag chars, delimiter breakout) inside `BEGIN_UNTRUSTED_PR_DATA` / `END_UNTRUSTED_PR_DATA`.
 
-### 2. `reconcile` (pending-operation recovery)
+### 2. `reconcile` (pending-operation recovery; single-writer parent)
 ```text
-reconcile --repo <owner/repo> --pr <N> [--repo-root <dir>] [--max-pages <M>]
+b3 pr reconcile --repo <owner/repo> --pr <N> [--repo-root <dir>] [--max-pages <M>]
 ```
 - Acquires the canonical PR lock and verifies every `PENDING` / `reconciliation_required` record against live remote objects (`verifyRemoteObject`), classifying `CONFIRMED_SUCCESS`, `CONFIRMED_ABSENCE`, `STALE_MUTATION`, or `UNCERTAIN`.
 - Clears pending blocks only on `CONFIRMED_*` / `STALE_MUTATION`; exits `2` (`PR_RECONCILIATION_UNCERTAIN`) and keeps writes blocked when uncertain.
 
-### 3. `reply`
+### 3. `reply` (single-writer parent when `--authorize-write`; workers may run `--draft`)
 ```text
-reply --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
+b3 pr reply --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
   --target-kind review_thread|general_comment --target-id <id> \
   --body-file <path> [--idempotency-key <key>] \
   [--authorize-write] [--draft] [--max-pages <M>]
@@ -38,19 +35,19 @@ reply --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
 - Targeted `node(id)` (`review_thread`) or `GET issues/comments/<id>` (`general_comment`, prepending `> Replying to [comment #<id>](<html_url>)`).
 - Derives `<!-- b3-pr-key:<key>;op=<16hex> -->`, detects key collisions (`PR_KEY_COLLISION`), revalidates existing remote objects before skipping (`PR_REMOTE_STATE_MISMATCH` on edit), rechecks `OPEN` + `HEAD` pre-write, posts (never resolves), and verifies the created remote object + `HEAD` + `OPEN`.
 
-### 4. `resolve`
+### 4. `resolve` (single-writer parent when `--authorize-resolve`; workers may run `--draft`)
 ```text
-resolve --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
+b3 pr resolve --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
   --thread-id <id> --fix-commit <sha> --evidence-file <path> \
   [--authorize-resolve] [--draft] [--max-pages <M>]
 ```
-- Reuses canonical `scripts/b3-guard.{ps1,sh} verify-check` against exact remote PR `HEAD`, `evidence.checked_command`, verified paths, and receipt `head_sha`, **plus** enforces clean non-ignored index/working tree (preserving gitignored `.b3/{ship,research-ship,autodev}/` checkpoints) and exact committed `ls-tree` manifest hash match against `expected_head` (`COMMIT_TREE` check).
+- Reuses canonical `b3 guard verify-check` against exact remote PR `HEAD`, `evidence.checked_command`, verified paths, and receipt `head_sha`, **plus** enforces clean non-ignored index/working tree (preserving gitignored `.b3/{ship,research-ship,autodev}/` checkpoints) and exact committed `ls-tree` manifest hash match against `expected_head` (`COMMIT_TREE` check).
 - Verifies remote `thread.path == evidence.target_path`, `DUPLICATE_FIXED` `primary_thread_id` resolved remotely, remote `compare` ancestry (`identical|ahead`, `behind_by == 0`), and `GET commits/<fix_commit>` modifying all verified paths.
 - Rechecks remote `OPEN` + `HEAD` **and** exact-commit local verification immediately before `resolveReviewThread`, then verifies `isResolved == true`, ownership, `OPEN`, and `HEAD`.
 
-### 5. `comment`
+### 5. `comment` (single-writer parent when `--authorize-write`; workers may run `--draft`)
 ```text
-comment --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
+b3 pr comment --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sha> \
   --mode summary|inline|both [--event COMMENT|APPROVE|REQUEST_CHANGES] \
   [--summary-file <path>] [--inline-json <path>] [--idempotency-key <key>] \
   [--authorize-write] [--authorize-review-event APPROVE|REQUEST_CHANGES] \

@@ -6,7 +6,7 @@ use crate::error::{fail, B3Error};
 use crate::fs::{
     is_reparse_or_symlink, normalize_path_value, normalize_repo_root, resolve_safe_repo_write_path,
     sort_ordinal, split_csv_list_as_paths, split_path_csv_checked, test_checkpoint_path,
-    test_contained_repo_path, test_path_match, write_atomic_lf,
+    test_contained_repo_path, test_path_match, valid_timestamp_utc, write_atomic_lf,
 };
 use crate::git::{
     assert_valid_git_rev, git_err_detail, git_hash_text, is_hex40, merge_base_is_ancestor, run_git,
@@ -321,13 +321,18 @@ pub(crate) fn get_submodule_entry_identity(
     Ok(None)
 }
 
-/// Computes canonical tree fingerprint matching `Get-TreeFingerprint` (`b3-guard.ps1`).
-pub fn get_tree_fingerprint(
+pub(crate) struct TreeFingerprintMaps {
+    pub head_sha: String,
+    pub effective: BTreeMap<String, String>,
+    pub index_div: BTreeMap<String, String>,
+}
+
+pub(crate) fn collect_tree_fingerprint_maps(
     root: &Path,
-    rel_paths: &[String],
+    clean_rel: &[String],
     ign_paths: &[String],
     target_commit_sha: &str,
-) -> Result<TreeFingerprint, B3Error> {
+) -> Result<TreeFingerprintMaps, B3Error> {
     let no_env: [(&str, &str); 0] = [];
     let t_arg = target_commit_sha.trim();
     let has_target_commit = !t_arg.is_empty();
@@ -369,39 +374,6 @@ pub fn get_tree_fingerprint(
             ));
         }
         sha
-    };
-
-    let clean_rel = if !rel_paths.is_empty() {
-        let filtered: Vec<String> = rel_paths
-            .iter()
-            .filter_map(|rp| {
-                let np = normalize_path_value(rp);
-                if np.is_empty()
-                    || test_checkpoint_path(&np)
-                    || (!ign_paths.is_empty() && test_path_match(&np, ign_paths))
-                {
-                    None
-                } else {
-                    Some(np)
-                }
-            })
-            .collect();
-        let sorted = sort_ordinal(filtered, false);
-        if sorted.is_empty() {
-            return Err(fail(
-                "TREE_FP_FAIL: relevant paths resolved to empty after exclusions",
-                1,
-            ));
-        }
-        sorted
-    } else {
-        Vec::new()
-    };
-
-    let paths_csv = if clean_rel.is_empty() {
-        "ALL".to_string()
-    } else {
-        clean_rel.join(",")
     };
 
     let mut effective: BTreeMap<String, String> = BTreeMap::new();
@@ -449,7 +421,7 @@ pub fn get_tree_fingerprint(
         if !ign_paths.is_empty() && test_path_match(&p, ign_paths) {
             continue;
         }
-        if !clean_rel.is_empty() && !test_path_match(&p, &clean_rel) {
+        if !clean_rel.is_empty() && !test_path_match(&p, clean_rel) {
             continue;
         }
         effective.insert(p, format!("{} {} {}", meta[0], meta[1], meta[2]));
@@ -545,9 +517,9 @@ pub fn get_tree_fingerprint(
         }
         let untracked = run_git_paths_z(root, &un_args, GitZMode::Names, "GIT_ERROR", &no_env)?;
 
-        let head_diff = parse_git_raw_diff_z(&hd_res.stdout, ign_paths, &clean_rel, "GIT_ERROR")?;
-        let cached_diff = parse_git_raw_diff_z(&ca_res.stdout, ign_paths, &clean_rel, "GIT_ERROR")?;
-        let idx_wt_diff = parse_git_raw_diff_z(&iw_res.stdout, ign_paths, &clean_rel, "GIT_ERROR")?;
+        let head_diff = parse_git_raw_diff_z(&hd_res.stdout, ign_paths, clean_rel, "GIT_ERROR")?;
+        let cached_diff = parse_git_raw_diff_z(&ca_res.stdout, ign_paths, clean_rel, "GIT_ERROR")?;
+        let idx_wt_diff = parse_git_raw_diff_z(&iw_res.stdout, ign_paths, clean_rel, "GIT_ERROR")?;
 
         for (p, entry) in &head_diff {
             let m = entry.new_mode.as_str();
@@ -617,7 +589,7 @@ pub fn get_tree_fingerprint(
             if !ign_paths.is_empty() && test_path_match(&p, ign_paths) {
                 continue;
             }
-            if !clean_rel.is_empty() && !test_path_match(&p, &clean_rel) {
+            if !clean_rel.is_empty() && !test_path_match(&p, clean_rel) {
                 continue;
             }
             if head_diff.get(&p).is_some_and(|he| he.new_mode != "000000") {
@@ -665,38 +637,87 @@ pub fn get_tree_fingerprint(
         }
     }
 
-    let mut manifest = String::new();
-    manifest.push_str(&format!("PATHS={paths_csv}\n"));
-    for (ep, ev) in &effective {
-        manifest.push_str(&format!("E {ev} {ep}\n"));
-    }
-    for (ip, iv) in &index_div {
-        manifest.push_str(&format!("I {iv} {ip}\n"));
-    }
-
-    let tree_hash = git_hash_text(root, &manifest, "GIT_ERROR", "manifest failed")?;
-    Ok(TreeFingerprint {
+    Ok(TreeFingerprintMaps {
         head_sha,
-        tree_hash,
-        paths_csv,
+        effective,
+        index_div,
     })
 }
 
-fn valid_timestamp_utc(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 20
-        && b[0..4].iter().all(|c| c.is_ascii_digit())
-        && b[4] == b'-'
-        && b[5..7].iter().all(|c| c.is_ascii_digit())
-        && b[7] == b'-'
-        && b[8..10].iter().all(|c| c.is_ascii_digit())
-        && b[10] == b'T'
-        && b[11..13].iter().all(|c| c.is_ascii_digit())
-        && b[13] == b':'
-        && b[14..16].iter().all(|c| c.is_ascii_digit())
-        && b[16] == b':'
-        && b[17..19].iter().all(|c| c.is_ascii_digit())
-        && b[19] == b'Z'
+pub(crate) fn hash_tree_fingerprint_maps(
+    root: &Path,
+    paths_csv: &str,
+    maps: &TreeFingerprintMaps,
+    filter_paths: Option<&[String]>,
+) -> Result<String, B3Error> {
+    let mut manifest = String::new();
+    manifest.push_str(&format!("PATHS={paths_csv}\n"));
+    for (ep, ev) in &maps.effective {
+        if match filter_paths {
+            None => true,
+            Some(fp) => test_path_match(ep, fp),
+        } {
+            manifest.push_str(&format!("E {ev} {ep}\n"));
+        }
+    }
+    for (ip, iv) in &maps.index_div {
+        if match filter_paths {
+            None => true,
+            Some(fp) => test_path_match(ip, fp),
+        } {
+            manifest.push_str(&format!("I {iv} {ip}\n"));
+        }
+    }
+    git_hash_text(root, &manifest, "GIT_ERROR", "manifest failed")
+}
+
+/// Computes canonical tree fingerprint matching `Get-TreeFingerprint` (`b3-guard.ps1`).
+pub fn get_tree_fingerprint(
+    root: &Path,
+    rel_paths: &[String],
+    ign_paths: &[String],
+    target_commit_sha: &str,
+) -> Result<TreeFingerprint, B3Error> {
+    let clean_rel = if !rel_paths.is_empty() {
+        let filtered: Vec<String> = rel_paths
+            .iter()
+            .filter_map(|rp| {
+                let np = normalize_path_value(rp);
+                if np.is_empty()
+                    || test_checkpoint_path(&np)
+                    || (!ign_paths.is_empty() && test_path_match(&np, ign_paths))
+                {
+                    None
+                } else {
+                    Some(np)
+                }
+            })
+            .collect();
+        let sorted = sort_ordinal(filtered, false);
+        if sorted.is_empty() {
+            return Err(fail(
+                "TREE_FP_FAIL: relevant paths resolved to empty after exclusions",
+                1,
+            ));
+        }
+        sorted
+    } else {
+        Vec::new()
+    };
+
+    let paths_csv = if clean_rel.is_empty() {
+        "ALL".to_string()
+    } else {
+        clean_rel.join(",")
+    };
+
+    let maps = collect_tree_fingerprint_maps(root, &clean_rel, ign_paths, target_commit_sha)?;
+    let tree_hash = hash_tree_fingerprint_maps(root, &paths_csv, &maps, None)?;
+    Ok(TreeFingerprint {
+        head_sha: maps.head_sha,
+        tree_hash,
+        paths_csv,
+    })
 }
 
 fn valid_exit_code_str(s: &str) -> bool {

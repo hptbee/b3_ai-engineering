@@ -10,6 +10,29 @@ use crate::git::{
     run_git, run_git_paths_z, test_git_mid_operation, test_repo_case_insensitive, GitZMode,
 };
 
+pub const MAX_CONCURRENCY_LIMIT: i32 = 64;
+
+pub fn default_adaptive_concurrency() -> i32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get().clamp(4, 16) as i32)
+        .unwrap_or(4)
+}
+
+pub fn resolve_concurrency(max_concurrency: i32, err_prefix: &str) -> Result<i32, B3Error> {
+    if max_concurrency == 0 {
+        return Ok(default_adaptive_concurrency());
+    }
+    if !(1..=MAX_CONCURRENCY_LIMIT).contains(&max_concurrency) {
+        return Err(fail(
+            format!(
+                "{err_prefix}: --max-concurrency must be between 1 and {MAX_CONCURRENCY_LIMIT}"
+            ),
+            1,
+        ));
+    }
+    Ok(max_concurrency)
+}
+
 struct DirtyEntry {
     path: String,
     tag: &'static str,
@@ -33,12 +56,7 @@ pub fn run(
     if repo_root_raw.is_empty() {
         return Err(fail("WAVE_FAIL: missing --repo-root", 1));
     }
-    if !(1..=4).contains(&max_concurrency) {
-        return Err(fail(
-            "WAVE_FAIL: --max-concurrency must be between 1 and 4",
-            1,
-        ));
-    }
+    let max_concurrency = resolve_concurrency(max_concurrency, "WAVE_FAIL")?;
 
     let repo_root = normalize_repo_root(repo_root_raw)?;
     if find_reparse_in_path_hierarchy(&repo_root).is_some() {

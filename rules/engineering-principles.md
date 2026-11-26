@@ -13,9 +13,8 @@ Hard rules for how work is done in this system.
 1. **Understand before changing.** Do not edit until the problem, the existing design, and the success condition are clear enough to state.
 2. **Prefer the smallest change that satisfies the success condition.** Scope expansion requires an explicit decision.
 3. **Keep methods composable.** Use a focused skill; do not invent a one-off giant procedure when an existing skill applies.
-4. **Do not confuse layers.** Constraints go in `rules/`. Methods go in `skills/`. User actions go in `commands/`. Isolated roles go in `agents/`. Sequencing goes in `workflows/`. Host-only wrappers and wiring go in `.cursor/rules`, `CLAUDE.md`, `.agents/skills.json`, and `adapters/`. Personal taste goes in `knowledge/personal/`.
-5. **Do not treat this repository as a company standard.** It is a personal, portable system. Do not import employer architecture or product-specific policy here.
+4. **Do not confuse layers.** Constraints→`rules/`; methods→`skills/`; actions→`commands/`; roles→`agents/`; sequencing→`workflows/`; host wiring→`.cursor/rules`, `CLAUDE.md`, `.agents/skills.json`, `adapters/`; taste→`knowledge/personal/`.
+5. **Not a company standard.** Personal, portable system; never import employer architecture or product policy.
+6. **Maximum safe parallelism, not maximum agent count.** Evaluate concurrency by dependencies, ownership, risk, host limits, and cost — inline when simple, parallel when independent (`workflows/references/dispatch-naming.md`), sequential when justified.
 
-Strong guideline: when a principle and a delivery shortcut conflict, record the tradeoff instead of silently dropping the principle.
-
-Conflicts with a user request or a product repo: `docs/precedence.md`.
+Record tradeoffs instead of dropping principles. Conflicts: `docs/precedence.md`.

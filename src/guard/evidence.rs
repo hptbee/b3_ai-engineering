@@ -3,36 +3,19 @@ use std::path::Path;
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    normalize_repo_root, resolve_unresolved_path, sha256_bytes_hex, sort_ordinal,
-    split_path_csv_checked, test_contained_repo_path, write_atomic_lf,
+    is_hex64_lower, normalize_repo_root, resolve_unresolved_path, sha256_file_hex, sort_ordinal,
+    split_path_csv_checked, test_contained_repo_path, valid_timestamp_utc, write_atomic_lf,
 };
 use crate::git::{is_hex40, run_git};
 use crate::guard::verify::format_utc_iso8601_now;
 
 fn sha256_file_for_evidence(path: &Path) -> Result<String, B3Error> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| fail(format!("EVIDENCE_MISSING: failed reading file: {e}"), 1))?;
-    Ok(sha256_bytes_hex(&bytes))
-}
-
-fn valid_timestamp_utc(ts: &str) -> bool {
-    let b = ts.as_bytes();
-    if b.len() != 20 {
-        return false;
-    }
-    b[4] == b'-'
-        && b[7] == b'-'
-        && b[10] == b'T'
-        && b[13] == b':'
-        && b[16] == b':'
-        && b[19] == b'Z'
-        && [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
-            .into_iter()
-            .all(|idx| b[idx].is_ascii_digit())
-}
-
-fn is_hex64_lower(s: &str) -> bool {
-    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    sha256_file_hex(path).map_err(|e| {
+        fail(
+            format!("EVIDENCE_MISSING: failed reading file: {}", e.message),
+            1,
+        )
+    })
 }
 
 /// Executes `b3 guard evidence-check`.

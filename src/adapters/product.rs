@@ -5,10 +5,10 @@ use crate::adapters::common::{
     assert_regular_dir_or_missing, assert_regular_file_or_missing, collect_skill_md_files,
     create_dir_link, get_skill_name_from_file, initialize_personal_models_file, is_reparse_link,
     normalize_abs_path_str, normalize_path_str, path_exists_or_link, remove_link_only,
-    resolve_b3_home_dir, test_link_target, text_sha256_lf, write_utf8_no_bom_lf,
+    resolve_b3_home_auto, test_link_target, text_sha256_lf, write_utf8_no_bom_lf,
 };
 use crate::error::{fail, B3Error};
-use crate::fs::sort_ordinal;
+use crate::fs::{is_hex64_lower, paths_equal_fs, sort_ordinal};
 
 const MANAGED_CMD_PREFIX: &str = "<!-- b3-managed-command: sha256=";
 const MANAGED_CMD_SUFFIX: &str = " -->";
@@ -78,12 +78,7 @@ fn inspect_command_state(dest_path: &Path, body_lf: &str, rendered: &str) -> Man
         if let Some(marker_pos) = before_suffix.rfind(MANAGED_CMD_PREFIX) {
             let sha_part = &before_suffix[marker_pos + MANAGED_CMD_PREFIX.len()..];
             let prefix = &before_suffix[..marker_pos];
-            if sha_part.len() == 64
-                && sha_part
-                    .bytes()
-                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-                && prefix.ends_with('\n')
-            {
+            if is_hex64_lower(sha_part) && prefix.ends_with('\n') {
                 if text_sha256_lf(prefix) == sha_part {
                     return ManagedCmdState::ManagedStale;
                 }
@@ -346,16 +341,7 @@ pub fn run(
         ));
     }
 
-    let fallback_root = if let Ok(env_home) = std::env::var("B3_HOME") {
-        if !env_home.trim().is_empty() {
-            PathBuf::from(env_home.trim())
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        }
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    };
-    let b3_home = resolve_b3_home_dir(b3_home_raw, &fallback_root)?;
+    let b3_home = resolve_b3_home_auto(b3_home_raw)?;
     let b3_home_str = b3_home.to_string_lossy().into_owned();
 
     let workflow = b3_home.join("workflows").join("ship.md");
@@ -470,12 +456,7 @@ pub fn run(
             let same_home = if looks_abs {
                 let norm_ex = normalize_path_str(&existing_home).unwrap_or_default();
                 let norm_req = normalize_abs_path_str(&b3_home);
-                !norm_ex.is_empty()
-                    && if cfg!(windows) {
-                        norm_ex.eq_ignore_ascii_case(&norm_req)
-                    } else {
-                        norm_ex == norm_req
-                    }
+                !norm_ex.is_empty() && paths_equal_fs(&norm_ex, &norm_req, cfg!(windows))
             } else {
                 false
             };
@@ -731,7 +712,7 @@ pub fn run(
             agents_dest.display()
         )),
         "antigravity" => out.push(format!(
-            "skills={} (flattened junctions + command-skills linked; gitignored, not copied; use adapters/install-global.ps1 -HostName antigravity if Cursor also opens this repo)",
+            "skills={} (flattened junctions + command-skills linked; gitignored, not copied; use b3 install global --host antigravity if Cursor also opens this repo)",
             agents_dest.display()
         )),
         "claude" => out.push(format!(
@@ -746,7 +727,7 @@ pub fn run(
             claude_skills_dest.display()
         )),
         _ => out.push(
-            "skills=user-level ~/.cursor/skills/<name> via adapters/install-global.ps1 -HostName cursor (not copied into product)"
+            "skills=user-level ~/.cursor/skills/<name> via b3 install global --host cursor (not copied into product)"
                 .to_string(),
         ),
     }

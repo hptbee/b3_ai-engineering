@@ -59,16 +59,7 @@ pub fn run(
     let plugin_root_arg = trim_child_path_arg(plugin_root_raw);
     let user_home_arg = trim_child_path_arg(user_home_raw);
 
-    let fallback_b3 = if let Ok(env_h) = std::env::var("B3_HOME") {
-        if !env_h.trim().is_empty() {
-            PathBuf::from(env_h.trim())
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        }
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    };
-    let b3_home = common::resolve_b3_home_dir(&b3_home_arg, &fallback_b3)?;
+    let b3_home = common::resolve_b3_home_auto(&b3_home_arg)?;
     let b3_home_str = b3_home.to_string_lossy().into_owned();
 
     let mut out = Vec::new();

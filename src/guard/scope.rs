@@ -221,8 +221,15 @@ pub fn scan_path_risk_signals(map: &mut HashMap<String, Vec<String>>, path_val: 
         add_signal_tag(map, path_val, "auth_security");
     }
     let leaf = low.rsplit('/').next().unwrap_or("");
-    if (leaf.starts_with("b3-guard.") || leaf.starts_with("install") || leaf.starts_with("sync"))
-        && (leaf.ends_with(".ps1") || leaf.ends_with(".sh"))
+    if ((leaf.starts_with("b3-guard.") || leaf.starts_with("install") || leaf.starts_with("sync"))
+        && (leaf.ends_with(".ps1") || leaf.ends_with(".sh")))
+        || low.starts_with("src/guard/")
+        || low.starts_with("src/adapters/")
+        || low.starts_with("src/pr/")
+        || low == "src/fs.rs"
+        || low == "src/git.rs"
+        || low == "src/process.rs"
+        || low.starts_with("scripts/bootstrap-b3.")
     {
         add_signal_tag(map, path_val, "fs_git_security");
     }

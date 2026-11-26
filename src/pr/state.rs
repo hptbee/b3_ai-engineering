@@ -5,11 +5,12 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use crate::fs::{
-    has_control_chars, is_reparse_or_symlink, next_tmp_suffix, resolve_unresolved_path,
-    sha256_bytes_hex,
+    has_control_chars, is_reparse_or_symlink, next_tmp_suffix, paths_equal_fs,
+    resolve_unresolved_path, sha256_bytes_hex,
 };
 use crate::guard::verify::format_utc_iso8601_now;
 use crate::json::{parse_json, JsonValue};
+use crate::process::{probe_pid_liveness, PidLiveness};
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
@@ -283,11 +284,7 @@ pub fn read_safe_input_file(
 }
 
 pub fn same_fs_path(a: &Path, b: &Path) -> bool {
-    if cfg!(windows) {
-        a.to_string_lossy().to_ascii_lowercase() == b.to_string_lossy().to_ascii_lowercase()
-    } else {
-        a == b
-    }
+    paths_equal_fs(&a.to_string_lossy(), &b.to_string_lossy(), cfg!(windows))
 }
 
 pub fn canonicalize_clean(p: &Path) -> std::io::Result<PathBuf> {
@@ -745,21 +742,11 @@ impl PidState {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetComputerNameExW(name_type: u32, buffer: *mut u16, size: *mut u32) -> i32;
-    fn OpenProcess(
-        desired_access: u32,
-        inherit_handle: i32,
-        process_id: u32,
-    ) -> *mut core::ffi::c_void;
-    fn WaitForSingleObject(handle: *mut core::ffi::c_void, milliseconds: u32) -> u32;
-    fn GetExitCodeProcess(process: *mut core::ffi::c_void, exit_code: *mut u32) -> i32;
-    fn CloseHandle(object: *mut core::ffi::c_void) -> i32;
-    fn GetLastError() -> u32;
 }
 
 #[cfg(unix)]
 extern "C" {
     fn gethostname(name: *mut std::ffi::c_char, len: usize) -> i32;
-    fn kill(pid: i32, sig: i32) -> i32;
 }
 
 /// Returns the local DNS hostname matching `[Net.Dns]::GetHostName()` and Node's `os.hostname()`.
@@ -798,88 +785,10 @@ pub fn get_hostname() -> String {
 
 /// Probes whether `pid` on the local host is alive, confirmed dead, or indeterminate.
 pub fn is_pid_alive_same_host(pid: i64) -> PidState {
-    if pid <= 0 || pid > i32::MAX as i64 {
-        return PidState::Unknown;
-    }
-    #[cfg(windows)]
-    {
-        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-        const SYNCHRONIZE: u32 = 0x0010_0000;
-        const WAIT_OBJECT_0: u32 = 0;
-        const WAIT_TIMEOUT: u32 = 0x0000_0102;
-        const STILL_ACTIVE: u32 = 259;
-        const ERROR_ACCESS_DENIED: u32 = 5;
-        const ERROR_INVALID_PARAMETER: u32 = 87;
-
-        let pid_u32 = pid as u32;
-        // SAFETY: Win32 handle obtained via `OpenProcess` is always closed via `CloseHandle`.
-        unsafe {
-            let handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid_u32);
-            if !handle.is_null() {
-                let wait = WaitForSingleObject(handle, 0);
-                let res = if wait == WAIT_OBJECT_0 {
-                    PidState::Dead
-                } else if wait == WAIT_TIMEOUT {
-                    PidState::Alive
-                } else {
-                    let mut exit_code: u32 = 0;
-                    if GetExitCodeProcess(handle, &mut exit_code) != 0 {
-                        if exit_code == STILL_ACTIVE {
-                            PidState::Alive
-                        } else {
-                            PidState::Dead
-                        }
-                    } else {
-                        PidState::Unknown
-                    }
-                };
-                CloseHandle(handle);
-                return res;
-            }
-            let err = GetLastError();
-            if err == ERROR_INVALID_PARAMETER {
-                return PidState::Dead;
-            }
-            if err == ERROR_ACCESS_DENIED {
-                let h2 = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid_u32);
-                if h2.is_null() {
-                    let err2 = GetLastError();
-                    return match err2 {
-                        ERROR_ACCESS_DENIED => PidState::Alive,
-                        ERROR_INVALID_PARAMETER => PidState::Dead,
-                        _ => PidState::Unknown,
-                    };
-                }
-                let mut exit_code: u32 = 0;
-                let state = if GetExitCodeProcess(h2, &mut exit_code) != 0 {
-                    if exit_code == STILL_ACTIVE {
-                        PidState::Alive
-                    } else {
-                        PidState::Dead
-                    }
-                } else {
-                    PidState::Unknown
-                };
-                CloseHandle(h2);
-                return state;
-            }
-            PidState::Unknown
-        }
-    }
-    #[cfg(unix)]
-    {
-        const EPERM: i32 = 1;
-        const ESRCH: i32 = 3;
-        // SAFETY: signal 0 probes process existence without sending a signal.
-        let rc = unsafe { kill(pid as i32, 0) };
-        if rc == 0 {
-            return PidState::Alive;
-        }
-        match std::io::Error::last_os_error().raw_os_error() {
-            Some(ESRCH) => PidState::Dead,
-            Some(EPERM) => PidState::Alive,
-            _ => PidState::Unknown,
-        }
+    match probe_pid_liveness(pid) {
+        PidLiveness::Alive => PidState::Alive,
+        PidLiveness::Dead => PidState::Dead,
+        PidLiveness::Unknown => PidState::Unknown,
     }
 }
 

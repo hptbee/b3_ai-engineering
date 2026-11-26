@@ -2,7 +2,7 @@
 
 Agents are specialized roles. They answer: **who should handle this?**
 
-Canonical role definitions live here (`agents/`). Cursor maps them via `.cursor/agents` (`sync-skills cursor`), Claude Code via `.claude/agents` (`sync-skills claude`), Antigravity via plugin generation (`adapters/antigravity/install-plugin.*`), and Codex via delegated role prompts. Orchestration is `review-loop/strategy.md`. Skills stay shared; agents exist for **isolation**.
+Canonical role definitions live here (`agents/`). Cursor maps them via `.cursor/agents` (`b3 sync --host cursor`), Claude Code via `.claude/agents` (`b3 sync --host claude`), Antigravity via plugin generation (`b3 install antigravity`), and Codex via delegated role prompts. Orchestration is `review-loop/strategy.md`. Skills stay shared; agents exist for **isolation**.
 
 | Agent | Mandate | Why not a skill only |
 | --- | --- | --- |

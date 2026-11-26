@@ -1,4 +1,5 @@
 use crate::error::{fail, B3Error};
+use crate::guard::wave::MAX_CONCURRENCY_LIMIT;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
@@ -669,7 +670,7 @@ fn parse_context(args: &[String]) -> Result<Command, B3Error> {
             1,
         ));
     }
-    let mut repo_root = ".".to_string();
+    let mut repo_root = String::new();
     let mut strict = false;
     let mut i = 1;
     while i < args.len() {
@@ -682,6 +683,26 @@ fn parse_context(args: &[String]) -> Result<Command, B3Error> {
         i += 1;
     }
     Ok(Command::ContextMeasure { repo_root, strict })
+}
+
+fn parse_max_concurrency(raw: &str, err_prefix: &str) -> Result<i32, B3Error> {
+    let val = raw.trim().parse::<i32>().map_err(|_| {
+        fail(
+            format!(
+                "{err_prefix}: --max-concurrency must be between 1 and {MAX_CONCURRENCY_LIMIT}"
+            ),
+            1,
+        )
+    })?;
+    if !(1..=MAX_CONCURRENCY_LIMIT).contains(&val) {
+        return Err(fail(
+            format!(
+                "{err_prefix}: --max-concurrency must be between 1 and {MAX_CONCURRENCY_LIMIT}"
+            ),
+            1,
+        ));
+    }
+    Ok(val)
 }
 
 fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
@@ -1118,7 +1139,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
             let mut wave_specs = String::new();
             let mut wave_reads = String::new();
             let mut expected_base_sha = String::new();
-            let mut max_concurrency = 3i32;
+            let mut max_concurrency = 0i32;
             let mut partition = false;
             let mut protected_paths = String::new();
             let mut check_dirty_scope = false;
@@ -1142,9 +1163,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                     }
                     "--max-concurrency" => {
                         let raw = take_val(rest, &mut i, "--max-concurrency", iv, "WAVE_FAIL")?;
-                        max_concurrency = raw.trim().parse::<i32>().map_err(|_| {
-                            fail("WAVE_FAIL: --max-concurrency must be between 1 and 4", 1)
-                        })?;
+                        max_concurrency = parse_max_concurrency(&raw, "WAVE_FAIL")?;
                     }
                     "--partition" if iv.is_none() => partition = true,
                     "--protected-paths" => {
@@ -1341,7 +1360,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
             let mut base_sha = String::new();
             let mut target_ref = String::new();
             let mut ignore_dirty_paths = String::new();
-            let mut max_concurrency = 4i32;
+            let mut max_concurrency = 0i32;
             let mut i = 0;
             while i < rest.len() {
                 let (flag, iv) = parse_opt(&rest[i]);
@@ -1362,9 +1381,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                     "--max-concurrency" => {
                         let raw =
                             take_val(rest, &mut i, "--max-concurrency", iv, "INVENTORY_FAIL")?;
-                        max_concurrency = raw.trim().parse::<i32>().map_err(|_| {
-                            fail("INVENTORY_FAIL: --max-concurrency must be an integer", 1)
-                        })?;
+                        max_concurrency = parse_max_concurrency(&raw, "INVENTORY_FAIL")?;
                     }
                     other => {
                         return Err(fail(format!("INVENTORY_FAIL: unknown option '{other}'"), 1));
@@ -1387,7 +1404,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
             let mut base_sha = String::new();
             let mut target_ref = String::new();
             let mut ignore_dirty_paths = String::new();
-            let mut max_concurrency = 4i32;
+            let mut max_concurrency = 0i32;
             let mut max_passes: Option<i64> = None;
             let mut unit_id = String::new();
             let mut status = String::new();
@@ -1426,9 +1443,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                     }
                     "--max-concurrency" => {
                         let raw = take_val(rest, &mut i, "--max-concurrency", iv, "LEDGER_FAIL")?;
-                        max_concurrency = raw.trim().parse::<i32>().map_err(|_| {
-                            fail("LEDGER_FAIL: --max-concurrency must be an integer", 1)
-                        })?;
+                        max_concurrency = parse_max_concurrency(&raw, "LEDGER_FAIL")?;
                     }
                     "--max-passes" => {
                         let raw = take_val(rest, &mut i, "--max-passes", iv, "LEDGER_FAIL")?;

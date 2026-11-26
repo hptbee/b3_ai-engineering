@@ -8,7 +8,8 @@ use crate::git::run_git;
 use crate::guard::verify::verify_check;
 use crate::json::{parse_json, JsonValue};
 use crate::pr::gh_exec::{
-    exec_gh, resolve_bash_binary, resolve_gh_binary, validate_pr_number, validate_repo_slug,
+    exec_gh, needs_bash_for_gh, resolve_bash_binary, resolve_gh_binary, validate_pr_number,
+    validate_repo_slug,
 };
 use crate::pr::state::{
     append_state_record, assert_mutation_owner_allowed, canonicalize_clean,
@@ -466,7 +467,11 @@ fn invoke_gh(
     let Some(gh_bin) = resolve_gh_binary("") else {
         return Err(err_simple("PR_API_ERROR", "gh CLI not found in PATH"));
     };
-    let bash_bin = resolve_bash_binary("");
+    let bash_bin = if needs_bash_for_gh(&gh_bin) {
+        resolve_bash_binary("")
+    } else {
+        None
+    };
     let res = exec_gh(
         args,
         &gh_bin,
@@ -1788,13 +1793,7 @@ fn parse_unified_diff_anchors(patch: Option<&str>) -> Result<DiffAnchors, &'stat
 }
 
 fn is_b3_checkpoint_path(p: &str) -> bool {
-    let low = p.to_ascii_lowercase();
-    for prefix in [".b3/ship", ".b3/research-ship", ".b3/autodev"] {
-        if low == prefix || low.starts_with(&format!("{prefix}/")) {
-            return true;
-        }
-    }
-    false
+    crate::fs::test_checkpoint_path(&p.to_ascii_lowercase())
 }
 
 fn assert_clean_index_and_working_tree(repo_root: &Path) -> Result<(), PrExit> {

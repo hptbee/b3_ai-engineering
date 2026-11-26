@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    has_control_chars, is_reparse_or_symlink, normalize_path_value, normalize_repo_root,
-    sha256_bytes_hex, sort_ordinal, test_checkpoint_path, test_contained_repo_path,
-    test_path_match, test_secret_path, write_atomic_lf,
+    has_control_chars, is_hex64_lower, is_reparse_or_symlink, normalize_path_value,
+    normalize_repo_root, sha256_file_hex, sort_ordinal, test_checkpoint_path,
+    test_contained_repo_path, test_path_match, test_secret_path, valid_timestamp_utc,
+    write_atomic_lf,
 };
 use crate::git::{
     is_hex40, merge_base_is_ancestor, run_git, run_git_paths_z, test_git_mid_operation, GitZMode,
@@ -319,25 +320,7 @@ fn test_graph_index_fresh(
 }
 
 fn sha256_file_for_context(path: &Path) -> Result<String, B3Error> {
-    let bytes =
-        std::fs::read(path).map_err(|_| fail("CONTEXT_ERROR: sha256 computation failed", 1))?;
-    Ok(sha256_bytes_hex(&bytes))
-}
-
-fn valid_timestamp_utc(ts: &str) -> bool {
-    let b = ts.as_bytes();
-    if b.len() != 20 {
-        return false;
-    }
-    b[4] == b'-'
-        && b[7] == b'-'
-        && b[10] == b'T'
-        && b[13] == b':'
-        && b[16] == b':'
-        && b[19] == b'Z'
-        && [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
-            .into_iter()
-            .all(|idx| b[idx].is_ascii_digit())
+    sha256_file_hex(path).map_err(|_| fail("CONTEXT_ERROR: sha256 computation failed", 1))
 }
 
 /// Executes `b3 guard context-cache`.
@@ -640,11 +623,7 @@ pub fn run(
             return Err(fail("CONTEXT_CORRUPT: invalid summary_sha256", 1));
         }
     } else {
-        if kv["summary_sha256"].len() != 64
-            || !kv["summary_sha256"]
-                .bytes()
-                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-        {
+        if !is_hex64_lower(kv["summary_sha256"]) {
             return Err(fail("CONTEXT_CORRUPT: invalid summary_sha256", 1));
         }
         let CheckpointFileStatus::Ok { full, .. } =

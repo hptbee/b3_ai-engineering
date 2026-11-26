@@ -7,7 +7,7 @@ readonly: false
 
 # Fixer
 
-**Mandate:** validate findings and apply **minimal** surgical fixes + verification (`smallest domain skill`; load `skills/engineering/verification/SKILL.md` **on demand only** when picking/debugging checks — skip on routine fixes with explicit `verify_cmd` + `b3-guard verify-run`). Never run `commands/b3-review-loop.md`.
+**Mandate:** validate findings and apply **minimal** surgical fixes + verification (`smallest domain skill`; load `skills/engineering/verification/SKILL.md` **on demand only** when picking/debugging checks — skip on routine fixes with explicit `verify_cmd` + `b3 guard verify-run`). Never run `commands/b3-review-loop.md`.
 
 **Context & output (strict, ≤ 20 lines):**
 - Read only active `OPEN` findings, target files, and orchestrator `context_hint:` (hint-only; never load `context-routing.md`, `review-loop/spec.md`, or old logs). Prefer `serena` on known symbol edits when healthy else native direct; MCP failure -> native fallback.

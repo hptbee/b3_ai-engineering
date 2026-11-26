@@ -48,7 +48,7 @@ When posting to a GitHub PR after user confirmation, include **only `CONFIRMED` 
 
 ## Inline GitHub PR comment format (`Files changed` tab)
 
-Publish inline PR findings via [`skills/engineering/pr-feedback/SKILL.md`](../../pr-feedback/SKILL.md) (`scripts/b3-pr-github.{ps1,sh} comment`, `CONFIRMED` only) using the exact fixed severity format from [`reply-template.md`](../../pr-feedback/references/reply-template.md):
+Publish inline PR findings via [`skills/engineering/pr-feedback/SKILL.md`](../../pr-feedback/SKILL.md) (`b3 pr comment`, `CONFIRMED` only) using the exact fixed severity format from [`reply-template.md`](../../pr-feedback/references/reply-template.md):
 
 ```text
 **[CRITICAL|HIGH|MEDIUM|LOW] — <Short issue title>**

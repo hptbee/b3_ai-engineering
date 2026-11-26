@@ -122,13 +122,57 @@ fn current_local_timestamp() -> Result<String, B3Error> {
 
     #[cfg(unix)]
     {
-        use std::process::Command;
-        let out = Command::new("date")
-            .arg("+%Y%m%d-%H%M")
-            .output()
-            .map_err(|e| fail(format!("NEW_RUN_FAIL: unable to read clock: {e}"), 1))?;
-        let ts = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !out.status.success() || !valid_timestamp(&ts) {
+        #[repr(C)]
+        struct Tm {
+            tm_sec: core::ffi::c_int,
+            tm_min: core::ffi::c_int,
+            tm_hour: core::ffi::c_int,
+            tm_mday: core::ffi::c_int,
+            tm_mon: core::ffi::c_int,
+            tm_year: core::ffi::c_int,
+            tm_wday: core::ffi::c_int,
+            tm_yday: core::ffi::c_int,
+            tm_isdst: core::ffi::c_int,
+            tm_gmtoff: core::ffi::c_long,
+            tm_zone: *const core::ffi::c_char,
+        }
+        extern "C" {
+            fn time(tloc: *mut core::ffi::c_long) -> core::ffi::c_long;
+            fn localtime_r(timep: *const core::ffi::c_long, result: *mut Tm) -> *mut Tm;
+        }
+        let mut now: core::ffi::c_long = 0;
+        // SAFETY: `now` is a valid aligned stack slot for `time`.
+        let t = unsafe { time(&mut now) };
+        if t == -1 {
+            return Err(fail("NEW_RUN_FAIL: unable to read clock", 1));
+        }
+        let mut tm = Tm {
+            tm_sec: 0,
+            tm_min: 0,
+            tm_hour: 0,
+            tm_mday: 0,
+            tm_mon: 0,
+            tm_year: 0,
+            tm_wday: 0,
+            tm_yday: 0,
+            tm_isdst: 0,
+            tm_gmtoff: 0,
+            tm_zone: core::ptr::null(),
+        };
+        // SAFETY: `now` and `tm` are valid pointers for `localtime_r`.
+        let ptr = unsafe { localtime_r(&now, &mut tm) };
+        if ptr.is_null() {
+            return Err(fail("NEW_RUN_FAIL: unable to format local timestamp", 1));
+        }
+        let ts = format!(
+            "{:04}{:02}{:02}-{:02}{:02}",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min
+        );
+        if !valid_timestamp(&ts) {
             return Err(fail("NEW_RUN_FAIL: unable to format local timestamp", 1));
         }
         Ok(ts)

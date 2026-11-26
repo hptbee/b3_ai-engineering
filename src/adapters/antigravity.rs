@@ -6,13 +6,13 @@ use crate::adapters::common::{
     add_canonical_skills_with_bucket, assert_regular_dir_or_missing,
     assert_regular_file_or_missing, create_dir_link, file_sha256, get_canonical_markdown_names,
     get_skill_overlaps, is_reparse_link, normalize_abs_path_str, normalize_path_str,
-    path_exists_or_link, read_b3_manifest, remove_dir_tree_safely, remove_empty_regular_dir,
-    remove_link_only, resolve_b3_home_dir, resolve_user_home_dir, split_yaml_frontmatter,
-    test_link_target, text_sha256_lf, to_forward_path, uninstall_managed_file,
-    uninstall_managed_link, write_b3_manifest, write_utf8_no_bom_lf, B3Manifest,
+    path_exists_or_link, read_b3_manifest, remove_empty_regular_dir, remove_link_only,
+    resolve_b3_home_auto, resolve_user_home_dir, split_yaml_frontmatter, test_link_target,
+    text_sha256_lf, to_forward_path, uninstall_managed_file, uninstall_managed_link,
+    write_b3_manifest, write_utf8_no_bom_lf, B3Manifest,
 };
 use crate::error::{fail, B3Error};
-use crate::fs::sort_ordinal;
+use crate::fs::{paths_equal_fs, remove_dir_tree_safely, sort_ordinal};
 use crate::json::{parse_json, JsonValue};
 
 struct RenderedAgent {
@@ -175,14 +175,6 @@ fn normalize_skill_json_path(raw: &str) -> String {
     p
 }
 
-fn test_skill_path_equal(a: &str, b: &str) -> bool {
-    if cfg!(windows) {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
-    }
-}
-
 fn test_is_b3_managed_skill_path(candidate: &str, b3_prefixes: &[String]) -> bool {
     let norm = normalize_skill_json_path(candidate);
     if norm.is_empty() {
@@ -208,8 +200,8 @@ fn test_is_b3_managed_skill_path(candidate: &str, b3_prefixes: &[String]) -> boo
         } else {
             format!("{prefix}/skills/")
         };
-        if test_skill_path_equal(&norm, &cmd_path)
-            || test_skill_path_equal(&norm, &skills_exact)
+        if paths_equal_fs(&norm, &cmd_path, cfg!(windows))
+            || paths_equal_fs(&norm, &skills_exact, cfg!(windows))
             || if cfg!(windows) {
                 norm.len() >= skills_prefix.len()
                     && norm[..skills_prefix.len()].eq_ignore_ascii_case(&skills_prefix)
@@ -240,7 +232,7 @@ fn get_desired_skills_json_entries(
             }
         }
         for p in sort_ordinal(parents, false) {
-            if !seen.iter().any(|s| test_skill_path_equal(s, &p)) {
+            if !seen.iter().any(|s| paths_equal_fs(s, &p, cfg!(windows))) {
                 seen.push(p.clone());
                 result.push(p);
             }
@@ -413,12 +405,7 @@ fn check_antigravity_coexistence(
                 }
                 let cand_path = cand.path();
                 let cand_norm = normalize_abs_path_str(&cand_path);
-                let same = if cfg!(windows) {
-                    cand_norm.eq_ignore_ascii_case(&plugin_norm)
-                } else {
-                    cand_norm == plugin_norm
-                };
-                if same {
+                if paths_equal_fs(&cand_norm, &plugin_norm, cfg!(windows)) {
                     continue;
                 }
                 if test_b3_plugin_json(&cand_path.join("plugin.json"), true) {
@@ -747,16 +734,7 @@ pub fn run(
         return Ok((out.join("\n"), 0));
     }
 
-    let fallback_b3 = if let Ok(env_h) = std::env::var("B3_HOME") {
-        if !env_h.trim().is_empty() {
-            PathBuf::from(env_h.trim())
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        }
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    };
-    let b3_home = resolve_b3_home_dir(b3_home_raw, &fallback_b3)?;
+    let b3_home = resolve_b3_home_auto(b3_home_raw)?;
     let b3_home_forward = to_forward_path(&b3_home);
 
     let workflow_path = b3_home.join("workflows").join("ship.md");
@@ -1149,7 +1127,10 @@ B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify
                     })
                     .collect();
                 for req in &desired_skills_json_entries {
-                    if !norm_paths.iter().any(|np| test_skill_path_equal(np, req)) {
+                    if !norm_paths
+                        .iter()
+                        .any(|np| paths_equal_fs(np, req, cfg!(windows)))
+                    {
                         skills_json_ok = false;
                         errors.push(format!("global skills.json missing B3 entry: {req}"));
                     }
@@ -1162,7 +1143,7 @@ B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify
                         && test_is_b3_managed_skill_path(&np, &prefixes)
                         && !desired_skills_json_entries
                             .iter()
-                            .any(|req| test_skill_path_equal(&np, req))
+                            .any(|req| paths_equal_fs(&np, req, cfg!(windows)))
                     {
                         skills_json_ok = false;
                         errors.push(format!(
@@ -1571,7 +1552,7 @@ B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify
                 && (test_is_b3_managed_skill_path(&item_path, &replace_prefixes)
                     || desired_skills_json_entries
                         .iter()
-                        .any(|req| test_skill_path_equal(&item_path, req)))
+                        .any(|req| paths_equal_fs(&item_path, req, cfg!(windows))))
             {
                 continue;
             }

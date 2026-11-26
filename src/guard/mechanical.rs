@@ -3,28 +3,20 @@ use std::path::Path;
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    convert_to_wave_paths, convert_to_wave_task_map, has_control_chars, is_reparse_or_symlink,
-    is_valid_task_id, is_windows_junction, normalize_path_value, normalize_repo_root,
-    sha256_file_hex, sort_ordinal, split_csv_list, split_path_csv_checked, test_binary_file,
-    test_checkpoint_path, test_noise_file, test_ownership_path_match, test_path_match,
-    test_secret_path, test_test_path, test_wave_path_contained, test_wave_path_overlap,
-    test_worktree_root_overlap, WaveOverlap,
+    convert_to_wave_paths, convert_to_wave_task_map, has_control_chars, is_hex64_lower,
+    is_reparse_or_symlink, is_valid_task_id, is_windows_junction, normalize_path_value,
+    normalize_repo_root, paths_equal_fs, sha256_file_hex, sort_ordinal, split_csv_list,
+    split_path_csv_checked, test_binary_file, test_checkpoint_path, test_noise_file,
+    test_ownership_path_match, test_path_match, test_secret_path, test_test_path,
+    test_wave_path_contained, test_wave_path_overlap, test_worktree_root_overlap, WaveOverlap,
 };
 use crate::git::{
     git_err_detail, is_hex40, merge_base_is_ancestor, new_working_tree_oid,
-    resolve_scope_target_and_base, run_git, run_git_paths_z, test_git_mid_operation,
-    test_repo_case_insensitive, GitZMode,
+    resolve_scope_target_and_base, run_git, run_git_paths_z, test_git_dir_mid_operation,
+    test_git_mid_operation, test_repo_case_insensitive, GitZMode,
 };
 use crate::guard::verify::{get_submodule_entry_identity, get_symlink_blob_oid};
 use crate::guard::worktree::resolve_safe_worktree_identity;
-
-fn paths_equal_fs(a: &str, b: &str, case_insensitive: bool) -> bool {
-    if case_insensitive {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
-    }
-}
 
 fn find_leftover_tag(line: &str) -> Option<&'static str> {
     let bytes = line.as_bytes();
@@ -408,19 +400,17 @@ pub fn run(
                         1,
                     ));
                 }
-                let valid_hex64 =
-                    raw_dig.len() == 64 && raw_dig.bytes().all(|b| b.is_ascii_hexdigit());
-                if raw_dig != "DELETED" && !valid_hex64 {
-                    return Err(fail(
-                        format!("MECHANICAL_FAIL: invalid DirtyDigests digest for '{dp_norm}'"),
-                        1,
-                    ));
-                }
                 let norm_dig = if raw_dig == "DELETED" {
                     "DELETED".to_string()
                 } else {
                     raw_dig.to_ascii_lowercase()
                 };
+                if norm_dig != "DELETED" && !is_hex64_lower(&norm_dig) {
+                    return Err(fail(
+                        format!("MECHANICAL_FAIL: invalid DirtyDigests digest for '{dp_norm}'"),
+                        1,
+                    ));
+                }
                 let dd_key = if case_insensitive {
                     dp_norm.to_ascii_lowercase()
                 } else {
@@ -474,7 +464,7 @@ pub fn run(
         }
         if is_attributing {
             let b_trim = base_sha_raw.trim();
-            if b_trim.len() != 40 || !b_trim.bytes().all(|b| b.is_ascii_hexdigit()) {
+            if !is_hex40(&b_trim.to_ascii_lowercase()) {
                 return Err(fail(
                     "MECHANICAL_FAIL: worker attribution requires explicit 40-hex -BaseSha",
                     1,
@@ -1331,7 +1321,7 @@ pub fn run(
                         "worker_not_git",
                         true,
                     )?;
-                    if let Some(w_mid) = test_git_mid_operation(&w_id.logical) {
+                    if let Some(w_mid) = test_git_dir_mid_operation(&w_id.git_dir_path) {
                         return Err(fail(
                             format!("WORKTREE_UNSAFE: git_op_in_progress({w_mid})"),
                             2,

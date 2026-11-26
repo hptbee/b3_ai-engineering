@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::adapters::common::resolve_b3_repo_root_auto;
 use crate::error::B3Error;
-use crate::fs::normalize_repo_root;
 
 fn read_lf_bytes(path: &Path) -> usize {
     match fs::read(path) {
@@ -75,7 +75,7 @@ fn collect_skill_files(base: &Path, root: &Path, out: &mut Vec<(String, PathBuf)
 /// Computes the exact B3 Context Budget Report and warnings matching
 /// `scripts/measure-context.{ps1,sh}`.
 pub fn measure_context(repo_root_raw: &str, strict: bool) -> Result<(String, i32), B3Error> {
-    let repo_root = normalize_repo_root(repo_root_raw)?;
+    let repo_root = resolve_b3_repo_root_auto(repo_root_raw)?;
     let mut warnings: Vec<String> = Vec::new();
 
     let agents_bytes = file_bytes(&repo_root, "AGENTS.md");

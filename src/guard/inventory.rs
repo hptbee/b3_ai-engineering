@@ -11,6 +11,7 @@ use crate::guard::scope::{
     collect_scope_data, eval_risk_for_subset, get_raw_module_group, get_tshirt_size,
     test_contract_path, test_doc_or_asset_path, test_generated_code_path,
 };
+use crate::guard::wave::resolve_concurrency;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReviewUnit {
@@ -998,6 +999,7 @@ pub(crate) fn build_inventory(
     max_concurrency: i32,
     fail_prefix: &str,
 ) -> Result<InventoryResult, B3Error> {
+    let resolved_conc = resolve_concurrency(max_concurrency, fail_prefix)?;
     let scope = collect_scope_data(root, resolved_base, target_commit_sha, ignored, fail_prefix)?;
     if scope.review_files.is_empty() && scope.noise_files.is_empty() {
         return Ok(InventoryResult {
@@ -1018,7 +1020,7 @@ pub(crate) fn build_inventory(
             noise_files: Vec::new(),
             review_files: Vec::new(),
             split_recommended: false,
-            max_concurrency: max_concurrency.clamp(1, 4),
+            max_concurrency: resolved_conc,
             units: Vec::new(),
         });
     }
@@ -1083,7 +1085,6 @@ pub(crate) fn build_inventory(
         }
     }
 
-    let clamped_conc = max_concurrency.clamp(1, 4);
     let split_recommended =
         matches!(size_class, "L" | "XL" | "XXL") && (units.len() >= 2 || scope.total_lines > 800);
 
@@ -1105,7 +1106,7 @@ pub(crate) fn build_inventory(
         noise_files: scope.noise_files,
         review_files: scope.review_files,
         split_recommended,
-        max_concurrency: clamped_conc,
+        max_concurrency: resolved_conc,
         units,
     })
 }
@@ -1118,6 +1119,7 @@ pub fn run(
     ignore_dirty_paths: &str,
     max_concurrency: i32,
 ) -> Result<(String, i32), B3Error> {
+    let max_concurrency = resolve_concurrency(max_concurrency, "INVENTORY_FAIL")?;
     let ignored = split_path_csv_checked(ignore_dirty_paths, "INVENTORY_FAIL", true, None)?;
     let repo_root = normalize_repo_root(repo_root_raw)?;
     let scope = resolve_scope_target_and_base(

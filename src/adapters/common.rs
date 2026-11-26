@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    has_control_chars, is_reparse_or_symlink, resolve_unresolved_path, sha256_bytes_hex,
-    sort_ordinal,
+    has_control_chars, is_hex64_lower, is_reparse_or_symlink, normalize_repo_root, paths_equal_fs,
+    resolve_unresolved_path, sha256_bytes_hex, sha256_file_hex, sort_ordinal,
 };
 
 /// Normalizes `raw` lexically against CWD, trimming trailing slashes and uppercasing Windows drive letters.
@@ -93,13 +93,8 @@ pub fn text_sha256_lf(text: &str) -> String {
 }
 
 pub fn file_sha256(path: &Path) -> Result<String, B3Error> {
-    let bytes = fs::read(path).map_err(|e| {
-        fail(
-            format!("ADAPTER_FAIL: cannot read {}: {e}", path.display()),
-            1,
-        )
-    })?;
-    Ok(sha256_bytes_hex(&bytes))
+    sha256_file_hex(path)
+        .map_err(|_| fail(format!("ADAPTER_FAIL: cannot read {}", path.display()), 1))
 }
 
 pub fn path_exists_or_link(p: &Path) -> bool {
@@ -439,11 +434,7 @@ pub fn test_link_target(link_path: &Path, expected_dir: &Path, raw_target_only: 
     if cand_norm.is_empty() {
         return false;
     }
-    if cfg!(windows) {
-        cand_norm.eq_ignore_ascii_case(&exp_norm)
-    } else {
-        cand_norm == exp_norm
-    }
+    paths_equal_fs(&cand_norm, &exp_norm, cfg!(windows))
 }
 
 pub fn has_active_path(p: &Path) -> bool {
@@ -495,36 +486,7 @@ pub fn add_canonical_skills(
     root_dir: &Path,
     all_map: &mut BTreeMap<String, PathBuf>,
 ) -> Result<usize, B3Error> {
-    if !root_dir.is_dir() {
-        return Ok(0);
-    }
-    let mut found_files = Vec::new();
-    collect_skill_md_files(root_dir, &mut found_files)?;
-    let path_strs = sort_ordinal(
-        found_files.iter().map(|p| p.to_string_lossy().into_owned()),
-        false,
-    );
-    let count = path_strs.len();
-    for sf_str in path_strs {
-        let sf = PathBuf::from(&sf_str);
-        let sname = get_skill_name_from_file(&sf);
-        let Some(parent_dir) = sf.parent() else {
-            continue;
-        };
-        let norm_dir = PathBuf::from(normalize_abs_path_str(parent_dir));
-        if let Some(prev) = all_map.get(&sname) {
-            return Err(fail(
-                format!(
-                    "duplicate canonical skill name '{sname}': {} and {}",
-                    prev.display(),
-                    sf.display()
-                ),
-                1,
-            ));
-        }
-        all_map.insert(sname, norm_dir);
-    }
-    Ok(count)
+    add_canonical_skills_with_bucket(root_dir, all_map, None)
 }
 
 pub fn collect_skill_md_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), B3Error> {
@@ -684,6 +646,81 @@ pub fn resolve_b3_home_dir(b3_home_arg: &str, default_root: &Path) -> Result<Pat
     }
     let norm = normalize_abs_path_str(&cand);
     Ok(PathBuf::from(norm))
+}
+
+fn is_b3_checkout_dir(dir: &Path) -> bool {
+    dir.join("skills").is_dir() && dir.join("commands").is_dir() && dir.join("AGENTS.md").is_file()
+}
+
+fn is_valid_b3_target_dir(dir: &Path) -> bool {
+    dir.is_dir() && (dir.join("skills").is_dir() || dir.join("workflows").join("ship.md").is_file())
+}
+
+fn read_b3_home_pointer(pointer_file: &Path, base: &Path) -> Option<PathBuf> {
+    if !pointer_file.is_file() || is_reparse_link(pointer_file) {
+        return None;
+    }
+    let raw = fs::read_to_string(pointer_file).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || has_control_chars(trimmed) {
+        return None;
+    }
+    let resolved = resolve_unresolved_path(base, trimmed);
+    if is_valid_b3_target_dir(&resolved) {
+        Some(PathBuf::from(normalize_abs_path_str(&resolved)))
+    } else {
+        None
+    }
+}
+
+/// Resolves `B3_HOME` across explicit arg, env var, project `.b3/home`, B3 checkout CWD,
+/// `current_exe()` ancestors, `~/.cursor/b3-home`, and CWD fallback.
+pub fn resolve_b3_home_auto(explicit: &str) -> Result<PathBuf, B3Error> {
+    if !explicit.trim().is_empty() {
+        return resolve_b3_home_dir(explicit, Path::new("."));
+    }
+    if let Ok(env_h) = std::env::var("B3_HOME") {
+        let trimmed = env_h.trim();
+        if !trimmed.is_empty() {
+            return resolve_b3_home_dir(trimmed, Path::new("."));
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Some(p) = read_b3_home_pointer(&cwd.join(".b3").join("home"), &cwd) {
+        return Ok(p);
+    }
+    if is_b3_checkout_dir(&cwd) {
+        return Ok(PathBuf::from(normalize_abs_path_str(&cwd)));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        for anc in exe.ancestors().skip(1).take(4) {
+            if is_b3_checkout_dir(anc) {
+                return Ok(PathBuf::from(normalize_abs_path_str(anc)));
+            }
+        }
+    }
+    let user_home = resolve_user_home_dir(None);
+    if let Some(p) = read_b3_home_pointer(&user_home.join(".cursor").join("b3-home"), &user_home) {
+        return Ok(p);
+    }
+    Ok(PathBuf::from(normalize_abs_path_str(&cwd)))
+}
+
+/// Resolves `--repo-root` for `b3 sync` and `b3 context measure`, preserving `"."`
+/// when `explicit` is provided or CWD has B3 layout, and falling back to
+/// `resolve_b3_home_auto("")` when omitted outside a B3 layout.
+pub fn resolve_b3_repo_root_auto(repo_root_raw: &str) -> Result<PathBuf, B3Error> {
+    let trimmed = repo_root_raw.trim();
+    if !trimmed.is_empty() {
+        return normalize_repo_root(trimmed);
+    }
+    let cwd = normalize_repo_root(".")?;
+    let has_b3_layout = cwd.join("skills").is_dir()
+        || (cwd.join("AGENTS.md").is_file() && !cwd.join(".b3").join("home").is_file());
+    if has_b3_layout {
+        return Ok(cwd);
+    }
+    resolve_b3_home_auto("")
 }
 
 #[derive(Debug, Clone)]
@@ -850,49 +887,6 @@ pub fn get_skill_overlaps(root_dir: &Path, skill_names: &[String]) -> Vec<String
     overlaps
 }
 
-pub fn remove_dir_tree_safely(dir_path: &Path) -> Result<(), B3Error> {
-    let Ok(meta) = fs::symlink_metadata(dir_path) else {
-        return Ok(());
-    };
-    if meta.file_type().is_symlink() || is_reparse_link(dir_path) {
-        return Err(fail(
-            format!(
-                "refusing recursive delete of link path: {}",
-                dir_path.display()
-            ),
-            1,
-        ));
-    }
-    if !meta.is_dir() {
-        fs::remove_file(dir_path)
-            .map_err(|e| fail(format!("cannot remove file {}: {e}", dir_path.display()), 1))?;
-        return Ok(());
-    }
-    let entries = fs::read_dir(dir_path).map_err(|e| {
-        fail(
-            format!("cannot read directory {}: {e}", dir_path.display()),
-            1,
-        )
-    })?;
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if is_reparse_link(&p) {
-            remove_link_only(&p)?;
-        } else if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-            remove_dir_tree_safely(&p)?;
-        } else {
-            fs::remove_file(&p)
-                .map_err(|e| fail(format!("cannot remove file {}: {e}", p.display()), 1))?;
-        }
-    }
-    fs::remove_dir(dir_path).map_err(|e| {
-        fail(
-            format!("cannot remove directory {}: {e}", dir_path.display()),
-            1,
-        )
-    })
-}
-
 pub fn remove_empty_regular_dir(dir_path: &Path) {
     if dir_path.is_dir()
         && !is_reparse_link(dir_path)
@@ -977,9 +971,7 @@ pub fn test_safe_manifest_value(kind: &str, val: &str) -> bool {
         return false;
     }
     match kind {
-        "command" | "agent" | "file" => {
-            val.len() == 64 && val.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-        }
+        "command" | "agent" | "file" => is_hex64_lower(val),
         "skill" | "link" => !val.contains('|') && test_safe_header_path(val),
         _ => false,
     }
@@ -1195,11 +1187,7 @@ pub fn uninstall_managed_file(
         if let Some(parent_dir) = path.parent() {
             let p_norm = normalize_abs_path_str(parent_dir);
             let r_norm = normalize_abs_path_str(root_dir);
-            let same = if cfg!(windows) {
-                p_norm.eq_ignore_ascii_case(&r_norm)
-            } else {
-                p_norm == r_norm
-            };
+            let same = paths_equal_fs(&p_norm, &r_norm, cfg!(windows));
             if !same && is_reparse_link(parent_dir) {
                 if warned.insert(p_norm) {
                     eprintln!(
@@ -1251,38 +1239,8 @@ pub fn uninstall_managed_file(
 #[cfg(all(test, windows))]
 mod tests {
     use super::{create_dir_link, test_link_target};
-    use crate::fs::expand_windows_long_path;
-    use std::ffi::OsString;
+    use crate::fs::{expand_windows_long_path, remove_link_only, to_short_path};
     use std::fs;
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-
-    extern "system" {
-        fn GetShortPathNameW(
-            lpsz_long_path: *const u16,
-            lpsz_short_path: *mut u16,
-            cch_buffer: u32,
-        ) -> u32;
-    }
-
-    fn to_short_path(path: &Path) -> Option<PathBuf> {
-        let wide: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
-        if needed == 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; needed as usize];
-        let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
-        if written == 0 || written >= needed {
-            return None;
-        }
-        Some(PathBuf::from(OsString::from_wide(&buf[..written as usize])))
-    }
 
     #[test]
     fn test_link_target_matches_across_windows_83_and_long_paths() {
@@ -1310,9 +1268,7 @@ mod tests {
             "test_link_target must reject distinct target"
         );
 
-        let _ = Command::new("cmd")
-            .args(["/d", "/c", "rmdir", &link.to_string_lossy()])
-            .status();
+        remove_link_only(&link);
         let _ = fs::remove_dir_all(&root);
     }
 }

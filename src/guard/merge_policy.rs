@@ -647,21 +647,6 @@ fn resolve_explicit_github_verify_adapter(err_prefix: &str) -> Result<Option<Pat
             return Err(fail(format!("{err_prefix}: github_adapter_missing"), 1));
         }
     }
-    let name = if cfg!(windows) {
-        "b3-github-verify.ps1"
-    } else {
-        "b3-github-verify.sh"
-    };
-    if let Ok(sdir) = std::env::var("B3_SCRIPTS_DIR") {
-        let trimmed = sdir.trim();
-        if !trimmed.is_empty() {
-            let p = PathBuf::from(trimmed).join(name);
-            if p.is_file() {
-                return Ok(Some(p));
-            }
-            return Err(fail(format!("{err_prefix}: github_adapter_missing"), 1));
-        }
-    }
     Ok(None)
 }
 
