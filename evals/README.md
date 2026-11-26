@@ -2,7 +2,7 @@
 
 Philosophy: [`docs/evaluation.md`](../docs/evaluation.md).
 
-**Status:** `299` YAML activation, boundary, rule, review-loop, and workflow fixtures across 6 top-level categories. Automated LLM runner and CI **deferred** (decision-005).
+**Status:** `304` YAML activation, boundary, rule, review-loop, and workflow fixtures across 6 top-level categories. Automated LLM runner and CI **deferred** (decision-005).
 
 ```bash
 ./scripts/validate-evals.sh
@@ -12,7 +12,7 @@ Schema check only — not semantic scoring. Capability evals **not implemented**
 
 | Area | Cases | Notes |
 | --- | ---: | --- |
-| `skills/` | 176 | `2/2/2` minimum across all `24` canonical skills (`should-trigger`, `should-not-trigger`, `near-miss`), including `6` fixtures in `skills/pr-feedback/` (`scripts/validate-pr-feedback.ps1`) and `16` in `skills/code-review/` |
+| `skills/` | 181 | `2/2/2` minimum across all `24` canonical skills (`should-trigger`, `should-not-trigger`, `near-miss`), including `6` fixtures in `skills/pr-feedback/` (`scripts/validate-pr-feedback.ps1`), `10` in `skills/simplest-correct/`, and `18` in `skills/code-review/` |
 | `rules/` | 10 | Comply/violate samples across `comply/` (`3`), `violate/` (`3`), `engineering-principles/` (`2`), and `portability/` (`2`) |
 | `agents/` | 7 | `b3-architecture-reviewer` (`3`, incl. `design-only`) and `b3-performance-reviewer` (`4`); security still thin |
 | `review-loop/` | 26 | Spec + orchestration scenarios across all `8` subfolders (`adaptive-sizing/`, `orchestration/`, `quality-gate/`, `false-positive/`, `false-convergence/`, `tool-failure/`, `iteration-limit/`, `finding-lifecycle/`; see [`review-loop/README.md`](review-loop/README.md), `scripts/validate-tshirt-hierarchical.ps1`, and `scripts/validate-merge-security.sh`) |

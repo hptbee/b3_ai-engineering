@@ -1,8 +1,10 @@
-# Simplification & implementation residue checklist
+# Simplification, overengineering & implementation residue checklist
 
-Reference for [`../SKILL.md`](../SKILL.md). Ask: *“Given the final implementation and current requirements, is all of this code still necessary?”*
+Reference for [`../SKILL.md`](../SKILL.md). Ask:
+- *“Given the final implementation and current requirements, is all of this code still necessary?”*
+- *“Could the same requirements be satisfied with substantially less implementation and maintenance complexity?”*
 
-## Target categories (risk-based)
+## Implementation residue (risk-based)
 
 - Duplicated business logic, duplicate conditions, or equivalent/redundant branches
 - Unreachable paths, obsolete fallback behavior, or stale compatibility shims
@@ -11,17 +13,26 @@ Reference for [`../SKILL.md`](../SKILL.md). Ask: *“Given the final implementat
 - Duplicate mappings/transforms, validation, or error handling
 - Pass-through wrappers or abstractions whose original consumer disappeared
 - Obsolete overloads, stale DTO/model fields, duplicated API contracts, or obsolete cache layers
-- Defensive guards for states proven impossible by current contracts
+- Defensive guards for states proven impossible or irrelevant by current contracts
 - Comments describing removed behavior, completed TODOs, or obsolete tests for removed behavior
 - Old code paths retained after a replacement became canonical
+
+## Disproportionate complexity (overengineering)
+
+- Custom parsers when simpler supported alternatives (e.g., plain Markdown/config or built-in parsers) exist
+- Excessive validation or schema machinery for low-risk convenience features
+- New frameworks, engines, or reusable subsystems introduced without a concrete requirement
+- Reimplementation of standard library or native platform functionality
+- Unnecessary configuration layers or indirection for simple options
+- Disproportionate code and maintenance cost relative to feature value
 
 ## Classification
 
 | Class | Meaning | Action |
 | --- | --- | --- |
-| **CONFIRMED REDUNDANCY** | Repo evidence proves no remaining responsibility or full duplication | Map to `simplification` + `CONFIRMED`; require minimal cleanup |
-| **LIKELY REDUNDANT** | Strong evidence, but one dependency/requirement remains uncertain | Keep `SPECULATIVE` / `INVESTIGATING`; do not delete without proof |
-| **INTENTIONAL COMPLEXITY** | Named current responsibility holds (compatibility, security, perf, external consumer) | Accept; do not delete |
+| **CONFIRMED** (`CONFIRMED REDUNDANCY` / overengineering) | Repo evidence proves no remaining responsibility, full duplication, or a concrete evidence-based simpler alternative that meets all requirements | Map to `simplification` + `CONFIRMED`; require minimal cleanup |
+| **SPECULATIVE** (`LIKELY REDUNDANT`) | Strong signal, but a dependency, requirement, or simpler alternative remains unproven | Keep `SPECULATIVE` / non-blocking; do not delete without proof |
+| **INTENTIONAL COMPLEXITY** | Concrete requirement holds (security, correctness, portability, compatibility, explicit spec, verified perf, external consumer) | Accept; do not flag or simplify away |
 | **UNKNOWN** | Insufficient evidence to judge safety | Do not convert uncertainty into deletion |
 
-Never perform aesthetic line-count golf or unrelated refactors.
+Require an evidence-based simpler alternative before classifying overengineering as `CONFIRMED`. Never flag complexity on line count alone, never turn stylistic preferences into blocking findings, and never perform aesthetic line-count golf or unrelated refactors.
