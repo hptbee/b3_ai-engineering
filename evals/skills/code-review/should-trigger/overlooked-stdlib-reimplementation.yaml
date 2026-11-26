@@ -1,0 +1,6 @@
+id: code-review-trigger-011
+artifact: skills/engineering/code-review/SKILL.md
+intent: Flag custom reimplementation when standard library already provides the capability
+input: "Review this PR. It adds a 250-line hand-rolled URL query string and path normalization parser in Node.js even though built-in URLSearchParams and node:path satisfy every requirement."
+expected_bucket: should-trigger
+notes: Evidence-based simpler standard-library alternative exists; classify as CONFIRMED simplification finding.

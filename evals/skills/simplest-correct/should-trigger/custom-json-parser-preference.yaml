@@ -1,0 +1,6 @@
+id: simplest-correct-custom-json-parser-preference
+artifact: skills/architecture/simplest-correct/SKILL.md
+intent: Catch unnecessary custom JSON parser for a small optional preference feature before coding
+input: "Let's add optional local model preferences by building a custom JSON parser, schema validator, and migration layer even though a simple Markdown file satisfies the requirement."
+expected_bucket: should-trigger
+notes: Disproportionate subsystem for a low-risk convenience feature; simpler representation should be chosen pre-implementation.

@@ -27,7 +27,7 @@ Near miss: “is this architecture sound?” with no implementation yet → this
 ## Procedure
 
 1. **Restate goal & scope** in one sentence, naming explicit **in-scope / out-of-scope** bounds and top-level success evidence (command or probe).
-2. **Map files & reuse:** identify files/modules to create or modify following existing project conventions; check existing utilities/architecture first so no duplicate abstraction is invented.
+2. **Map files, reuse & proportionality:** identify files/modules to create or modify following project conventions; check existing components, native platform features, and standard libraries first. Prefer simple representations/configs and direct workflows over custom parsers, config frameworks, or reusable subsystems for one-off convenience features unless justified by a concrete requirement (security, correctness, portability, explicit spec, or verified perf — `architecture/simplest-correct`).
 3. **Assess risks (risk-adaptive depth):** list security/authz, data consistency, perf, a11y, or 3D resource risks and matching domain skills.
    - **Low-risk / localized:** keep the plan compact (files, ACs, tasks, checks).
    - **High-risk trigger** (ambiguity, architecture/contract changes, authz boundaries, stateful/concurrency/retry logic, cache/write-path invalidation, cross-module deps): explicitly capture shared contracts/interfaces, failure modes, and write/invalidation paths before task breakdown.
