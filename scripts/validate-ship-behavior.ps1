@@ -3382,12 +3382,12 @@ try {
     & git -C $rAdv add 'src/db.ts' | Out-Null
     [IO.File]::WriteAllText((Join-Path $rAdv 'src\db.ts'), "export const q = 'SELECT 1';`n", $utf8NoBomAdv)
     $secMcPs = Invoke-PsGuard @('mechanical-check', '-RepoRoot', $rAdv, '-BaseSha', 'HEAD', '-AllowedPaths', 'src/db.ts')
-    if ($secMcPs.Code -ne 1 -or $secMcPs.Text -notmatch 'destructive_sql') {
+    if ($secMcPs.Code -ne 2 -or $secMcPs.Text -notmatch 'destructive_sql') {
         $advErrs.Add("SEC-03 PS staged-only destructive_sql missed: $($secMcPs.Code)/$($secMcPs.Text)")
     }
     if ($script:HasBash) {
         $secMcSh = Invoke-ShGuard @('mechanical-check', '--repo-root', $rAdvPosix, '--base-sha', 'HEAD', '--allowed-paths', 'src/db.ts')
-        if ($secMcSh.Code -ne 1 -or $secMcSh.Text -notmatch 'destructive_sql') {
+        if ($secMcSh.Code -ne 2 -or $secMcSh.Text -notmatch 'destructive_sql') {
             $advErrs.Add("SEC-03 SH staged-only destructive_sql missed: $($secMcSh.Code)/$($secMcSh.Text)")
         }
     }
