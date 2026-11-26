@@ -1644,6 +1644,152 @@ protected_path_match_ci() {
   return 1
 }
 
+_LS_REMOTE_STATUS=""
+_LS_REMOTE_SHA=""
+git_ls_remote_ref() {
+  local root="$1" full_ref="$2" out="" rc=0 line
+  _LS_REMOTE_STATUS="UNREACHABLE"
+  _LS_REMOTE_SHA=""
+  if command -v timeout >/dev/null 2>&1; then
+    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" timeout 8 git -C "$root" -c credential.helper= ls-remote --exit-code origin "$full_ref" 2>/dev/null)"; then rc=0; else rc=$?; fi
+  else
+    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" git -C "$root" -c credential.helper= ls-remote --exit-code origin "$full_ref" 2>/dev/null)"; then rc=0; else rc=$?; fi
+  fi
+  if [[ $rc -eq 2 ]]; then
+    _LS_REMOTE_STATUS="MISSING"
+    return 0
+  fi
+  if [[ $rc -eq 0 && -n "$out" ]]; then
+    while IFS= read -r line; do
+      line="${line%$'\r'}"
+      if [[ "$line" =~ ^([0-9a-f]{40})$'\t' ]]; then
+        _LS_REMOTE_STATUS="OK"
+        _LS_REMOTE_SHA="${BASH_REMATCH[1]}"
+        return 0
+      fi
+    done <<< "$out"
+  fi
+  return 0
+}
+
+_check_paths_covered_ci_mode() {
+  local cand="$1" packed="$2" ci_mode="$3"
+  local save_ci="$_B3_IS_CASE_INSENSITIVE_FS"
+  _B3_IS_CASE_INSENSITIVE_FS="$ci_mode"
+  local rc=0
+  if ownership_path_match "$cand" "$packed"; then rc=0; else rc=1; fi
+  _B3_IS_CASE_INSENSITIVE_FS="$save_ci"
+  return $rc
+}
+
+assert_single_verify_receipt_matches_target() {
+  local root="$1" rec_path="$2" ign_csv="$3" head_sha="$4" ci_mode="$5"
+  shift 5
+  local -a req_paths=("$@")
+  if [[ -z "$head_sha" || ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "MERGE_BLOCKED: ci_evidence_invalid(invalid_head_sha)"
+    exit 1
+  fi
+  local vr_rc=0
+  set +e
+  run_verify_check "$root" "$rec_path" "$ign_csv" "" "" "$head_sha"
+  vr_rc=$?
+  set -e
+  if [[ $vr_rc -ne 0 ]]; then
+    printf 'MERGE_BLOCKED: ci_evidence_invalid(%s)\n' "${_VR_MSG:-unknown}"
+    exit 1
+  fi
+  if [[ "$_VR_REL_PATHS" != "ALL" ]]; then
+    if [[ ${#req_paths[@]} -eq 0 ]]; then
+      echo "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)"
+      exit 1
+    fi
+    local -a rec_arr=()
+    local rp cp
+    while IFS= read -r rp; do [[ -n "$rp" ]] && rec_arr+=("$rp"); done < <(split_csv_lines "$_VR_REL_PATHS" true)
+    local rec_packed=""
+    [[ ${#rec_arr[@]} -gt 0 ]] && rec_packed="$(IFS='|'; printf '%s' "${rec_arr[*]}")"
+    for cp in "${req_paths[@]}"; do
+      if [[ -z "$rec_packed" ]] || ! _check_paths_covered_ci_mode "$cp" "$rec_packed" "$ci_mode"; then
+        printf 'MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: %s)\n' "$cp"
+        exit 1
+      fi
+    done
+  fi
+}
+
+assert_local_ci_evidence() {
+  local root="$1" head_sha="$2" rec_path="$3" led_meta_out="$4" ign_csv="$5" caller_ci="$6" req_ci="$7" ci_mode="$8"
+  shift 8
+  local -a chg_paths=("$@")
+  local rec_trim
+  rec_trim="$(trim_str "$rec_path")"
+  if [[ -n "$rec_trim" ]]; then
+    assert_single_verify_receipt_matches_target "$root" "$rec_trim" "$ign_csv" "$head_sha" "$ci_mode" ${chg_paths[@]+"${chg_paths[@]}"}
+    return 0
+  fi
+  if [[ "$req_ci" != "true" ]]; then
+    return 0
+  fi
+  if [[ -n "$led_meta_out" ]]; then
+    local has_units=false has_all=false
+    local -a unit_recs=() cov_arr=()
+    local mline ur rp
+    while IFS= read -r mline; do
+      if [[ "$mline" == META_UNIT_RECEIPT=* ]]; then
+        has_units=true
+        unit_recs+=("${mline#META_UNIT_RECEIPT=}")
+      fi
+    done <<< "$led_meta_out"
+    if $has_units; then
+      for entry in "${unit_recs[@]}"; do
+        local uid="${entry%%|*}"
+        ur="${entry#*|}"
+        if [[ -z "$ur" || "$ur" == "none" ]]; then
+          printf 'MERGE_BLOCKED: ci_evidence_invalid(ledger_unit_missing_verify_receipt:%s)\n' "$uid"
+          exit 1
+        fi
+        local vr_u=0
+        set +e
+        run_verify_check "$root" "$ur" "$ign_csv" "" "" "$head_sha"
+        vr_u=$?
+        set -e
+        if [[ $vr_u -ne 0 ]]; then
+          printf 'MERGE_BLOCKED: ci_evidence_invalid(%s)\n' "${_VR_MSG:-unknown}"
+          exit 1
+        fi
+        if [[ "$_VR_REL_PATHS" == "ALL" ]]; then
+          has_all=true
+        else
+          while IFS= read -r rp; do [[ -n "$rp" ]] && cov_arr+=("$rp"); done < <(split_csv_lines "$_VR_REL_PATHS" true)
+        fi
+      done
+      if ! $has_all; then
+        if [[ ${#chg_paths[@]} -eq 0 ]]; then
+          echo "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)"
+          exit 1
+        fi
+        local cov_packed=""
+        [[ ${#cov_arr[@]} -gt 0 ]] && cov_packed="$(IFS='|'; printf '%s' "${cov_arr[*]}")"
+        local cp
+        for cp in "${chg_paths[@]}"; do
+          if [[ -z "$cov_packed" ]] || ! _check_paths_covered_ci_mode "$cp" "$cov_packed" "$ci_mode"; then
+            printf 'MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: %s)\n' "$cp"
+            exit 1
+          fi
+        done
+      fi
+      return 0
+    fi
+  fi
+  if [[ "$caller_ci" == "PASS" ]]; then
+    echo "MERGE_BLOCKED: ci_evidence_unverified(caller_reported_ci_cannot_authorize)"
+    exit 1
+  fi
+  echo "MERGE_BLOCKED: ci_evidence_missing"
+  exit 1
+}
+
 is_secret_path() {
   local leaf="${1##*/}"
   leaf="$(printf '%s' "$leaf" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
@@ -4959,6 +5105,12 @@ run_review_ledger_check_sub() {
       printf 'META_TARGET_REF=%s\n' "$L_TREF"
       printf 'META_TARGET_SHA=%s\n' "$L_TSHA"
       printf 'META_REVIEW_INDEPENDENCE=%s\n' "$L_RIND"
+      if [[ ${#U_ROWS[@]} -gt 0 ]]; then
+        for ur in "${U_ROWS[@]}"; do
+          IFS='|' read -r u_id _1 _2 _3 _4 _5 _6 _7 _8 u_rec _10 _11 <<< "$ur"
+          printf 'META_UNIT_RECEIPT=%s|%s\n' "$u_id" "$u_rec"
+        done
+      fi
     fi
     exit 0
   )
@@ -9402,6 +9554,7 @@ ${el}"
     BASE_SHA=""
     HEAD_SHA_ARG=""
     LEDGER_PATH=""
+    RECEIPT_PATH=""
     IGNORE_DIRTY=""
     PR_NUMBER=""
     REPO_ARG=""
@@ -9426,6 +9579,7 @@ ${el}"
         --base-sha) BASE_SHA="${2:-}"; shift 2 ;;
         --head-sha) HEAD_SHA_ARG="${2:-}"; shift 2 ;;
         --ledger-path) LEDGER_PATH="${2:-}"; shift 2 ;;
+        --receipt-path) RECEIPT_PATH="${2:-}"; shift 2 ;;
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         --pr-number) PR_NUMBER="${2:-}"; shift 2 ;;
         --repo) REPO_ARG="${2:-}"; shift 2 ;;
@@ -9806,6 +9960,19 @@ ${el}"
         fi
         if [[ ! "$REM_TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
           echo "POST_MERGE_FAILED: remote_target_not_fetched"
+          exit 1
+        fi
+        git_ls_remote_ref "$REPO_ROOT" "refs/heads/${LOCAL_TARGET_BRANCH}"
+        if [[ "$_LS_REMOTE_STATUS" == "MISSING" ]]; then
+          echo "POST_MERGE_FAILED: remote_target_ref_missing"
+          exit 1
+        fi
+        if [[ "$_LS_REMOTE_STATUS" == "UNREACHABLE" ]]; then
+          echo "PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable"
+          exit 2
+        fi
+        if [[ "$_LS_REMOTE_SHA" != "$REM_TARGET_SHA" ]]; then
+          printf 'POST_MERGE_FAILED: stale_remote_target_ref(local=%s remote=%s)\n' "$REM_TARGET_SHA" "$_LS_REMOTE_SHA"
           exit 1
         fi
         if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$REM_TARGET_SHA"; then
@@ -10659,12 +10826,29 @@ ${el}"
     fi
 
     # --- Provider-Neutral Local / --local-only / auto_merge=disabled Path ---
+    if $REQUIRE_REMOTE_CI; then
+      echo "PROVIDER_UNAVAILABLE: remote_ci_requires_provider_verification"
+      exit 2
+    fi
     if [[ "$AUTO_MERGE" != "authorized" ]]; then
-      if [[ "$REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
-        echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
-        exit 1
-      fi
       LED_OPT_TRIM="$(trim_str "$LEDGER_PATH")"
+      OPT_LED_OUT=""
+      if [[ -n "$LED_OPT_TRIM" ]]; then
+        if ! check_contained_repo_path "$REPO_ROOT" "$LED_OPT_TRIM"; then
+          echo "MERGE_BLOCKED: invalid_ledger_path"
+          exit 1
+        fi
+        if [[ -f "$_CONTAINED_FULL" && "$REQ_CI" == "true" && -z "$(trim_str "$RECEIPT_PATH")" ]]; then
+          set +e
+          _led_dis_out="$(run_review_ledger_check_sub "$REPO_ROOT" "$_CONTAINED_FULL" "$_CONTAINED_REL" "" "true")"
+          _led_dis_rc=$?
+          set -e
+          [[ $_led_dis_rc -eq 0 ]] && OPT_LED_OUT="$_led_dis_out"
+        fi
+      fi
+      if [[ "$REQ_CI" == "true" || -n "$(trim_str "$RECEIPT_PATH")" ]]; then
+        assert_local_ci_evidence "$REPO_ROOT" "$LIVE_HEAD_SHA" "$RECEIPT_PATH" "$OPT_LED_OUT" "$IGNORE_DIRTY" "$CI_STATUS" "$REQ_CI" "$_MP_CASE_INSENSITIVE" ${LOCAL_PRE_CHANGED_ARR[@]+"${LOCAL_PRE_CHANGED_ARR[@]}"}
+      fi
       if [[ "$REQ_REV" == "true" && "$REVIEW_STATUS" != "PASS" && -z "$LED_OPT_TRIM" ]]; then
         echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
         exit 1
@@ -10677,12 +10861,6 @@ ${el}"
       if [[ -n "$BASE_OPT_TRIM" ]]; then
         if [[ "$BASE_OPT_TRIM" == -* ]] || ! run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${BASE_OPT_TRIM}^{commit}" || [[ ! "$(trim_str "$_GIT_STDOUT")" =~ ^[0-9a-f]{40}$ ]]; then
           echo "MERGE_BLOCKED: invalid_base_sha"
-          exit 1
-        fi
-      fi
-      if [[ -n "$LED_OPT_TRIM" ]]; then
-        if ! check_contained_repo_path "$REPO_ROOT" "$LED_OPT_TRIM"; then
-          echo "MERGE_BLOCKED: invalid_ledger_path"
           exit 1
         fi
       fi
@@ -10970,11 +11148,6 @@ ${el}"
       fi
     fi
 
-    if [[ "$AUTH_LOC_REQ_CI" == "true" && "$CI_STATUS" != "PASS" ]]; then
-      echo "MERGE_BLOCKED: ci_status=$CI_STATUS"
-      exit 1
-    fi
-
     LED_TRIM_LOC="$(trim_str "$LEDGER_PATH")"
     if [[ -z "$LED_TRIM_LOC" ]]; then
       echo "MERGE_BLOCKED: missing_ledger_path"
@@ -11026,22 +11199,73 @@ ${el}"
       exit 1
     fi
 
-    if $LOCAL_ONLY; then
-      echo "LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized"
-      exit 2
-    fi
+    assert_local_ci_evidence "$REPO_ROOT" "$LIVE_HEAD_SHA" "$RECEIPT_PATH" "$LED_LOC_OUT" "$IGNORE_DIRTY" "$CI_STATUS" "$AUTH_LOC_REQ_CI" "$_MP_CASE_INSENSITIVE" ${ALL_CHANGED_LOC[@]+"${ALL_CHANGED_LOC[@]}"}
 
     if [[ -z "$TARGET_SYM_FULL" || -z "$EFF_AUTH_SYM_FULL" ]]; then
       echo "MERGE_BLOCKED: invalid_target_ref"
       exit 1
     fi
-    if $HAS_ORIGIN && [[ "$TARGET_SYM_FULL" != refs/remotes/origin/* ]]; then
+    if $HAS_ORIGIN && ! $LOCAL_ONLY && [[ "$TARGET_SYM_FULL" != refs/remotes/origin/* ]]; then
       echo "MERGE_BLOCKED: remote_tracking_target_required"
       exit 1
     fi
     if ! $HAS_ANY_REMOTE && ( [[ "$TARGET_SYM_FULL" != refs/heads/* ]] || [[ -n "$CUR_SYM_FULL" && "$TARGET_SYM_FULL" == "$CUR_SYM_FULL" ]] ); then
       echo "MERGE_BLOCKED: invalid_target_ref"
       exit 1
+    fi
+
+    if $HAS_ANY_REMOTE; then
+      REMOTE_AUTH_STATE="no_provider_verification"
+      if $HAS_ORIGIN; then
+        _ra_status="" _ra_sha=""
+        if [[ -n "$EFF_AUTH_BRANCH" ]]; then
+          git_ls_remote_ref "$REPO_ROOT" "refs/heads/${EFF_AUTH_BRANCH}"
+          _ra_status="$_LS_REMOTE_STATUS"
+          _ra_sha="$_LS_REMOTE_SHA"
+          if [[ "$_ra_status" == "MISSING" ]]; then
+            echo "MERGE_BLOCKED: remote_authority_ref_missing"
+            exit 1
+          fi
+          if [[ "$_ra_status" == "OK" && "$_ra_sha" != "$EFF_AUTH_SHA" ]]; then
+            printf 'MERGE_BLOCKED: stale_remote_ref(authority local=%s remote=%s)\n' "$EFF_AUTH_SHA" "$_ra_sha"
+            exit 1
+          fi
+          if [[ "$_ra_status" == "UNREACHABLE" ]]; then
+            REMOTE_AUTH_STATE="remote_ref_unverifiable"
+          fi
+        fi
+        if [[ -n "$TARGET_BRANCH_NAME" ]]; then
+          if [[ -n "$EFF_AUTH_BRANCH" && "$TARGET_BRANCH_NAME" == "$EFF_AUTH_BRANCH" && -n "$_ra_status" ]]; then
+            if [[ "$_ra_status" == "OK" && "$_ra_sha" != "$RES_BASE_SHA" ]]; then
+              printf 'MERGE_BLOCKED: stale_remote_ref(target local=%s remote=%s)\n' "$RES_BASE_SHA" "$_ra_sha"
+              exit 1
+            fi
+          else
+            git_ls_remote_ref "$REPO_ROOT" "refs/heads/${TARGET_BRANCH_NAME}"
+            if [[ "$_LS_REMOTE_STATUS" == "MISSING" ]]; then
+              echo "MERGE_BLOCKED: remote_target_ref_missing"
+              exit 1
+            fi
+            if [[ "$_LS_REMOTE_STATUS" == "OK" && "$_LS_REMOTE_SHA" != "$RES_BASE_SHA" ]]; then
+              printf 'MERGE_BLOCKED: stale_remote_ref(target local=%s remote=%s)\n' "$RES_BASE_SHA" "$_LS_REMOTE_SHA"
+              exit 1
+            fi
+            if [[ "$_LS_REMOTE_STATUS" == "UNREACHABLE" ]]; then
+              REMOTE_AUTH_STATE="remote_ref_unverifiable"
+            fi
+          fi
+        fi
+      else
+        REMOTE_AUTH_STATE="no_origin_remote"
+      fi
+      printf 'LOCAL_ELIGIBLE_ONLY: engineering_ready=true remote_authorization=UNVERIFIED(%s) auto_merge=authorized target_ref=%s target_sha=%s head_sha=%s policy_authority=%s@%s governance=CLEAR\n' \
+        "$REMOTE_AUTH_STATE" "$TARGET_SYM_FULL" "$RES_BASE_SHA" "$LIVE_HEAD_SHA" "$EFF_AUTH_SYM_FULL" "$EFF_AUTH_SHA"
+      exit 2
+    fi
+
+    if $LOCAL_ONLY; then
+      echo "LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized"
+      exit 2
     fi
 
     printf 'MERGE_AUTHORIZED: mode=local target_ref=%s target_sha=%s head_sha=%s policy_authority=%s@%s auto_merge=authorized governance=CLEAR\n' \

@@ -485,7 +485,7 @@ function Format-WinArg([string]$Arg) {
     return $sb.ToString()
 }
 
-function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '', [hashtable]$ExtraEnv = $null) {
+function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '', [hashtable]$ExtraEnv = $null, [int]$TimeoutMs = 0) {
     $useStdIn = $PSBoundParameters.ContainsKey('StdInText')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'git'
@@ -525,7 +525,14 @@ function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText
             }
             $proc.StandardInput.Close()
         }
-        $proc.WaitForExit()
+        if ($TimeoutMs -gt 0) {
+            if (-not $proc.WaitForExit($TimeoutMs)) {
+                try { $proc.Kill() } catch {}
+                return [PSCustomObject]@{ ExitCode = 124; StdOut = ''; StdErr = 'timeout' }
+            }
+        } else {
+            $proc.WaitForExit()
+        }
         $stdout = $outTask.GetAwaiter().GetResult()
         $stderr = $errTask.GetAwaiter().GetResult()
         $code = $proc.ExitCode
@@ -2937,6 +2944,99 @@ function Test-ProtectedPathMatchCI([string]$Candidate, [string[]]$Patterns, [boo
         }
     }
     return $false
+}
+
+function Invoke-GitLsRemoteRef([string]$Root, [string]$FullRef) {
+    $envLs = @{
+        GIT_TERMINAL_PROMPT = '0'
+        GCM_INTERACTIVE     = 'never'
+        GIT_ASKPASS         = ''
+        SSH_ASKPASS         = ''
+    }
+    $lsRes = Invoke-GitCommand $Root @('-c', 'credential.helper=', 'ls-remote', '--exit-code', 'origin', $FullRef) -ExtraEnv $envLs -TimeoutMs 8000
+    if ($lsRes.ExitCode -eq 2) {
+        return @{ Status = 'MISSING'; Sha = '' }
+    }
+    if ($lsRes.ExitCode -eq 0 -and $lsRes.StdOut) {
+        foreach ($ln in ($lsRes.StdOut -split "\r?\n")) {
+            if ($ln -cmatch "^([0-9a-f]{40})\t") {
+                return @{ Status = 'OK'; Sha = $Matches[1] }
+            }
+        }
+    }
+    return @{ Status = 'UNREACHABLE'; Sha = '' }
+}
+
+function Assert-SingleVerifyReceiptMatchesTarget([string]$Root, [string]$RecPath, [string[]]$IgnPaths, [string]$HeadSha, [string[]]$RequiredPaths, [bool]$CaseInsensitive) {
+    if (-not $HeadSha -or $HeadSha -cnotmatch '^[0-9a-f]{40}$') {
+        Fail 'MERGE_BLOCKED: ci_evidence_invalid(invalid_head_sha)' 1
+    }
+    $vr = Test-VerifyReceipt $Root $RecPath $IgnPaths '' '' $HeadSha
+    if (-not $vr -or $vr.Code -ne 0) {
+        $msg = if ($vr -and $vr.Message) { $vr.Message } else { 'unknown' }
+        Fail "MERGE_BLOCKED: ci_evidence_invalid($msg)" 1
+    }
+    $relCsv = if ($vr.RelevantPathsCsv) { [string]$vr.RelevantPathsCsv } else { '' }
+    if ($relCsv -cne 'ALL') {
+        if (-not $RequiredPaths -or $RequiredPaths.Count -eq 0) {
+            Fail 'MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)' 1
+        }
+        $recList = @(Split-CsvList $relCsv -AsPaths)
+        foreach ($cp in $RequiredPaths) {
+            if (-not (Test-OwnershipPathMatch $cp $recList $CaseInsensitive)) {
+                Fail "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: $cp)" 1
+            }
+        }
+    }
+}
+
+function Assert-LocalCiEvidence([string]$Root, [string]$HeadSha, [string[]]$ChangedPaths, [string]$RecPath, [hashtable]$LedgerObj, [string[]]$IgnPaths, [string]$CallerCiStatus, [bool]$RequireCi, [bool]$CaseInsensitive) {
+    $hasExplicitReceipt = [bool]($RecPath -and $RecPath.Trim())
+    if ($hasExplicitReceipt) {
+        Assert-SingleVerifyReceiptMatchesTarget $Root $RecPath $IgnPaths $HeadSha $ChangedPaths $CaseInsensitive
+        return 'LOCAL_VERIFIED'
+    }
+    if (-not $RequireCi) {
+        return 'NOT_REQUIRED'
+    }
+    if ($null -ne $LedgerObj -and $LedgerObj.Units -and $LedgerObj.Units.Count -gt 0) {
+        $hasAllScope = $false
+        $coveredList = New-Object System.Collections.Generic.List[string]
+        foreach ($u in $LedgerObj.Units) {
+            $ur = if ($u.verify_receipt) { [string]$u.verify_receipt } else { 'none' }
+            if (-not $ur -or $ur -ceq 'none') {
+                Fail "MERGE_BLOCKED: ci_evidence_invalid(ledger_unit_missing_verify_receipt:$($u.unit_id))" 1
+            }
+            $vrU = Test-VerifyReceipt $Root $ur $IgnPaths '' '' $HeadSha
+            if (-not $vrU -or $vrU.Code -ne 0) {
+                $msgU = if ($vrU -and $vrU.Message) { $vrU.Message } else { 'unknown' }
+                Fail "MERGE_BLOCKED: ci_evidence_invalid($msgU)" 1
+            }
+            if ($vrU.RelevantPathsCsv -ceq 'ALL') {
+                $hasAllScope = $true
+            } else {
+                foreach ($rp in @(Split-CsvList $vrU.RelevantPathsCsv -AsPaths)) {
+                    if ($rp -and -not $coveredList.Contains($rp)) { $coveredList.Add($rp) }
+                }
+            }
+        }
+        if (-not $hasAllScope) {
+            if (-not $ChangedPaths -or $ChangedPaths.Count -eq 0) {
+                Fail 'MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)' 1
+            }
+            $covArr = @($coveredList)
+            foreach ($cp in $ChangedPaths) {
+                if (-not (Test-OwnershipPathMatch $cp $covArr $CaseInsensitive)) {
+                    Fail "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: $cp)" 1
+                }
+            }
+        }
+        return 'LOCAL_VERIFIED'
+    }
+    if ($CallerCiStatus -ceq 'PASS') {
+        Fail 'MERGE_BLOCKED: ci_evidence_unverified(caller_reported_ci_cannot_authorize)' 1
+    }
+    Fail 'MERGE_BLOCKED: ci_evidence_missing' 1
 }
 
 function Parse-MergePolicyJsonText([string]$RawJson) {
@@ -6528,6 +6628,16 @@ switch ($Command) {
                 if ($remTargetRes.ExitCode -ne 0 -or $remTargetSha -cnotmatch '^[0-9a-f]{40}$') {
                     Fail 'POST_MERGE_FAILED: remote_target_not_fetched' 1
                 }
+                $pmRemoteChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/${localTargetBranch}"
+                if ($pmRemoteChk.Status -ceq 'MISSING') {
+                    Fail 'POST_MERGE_FAILED: remote_target_ref_missing' 1
+                }
+                if ($pmRemoteChk.Status -ceq 'UNREACHABLE') {
+                    Fail 'PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable' 2
+                }
+                if ($pmRemoteChk.Sha -cne $remTargetSha) {
+                    Fail "POST_MERGE_FAILED: stale_remote_target_ref(local=$remTargetSha remote=$($pmRemoteChk.Sha))" 1
+                }
                 $ancRemRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resMerged, $remTargetSha)
                 if ($ancRemRes.ExitCode -ne 0) {
                     Fail "POST_MERGE_FAILED: merge_commit_not_in_remote_target(target_ref=$localTargetBranch)" 1
@@ -7182,8 +7292,30 @@ switch ($Command) {
         }
 
         # --- Provider-Neutral Local / -LocalOnly / auto_merge=disabled Path ---
+        if ($RequireRemoteCi) {
+            Fail 'PROVIDER_UNAVAILABLE: remote_ci_requires_provider_verification' 2
+        }
         if ($autoMerge -cne 'authorized') {
-            if ($requireCi -and $ciSt -cne 'PASS') { Fail "MERGE_BLOCKED: ci_status=$ciSt" 1 }
+            $optLedObj = $null
+            if ($LedgerPath -and $LedgerPath.Trim()) {
+                $lOptSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
+                if (-not $lOptSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+                if ((Test-Path -LiteralPath $lOptSpec.Full -PathType Leaf) -and $requireCi -and (-not ($ReceiptPath -and $ReceiptPath.Trim()))) {
+                    $prevCapDis = $script:CaptureFailMode
+                    $script:CaptureFailMode = $true
+                    try {
+                        $ledDisRes = Invoke-ReviewLedgerCheck $RepoRoot $lOptSpec.Full $lOptSpec.Rel @()
+                        if ($ledDisRes -and $ledDisRes.Code -eq 0 -and $ledDisRes.Ledger) { $optLedObj = $ledDisRes.Ledger }
+                    } catch {
+                        $optLedObj = $null
+                    } finally {
+                        $script:CaptureFailMode = $prevCapDis
+                    }
+                }
+            }
+            if ($requireCi -or ($ReceiptPath -and $ReceiptPath.Trim())) {
+                [void](Assert-LocalCiEvidence $RepoRoot $liveHeadSha $localPreChangedArr $ReceiptPath $optLedObj $ignored $ciSt $requireCi $mpCaseInsensitive)
+            }
             if ($requireReview -and $revSt -cne 'PASS' -and (-not ($LedgerPath -and $LedgerPath.Trim()))) {
                 Fail "MERGE_BLOCKED: review_status=$revSt" 1
             }
@@ -7197,10 +7329,6 @@ switch ($Command) {
                 if ($bChk.ExitCode -ne 0 -or $bChk.StdOut.Trim() -cnotmatch '^[0-9a-f]{40}$') {
                     Fail 'MERGE_BLOCKED: invalid_base_sha' 1
                 }
-            }
-            if ($LedgerPath -and $LedgerPath.Trim()) {
-                $lOptSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
-                if (-not $lOptSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
             }
             Fail 'PR_READY: auto_merge=disabled' 2
         }
@@ -7417,10 +7545,6 @@ switch ($Command) {
             }
         }
 
-        if ($authLocPol.RequireCi -and $ciSt -cne 'PASS') {
-            Fail "MERGE_BLOCKED: ci_status=$ciSt" 1
-        }
-
         if (-not $LedgerPath -or -not $LedgerPath.Trim()) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
         $ledSpecLoc = Test-ContainedRepoPath $RepoRoot $LedgerPath
         if (-not $ledSpecLoc) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
@@ -7457,18 +7581,60 @@ switch ($Command) {
             Fail 'MERGE_BLOCKED: review_independence_unknown' 1
         }
 
-        if ($LocalOnly) {
-            Fail 'LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized' 2
-        }
+        [void](Assert-LocalCiEvidence $RepoRoot $liveHeadSha $allChangedLocArr $ReceiptPath $ledChkLoc.Ledger $ignored $ciSt ([bool]$authLocPol.RequireCi) $mpCaseInsensitive)
 
         if (-not $targetSymFull -or -not $effAuthSymFull) {
             Fail 'MERGE_BLOCKED: invalid_target_ref' 1
         }
-        if ($hasOrigin -and (-not $targetSymFull.StartsWith('refs/remotes/origin/', [System.StringComparison]::Ordinal))) {
+        if ($hasOrigin -and (-not $LocalOnly) -and (-not $targetSymFull.StartsWith('refs/remotes/origin/', [System.StringComparison]::Ordinal))) {
             Fail 'MERGE_BLOCKED: remote_tracking_target_required' 1
         }
         if ((-not $hasAnyRemote) -and ((-not $targetSymFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal)) -or ($curSymFull -and ($targetSymFull -ceq $curSymFull)))) {
             Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+        }
+
+        if ($hasAnyRemote) {
+            $remoteAuthState = 'no_provider_verification'
+            if ($hasOrigin) {
+                $rAuthChk = $null
+                if ($effAuthBranch) {
+                    $rAuthChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/$effAuthBranch"
+                    if ($rAuthChk.Status -ceq 'MISSING') {
+                        Fail 'MERGE_BLOCKED: remote_authority_ref_missing' 1
+                    }
+                    if ($rAuthChk.Status -ceq 'OK' -and $rAuthChk.Sha -cne $effAuthSha) {
+                        Fail "MERGE_BLOCKED: stale_remote_ref(authority local=$effAuthSha remote=$($rAuthChk.Sha))" 1
+                    }
+                    if ($rAuthChk.Status -ceq 'UNREACHABLE') {
+                        $remoteAuthState = 'remote_ref_unverifiable'
+                    }
+                }
+                if ($targetBranchName) {
+                    if ($effAuthBranch -and $targetBranchName -ceq $effAuthBranch -and $rAuthChk) {
+                        if ($rAuthChk.Status -ceq 'OK' -and $rAuthChk.Sha -cne $resolvedBaseSha) {
+                            Fail "MERGE_BLOCKED: stale_remote_ref(target local=$resolvedBaseSha remote=$($rAuthChk.Sha))" 1
+                        }
+                    } else {
+                        $rTgtChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/$targetBranchName"
+                        if ($rTgtChk.Status -ceq 'MISSING') {
+                            Fail 'MERGE_BLOCKED: remote_target_ref_missing' 1
+                        }
+                        if ($rTgtChk.Status -ceq 'OK' -and $rTgtChk.Sha -cne $resolvedBaseSha) {
+                            Fail "MERGE_BLOCKED: stale_remote_ref(target local=$resolvedBaseSha remote=$($rTgtChk.Sha))" 1
+                        }
+                        if ($rTgtChk.Status -ceq 'UNREACHABLE') {
+                            $remoteAuthState = 'remote_ref_unverifiable'
+                        }
+                    }
+                }
+            } else {
+                $remoteAuthState = 'no_origin_remote'
+            }
+            Fail "LOCAL_ELIGIBLE_ONLY: engineering_ready=true remote_authorization=UNVERIFIED($remoteAuthState) auto_merge=authorized target_ref=$targetSymFull target_sha=$resolvedBaseSha head_sha=$liveHeadSha policy_authority=${effAuthSymFull}@${effAuthSha} governance=CLEAR" 2
+        }
+
+        if ($LocalOnly) {
+            Fail 'LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized' 2
         }
 
         Write-Output "MERGE_AUTHORIZED: mode=local target_ref=$targetSymFull target_sha=$resolvedBaseSha head_sha=$liveHeadSha policy_authority=${effAuthSymFull}@${effAuthSha} auto_merge=authorized governance=CLEAR"
