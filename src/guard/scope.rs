@@ -150,12 +150,12 @@ fn has_segment_or_prefix(low: &str, keys: &[&str], match_dot_after: bool) -> boo
 }
 
 fn has_dir_or_leaf_prefix(low: &str, keys: &[&str]) -> bool {
-    let parts: Vec<&str> = low.split('/').collect();
-    for (idx, seg) in parts.iter().enumerate() {
-        if keys.contains(seg) {
+    let mut parts = low.split('/').peekable();
+    while let Some(seg) = parts.next() {
+        if keys.contains(&seg) {
             return true;
         }
-        if idx + 1 == parts.len() {
+        if parts.peek().is_none() {
             if let Some(dot_idx) = seg.find('.') {
                 let prefix = &seg[..dot_idx];
                 // Matches `[^/]*\.` in `b3-guard.ps1:2044` for auth_security keywords.
@@ -169,13 +169,11 @@ fn has_dir_or_leaf_prefix(low: &str, keys: &[&str]) -> bool {
 }
 
 pub fn get_raw_module_group(path_val: &str) -> String {
-    let parts: Vec<&str> = path_val.split('/').collect();
-    if parts.len() >= 3 {
-        format!("{}/{}", parts[0], parts[1])
-    } else if parts.len() == 2 {
-        parts[0].to_string()
-    } else {
-        "root".to_string()
+    let mut parts = path_val.split('/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(p0), Some(p1), Some(_)) => format!("{p0}/{p1}"),
+        (Some(p0), Some(_), None) => p0.to_string(),
+        _ => "root".to_string(),
     }
 }
 
@@ -631,20 +629,23 @@ pub fn collect_scope_data(
         )?
     };
 
-    let mut review_files = Vec::new();
-    let mut noise_files = Vec::new();
-    let mut file_lines: HashMap<String, usize> = HashMap::new();
-    let mut file_signals: HashMap<String, Vec<String>> = HashMap::new();
-    let mut change_map: HashMap<String, char> = HashMap::new();
-    let mut untracked_set: HashSet<String> = HashSet::new();
-    let mut scan_content_set: HashSet<String> = HashSet::new();
-    let mut total_lines = 0usize;
-
     // Parse `--name-status -z`: status\0path\0
     let mut st_toks: Vec<&[u8]> = st_res.stdout.split(|&b| b == 0).collect();
     if matches!(st_toks.last(), Some(l) if l.is_empty()) {
         st_toks.pop();
     }
+    let est = (st_toks.len() / 2 + untracked.len()).max(16);
+    let mut review_files = Vec::with_capacity(est);
+    let mut review_seen: HashSet<String> = HashSet::with_capacity(est);
+    let mut noise_files = Vec::new();
+    let mut noise_seen: HashSet<String> = HashSet::new();
+    let mut file_lines: HashMap<String, usize> = HashMap::with_capacity(est);
+    let mut file_signals: HashMap<String, Vec<String>> = HashMap::with_capacity(est / 4 + 8);
+    let mut change_map: HashMap<String, char> = HashMap::with_capacity(est);
+    let mut untracked_set: HashSet<String> = HashSet::with_capacity(untracked.len());
+    let mut scan_content_set: HashSet<String> = HashSet::new();
+    let mut total_lines = 0usize;
+
     let mut si = 0;
     while si + 1 < st_toks.len() {
         let st = String::from_utf8_lossy(st_toks[si]);
@@ -670,11 +671,13 @@ pub fn collect_scope_data(
             continue;
         }
         let line_str = String::from_utf8_lossy(rec);
-        let parts: Vec<&str> = line_str.splitn(3, '\t').collect();
-        if parts.len() < 3 {
+        let mut cols = line_str.splitn(3, '\t');
+        let (Some(added_s), Some(deleted_s), Some(raw_path)) =
+            (cols.next(), cols.next(), cols.next())
+        else {
             continue;
-        }
-        let p = normalize_path_value(parts[2]);
+        };
+        let p = normalize_path_value(raw_path);
         if p.is_empty()
             || test_checkpoint_path(&p)
             || (!ign_paths.is_empty() && test_path_match(&p, ign_paths))
@@ -683,19 +686,19 @@ pub fn collect_scope_data(
         }
         scan_path_risk_signals(&mut file_signals, &p);
         if test_noise_file(&p) {
-            if !noise_files.iter().any(|x| x == &p) {
+            if noise_seen.insert(p.clone()) {
                 noise_files.push(p);
             }
             continue;
         }
-        if !review_files.iter().any(|x| x == &p) {
+        if review_seen.insert(p.clone()) {
             review_files.push(p.clone());
         }
         let mut flc = 0usize;
-        if let Ok(a) = parts[0].trim().parse::<usize>() {
+        if let Ok(a) = added_s.trim().parse::<usize>() {
             flc += a;
         }
-        if let Ok(d) = parts[1].trim().parse::<usize>() {
+        if let Ok(d) = deleted_s.trim().parse::<usize>() {
             flc += d;
         }
         file_lines.insert(p.clone(), flc);
@@ -714,12 +717,12 @@ pub fn collect_scope_data(
         }
         scan_path_risk_signals(&mut file_signals, &u);
         if test_noise_file(&u) {
-            if !noise_files.iter().any(|x| x == &u) {
+            if noise_seen.insert(u.clone()) {
                 noise_files.push(u);
             }
             continue;
         }
-        if !review_files.iter().any(|x| x == &u) {
+        if review_seen.insert(u.clone()) {
             review_files.push(u.clone());
             untracked_set.insert(u.clone());
             change_map.insert(u.clone(), 'U');

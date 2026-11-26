@@ -6,14 +6,17 @@ use crate::fs::normalize_repo_root;
 
 fn read_lf_bytes(path: &Path) -> usize {
     match fs::read(path) {
-        Ok(bytes) => bytes.into_iter().filter(|&b| b != b'\r').count(),
+        Ok(bytes) => bytes.iter().filter(|&&b| b != b'\r').count(),
         Err(_) => 0,
     }
 }
 
 fn read_lf_raw(path: &Path) -> Option<Vec<u8>> {
-    let bytes = fs::read(path).ok()?;
-    Some(bytes.into_iter().filter(|&b| b != b'\r').collect())
+    let mut bytes = fs::read(path).ok()?;
+    if bytes.contains(&b'\r') {
+        bytes.retain(|&b| b != b'\r');
+    }
+    Some(bytes)
 }
 
 fn file_bytes(root: &Path, rel: &str) -> usize {
@@ -183,13 +186,39 @@ pub fn measure_context(repo_root_raw: &str, strict: bool) -> Result<(String, i32
         ));
     }
 
+    let mut agent_roles_bytes = 0usize;
+    let mut agent_role_count = 0usize;
+    let mut rev_agent_bytes = 0usize;
+    let mut fixer_agent_bytes = 0usize;
+    if let Ok(entries) = fs::read_dir(repo_root.join("agents")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+                let fname = path.file_name().and_then(|n| n.to_str());
+                if fname != Some("README.md") {
+                    let b = read_lf_bytes(&path);
+                    agent_role_count += 1;
+                    agent_roles_bytes += b;
+                    if fname == Some("b3-reviewer.md") {
+                        rev_agent_bytes = b;
+                    } else if fname == Some("b3-fixer.md") {
+                        fixer_agent_bytes = b;
+                    }
+                }
+            }
+        }
+    }
+    if agent_roles_bytes > 8500 {
+        warnings.push(format!(
+            "agents/*.md roles ({agent_roles_bytes} B > 8500 B)"
+        ));
+    }
+
     let cr_skill_bytes = file_bytes(&repo_root, "skills/engineering/code-review/SKILL.md");
     let rev_tpl_bytes = file_bytes(
         &repo_root,
         "skills/engineering/code-review/references/review-template.md",
     );
-    let rev_agent_bytes = file_bytes(&repo_root, "agents/b3-reviewer.md");
-    let fixer_agent_bytes = file_bytes(&repo_root, "agents/b3-fixer.md");
     let review_delta_bytes = rev_agent_bytes;
     let rev_iter_subag_bytes = rev_agent_bytes + fixer_agent_bytes;
     let plan_cmd_bytes = file_bytes(&repo_root, "commands/b3-plan.md")
@@ -221,26 +250,6 @@ pub fn measure_context(repo_root_raw: &str, strict: bool) -> Result<(String, i32
         + file_bytes(&repo_root, "review-loop/sizing.md")
         + file_bytes(&repo_root, "review-loop/models.md")
         + file_bytes(&repo_root, "review-loop/hierarchical.md");
-
-    let mut agent_roles_bytes = 0usize;
-    let mut agent_role_count = 0usize;
-    if let Ok(entries) = fs::read_dir(repo_root.join("agents")) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file()
-                && path.extension().and_then(|e| e.to_str()) == Some("md")
-                && path.file_name().and_then(|n| n.to_str()) != Some("README.md")
-            {
-                agent_role_count += 1;
-                agent_roles_bytes += read_lf_bytes(&path);
-            }
-        }
-    }
-    if agent_roles_bytes > 8500 {
-        warnings.push(format!(
-            "agents/*.md roles ({agent_roles_bytes} B > 8500 B)"
-        ));
-    }
 
     let mut lines = Vec::with_capacity(20);
     lines.push("=== B3 Context Budget Report ===".to_string());

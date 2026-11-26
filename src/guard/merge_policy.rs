@@ -284,39 +284,22 @@ fn assert_merge_dirty_worktree_clean(
     pol_violation_reason: &str,
 ) -> Result<(), B3Error> {
     let no_env: [(&str, &str); 0] = [];
-    let specs: [(&[&str], GitZMode); 3] = [
-        (
-            &[
-                "diff",
-                "--no-ext-diff",
-                "--cached",
-                "--name-status",
-                "-z",
-                "--",
-            ],
-            GitZMode::NameStatus,
-        ),
-        (
-            &["diff", "--no-ext-diff", "--name-status", "-z", "--"],
-            GitZMode::NameStatus,
-        ),
-        (
-            &["ls-files", "--others", "--exclude-standard", "-z"],
-            GitZMode::Names,
-        ),
-    ];
+    let paths = run_git_paths_z(
+        root,
+        &["status", "--porcelain=v1", "-z", "-uall"],
+        GitZMode::Status,
+        "MERGE_BLOCKED",
+        &no_env,
+    )?;
     let mut has_dirty = false;
-    for (args, mode) in specs {
-        let paths = run_git_paths_z(root, args, mode, "MERGE_BLOCKED", &no_env)?;
-        for dp in paths {
-            if dp.is_empty() || test_checkpoint_path(&dp) {
-                continue;
-            }
-            if test_protected_path_match_ci(&dp, policy_protected, case_insensitive) {
-                return Err(fail(format!("MERGE_BLOCKED: {pol_violation_reason}"), 1));
-            }
-            has_dirty = true;
+    for dp in paths {
+        if dp.is_empty() || test_checkpoint_path(&dp) {
+            continue;
         }
+        if test_protected_path_match_ci(&dp, policy_protected, case_insensitive) {
+            return Err(fail(format!("MERGE_BLOCKED: {pol_violation_reason}"), 1));
+        }
+        has_dirty = true;
     }
     if has_dirty {
         return Err(fail("MERGE_BLOCKED: dirty_worktree", 1));
