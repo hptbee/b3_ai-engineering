@@ -680,6 +680,60 @@ parse_wave_task_map() {
   [[ ${#_WTM_IDS[@]} -gt 0 ]] || { echo "${err_prefix}: no tasks in ${empty_arg_label}"; exit 1; }
 }
 
+_check_no_symlink_segments() {
+  local canon_root="$1"
+  local rem="$2"
+  local seg_cur="${canon_root%/}" seg canon_seg seg_cur_cmp canon_seg_cmp
+  while [[ -n "$rem" ]]; do
+    if [[ "$rem" == */* ]]; then
+      seg="${rem%%/*}"
+      rem="${rem#*/}"
+    else
+      seg="$rem"
+      rem=""
+    fi
+    [[ -z "$seg" || "$seg" == "." ]] && continue
+    [[ "$seg" == ".." ]] && return 1
+    seg_cur="${seg_cur}/${seg}"
+    seg_cur="${seg_cur%/}"
+    [[ -L "$seg_cur" ]] && return 1
+    if [[ -d "$seg_cur" ]]; then
+      canon_seg="$(cd -P "$seg_cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+      canon_seg="$(normalize_abs_for_repo "$canon_seg")"
+      _path_within_or_equal "$canon_seg" "$canon_root" || return 1
+      seg_cur_cmp="$seg_cur"
+      canon_seg_cmp="$canon_seg"
+      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
+        seg_cur_cmp="$(printf '%s' "$seg_cur_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        canon_seg_cmp="$(printf '%s' "$canon_seg_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+      fi
+      [[ "$canon_seg_cmp" == "$seg_cur_cmp" ]] || return 1
+    fi
+  done
+  return 0
+}
+
+_check_nearest_ancestor_within_root() {
+  local full="$1" canon_root="$2" require_dir="${3:-true}"
+  local probe next_probe canon_dir re_winroot='^[A-Za-z]:/$'
+  probe="$(dirname "$full")"
+  [[ "$probe" =~ ^[A-Za-z]:$ ]] && probe="${probe}/"
+  while [[ -n "$probe" && "$probe" != "/" && ! "$probe" =~ $re_winroot && ! -d "$probe" ]]; do
+    next_probe="$(dirname "$probe")"
+    [[ "$next_probe" =~ ^[A-Za-z]:$ ]] && next_probe="${next_probe}/"
+    [[ "$next_probe" == "$probe" ]] && break
+    probe="$next_probe"
+  done
+  if [[ "$require_dir" == "true" ]]; then
+    [[ -d "$probe" ]] || return 1
+  elif [[ ! -d "$probe" ]]; then
+    return 0
+  fi
+  canon_dir="$(cd -P "$probe" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
+  canon_dir="$(normalize_abs_for_repo "$canon_dir")"
+  _path_within_or_equal "$canon_dir" "$canon_root"
+}
+
 check_wave_path_containment() {
   local root="$1"
   local norm="$2"
@@ -702,41 +756,7 @@ check_wave_path_containment() {
   fi
   [[ "$tf_cmp" == "$cr_cmp" ]] && return 1
 
-  local rem="$norm" seg_cur="${canon_root%/}" seg canon_seg seg_cur_cmp canon_seg_cmp
-  while [[ -n "$rem" ]]; do
-    if [[ "$rem" == */* ]]; then
-      seg="${rem%%/*}"
-      rem="${rem#*/}"
-    else
-      seg="$rem"
-      rem=""
-    fi
-    [[ -z "$seg" || "$seg" == "." ]] && continue
-    if [[ "$seg" == ".." ]]; then
-      return 1
-    fi
-    seg_cur="${seg_cur}/${seg}"
-    seg_cur="${seg_cur%/}"
-    if [[ -L "$seg_cur" ]]; then
-      return 1
-    fi
-    if [[ -d "$seg_cur" ]]; then
-      canon_seg="$(cd -P "$seg_cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-      canon_seg="$(normalize_abs_for_repo "$canon_seg")"
-      if ! _path_within_or_equal "$canon_seg" "$canon_root"; then
-        return 1
-      fi
-      seg_cur_cmp="$seg_cur"
-      canon_seg_cmp="$canon_seg"
-      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
-        seg_cur_cmp="$(printf '%s' "$seg_cur_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-        canon_seg_cmp="$(printf '%s' "$canon_seg_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-      fi
-      if [[ "$canon_seg_cmp" != "$seg_cur_cmp" ]]; then
-        return 1
-      fi
-    fi
-  done
+  _check_no_symlink_segments "$canon_root" "$norm" || return 1
   if [[ -d "$target_trim" ]]; then
     local child_sym
     child_sym="$(find "$target_trim" -mindepth 1 \( -name .git -prune \) -o -type l -print 2>/dev/null | head -n 1 || true)"
@@ -1212,59 +1232,14 @@ check_contained_repo_path() {
     return 1
   fi
   canon_root="$(canon_repo_root "$root")" || return 1
-  local rem="${p#./}" seg_cur="${canon_root%/}" seg canon_seg seg_cur_cmp canon_seg_cmp
-  while [[ -n "$rem" ]]; do
-    if [[ "$rem" == */* ]]; then
-      seg="${rem%%/*}"
-      rem="${rem#*/}"
-    else
-      seg="$rem"
-      rem=""
-    fi
-    [[ -z "$seg" || "$seg" == "." ]] && continue
-    if [[ "$seg" == ".." ]]; then return 1; fi
-    seg_cur="${seg_cur}/${seg}"
-    seg_cur="${seg_cur%/}"
-    if [[ -L "$seg_cur" ]]; then
-      return 1
-    fi
-    if [[ -d "$seg_cur" ]]; then
-      canon_seg="$(cd -P "$seg_cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-      canon_seg="$(normalize_abs_for_repo "$canon_seg")"
-      if ! _path_within_or_equal "$canon_seg" "$canon_root"; then
-        return 1
-      fi
-      seg_cur_cmp="$seg_cur"
-      canon_seg_cmp="$canon_seg"
-      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
-        seg_cur_cmp="$(printf '%s' "$seg_cur_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-        canon_seg_cmp="$(printf '%s' "$canon_seg_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-      fi
-      if [[ "$canon_seg_cmp" != "$seg_cur_cmp" ]]; then
-        return 1
-      fi
-    fi
-  done
-  local full canon_dir probe next_probe re_winroot='^[A-Za-z]:/$'
+  _check_no_symlink_segments "$canon_root" "${p#./}" || return 1
+  local full
   full="$(resolve_target_path "$canon_root" "$p")" || return 1
   [[ -n "$full" ]] || return 1
   if ! _path_within_or_equal "$full" "$canon_root"; then
     return 1
   fi
-  probe="$(dirname "$full")"
-  [[ "$probe" =~ ^[A-Za-z]:$ ]] && probe="${probe}/"
-  while [[ -n "$probe" && "$probe" != "/" && ! "$probe" =~ $re_winroot && ! -d "$probe" ]]; do
-    next_probe="$(dirname "$probe")"
-    [[ "$next_probe" =~ ^[A-Za-z]:$ ]] && next_probe="${next_probe}/"
-    [[ "$next_probe" == "$probe" ]] && break
-    probe="$next_probe"
-  done
-  [[ -d "$probe" ]] || return 1
-  canon_dir="$(cd -P "$probe" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-  canon_dir="$(normalize_abs_for_repo "$canon_dir")"
-  if ! _path_within_or_equal "$canon_dir" "$canon_root"; then
-    return 1
-  fi
+  _check_nearest_ancestor_within_root "$full" "$canon_root" "true" || return 1
   _CONTAINED_REL="$p"
   _CONTAINED_FULL="${canon_root%/}/${p}"
   return 0
@@ -1658,10 +1633,14 @@ protected_path_match_ci() {
 
 _LS_REMOTE_STATUS=""
 _LS_REMOTE_SHA=""
-git_ls_remote_ref() {
-  local root="$1" full_ref="$2" out="" rc=0 line to_bin="" to_low=""
+git_ls_remote_refs() {
+  local root="$1"
+  shift
+  local -a q_refs=("$@")
   _LS_REMOTE_STATUS="UNREACHABLE"
-  _LS_REMOTE_SHA=""
+  _LS_REMOTE_MAP=$'\x1f'
+  [[ ${#q_refs[@]} -gt 0 ]] || { _LS_REMOTE_STATUS="OK"; return 0; }
+  local out="" rc=0 line to_bin="" to_low=""
   if [[ -x /usr/bin/timeout ]]; then
     to_bin="/usr/bin/timeout"
   else
@@ -1670,25 +1649,145 @@ git_ls_remote_ref() {
     [[ "$to_low" == */system32/* || "$to_low" == *\\system32\\* || "$to_low" == *windowsapps* ]] && to_bin=""
   fi
   if [[ -n "$to_bin" ]]; then
-    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" "$to_bin" 8 git -C "$root" -c credential.helper= ls-remote --exit-code origin "$full_ref" 2>/dev/null)"; then rc=0; else rc=$?; fi
+    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" "$to_bin" 8 git -C "$root" -c credential.helper= ls-remote origin "${q_refs[@]}" 2>/dev/null)"; then rc=0; else rc=$?; fi
   else
-    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" git -C "$root" -c credential.helper= ls-remote --exit-code origin "$full_ref" 2>/dev/null)"; then rc=0; else rc=$?; fi
+    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" git -C "$root" -c credential.helper= ls-remote origin "${q_refs[@]}" 2>/dev/null)"; then rc=0; else rc=$?; fi
   fi
-  if [[ $rc -eq 2 ]]; then
-    _LS_REMOTE_STATUS="MISSING"
-    return 0
-  fi
-  if [[ $rc -eq 0 && -n "$out" ]]; then
+  [[ $rc -eq 0 ]] || return 0
+  _LS_REMOTE_STATUS="OK"
+  if [[ -n "$out" ]]; then
     while IFS= read -r line; do
       line="${line%$'\r'}"
-      if [[ "$line" =~ ^([0-9a-f]{40})$'\t' ]]; then
-        _LS_REMOTE_STATUS="OK"
-        _LS_REMOTE_SHA="${BASH_REMATCH[1]}"
-        return 0
+      if [[ "$line" =~ ^([0-9a-f]{40})$'\t'([^[:space:]]+)$ ]]; then
+        _LS_REMOTE_MAP+="${BASH_REMATCH[2]}=${BASH_REMATCH[1]}"$'\x1f'
       fi
     done <<< "$out"
   fi
   return 0
+}
+
+git_ls_remote_lookup() {
+  local full_ref="$1"
+  local marker=$'\x1f'"${full_ref}="
+  if [[ "$_LS_REMOTE_MAP" == *"$marker"* ]]; then
+    local rest="${_LS_REMOTE_MAP#*"$marker"}"
+    printf '%s' "${rest%%$'\x1f'*}"
+    return 0
+  fi
+  return 1
+}
+
+resolve_canonical_trunk_authority() {
+  local root="$1" has_origin="$2" allow_local="$3"
+  _TRUNK_SYM_FULL=""
+  _TRUNK_BRANCH=""
+  _TRUNK_SHA=""
+  local _oh_full _oh_sha _cand_br _c_full _c_sha
+  if [[ "$has_origin" == "true" ]]; then
+    if run_git_cmd_quiet "$root" symbolic-ref -q refs/remotes/origin/HEAD; then
+      _oh_full="$(trim_str "$_GIT_STDOUT")"
+      if [[ "$_oh_full" == refs/remotes/origin/* ]] && run_git_cmd_quiet "$root" rev-parse --verify --quiet "${_oh_full}^{commit}"; then
+        _oh_sha="$(trim_str "$_GIT_STDOUT")"
+        if [[ "$_oh_sha" =~ ^[0-9a-f]{40}$ ]]; then
+          _TRUNK_SYM_FULL="$_oh_full"
+          _TRUNK_BRANCH="${_oh_full#refs/remotes/origin/}"
+          _TRUNK_SHA="$_oh_sha"
+          return 0
+        fi
+      fi
+    fi
+    for _cand_br in main master; do
+      _c_full="refs/remotes/origin/${_cand_br}"
+      if run_git_cmd_quiet "$root" rev-parse --verify --quiet "${_c_full}^{commit}"; then
+        _c_sha="$(trim_str "$_GIT_STDOUT")"
+        if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
+          _TRUNK_SYM_FULL="$_c_full"
+          _TRUNK_BRANCH="$_cand_br"
+          _TRUNK_SHA="$_c_sha"
+          return 0
+        fi
+      fi
+    done
+  fi
+  if [[ "$allow_local" == "true" ]]; then
+    for _cand_br in main master; do
+      _c_full="refs/heads/${_cand_br}"
+      if run_git_cmd_quiet "$root" rev-parse --verify --quiet "${_c_full}^{commit}"; then
+        _c_sha="$(trim_str "$_GIT_STDOUT")"
+        if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
+          _TRUNK_SYM_FULL="$_c_full"
+          _TRUNK_BRANCH="$_cand_br"
+          _TRUNK_SHA="$_c_sha"
+          return 0
+        fi
+      fi
+    done
+  fi
+}
+
+check_merge_dirty_worktree() {
+  local root="$1" pol_violation_reason="$2"
+  shift 2
+  local -a prot_arr=("$@")
+  local _dkind dp has_dirty=false
+  for _dkind in staged wt untracked; do
+    case "$_dkind" in
+      staged) run_git_paths_z "$root" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --cached --name-status -z -- || exit 1 ;;
+      wt) run_git_paths_z "$root" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z -- || exit 1 ;;
+      untracked) run_git_paths_z "$root" "names" "MERGE_BLOCKED" "" -- ls-files --others --exclude-standard -z || exit 1 ;;
+    esac
+    for dp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
+      [[ -n "$dp" ]] || continue
+      is_checkpoint_dir "$dp" && continue
+      if [[ ${#prot_arr[@]} -gt 0 ]] && protected_path_match_ci "$dp" "${prot_arr[@]}"; then
+        echo "MERGE_BLOCKED: $pol_violation_reason"
+        exit 1
+      fi
+      has_dirty=true
+    done
+  done
+  if $has_dirty; then
+    echo "MERGE_BLOCKED: dirty_worktree"
+    exit 1
+  fi
+}
+
+run_merge_ledger_gate() {
+  local root="$1" ledger_arg="$2" expected_base="$3" expected_head="$4"
+  local led_trim led_full led_rel led_out led_rc _first_err mline
+  local m_base="" m_head="" m_tref="" m_tsha="" m_rind=""
+  led_trim="$(trim_str "$ledger_arg")"
+  [[ -n "$led_trim" ]] || { echo "MERGE_BLOCKED: missing_ledger_path"; exit 1; }
+  check_contained_repo_path "$root" "$led_trim" || { echo "MERGE_BLOCKED: invalid_ledger_path"; exit 1; }
+  led_full="$_CONTAINED_FULL"
+  led_rel="$_CONTAINED_REL"
+  [[ -f "$led_full" ]] || { echo "MERGE_BLOCKED: missing_ledger_path"; exit 1; }
+  set +e
+  led_out="$(run_review_ledger_check_sub "$root" "$led_full" "$led_rel" "" "true")"
+  led_rc=$?
+  set -e
+  if [[ $led_rc -ne 0 ]]; then
+    _first_err="${led_out%%$'\n'*}"
+    echo "MERGE_BLOCKED: ledger_check_failed (${_first_err:-unknown})"
+    exit 1
+  fi
+  while IFS= read -r mline; do
+    case "$mline" in
+      META_BASE_SHA=*) m_base="${mline#META_BASE_SHA=}" ;;
+      META_HEAD_SHA=*) m_head="${mline#META_HEAD_SHA=}" ;;
+      META_TARGET_REF=*) m_tref="${mline#META_TARGET_REF=}" ;;
+      META_TARGET_SHA=*) m_tsha="${mline#META_TARGET_SHA=}" ;;
+      META_REVIEW_INDEPENDENCE=*) m_rind="${mline#META_REVIEW_INDEPENDENCE=}" ;;
+    esac
+  done <<< "$led_out"
+  [[ "$m_base" == "$expected_base" ]] || { echo "MERGE_BLOCKED: ledger_target_mismatch"; exit 1; }
+  if [[ "$m_head" != "$expected_head" || ( "$m_tref" != "working_tree" && "$m_tsha" != "$expected_head" ) ]]; then
+    echo "MERGE_BLOCKED: ledger_head_mismatch"
+    exit 1
+  fi
+  [[ "$m_rind" != "SINGLE_AGENT_LIMIT" ]] || { echo "MERGE_BLOCKED: single_agent_limit"; exit 1; }
+  [[ "$m_rind" == "INDEPENDENT" ]] || { echo "MERGE_BLOCKED: review_independence_unknown"; exit 1; }
+  _MERGE_LEDGER_OUT="$led_out"
 }
 
 _check_paths_covered_ci_mode() {
@@ -1752,12 +1851,14 @@ assert_local_ci_evidence() {
   fi
   if [[ -n "$led_meta_out" ]]; then
     local has_units=false has_all=false
-    local -a unit_recs=() cov_arr=()
+    local -a unit_recs=() cov_arr=() checked_recs=()
     local mline ur rp
     while IFS= read -r mline; do
       if [[ "$mline" == META_UNIT_RECEIPT=* ]]; then
         has_units=true
         unit_recs+=("${mline#META_UNIT_RECEIPT=}")
+      elif [[ "$mline" == META_UNIT_RECEIPT_CHECKED=* ]]; then
+        checked_recs+=("${mline#META_UNIT_RECEIPT_CHECKED=}")
       fi
     done <<< "$led_meta_out"
     if $has_units; then
@@ -1768,14 +1869,29 @@ assert_local_ci_evidence() {
           printf 'MERGE_BLOCKED: ci_evidence_invalid(ledger_unit_missing_verify_receipt:%s)\n' "$uid"
           exit 1
         fi
-        local vr_u=0
-        set +e
-        run_verify_check "$root" "$ur" "$ign_csv" "" "" "$head_sha"
-        vr_u=$?
-        set -e
-        if [[ $vr_u -ne 0 ]]; then
-          printf 'MERGE_BLOCKED: ci_evidence_invalid(%s)\n' "${_VR_MSG:-unknown}"
-          exit 1
+        local reused_vr=false c_entry c_uid c_rest c_rec c_rel c_head
+        if [[ ${#checked_recs[@]} -gt 0 ]]; then
+          for c_entry in "${checked_recs[@]}"; do
+            c_uid="${c_entry%%|*}"; c_rest="${c_entry#*|}"
+            c_rec="${c_rest%%|*}"; c_rest="${c_rest#*|}"
+            c_rel="${c_rest%%|*}"; c_head="${c_rest#*|}"
+            if [[ "$c_uid" == "$uid" && "$c_rec" == "$ur" && "$c_head" == "$head_sha" ]]; then
+              _VR_REL_PATHS="$c_rel"
+              reused_vr=true
+              break
+            fi
+          done
+        fi
+        if ! $reused_vr; then
+          local vr_u=0
+          set +e
+          run_verify_check "$root" "$ur" "$ign_csv" "" "" "$head_sha"
+          vr_u=$?
+          set -e
+          if [[ $vr_u -ne 0 ]]; then
+            printf 'MERGE_BLOCKED: ci_evidence_invalid(%s)\n' "${_VR_MSG:-unknown}"
+            exit 1
+          fi
         fi
         if [[ "$_VR_REL_PATHS" == "ALL" ]]; then
           has_all=true
@@ -2062,59 +2178,8 @@ validate_repo_write_path() {
     return 1
   fi
 
-  local rem="$rel" seg_cur="${root%/}" seg canon_seg seg_cur_cmp canon_seg_cmp
-  while [[ -n "$rem" ]]; do
-    if [[ "$rem" == */* ]]; then
-      seg="${rem%%/*}"
-      rem="${rem#*/}"
-    else
-      seg="$rem"
-      rem=""
-    fi
-    [[ -z "$seg" || "$seg" == "." ]] && continue
-    if [[ "$seg" == ".." ]]; then
-      return 1
-    fi
-    seg_cur="${seg_cur}/${seg}"
-    seg_cur="${seg_cur%/}"
-    if [[ -L "$seg_cur" ]]; then
-      return 1
-    fi
-    if [[ -d "$seg_cur" ]]; then
-      canon_seg="$(cd -P "$seg_cur" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-      canon_seg="$(normalize_abs_for_repo "$canon_seg")"
-      if ! _path_within_or_equal "$canon_seg" "$root"; then
-        return 1
-      fi
-      seg_cur_cmp="$seg_cur"
-      canon_seg_cmp="$canon_seg"
-      if [[ "$_B3_IS_CASE_INSENSITIVE_FS" == "true" ]]; then
-        seg_cur_cmp="$(printf '%s' "$seg_cur_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-        canon_seg_cmp="$(printf '%s' "$canon_seg_cmp" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
-      fi
-      if [[ "$canon_seg_cmp" != "$seg_cur_cmp" ]]; then
-        return 1
-      fi
-    fi
-  done
-
-  local anc next_anc re_winroot='^[A-Za-z]:/$'
-  anc="$(dirname "$full")"
-  [[ "$anc" =~ ^[A-Za-z]:$ ]] && anc="${anc}/"
-  while [[ -n "$anc" && "$anc" != "/" && ! "$anc" =~ $re_winroot && ! -d "$anc" ]]; do
-    next_anc="$(dirname "$anc")"
-    [[ "$next_anc" =~ ^[A-Za-z]:$ ]] && next_anc="${next_anc}/"
-    [[ "$next_anc" == "$anc" ]] && break
-    anc="$next_anc"
-  done
-  if [[ -d "$anc" ]]; then
-    local canon_anc
-    canon_anc="$(cd -P "$anc" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-    canon_anc="$(normalize_abs_for_repo "$canon_anc")"
-    if ! _path_within_or_equal "$canon_anc" "$root"; then
-      return 1
-    fi
-  fi
+  _check_no_symlink_segments "$root" "$rel" || return 1
+  _check_nearest_ancestor_within_root "$full" "$root" "false" || return 1
 
   local full_clean="${root%/}/${rel}"
   _SAFE_FULL="$full_clean"
@@ -2363,6 +2428,50 @@ resolve_submodule_entry() {
   return 2
 }
 
+_B3_FP_AWK_PRELUDE='
+function norm_p(s) {
+  gsub(/\r/, "", s)
+  gsub(/\\/, "/", s)
+  sub(/^[ \t]+/, "", s)
+  sub(/[ \t]+$/, "", s)
+  sub(/^\.\//, "", s)
+  while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
+  return s
+}
+function is_cp(s) {
+  return (s ~ /^\.b3\/(ship|research-ship|autodev)(\/|$)/)
+}
+function in_list(s, arr, n,    i, pat) {
+  for (i = 1; i <= n; i++) {
+    pat = arr[i]
+    if (pat == "") continue
+    if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
+  }
+  return 0
+}
+function accept_path(fp) {
+  if (fp == "" || is_cp(fp)) return 0
+  if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
+  if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
+  return 1
+}
+function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
+  if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
+  ti = index(line, "\t")
+  if (ti < 3) return
+  meta = substr(line, 2, ti - 2)
+  nmp = split(meta, mp, /[ \t]+/)
+  if (nmp < 5) return
+  nm = mp[2]; noid = mp[4]
+  if (length(nm) != 6 || nm !~ /^[0-9]+$/ || length(noid) != 40 || noid !~ /^[0-9a-f]+$/) return
+  fp = norm_p(substr(line, ti + 1))
+  if (!accept_path(fp)) return
+  if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
+  out_m[fp] = nm
+  out_o[fp] = noid
+}
+'
+
 compute_tree_fingerprint() {
   local root="$1"
   local rel_csv="$2"
@@ -2479,48 +2588,7 @@ compute_tree_fingerprint() {
       printf '__CACHED__\n%s\n' "$diff_cached_raw"
       printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
       printf '__UNTRACKED__\n%s\n' "$untracked"
-    } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
-      function norm_p(s) {
-        gsub(/\r/, "", s)
-        gsub(/\\/, "/", s)
-        sub(/^[ \t]+/, "", s)
-        sub(/[ \t]+$/, "", s)
-        sub(/^\.\//, "", s)
-        while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
-        return s
-      }
-      function is_cp(s) {
-        return (s ~ /^\.b3\/(ship|research-ship|autodev)(\/|$)/)
-      }
-      function in_list(s, arr, n,    i, pat) {
-        for (i = 1; i <= n; i++) {
-          pat = arr[i]
-          if (pat == "") continue
-          if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
-        }
-        return 0
-      }
-      function accept_path(fp) {
-        if (fp == "" || is_cp(fp)) return 0
-        if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
-        if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
-        return 1
-      }
-      function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
-        if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
-        ti = index(line, "\t")
-        if (ti < 3) return
-        meta = substr(line, 2, ti - 2)
-        nmp = split(meta, mp, /[ \t]+/)
-        if (nmp < 5) return
-        nm = mp[2]; noid = mp[4]
-        if (length(nm) != 6 || nm !~ /^[0-9]+$/ || length(noid) != 40 || noid !~ /^[0-9a-f]+$/) return
-        fp = norm_p(substr(line, ti + 1))
-        if (!accept_path(fp)) return
-        if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
-        out_m[fp] = nm
-        out_o[fp] = noid
-      }
+    } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" "$_B3_FP_AWK_PRELUDE"'
       BEGIN {
         split("", ign_arr); split("", rel_arr)
         split("", h_m); split("", h_o); split("", c_m); split("", c_o); split("", iw); split("", untr)
@@ -2659,53 +2727,12 @@ compute_tree_fingerprint() {
       printf '__CACHED__\n%s\n' "$diff_cached_raw"
       printf '__IDXWT__\n%s\n' "$diff_idx_wt_raw"
       printf '__RESOLVED__\n%s' "$resolved_lines"
-    } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" '
-      function norm_p(s) {
-        gsub(/\r/, "", s)
-        gsub(/\\/, "/", s)
-        sub(/^[ \t]+/, "", s)
-        sub(/[ \t]+$/, "", s)
-        sub(/^\.\//, "", s)
-        while (length(s) > 1 && substr(s, length(s), 1) == "/") s = substr(s, 1, length(s) - 1)
-        return s
-      }
-      function is_cp(s) {
-        return (s ~ /^\.b3\/(ship|research-ship|autodev)(\/|$)/)
-      }
-      function in_list(s, arr, n,    i, pat) {
-        for (i = 1; i <= n; i++) {
-          pat = arr[i]
-          if (pat == "") continue
-          if (pat == "." || s == pat || index(s, pat "/") == 1) return 1
-        }
-        return 0
-      }
-      function accept_path(fp) {
-        if (fp == "" || is_cp(fp)) return 0
-        if (n_ign > 0 && in_list(fp, ign_arr, n_ign)) return 0
-        if (n_rel > 0 && !in_list(fp, rel_arr, n_rel)) return 0
-        return 1
-      }
+    } | LC_ALL=C awk -v ign_csv="$clean_ign_csv" -v rel_csv="$clean_rel_csv" "$_B3_FP_AWK_PRELUDE"'
       function entry_type(m) {
         if (m == "160000") return "commit"
         if (m == "000000") return "deleted"
         if (m == "040000") return "tree"
         return "blob"
-      }
-      function parse_raw(line, out_m, out_o,    ti, meta, nmp, mp, fp, nm, noid) {
-        if (substr(line, 1, 1) != ":" || substr(line, 1, 2) == "::") return
-        ti = index(line, "\t")
-        if (ti < 3) return
-        meta = substr(line, 2, ti - 2)
-        nmp = split(meta, mp, /[ \t]+/)
-        if (nmp < 5) return
-        nm = mp[2]; noid = mp[4]
-        if (length(nm) != 6 || nm !~ /^[0-9]+$/ || length(noid) != 40 || noid !~ /^[0-9a-f]+$/) return
-        fp = norm_p(substr(line, ti + 1))
-        if (!accept_path(fp)) return
-        if ((fp in out_m) && nm == "000000" && out_m[fp] != "000000") return
-        out_m[fp] = nm
-        out_o[fp] = noid
       }
       BEGIN {
         split("", ign_arr); split("", rel_arr)
@@ -3140,10 +3167,10 @@ extract_symbol_decl_ext() {
   return 0
 }
 
-resolve_canonical_git_common_dir() {
-  local dir="$1"
+resolve_canonical_git_path() {
+  local dir="$1" rev_flag="$2"
   local gd=""
-  if run_git_cmd "$dir" rev-parse --git-common-dir; then
+  if run_git_cmd "$dir" rev-parse "$rev_flag"; then
     gd="$(trim_str "$_GIT_STDOUT")"
   fi
   [[ -n "$gd" ]] || return 1
@@ -3159,23 +3186,12 @@ resolve_canonical_git_common_dir() {
   fi
 }
 
+resolve_canonical_git_common_dir() {
+  resolve_canonical_git_path "$1" "--git-common-dir"
+}
+
 resolve_canonical_git_dir() {
-  local dir="$1"
-  local gd=""
-  if run_git_cmd "$dir" rev-parse --git-dir; then
-    gd="$(trim_str "$_GIT_STDOUT")"
-  fi
-  [[ -n "$gd" ]] || return 1
-  if [[ "$gd" != /* && ! "$gd" =~ ^[A-Za-z]: ]]; then
-    gd="${dir}/${gd}"
-  fi
-  if [[ -d "$gd" ]]; then
-    local abs
-    abs="$(cd -P "$gd" 2>/dev/null && (pwd -W 2>/dev/null || pwd -P))" || return 1
-    normalize_abs_for_repo "$abs"
-  else
-    normalize_abs_for_repo "$gd"
-  fi
+  resolve_canonical_git_path "$1" "--git-dir"
 }
 
 paths_equal_fs() {
@@ -4746,6 +4762,136 @@ is_valid_high_skip_rationale() {
   }'
 }
 
+parse_review_ledger() {
+  local ledger_file="$1" update_legacy="${2:-false}"
+  local rawln ln inner c_cnt c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11 col tc _re_pass lk lv rv
+  L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
+  L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"; L_RIND=""
+  L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
+  L_SEEN_KEYS=""
+  U_ROWS=()
+  P_ROWS=()
+  while IFS= read -r rawln || [[ -n "$rawln" ]]; do
+    ln="$(trim_str "${rawln%$'\r'}")"
+    [[ -z "$ln" || "$ln" == \#* ]] && continue
+    if [[ "$ln" == \|* ]]; then
+      inner="${ln#|}"; inner="${inner%|}"
+      c_cnt=0; c0=""; c1=""; c2=""; c3=""; c4=""; c5=""; c6=""; c7=""; c8=""; c9=""; c10=""; c11=""
+      while IFS= read -r col; do
+        tc="$(trim_str "$col")"
+        case "$c_cnt" in
+          0) c0="$tc" ;; 1) c1="$tc" ;; 2) c2="$tc" ;; 3) c3="$tc" ;; 4) c4="$tc" ;; 5) c5="$tc" ;;
+          6) c6="$tc" ;; 7) c7="$tc" ;; 8) c8="$tc" ;; 9) c9="$tc" ;; 10) c10="$tc" ;; 11) c11="$tc" ;;
+        esac
+        c_cnt=$((c_cnt + 1))
+      done < <(printf '%s\n' "$inner" | LC_ALL=C awk -F'|' '{for(i=1;i<=NF;i++) print $i}')
+      [[ "$c_cnt" -eq 12 ]] || { echo "LEDGER_CORRUPT: malformed unit row column count"; return 1; }
+      [[ "$c0" == "unit_id" || "$c0" == "---" ]] && continue
+      [[ "$c0" =~ ^U[0-9]{2,}$ ]] || { printf "LEDGER_CORRUPT: invalid unit_id '%s'\n" "$c0"; return 1; }
+      [[ "$c2" =~ ^[0-9]+$ && "$c3" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid unit row numeric field"; return 1; }
+      U_ROWS+=("${c0}|${c1}|${c2}|${c3}|${c4}|${c5}|${c6}|${c7}|${c8}|${c9}|${c10}|${c11}")
+      continue
+    fi
+    if [[ "$ln" == pass\|* ]]; then
+      _re_pass='^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$'
+      [[ "$ln" =~ $_re_pass ]] || { printf "LEDGER_CORRUPT: malformed pass log entry '%s'\n" "$ln"; return 1; }
+      P_ROWS+=("$ln")
+      continue
+    fi
+    [[ "$ln" == *"="* ]] || { printf "LEDGER_CORRUPT: unexpected line '%s'\n" "$ln"; return 1; }
+    lk="$(trim_str "${ln%%=*}")"; lv="$(trim_str "${ln#*=}")"
+    [[ -n "$lk" ]] || { printf "LEDGER_CORRUPT: unexpected line '%s'\n" "$ln"; return 1; }
+    case "$L_SEEN_KEYS" in *"|${lk}|"*) printf "LEDGER_CORRUPT: duplicate key '%s'\n" "$lk"; return 1 ;; esac
+    L_SEEN_KEYS+="|${lk}|"
+    case "$lk" in
+      schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
+      target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
+      risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
+      l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
+      review_independence) L_RIND="$lv" ;;
+      contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;; max_concurrency) L_MCONC="$lv" ;;
+      max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;; budget_status) L_BSTAT="$lv" ;;
+      cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
+    esac
+  done < "$ledger_file"
+
+  for rv in "$L_SCHEMA" "$L_BASE" "$L_HEAD" "$L_TREF" "$L_SNAP" "$L_SIZE" "$L_NLSIZE" "$L_RISK" "$L_RSIG" "$L_RSPEC" "$L_CFILES" "$L_GFILES" "$L_MCONC" "$L_MPASS" "$L_PUSED" "$L_BSTAT" "$L_CSTAT" "$L_CHASH" "$L_UCNT"; do
+    [[ -n "$rv" ]] || { echo "LEDGER_CORRUPT: missing required ledger key"; return 1; }
+  done
+  [[ "$L_SCHEMA" == "b3-review-ledger-v1" ]] || { printf "LEDGER_CORRUPT: unsupported schema '%s'\n" "$L_SCHEMA"; return 1; }
+  [[ "$L_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid base_sha"; return 1; }
+  [[ "$L_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid head_sha"; return 1; }
+  if [[ -z "$L_TSHA" ]]; then
+    if [[ "$L_TREF" == "working_tree" ]]; then
+      L_TSHA="none"
+    elif [[ "$L_TREF" =~ ^[0-9a-f]{40}$ ]]; then
+      L_TSHA="$L_TREF"
+    else
+      echo "LEDGER_CORRUPT: missing target_sha for symbolic target_ref"; return 1
+    fi
+  fi
+  if [[ "$L_TREF" == "working_tree" ]]; then
+    [[ "$L_TSHA" == "none" ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; return 1; }
+  else
+    [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; return 1; }
+  fi
+  [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid pass counter"; return 1; }
+  L_MPASS="$((10#$L_MPASS))"
+  L_PUSED="$((10#$L_PUSED))"
+  if [[ "$L_HAS_CHAIN" != "true" || -z "$L_PCHAIN" ]]; then
+    echo "LEDGER_CORRUPT: missing pass_chain"; return 1
+  fi
+  [[ "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid pass_chain"; return 1; }
+  [[ -n "$L_RIND" ]] || { echo "LEDGER_CORRUPT: missing review_independence"; return 1; }
+  if [[ "$L_RIND" != "UNKNOWN" && "$L_RIND" != "INDEPENDENT" && "$L_RIND" != "SINGLE_AGENT_LIMIT" ]]; then
+    printf "LEDGER_CORRUPT: invalid review_independence '%s'\n" "$L_RIND"; return 1
+  fi
+  [[ -z "$L_L1SPEC" ]] && L_L1SPEC="none"
+  [[ -z "$L_L1SKIP" ]] && L_L1SKIP="none"
+  ORIG_RAW_SIZE="$L_SIZE"
+  NORM_SIZE="$(normalize_size_class "$ORIG_RAW_SIZE")" || { printf "LEDGER_CORRUPT: invalid size_class '%s'\n" "$ORIG_RAW_SIZE"; return 1; }
+  [[ "$L_UCNT" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; return 1; }
+  L_UCNT="$((10#$L_UCNT))"
+  [[ "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; return 1; }
+  if [[ "$update_legacy" == "true" && "$ORIG_RAW_SIZE" != "$NORM_SIZE" ]]; then
+    L_NLSIZE="${ORIG_RAW_SIZE}:${NORM_SIZE}"
+  fi
+  L_SIZE="$NORM_SIZE"
+  TARGET_COMMIT_SHA=""
+  [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TSHA"
+  return 0
+}
+
+verify_ledger_pass_chain_for_root() {
+  local chain_root="$1" cur sum idx row _pt p_seq p_scope p_kind p_delta p_ref p_hash expect_seq
+  cur="$(init_pass_chain "$chain_root" "$L_BASE")" || return 1
+  sum=0; idx=0
+  if [[ ${#P_ROWS[@]} -gt 0 ]]; then
+    for row in "${P_ROWS[@]}"; do
+      IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
+      p_seq="$((10#$p_seq))"
+      p_delta="$((10#$p_delta))"
+      expect_seq=$((idx + 1))
+      if [[ "$p_seq" -ne "$expect_seq" || "$p_delta" -lt 1 ]]; then
+        printf 'LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index %s)\n' "$expect_seq"
+        return 1
+      fi
+      sum=$((sum + p_delta))
+      cur="$(step_pass_chain "$chain_root" "$cur" "$p_seq" "$p_scope" "$p_kind" "$p_delta" "$p_ref")" || return 1
+      if [[ "$cur" != "$p_hash" ]]; then
+        printf 'LEDGER_CORRUPT: passes_used tamper detected (chain hash mismatch at seq %s)\n' "$p_seq"
+        return 1
+      fi
+      idx=$((idx + 1))
+    done
+  fi
+  if [[ "$sum" -ne "$L_PUSED" || "$cur" != "$L_PCHAIN" ]]; then
+    printf 'LEDGER_CORRUPT: passes_used tamper detected (passes=%s log_sum=%s)\n' "$L_PUSED" "$sum"
+    return 1
+  fi
+  return 0
+}
+
 run_review_ledger_check_sub() {
   local _rc_root="$1"
   local _rc_full="$2"
@@ -4758,128 +4904,8 @@ run_review_ledger_check_sub() {
     make_temp_file "b3-git-err-sub" _B3_GIT_ERR_FILE
     [[ -f "$_rc_full" ]] || { echo "LEDGER_MISSING: $_rc_rel"; exit 1; }
 
-    L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
-    L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"; L_RIND=""
-    L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
-    L_SEEN_KEYS=""
-    U_ROWS=()
-    P_ROWS=()
-    while IFS= read -r rawln || [[ -n "$rawln" ]]; do
-      ln="$(trim_str "${rawln%$'\r'}")"
-      [[ -z "$ln" || "$ln" == \#* ]] && continue
-      if [[ "$ln" == \|* ]]; then
-        inner="${ln#|}"; inner="${inner%|}"
-        c_cnt=0; c0=""; c1=""; c2=""; c3=""; c4=""; c5=""; c6=""; c7=""; c8=""; c9=""; c10=""; c11=""
-        while IFS= read -r col; do
-          tc="$(trim_str "$col")"
-          case "$c_cnt" in
-            0) c0="$tc" ;; 1) c1="$tc" ;; 2) c2="$tc" ;; 3) c3="$tc" ;; 4) c4="$tc" ;; 5) c5="$tc" ;;
-            6) c6="$tc" ;; 7) c7="$tc" ;; 8) c8="$tc" ;; 9) c9="$tc" ;; 10) c10="$tc" ;; 11) c11="$tc" ;;
-          esac
-          c_cnt=$((c_cnt + 1))
-        done < <(printf '%s\n' "$inner" | LC_ALL=C awk -F'|' '{for(i=1;i<=NF;i++) print $i}')
-        [[ "$c_cnt" -eq 12 ]] || { echo "LEDGER_CORRUPT: malformed unit row column count"; exit 1; }
-        [[ "$c0" == "unit_id" || "$c0" == "---" ]] && continue
-        [[ "$c0" =~ ^U[0-9]{2,}$ ]] || { echo "LEDGER_CORRUPT: invalid unit_id '$c0'"; exit 1; }
-        [[ "$c2" =~ ^[0-9]+$ && "$c3" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid unit row numeric field"; exit 1; }
-        U_ROWS+=("${c0}|${c1}|${c2}|${c3}|${c4}|${c5}|${c6}|${c7}|${c8}|${c9}|${c10}|${c11}")
-        continue
-      fi
-      if [[ "$ln" == pass\|* ]]; then
-        _re_pass='^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$'
-        [[ "$ln" =~ $_re_pass ]] || { printf "LEDGER_CORRUPT: malformed pass log entry '%s'\n" "$ln"; exit 1; }
-        P_ROWS+=("$ln")
-        continue
-      fi
-      [[ "$ln" == *"="* ]] || { echo "LEDGER_CORRUPT: unexpected line '$ln'"; exit 1; }
-      lk="$(trim_str "${ln%%=*}")"; lv="$(trim_str "${ln#*=}")"
-      case "$L_SEEN_KEYS" in *"|${lk}|"*) echo "LEDGER_CORRUPT: duplicate key '$lk'"; exit 1 ;; esac
-      L_SEEN_KEYS+="|${lk}|"
-      case "$lk" in
-        schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
-        target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
-        risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
-        l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
-        review_independence) L_RIND="$lv" ;;
-        contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;; max_concurrency) L_MCONC="$lv" ;;
-        max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;; budget_status) L_BSTAT="$lv" ;;
-        cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
-      esac
-    done < "$_rc_full"
-
-    for rv in "$L_SCHEMA" "$L_BASE" "$L_HEAD" "$L_TREF" "$L_SNAP" "$L_SIZE" "$L_NLSIZE" "$L_RISK" "$L_RSIG" "$L_RSPEC" "$L_CFILES" "$L_GFILES" "$L_MCONC" "$L_MPASS" "$L_PUSED" "$L_BSTAT" "$L_CSTAT" "$L_CHASH" "$L_UCNT"; do
-      [[ -n "$rv" ]] || { echo "LEDGER_CORRUPT: missing required ledger key"; exit 1; }
-    done
-    [[ "$L_SCHEMA" == "b3-review-ledger-v1" ]] || { echo "LEDGER_CORRUPT: unsupported schema '$L_SCHEMA'"; exit 1; }
-    [[ "$L_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid base_sha"; exit 1; }
-    [[ "$L_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid head_sha"; exit 1; }
-    if [[ -z "$L_TSHA" ]]; then
-      if [[ "$L_TREF" == "working_tree" ]]; then
-        L_TSHA="none"
-      elif [[ "$L_TREF" =~ ^[0-9a-f]{40}$ ]]; then
-        L_TSHA="$L_TREF"
-      else
-        echo "LEDGER_CORRUPT: missing target_sha for symbolic target_ref"; exit 1
-      fi
-    fi
-    if [[ "$L_TREF" == "working_tree" ]]; then
-      [[ "$L_TSHA" == "none" ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
-    else
-      [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
-    fi
-    [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid pass counter"; exit 1; }
-    L_MPASS="$((10#$L_MPASS))"
-    L_PUSED="$((10#$L_PUSED))"
-    if [[ "$L_HAS_CHAIN" != "true" || -z "$L_PCHAIN" ]]; then
-      echo "LEDGER_CORRUPT: missing pass_chain"
-      exit 1
-    fi
-    [[ "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid pass_chain"; exit 1; }
-    if [[ -z "$L_RIND" ]]; then
-      echo "LEDGER_CORRUPT: missing review_independence"
-      exit 1
-    fi
-    if [[ "$L_RIND" != "UNKNOWN" && "$L_RIND" != "INDEPENDENT" && "$L_RIND" != "SINGLE_AGENT_LIMIT" ]]; then
-      echo "LEDGER_CORRUPT: invalid review_independence '$L_RIND'"
-      exit 1
-    fi
-    [[ -z "$L_L1SPEC" ]] && L_L1SPEC="none"
-    [[ -z "$L_L1SKIP" ]] && L_L1SKIP="none"
-    ORIG_RAW_SIZE="$L_SIZE"
-    NORM_SIZE="$(normalize_size_class "$ORIG_RAW_SIZE")" || { echo "LEDGER_CORRUPT: invalid size_class '$ORIG_RAW_SIZE'"; exit 1; }
-    [[ "$L_UCNT" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
-    L_UCNT="$((10#$L_UCNT))"
-    [[ "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
-    L_SIZE="$NORM_SIZE"
-    TARGET_COMMIT_SHA=""
-    [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TSHA"
-
-    # Verify pass chain
-    cur="$(init_pass_chain "$_rc_root" "$L_BASE")" || exit 1
-    sum=0; idx=0
-    if [[ ${#P_ROWS[@]} -gt 0 ]]; then
-      for row in "${P_ROWS[@]}"; do
-        IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
-        p_seq="$((10#$p_seq))"
-        p_delta="$((10#$p_delta))"
-        expect_seq=$((idx + 1))
-        if [[ "$p_seq" -ne "$expect_seq" || "$p_delta" -lt 1 ]]; then
-          printf 'LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index %s)\n' "$expect_seq"
-          exit 1
-        fi
-        sum=$((sum + p_delta))
-        cur="$(step_pass_chain "$_rc_root" "$cur" "$p_seq" "$p_scope" "$p_kind" "$p_delta" "$p_ref")" || exit 1
-        if [[ "$cur" != "$p_hash" ]]; then
-          printf 'LEDGER_CORRUPT: passes_used tamper detected (chain hash mismatch at seq %s)\n' "$p_seq"
-          exit 1
-        fi
-        idx=$((idx + 1))
-      done
-    fi
-    if [[ "$sum" -ne "$L_PUSED" || "$cur" != "$L_PCHAIN" ]]; then
-      printf 'LEDGER_CORRUPT: passes_used tamper detected (passes=%s log_sum=%s)\n' "$L_PUSED" "$sum"
-      exit 1
-    fi
+    parse_review_ledger "$_rc_full" "false" || exit 1
+    verify_ledger_pass_chain_for_root "$_rc_root" || exit 1
 
     if [[ "$L_MPASS" -le 0 ]]; then
       printf 'LEDGER_INCOMPLETE: unbounded or invalid max_passes (%s)\n' "$L_MPASS"
@@ -5011,6 +5037,7 @@ run_review_ledger_check_sub() {
       fi
     fi
 
+    _CHECKED_UNIT_RECS=()
     if [[ ${#U_ROWS[@]} -gt 0 ]]; then
       for ur in "${U_ROWS[@]}"; do
       IFS='|' read -r uid grp ufc ulc urisk uspec urat ust ufind urec uhash ufcsv <<< "$ur"
@@ -5089,7 +5116,9 @@ run_review_ledger_check_sub() {
         fi
       else
         if run_verify_check "$_rc_root" "$urec" "$_rc_ign" "" "$ufcsv" "$TARGET_COMMIT_SHA"; then
-          :
+          if [[ -n "$TARGET_COMMIT_SHA" ]]; then
+            _CHECKED_UNIT_RECS+=("${uid}|${urec}|${_VR_REL_PATHS}|${TARGET_COMMIT_SHA}")
+          fi
         else
           vrc=$?
           if [[ $vrc -eq 2 ]]; then
@@ -5130,6 +5159,11 @@ run_review_ledger_check_sub() {
         for ur in "${U_ROWS[@]}"; do
           IFS='|' read -r u_id _1 _2 _3 _4 _5 _6 _7 _8 u_rec _10 _11 <<< "$ur"
           printf 'META_UNIT_RECEIPT=%s|%s\n' "$u_id" "$u_rec"
+        done
+      fi
+      if [[ ${#_CHECKED_UNIT_RECS[@]} -gt 0 ]]; then
+        for cr in "${_CHECKED_UNIT_RECS[@]}"; do
+          printf 'META_UNIT_RECEIPT_CHECKED=%s\n' "$cr"
         done
       fi
     fi
@@ -5213,10 +5247,6 @@ serialize_review_ledger() {
   fi
 }
 
-has_control_chars() {
-  local s="$1"
-  has_ascii_cntrl "$s"
-}
 
 join_csv() {
   local IFS=','
@@ -6204,7 +6234,7 @@ case "$CMD" in
     DD_DIGESTS=()
     DD_KEYS_SEEN="|"
     if [[ "$HAS_DIRTY_DIGESTS_ARG" == "true" ]]; then
-      if has_control_chars "$DIRTY_DIGESTS"; then
+      if has_ascii_cntrl "$DIRTY_DIGESTS"; then
         echo "MECHANICAL_FAIL: invalid -DirtyDigests"
         exit 1
       fi
@@ -6343,7 +6373,7 @@ case "$CMD" in
         WC_PACKED=("${_WTM_PACKED[@]}")
       fi
       if [[ "$HAS_WORKER_ROOTS" == "true" ]]; then
-        if has_control_chars "$WORKER_ROOTS"; then
+        if has_ascii_cntrl "$WORKER_ROOTS"; then
           echo "MECHANICAL_FAIL: invalid -WorkerRoots"
           exit 1
         fi
@@ -6847,6 +6877,24 @@ case "$CMD" in
         if [[ ${#IGNORE_ARR[@]} -gt 0 ]]; then
           IGNORE_PACKED="$(IFS='|'; printf '%s' "${IGNORE_ARR[*]}")"
         fi
+        _mc_append_misowned() {
+          local wp_arg="$1" tid_arg="$2" other_tid="" wsi=0
+          local -a other_owners=()
+          for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+            other_tid="${WS_IDS[$wsi]}"
+            [[ "$other_tid" == "$tid_arg" ]] && continue
+            if [[ -n "${WS_PACKED[$wsi]}" ]] && ownership_path_match "$wp_arg" "${WS_PACKED[$wsi]}"; then
+              other_owners+=("$other_tid")
+            fi
+          done
+          if [[ ${#other_owners[@]} -gt 0 ]]; then
+            local first_other
+            first_other="$(printf '%s\n' "${other_owners[@]}" | LC_ALL=C sort | head -n 1)"
+            OV_VIOLATIONS+=("${wp_arg}(${tid_arg}->${first_other})")
+          else
+            OV_VIOLATIONS+=("${wp_arg}(${tid_arg}->unowned)")
+          fi
+        }
         OV_VIOLATIONS=()
         ATTRIBUTED_PATHS=()
         WC_PRESENT_IDS="|"
@@ -6884,61 +6932,30 @@ case "$CMD" in
               fi
               continue
             fi
-            OTHER_OWNERS=()
-            for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
-              other_tid="${WS_IDS[$wsi]}"
-              [[ "$other_tid" == "$tid" ]] && continue
-              if [[ -n "${WS_PACKED[$wsi]}" ]] && ownership_path_match "$wp" "${WS_PACKED[$wsi]}"; then
-                OTHER_OWNERS+=("$other_tid")
-              fi
-            done
-            if [[ ${#OTHER_OWNERS[@]} -gt 0 ]]; then
-              first_other="$(printf '%s\n' "${OTHER_OWNERS[@]}" | LC_ALL=C sort | head -n 1)"
-              OV_VIOLATIONS+=("${wp}(${tid}->${first_other})")
-            else
-              OV_VIOLATIONS+=("${wp}(${tid}->unowned)")
-            fi
+            _mc_append_misowned "$wp" "$tid"
           done
         done
-        if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
-          for gp in "${ALL_CHANGED[@]}"; do
-            is_attrib="false"
-            if [[ ${#ATTRIBUTED_PATHS[@]} -gt 0 ]]; then
-              for ap in "${ATTRIBUTED_PATHS[@]}"; do
-                if paths_equal_fs "$gp" "$ap"; then
-                  is_attrib="true"
-                  break
-                fi
-              done
-            fi
-            if [[ "$is_attrib" != "true" ]]; then
-              OV_VIOLATIONS+=("${gp}(unattributed)")
-            fi
-          done
-        fi
-        if [[ ${#PROTECTED_VIOLATIONS[@]} -gt 0 ]]; then
-          for pv in "${PROTECTED_VIOLATIONS[@]}"; do OV_VIOLATIONS+=("${pv}(protected)"); done
-        fi
-        if [[ ${#DIRTY_TAMPER_LIST[@]} -gt 0 ]]; then
-          for dt in "${DIRTY_TAMPER_LIST[@]}"; do OV_VIOLATIONS+=("${dt}(dirty_tamper)"); done
-        fi
-        MISSING_WORKERS=()
-        for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
-          if [[ "$WC_PRESENT_IDS" != *"|${WS_IDS[$wsi]}|"* ]]; then
-            MISSING_WORKERS+=("${WS_IDS[$wsi]}(missing_worker)")
-          fi
-        done
-        if [[ ${#OV_VIOLATIONS[@]} -gt 0 ]]; then
-          OV_STATUS="VIOLATION"
-          OV_VIOLATIONS_OUT="$(printf '%s\n' "${OV_VIOLATIONS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
-        elif [[ ${#MISSING_WORKERS[@]} -gt 0 ]]; then
-          OV_STATUS="PARTIAL_ATTRIBUTION"
-          OV_VIOLATIONS_OUT="$(printf '%s\n' "${MISSING_WORKERS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
-        else
-          OV_STATUS="CALLER_ATTRIBUTED"
-          OV_VIOLATIONS_OUT="none"
-        fi
+        _mc_present_ids="$WC_PRESENT_IDS"
+        _mc_ok_status="CALLER_ATTRIBUTED"
       else
+        _mc_append_misowned() {
+          local wp_arg="$1" tid_arg="$2" other_tid="" wsi=0
+          local -a other_owners=()
+          for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
+            other_tid="${WS_IDS[$wsi]}"
+            [[ "$other_tid" == "$tid_arg" ]] && continue
+            if [[ -n "${WS_PACKED[$wsi]}" ]] && ownership_path_match "$wp_arg" "${WS_PACKED[$wsi]}"; then
+              other_owners+=("$other_tid")
+            fi
+          done
+          if [[ ${#other_owners[@]} -gt 0 ]]; then
+            local first_other
+            first_other="$(printf '%s\n' "${other_owners[@]}" | LC_ALL=C sort | head -n 1)"
+            OV_VIOLATIONS+=("${wp_arg}(${tid_arg}->${first_other})")
+          else
+            OV_VIOLATIONS+=("${wp_arg}(${tid_arg}->unowned)")
+          fi
+        }
         # --worker-roots verified per-worker attribution
         check_worktree_identity "$REPO_ROOT" "missing_repo_root" "not_a_git_repo" "true"
         PARENT_TOP_NORM="$_WT_TOP_NORM"
@@ -7034,20 +7051,7 @@ case "$CMD" in
                 continue
               fi
               if [[ -z "$tid_owned" ]] || ! ownership_path_match "$wp" "$tid_owned"; then
-                OTHER_OWNERS=()
-                for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
-                  other_tid="${WS_IDS[$wsi]}"
-                  [[ "$other_tid" == "$tid" ]] && continue
-                  if [[ -n "${WS_PACKED[$wsi]}" ]] && ownership_path_match "$wp" "${WS_PACKED[$wsi]}"; then
-                    OTHER_OWNERS+=("$other_tid")
-                  fi
-                done
-                if [[ ${#OTHER_OWNERS[@]} -gt 0 ]]; then
-                  first_other="$(printf '%s\n' "${OTHER_OWNERS[@]}" | LC_ALL=C sort | head -n 1)"
-                  OV_VIOLATIONS+=("${wp}(${tid}->${first_other})")
-                else
-                  OV_VIOLATIONS+=("${wp}(${tid}->unowned)")
-                fi
+                _mc_append_misowned "$wp" "$tid"
                 continue
               fi
               if ! _in_all_changed_fs "$wp"; then
@@ -7062,7 +7066,10 @@ case "$CMD" in
             done
           fi
         done
-
+        _mc_present_ids="$WR_PRESENT_IDS"
+        _mc_ok_status="VERIFIED_PER_WORKER"
+      fi
+      if $HAS_WORKER_CHANGES || $HAS_WORKER_ROOTS; then
         if [[ ${#ALL_CHANGED[@]} -gt 0 ]]; then
           for gp in "${ALL_CHANGED[@]}"; do
             is_attrib="false"
@@ -7087,7 +7094,7 @@ case "$CMD" in
         fi
         MISSING_WORKERS=()
         for ((wsi = 0; wsi < ${#WS_IDS[@]}; wsi++)); do
-          if [[ "$WR_PRESENT_IDS" != *"|${WS_IDS[$wsi]}|"* ]]; then
+          if [[ "$_mc_present_ids" != *"|${WS_IDS[$wsi]}|"* ]]; then
             MISSING_WORKERS+=("${WS_IDS[$wsi]}(missing_worker)")
           fi
         done
@@ -7098,7 +7105,7 @@ case "$CMD" in
           OV_STATUS="PARTIAL_ATTRIBUTION"
           OV_VIOLATIONS_OUT="$(printf '%s\n' "${MISSING_WORKERS[@]}" | LC_ALL=C sort -u | paste -sd ',' -)"
         else
-          OV_STATUS="VERIFIED_PER_WORKER"
+          OV_STATUS="$_mc_ok_status"
           OV_VIOLATIONS_OUT="none"
         fi
       fi
@@ -8830,88 +8837,8 @@ timestamp_utc=${TS_UTC}
           _CLEANUP_FILES=()
           trap _cleanup_tmp EXIT
           make_temp_file "b3-git-err-ip" _B3_GIT_ERR_FILE
-          L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
-          L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"; L_RIND=""
-          L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
-          L_SEEN_KEYS=""
-          U_ROWS=()
-          P_ROWS=()
-          while IFS= read -r rawln || [[ -n "$rawln" ]]; do
-            ln="$(trim_str "${rawln%$'\r'}")"
-            [[ -z "$ln" || "$ln" == \#* ]] && continue
-            if [[ "$ln" == \|* ]]; then
-              inner="${ln#|}"; inner="${inner%|}"
-              c_cnt=0; c0=""; c2=""; c3=""
-              while IFS= read -r col; do
-                tc="$(trim_str "$col")"
-                case "$c_cnt" in 0) c0="$tc" ;; 2) c2="$tc" ;; 3) c3="$tc" ;; esac
-                c_cnt=$((c_cnt + 1))
-              done < <(printf '%s\n' "$inner" | LC_ALL=C awk -F'|' '{for(i=1;i<=NF;i++) print $i}')
-              [[ "$c_cnt" -eq 12 ]] || exit 10
-              [[ "$c0" == "unit_id" || "$c0" == "---" ]] && continue
-              [[ "$c0" =~ ^U[0-9]{2,}$ && "$c2" =~ ^[0-9]+$ && "$c3" =~ ^[0-9]+$ ]] || exit 10
-              U_ROWS+=("$c0")
-              continue
-            fi
-            if [[ "$ln" == pass\|* ]]; then
-              _re_pass='^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$'
-              [[ "$ln" =~ $_re_pass ]] || exit 10
-              P_ROWS+=("$ln")
-              continue
-            fi
-            [[ "$ln" == *"="* ]] || exit 10
-            lk="$(trim_str "${ln%%=*}")"; lv="$(trim_str "${ln#*=}")"
-            [[ -n "$lk" ]] || exit 10
-            case "$L_SEEN_KEYS" in *"|${lk}|"*) exit 10 ;; esac
-            L_SEEN_KEYS+="|${lk}|"
-            case "$lk" in
-              schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
-              target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
-              risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
-              l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
-              review_independence) L_RIND="$lv" ;; contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;;
-              max_concurrency) L_MCONC="$lv" ;; max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;;
-              budget_status) L_BSTAT="$lv" ;; cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
-            esac
-          done < "$LEDGER_FULL"
-          for rv in "$L_SCHEMA" "$L_BASE" "$L_HEAD" "$L_TREF" "$L_SNAP" "$L_SIZE" "$L_NLSIZE" "$L_RISK" "$L_RSIG" "$L_RSPEC" "$L_CFILES" "$L_GFILES" "$L_MCONC" "$L_MPASS" "$L_PUSED" "$L_BSTAT" "$L_CSTAT" "$L_CHASH" "$L_UCNT"; do
-            [[ -n "$rv" ]] || exit 10
-          done
-          [[ "$L_SCHEMA" == "b3-review-ledger-v1" && "$L_BASE" =~ ^[0-9a-f]{40}$ && "$L_HEAD" =~ ^[0-9a-f]{40}$ ]] || exit 10
-          if [[ -z "$L_TSHA" ]]; then
-            if [[ "$L_TREF" == "working_tree" ]]; then
-              L_TSHA="none"
-            elif [[ "$L_TREF" =~ ^[0-9a-f]{40}$ ]]; then
-              L_TSHA="$L_TREF"
-            else
-              exit 10
-            fi
-          fi
-          if [[ "$L_TREF" == "working_tree" ]]; then
-            [[ "$L_TSHA" == "none" ]] || exit 10
-          else
-            [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || exit 10
-          fi
-          [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ && "$L_UCNT" =~ ^[0-9]+$ ]] || exit 10
-          L_PUSED="$((10#$L_PUSED))"; L_UCNT="$((10#$L_UCNT))"
-          [[ "$L_UCNT" -eq ${#U_ROWS[@]} ]] || exit 10
-          [[ "$L_HAS_CHAIN" == "true" && "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || exit 10
-          [[ "$L_RIND" == "UNKNOWN" || "$L_RIND" == "INDEPENDENT" || "$L_RIND" == "SINGLE_AGENT_LIMIT" ]] || exit 10
-          normalize_size_class "$L_SIZE" >/dev/null || exit 10
-          cur="$(init_pass_chain "$REPO_ROOT" "$L_BASE")" || exit 10
-          sum=0; idx=0
-          if [[ ${#P_ROWS[@]} -gt 0 ]]; then
-            for row in "${P_ROWS[@]}"; do
-              IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
-              p_seq="$((10#$p_seq))"; p_delta="$((10#$p_delta))"
-              [[ "$p_seq" -eq $((idx + 1)) && "$p_delta" -ge 1 ]] || exit 10
-              sum=$((sum + p_delta))
-              cur="$(step_pass_chain "$REPO_ROOT" "$cur" "$p_seq" "$p_scope" "$p_kind" "$p_delta" "$p_ref")" || exit 10
-              [[ "$cur" == "$p_hash" ]] || exit 10
-              idx=$((idx + 1))
-            done
-          fi
-          [[ "$sum" -eq "$L_PUSED" && "$cur" == "$L_PCHAIN" ]] || exit 10
+          parse_review_ledger "$LEDGER_FULL" "false" >/dev/null || exit 10
+          verify_ledger_pass_chain_for_root "$REPO_ROOT" >/dev/null || exit 10
           if [[ "$L_BASE" == "$BASE_SHA" ]]; then
             if [[ "$L_PUSED" -gt 0 || "$L_BSTAT" == "EXHAUSTED" || "$L_RIND" == "SINGLE_AGENT_LIMIT" ]]; then
               exit 11
@@ -9019,133 +8946,10 @@ timestamp_utc=${TS_UTC}
 
     [[ -f "$LEDGER_FULL" ]] || { echo "LEDGER_MISSING: $LEDGER_REL"; exit 1; }
 
-    # Parse ledger metadata + unit rows + pass log (update)
-    L_SCHEMA=""; L_BASE=""; L_HEAD=""; L_TREF=""; L_TSHA=""; L_SNAP=""; L_SIZE=""; L_NLSIZE=""; L_RISK=""; L_RSIG=""; L_RSPEC=""
-    L_L1SPEC=""; L_L1SKIP=""; L_PCHAIN=""; L_HAS_CHAIN="false"; L_RIND=""
-    L_CFILES=""; L_GFILES=""; L_MCONC=""; L_MPASS=""; L_PUSED=""; L_BSTAT=""; L_CSTAT=""; L_CHASH=""; L_UCNT=""
-    L_SEEN_KEYS=""
-    U_ROWS=()
-    P_ROWS=()
-    while IFS= read -r rawln || [[ -n "$rawln" ]]; do
-      ln="$(trim_str "${rawln%$'\r'}")"
-      [[ -z "$ln" || "$ln" == \#* ]] && continue
-      if [[ "$ln" == \|* ]]; then
-        inner="${ln#|}"; inner="${inner%|}"
-        c_cnt=0; c0=""; c1=""; c2=""; c3=""; c4=""; c5=""; c6=""; c7=""; c8=""; c9=""; c10=""; c11=""
-        while IFS= read -r col; do
-          tc="$(trim_str "$col")"
-          case "$c_cnt" in
-            0) c0="$tc" ;; 1) c1="$tc" ;; 2) c2="$tc" ;; 3) c3="$tc" ;; 4) c4="$tc" ;; 5) c5="$tc" ;;
-            6) c6="$tc" ;; 7) c7="$tc" ;; 8) c8="$tc" ;; 9) c9="$tc" ;; 10) c10="$tc" ;; 11) c11="$tc" ;;
-          esac
-          c_cnt=$((c_cnt + 1))
-        done < <(printf '%s\n' "$inner" | LC_ALL=C awk -F'|' '{for(i=1;i<=NF;i++) print $i}')
-        [[ "$c_cnt" -eq 12 ]] || { echo "LEDGER_CORRUPT: malformed unit row column count"; exit 1; }
-        [[ "$c0" == "unit_id" || "$c0" == "---" ]] && continue
-        [[ "$c0" =~ ^U[0-9]{2,}$ ]] || { echo "LEDGER_CORRUPT: invalid unit_id '$c0'"; exit 1; }
-        [[ "$c2" =~ ^[0-9]+$ && "$c3" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid unit row numeric field"; exit 1; }
-        U_ROWS+=("${c0}|${c1}|${c2}|${c3}|${c4}|${c5}|${c6}|${c7}|${c8}|${c9}|${c10}|${c11}")
-        continue
-      fi
-      if [[ "$ln" == pass\|* ]]; then
-        _re_pass='^pass\|[0-9]+\|[^|]+\|[^|]+\|[0-9]+\|([0-9a-f]{40}|none)\|[0-9a-f]{40}$'
-        [[ "$ln" =~ $_re_pass ]] || { printf "LEDGER_CORRUPT: malformed pass log entry '%s'\n" "$ln"; exit 1; }
-        P_ROWS+=("$ln")
-        continue
-      fi
-      [[ "$ln" == *"="* ]] || { echo "LEDGER_CORRUPT: unexpected line '$ln'"; exit 1; }
-      lk="$(trim_str "${ln%%=*}")"; lv="$(trim_str "${ln#*=}")"
-      case "$L_SEEN_KEYS" in *"|${lk}|"*) echo "LEDGER_CORRUPT: duplicate key '$lk'"; exit 1 ;; esac
-      L_SEEN_KEYS+="|${lk}|"
-      case "$lk" in
-        schema) L_SCHEMA="$lv" ;; base_sha) L_BASE="$lv" ;; head_sha) L_HEAD="$lv" ;; target_ref) L_TREF="$lv" ;;
-        target_sha) L_TSHA="$lv" ;; snapshot_sha) L_SNAP="$lv" ;; size_class) L_SIZE="$lv" ;; normalized_legacy_size) L_NLSIZE="$lv" ;;
-        risk_level) L_RISK="$lv" ;; risk_signals) L_RSIG="$lv" ;; recommended_specialists) L_RSPEC="$lv" ;;
-        l1_specialists) L_L1SPEC="$lv" ;; l1_skip_rationale) L_L1SKIP="$lv" ;; pass_chain) L_PCHAIN="$lv"; L_HAS_CHAIN="true" ;;
-        review_independence) L_RIND="$lv" ;;
-        contract_files) L_CFILES="$lv" ;; generated_files) L_GFILES="$lv" ;; max_concurrency) L_MCONC="$lv" ;;
-        max_passes) L_MPASS="$lv" ;; passes_used) L_PUSED="$lv" ;; budget_status) L_BSTAT="$lv" ;;
-        cross_unit_status) L_CSTAT="$lv" ;; cross_unit_tree_hash) L_CHASH="$lv" ;; unit_count) L_UCNT="$lv" ;;
-      esac
-    done < "$LEDGER_FULL"
-
-    for rv in "$L_SCHEMA" "$L_BASE" "$L_HEAD" "$L_TREF" "$L_SNAP" "$L_SIZE" "$L_NLSIZE" "$L_RISK" "$L_RSIG" "$L_RSPEC" "$L_CFILES" "$L_GFILES" "$L_MCONC" "$L_MPASS" "$L_PUSED" "$L_BSTAT" "$L_CSTAT" "$L_CHASH" "$L_UCNT"; do
-      [[ -n "$rv" ]] || { echo "LEDGER_CORRUPT: missing required ledger key"; exit 1; }
-    done
-    [[ "$L_SCHEMA" == "b3-review-ledger-v1" ]] || { echo "LEDGER_CORRUPT: unsupported schema '$L_SCHEMA'"; exit 1; }
-    [[ "$L_BASE" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid base_sha"; exit 1; }
-    [[ "$L_HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid head_sha"; exit 1; }
-    if [[ -z "$L_TSHA" ]]; then
-      if [[ "$L_TREF" == "working_tree" ]]; then
-        L_TSHA="none"
-      elif [[ "$L_TREF" =~ ^[0-9a-f]{40}$ ]]; then
-        L_TSHA="$L_TREF"
-      else
-        echo "LEDGER_CORRUPT: missing target_sha for symbolic target_ref"; exit 1
-      fi
-    fi
-    if [[ "$L_TREF" == "working_tree" ]]; then
-      [[ "$L_TSHA" == "none" ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
-    else
-      [[ "$L_TSHA" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid target_sha"; exit 1; }
-    fi
-    [[ "$L_MPASS" =~ ^[0-9]+$ && "$L_PUSED" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: invalid pass counter"; exit 1; }
-    L_MPASS="$((10#$L_MPASS))"
-    L_PUSED="$((10#$L_PUSED))"
-    if [[ "$L_HAS_CHAIN" != "true" || -z "$L_PCHAIN" ]]; then
-      echo "LEDGER_CORRUPT: missing pass_chain"
-      exit 1
-    fi
-    [[ "$L_PCHAIN" =~ ^[0-9a-f]{40}$ ]] || { echo "LEDGER_CORRUPT: invalid pass_chain"; exit 1; }
-    if [[ -z "$L_RIND" ]]; then
-      echo "LEDGER_CORRUPT: missing review_independence"
-      exit 1
-    fi
-    if [[ "$L_RIND" != "UNKNOWN" && "$L_RIND" != "INDEPENDENT" && "$L_RIND" != "SINGLE_AGENT_LIMIT" ]]; then
-      echo "LEDGER_CORRUPT: invalid review_independence '$L_RIND'"
-      exit 1
-    fi
-    [[ -z "$L_L1SPEC" ]] && L_L1SPEC="none"
-    [[ -z "$L_L1SKIP" ]] && L_L1SKIP="none"
-    ORIG_RAW_SIZE="$L_SIZE"
-    NORM_SIZE="$(normalize_size_class "$ORIG_RAW_SIZE")" || { echo "LEDGER_CORRUPT: invalid size_class '$ORIG_RAW_SIZE'"; exit 1; }
-    [[ "$L_UCNT" =~ ^[0-9]+$ ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
-    L_UCNT="$((10#$L_UCNT))"
-    [[ "$L_UCNT" -eq ${#U_ROWS[@]} ]] || { echo "LEDGER_CORRUPT: unit_count mismatch"; exit 1; }
-    if [[ "$ORIG_RAW_SIZE" != "$NORM_SIZE" ]]; then
-      L_NLSIZE="${ORIG_RAW_SIZE}:${NORM_SIZE}"
-    fi
-    L_SIZE="$NORM_SIZE"
-    TARGET_COMMIT_SHA=""
-    [[ "$L_TREF" != "working_tree" ]] && TARGET_COMMIT_SHA="$L_TSHA"
+    parse_review_ledger "$LEDGER_FULL" "true" || exit 1
 
     verify_ledger_pass_chain() {
-      local cur sum idx row _pt p_seq p_scope p_kind p_delta p_ref p_hash expect_seq
-      cur="$(init_pass_chain "$REPO_ROOT" "$L_BASE")" || exit 1
-      sum=0; idx=0
-      if [[ ${#P_ROWS[@]} -gt 0 ]]; then
-        for row in "${P_ROWS[@]}"; do
-          IFS='|' read -r _pt p_seq p_scope p_kind p_delta p_ref p_hash <<< "$row"
-          p_seq="$((10#$p_seq))"
-          p_delta="$((10#$p_delta))"
-          expect_seq=$((idx + 1))
-          if [[ "$p_seq" -ne "$expect_seq" || "$p_delta" -lt 1 ]]; then
-            printf 'LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index %s)\n' "$expect_seq"
-            exit 1
-          fi
-          sum=$((sum + p_delta))
-          cur="$(step_pass_chain "$REPO_ROOT" "$cur" "$p_seq" "$p_scope" "$p_kind" "$p_delta" "$p_ref")" || exit 1
-          if [[ "$cur" != "$p_hash" ]]; then
-            printf 'LEDGER_CORRUPT: passes_used tamper detected (chain hash mismatch at seq %s)\n' "$p_seq"
-            exit 1
-          fi
-          idx=$((idx + 1))
-        done
-      fi
-      if [[ "$sum" -ne "$L_PUSED" || "$cur" != "$L_PCHAIN" ]]; then
-        printf 'LEDGER_CORRUPT: passes_used tamper detected (passes=%s log_sum=%s)\n' "$L_PUSED" "$sum"
-        exit 1
-      fi
+      verify_ledger_pass_chain_for_root "$REPO_ROOT" || exit 1
     }
 
     if [[ "$ACT_LOW" == "update" ]]; then
@@ -9905,46 +9709,9 @@ ${el}"
         exit 1
       fi
 
-      PM_TRUNK_SHA=""
-      PM_TRUNK_BRANCH=""
-      if $HAS_ORIGIN_PM; then
-        if run_git_cmd_quiet "$REPO_ROOT" symbolic-ref -q refs/remotes/origin/HEAD; then
-          _oh_full="$(trim_str "$_GIT_STDOUT")"
-          if [[ "$_oh_full" == refs/remotes/origin/* ]]; then
-            if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_oh_full}^{commit}"; then
-              _oh_sha="$(trim_str "$_GIT_STDOUT")"
-              if [[ "$_oh_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                PM_TRUNK_SHA="$_oh_sha"
-                PM_TRUNK_BRANCH="${_oh_full#refs/remotes/origin/}"
-              fi
-            fi
-          fi
-        fi
-        if [[ -z "$PM_TRUNK_SHA" ]]; then
-          for _cand_br in main master; do
-            if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "refs/remotes/origin/${_cand_br}^{commit}"; then
-              _c_sha="$(trim_str "$_GIT_STDOUT")"
-              if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                PM_TRUNK_SHA="$_c_sha"
-                PM_TRUNK_BRANCH="$_cand_br"
-                break
-              fi
-            fi
-          done
-        fi
-      fi
-      if [[ -z "$PM_TRUNK_SHA" ]]; then
-        for _cand_br in main master; do
-          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "refs/heads/${_cand_br}^{commit}"; then
-            _c_sha="$(trim_str "$_GIT_STDOUT")"
-            if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              PM_TRUNK_SHA="$_c_sha"
-              PM_TRUNK_BRANCH="$_cand_br"
-              break
-            fi
-          fi
-        done
-      fi
+      resolve_canonical_trunk_authority "$REPO_ROOT" "$HAS_ORIGIN_PM" "true"
+      PM_TRUNK_SHA="$_TRUNK_SHA"
+      PM_TRUNK_BRANCH="$_TRUNK_BRANCH"
 
       PM_ALLOWED_BRANCHES=()
       if [[ -n "$PM_TRUNK_SHA" ]]; then
@@ -9986,36 +9753,40 @@ ${el}"
           echo "POST_MERGE_FAILED: remote_target_not_fetched"
           exit 1
         fi
-        git_ls_remote_ref "$REPO_ROOT" "refs/heads/${LOCAL_TARGET_BRANCH}"
-        if [[ "$_LS_REMOTE_STATUS" == "MISSING" ]]; then
-          echo "POST_MERGE_FAILED: remote_target_ref_missing"
-          exit 1
+        _pm_tgt_ref="refs/heads/${LOCAL_TARGET_BRANCH}"
+        _pm_qrefs=("$_pm_tgt_ref")
+        _pm_auth_ref=""
+        if [[ -n "$PM_TRUNK_BRANCH" && "$PM_TRUNK_BRANCH" != "$LOCAL_TARGET_BRANCH" ]]; then
+          _pm_auth_ref="refs/heads/${PM_TRUNK_BRANCH}"
+          _pm_qrefs+=("$_pm_auth_ref")
         fi
+        git_ls_remote_refs "$REPO_ROOT" "${_pm_qrefs[@]}"
         if [[ "$_LS_REMOTE_STATUS" == "UNREACHABLE" ]]; then
           echo "PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable"
           exit 2
         fi
-        if [[ "$_LS_REMOTE_SHA" != "$REM_TARGET_SHA" ]]; then
-          printf 'POST_MERGE_FAILED: stale_remote_target_ref(local=%s remote=%s)\n' "$REM_TARGET_SHA" "$_LS_REMOTE_SHA"
+        _pm_live_tgt=""
+        if ! _pm_live_tgt="$(git_ls_remote_lookup "$_pm_tgt_ref")"; then
+          echo "POST_MERGE_FAILED: remote_target_ref_missing"
+          exit 1
+        fi
+        if [[ "$_pm_live_tgt" != "$REM_TARGET_SHA" ]]; then
+          printf 'POST_MERGE_FAILED: stale_remote_target_ref(local=%s remote=%s)\n' "$REM_TARGET_SHA" "$_pm_live_tgt"
           exit 1
         fi
         if [[ -n "$PM_TRUNK_BRANCH" ]]; then
-          if [[ "$PM_TRUNK_BRANCH" != "$LOCAL_TARGET_BRANCH" ]]; then
-            git_ls_remote_ref "$REPO_ROOT" "refs/heads/${PM_TRUNK_BRANCH}"
-            if [[ "$_LS_REMOTE_STATUS" == "MISSING" ]]; then
+          if [[ -n "$_pm_auth_ref" ]]; then
+            _pm_live_auth=""
+            if ! _pm_live_auth="$(git_ls_remote_lookup "$_pm_auth_ref")"; then
               echo "POST_MERGE_FAILED: remote_authority_ref_missing"
               exit 1
             fi
-            if [[ "$_LS_REMOTE_STATUS" == "UNREACHABLE" ]]; then
-              echo "PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable"
-              exit 2
-            fi
-            if [[ "$_LS_REMOTE_SHA" != "$PM_TRUNK_SHA" ]]; then
-              printf 'POST_MERGE_FAILED: stale_remote_authority_ref(local=%s remote=%s)\n' "$PM_TRUNK_SHA" "$_LS_REMOTE_SHA"
+            if [[ "$_pm_live_auth" != "$PM_TRUNK_SHA" ]]; then
+              printf 'POST_MERGE_FAILED: stale_remote_authority_ref(local=%s remote=%s)\n' "$PM_TRUNK_SHA" "$_pm_live_auth"
               exit 1
             fi
-          elif [[ "$_LS_REMOTE_SHA" != "$PM_TRUNK_SHA" ]]; then
-            printf 'POST_MERGE_FAILED: stale_remote_authority_ref(local=%s remote=%s)\n' "$PM_TRUNK_SHA" "$_LS_REMOTE_SHA"
+          elif [[ "$_pm_live_tgt" != "$PM_TRUNK_SHA" ]]; then
+            printf 'POST_MERGE_FAILED: stale_remote_authority_ref(local=%s remote=%s)\n' "$PM_TRUNK_SHA" "$_pm_live_tgt"
             exit 1
           fi
         fi
@@ -10220,51 +9991,12 @@ ${el}"
       CUR_SYM_FULL="$(trim_str "$_GIT_STDOUT")"
     fi
 
-    CANON_AUTH_FULL=""
-    CANON_AUTH_BRANCH=""
-    CANON_AUTH_SHA=""
-    if $HAS_ORIGIN; then
-      if run_git_cmd_quiet "$REPO_ROOT" symbolic-ref -q refs/remotes/origin/HEAD; then
-        _oh_full="$(trim_str "$_GIT_STDOUT")"
-        if [[ "$_oh_full" == refs/remotes/origin/* ]]; then
-          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_oh_full}^{commit}"; then
-            _oh_sha="$(trim_str "$_GIT_STDOUT")"
-            if [[ "$_oh_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              CANON_AUTH_FULL="$_oh_full"
-              CANON_AUTH_BRANCH="${_oh_full#refs/remotes/origin/}"
-              CANON_AUTH_SHA="$_oh_sha"
-            fi
-          fi
-        fi
-      fi
-      if [[ -z "$CANON_AUTH_SHA" ]]; then
-        for _cand_br in main master; do
-          _c_full="refs/remotes/origin/${_cand_br}"
-          if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_c_full}^{commit}"; then
-            _c_sha="$(trim_str "$_GIT_STDOUT")"
-            if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
-              CANON_AUTH_FULL="$_c_full"
-              CANON_AUTH_BRANCH="$_cand_br"
-              CANON_AUTH_SHA="$_c_sha"
-              break
-            fi
-          fi
-        done
-      fi
-    elif ! $HAS_ANY_REMOTE; then
-      for _cand_br in main master; do
-        _c_full="refs/heads/${_cand_br}"
-        if run_git_cmd_quiet "$REPO_ROOT" rev-parse --verify --quiet "${_c_full}^{commit}"; then
-          _c_sha="$(trim_str "$_GIT_STDOUT")"
-          if [[ "$_c_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            CANON_AUTH_FULL="$_c_full"
-            CANON_AUTH_BRANCH="$_cand_br"
-            CANON_AUTH_SHA="$_c_sha"
-            break
-          fi
-        fi
-      done
-    fi
+    _allow_local_canon=false
+    if ! $HAS_ANY_REMOTE; then _allow_local_canon=true; fi
+    resolve_canonical_trunk_authority "$REPO_ROOT" "$HAS_ORIGIN" "$_allow_local_canon"
+    CANON_AUTH_FULL="$_TRUNK_SYM_FULL"
+    CANON_AUTH_BRANCH="$_TRUNK_BRANCH"
+    CANON_AUTH_SHA="$_TRUNK_SHA"
 
     CALLER_AUTH_SYM_FULL=""
     CALLER_AUTH_BRANCH=""
@@ -10692,27 +10424,7 @@ ${el}"
         done
       fi
 
-      HAS_DIRTY_WT=false
-      for _dkind in staged wt untracked; do
-        case "$_dkind" in
-          staged) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --cached --name-status -z -- || exit 1 ;;
-          wt) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z -- || exit 1 ;;
-          untracked) run_git_paths_z "$REPO_ROOT" "names" "MERGE_BLOCKED" "" -- ls-files --others --exclude-standard -z || exit 1 ;;
-        esac
-        for dp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
-          [[ -n "$dp" ]] || continue
-          is_checkpoint_dir "$dp" && continue
-          if protected_path_match_ci "$dp" "${POL_PROT_ARR[@]}"; then
-            echo "MERGE_BLOCKED: $GH_POL_VIOLATION_REASON"
-            exit 1
-          fi
-          HAS_DIRTY_WT=true
-        done
-      done
-      if $HAS_DIRTY_WT; then
-        echo "MERGE_BLOCKED: dirty_worktree"
-        exit 1
-      fi
+      check_merge_dirty_worktree "$REPO_ROOT" "$GH_POL_VIOLATION_REASON" ${POL_PROT_ARR[@]+"${POL_PROT_ARR[@]}"}
 
       ALL_CHANGED=()
       _seen_all="|"
@@ -10813,56 +10525,7 @@ ${el}"
         exit 2
       fi
 
-      LED_TRIM="$(trim_str "$LEDGER_PATH")"
-      if [[ -z "$LED_TRIM" ]]; then
-        echo "MERGE_BLOCKED: missing_ledger_path"
-        exit 1
-      fi
-      if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM"; then
-        echo "MERGE_BLOCKED: invalid_ledger_path"
-        exit 1
-      fi
-      LED_FULL="$_CONTAINED_FULL"
-      LED_REL="$_CONTAINED_REL"
-      if [[ ! -f "$LED_FULL" ]]; then
-        echo "MERGE_BLOCKED: missing_ledger_path"
-        exit 1
-      fi
-      set +e
-      LED_CHK_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL" "$LED_REL" "" "true")"
-      LED_CHK_RC=$?
-      set -e
-      if [[ $LED_CHK_RC -ne 0 ]]; then
-        _first_err="${LED_CHK_OUT%%$'\n'*}"
-        echo "MERGE_BLOCKED: ledger_check_failed (${_first_err:-unknown})"
-        exit 1
-      fi
-      M_BASE=""; M_HEAD=""; M_TREF=""; M_TSHA=""; M_RIND=""
-      while IFS= read -r mline; do
-        case "$mline" in
-          META_BASE_SHA=*) M_BASE="${mline#META_BASE_SHA=}" ;;
-          META_HEAD_SHA=*) M_HEAD="${mline#META_HEAD_SHA=}" ;;
-          META_TARGET_REF=*) M_TREF="${mline#META_TARGET_REF=}" ;;
-          META_TARGET_SHA=*) M_TSHA="${mline#META_TARGET_SHA=}" ;;
-          META_REVIEW_INDEPENDENCE=*) M_RIND="${mline#META_REVIEW_INDEPENDENCE=}" ;;
-        esac
-      done <<< "$LED_CHK_OUT"
-      if [[ "$M_BASE" != "$RES_BASE_SHA" ]]; then
-        echo "MERGE_BLOCKED: ledger_target_mismatch"
-        exit 1
-      fi
-      if [[ "$M_HEAD" != "$LIVE_HEAD_SHA" || ( "$M_TREF" != "working_tree" && "$M_TSHA" != "$LIVE_HEAD_SHA" ) ]]; then
-        echo "MERGE_BLOCKED: ledger_head_mismatch"
-        exit 1
-      fi
-      if [[ "$M_RIND" == "SINGLE_AGENT_LIMIT" ]]; then
-        echo "MERGE_BLOCKED: single_agent_limit"
-        exit 1
-      fi
-      if [[ "$M_RIND" != "INDEPENDENT" ]]; then
-        echo "MERGE_BLOCKED: review_independence_unknown"
-        exit 1
-      fi
+      run_merge_ledger_gate "$REPO_ROOT" "$LEDGER_PATH" "$RES_BASE_SHA" "$LIVE_HEAD_SHA"
 
       printf 'MERGE_AUTHORIZED: mode=github pr=%s#%s target_ref=%s target_sha=%s head_sha=%s policy_authority=%s@%s auto_merge=authorized ci=%s governance=CLEAR\n' \
         "$GH_BASE_REPO" "$PR_NUM_TRIM" "$GH_BASE_REF" "$RES_BASE_SHA" "$LIVE_HEAD_SHA" "$GH_POLICY_AUTH_REF" "$GH_POLICY_AUTH_SHA" "$GH_CI_STATUS"
@@ -10922,27 +10585,7 @@ ${el}"
       exit 1
     fi
 
-    HAS_DIRTY_LOC=false
-    for _dkind in staged wt untracked; do
-      case "$_dkind" in
-        staged) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --cached --name-status -z -- || exit 1 ;;
-        wt) run_git_paths_z "$REPO_ROOT" "name-status-z" "MERGE_BLOCKED" "" -- diff --no-ext-diff --name-status -z -- || exit 1 ;;
-        untracked) run_git_paths_z "$REPO_ROOT" "names" "MERGE_BLOCKED" "" -- ls-files --others --exclude-standard -z || exit 1 ;;
-      esac
-      for dp in ${_GIT_PATHS_Z[@]+"${_GIT_PATHS_Z[@]}"}; do
-        [[ -n "$dp" ]] || continue
-        is_checkpoint_dir "$dp" && continue
-        if protected_path_match_ci "$dp" "${POL_PROT_ARR[@]}"; then
-          echo "MERGE_BLOCKED: policy_modified_in_pr"
-          exit 1
-        fi
-        HAS_DIRTY_LOC=true
-      done
-    done
-    if $HAS_DIRTY_LOC; then
-      echo "MERGE_BLOCKED: dirty_worktree"
-      exit 1
-    fi
+    check_merge_dirty_worktree "$REPO_ROOT" "policy_modified_in_pr" ${POL_PROT_ARR[@]+"${POL_PROT_ARR[@]}"}
 
     if ! $LOCAL_ONLY; then
       if $REQUIRE_REMOTE_CI; then
@@ -11192,56 +10835,9 @@ ${el}"
       fi
     fi
 
-    LED_TRIM_LOC="$(trim_str "$LEDGER_PATH")"
-    if [[ -z "$LED_TRIM_LOC" ]]; then
-      echo "MERGE_BLOCKED: missing_ledger_path"
-      exit 1
-    fi
-    if ! check_contained_repo_path "$REPO_ROOT" "$LED_TRIM_LOC"; then
-      echo "MERGE_BLOCKED: invalid_ledger_path"
-      exit 1
-    fi
-    LED_FULL_LOC="$_CONTAINED_FULL"
-    LED_REL_LOC="$_CONTAINED_REL"
-    if [[ ! -f "$LED_FULL_LOC" ]]; then
-      echo "MERGE_BLOCKED: missing_ledger_path"
-      exit 1
-    fi
-    set +e
-    LED_LOC_OUT="$(run_review_ledger_check_sub "$REPO_ROOT" "$LED_FULL_LOC" "$LED_REL_LOC" "" "true")"
-    LED_LOC_RC=$?
-    set -e
-    if [[ $LED_LOC_RC -ne 0 ]]; then
-      _first_err="${LED_LOC_OUT%%$'\n'*}"
-      echo "MERGE_BLOCKED: ledger_check_failed (${_first_err:-unknown})"
-      exit 1
-    fi
-    M_BASE_LOC=""; M_HEAD_LOC=""; M_TREF_LOC=""; M_TSHA_LOC=""; M_RIND_LOC=""
-    while IFS= read -r mline; do
-      case "$mline" in
-        META_BASE_SHA=*) M_BASE_LOC="${mline#META_BASE_SHA=}" ;;
-        META_HEAD_SHA=*) M_HEAD_LOC="${mline#META_HEAD_SHA=}" ;;
-        META_TARGET_REF=*) M_TREF_LOC="${mline#META_TARGET_REF=}" ;;
-        META_TARGET_SHA=*) M_TSHA_LOC="${mline#META_TARGET_SHA=}" ;;
-        META_REVIEW_INDEPENDENCE=*) M_RIND_LOC="${mline#META_REVIEW_INDEPENDENCE=}" ;;
-      esac
-    done <<< "$LED_LOC_OUT"
-    if [[ "$M_BASE_LOC" != "$RES_BASE_SHA" ]]; then
-      echo "MERGE_BLOCKED: ledger_target_mismatch"
-      exit 1
-    fi
-    if [[ "$M_HEAD_LOC" != "$LIVE_HEAD_SHA" || ( "$M_TREF_LOC" != "working_tree" && "$M_TSHA_LOC" != "$LIVE_HEAD_SHA" ) ]]; then
-      echo "MERGE_BLOCKED: ledger_head_mismatch"
-      exit 1
-    fi
-    if [[ "$M_RIND_LOC" == "SINGLE_AGENT_LIMIT" ]]; then
-      echo "MERGE_BLOCKED: single_agent_limit"
-      exit 1
-    fi
-    if [[ "$M_RIND_LOC" != "INDEPENDENT" ]]; then
-      echo "MERGE_BLOCKED: review_independence_unknown"
-      exit 1
-    fi
+    _MERGE_LEDGER_OUT=""
+    run_merge_ledger_gate "$REPO_ROOT" "$LEDGER_PATH" "$RES_BASE_SHA" "$LIVE_HEAD_SHA"
+    LED_LOC_OUT="$_MERGE_LEDGER_OUT"
 
     assert_local_ci_evidence "$REPO_ROOT" "$LIVE_HEAD_SHA" "$RECEIPT_PATH" "$LED_LOC_OUT" "$IGNORE_DIRTY" "$CI_STATUS" "$AUTH_LOC_REQ_CI" "$_MP_CASE_INSENSITIVE" ${ALL_CHANGED_LOC[@]+"${ALL_CHANGED_LOC[@]}"}
 
@@ -11261,41 +10857,40 @@ ${el}"
     if $HAS_ANY_REMOTE; then
       REMOTE_AUTH_STATE="no_provider_verification"
       if $HAS_ORIGIN; then
-        _ra_status="" _ra_sha=""
+        _loc_auth_ref="" _loc_tgt_ref=""
+        _loc_qrefs=()
         if [[ -n "$EFF_AUTH_BRANCH" ]]; then
-          git_ls_remote_ref "$REPO_ROOT" "refs/heads/${EFF_AUTH_BRANCH}"
-          _ra_status="$_LS_REMOTE_STATUS"
-          _ra_sha="$_LS_REMOTE_SHA"
-          if [[ "$_ra_status" == "MISSING" ]]; then
-            echo "MERGE_BLOCKED: remote_authority_ref_missing"
-            exit 1
-          fi
-          if [[ "$_ra_status" == "OK" && "$_ra_sha" != "$EFF_AUTH_SHA" ]]; then
-            printf 'MERGE_BLOCKED: stale_remote_ref(authority local=%s remote=%s)\n' "$EFF_AUTH_SHA" "$_ra_sha"
-            exit 1
-          fi
-          if [[ "$_ra_status" == "UNREACHABLE" ]]; then
-            REMOTE_AUTH_STATE="remote_ref_unverifiable"
-          fi
+          _loc_auth_ref="refs/heads/${EFF_AUTH_BRANCH}"
+          _loc_qrefs+=("$_loc_auth_ref")
         fi
         if [[ -n "$TARGET_BRANCH_NAME" ]]; then
-          if [[ -n "$EFF_AUTH_BRANCH" && "$TARGET_BRANCH_NAME" == "$EFF_AUTH_BRANCH" && -n "$_ra_status" ]]; then
-            if [[ "$_ra_status" == "OK" && "$_ra_sha" != "$RES_BASE_SHA" ]]; then
-              printf 'MERGE_BLOCKED: stale_remote_ref(target local=%s remote=%s)\n' "$RES_BASE_SHA" "$_ra_sha"
+          _loc_tgt_ref="refs/heads/${TARGET_BRANCH_NAME}"
+          [[ "$_loc_tgt_ref" != "$_loc_auth_ref" ]] && _loc_qrefs+=("$_loc_tgt_ref")
+        fi
+        git_ls_remote_refs "$REPO_ROOT" ${_loc_qrefs[@]+"${_loc_qrefs[@]}"}
+        if [[ "$_LS_REMOTE_STATUS" == "UNREACHABLE" ]]; then
+          REMOTE_AUTH_STATE="remote_ref_unverifiable"
+        else
+          if [[ -n "$_loc_auth_ref" ]]; then
+            _ra_sha=""
+            if ! _ra_sha="$(git_ls_remote_lookup "$_loc_auth_ref")"; then
+              echo "MERGE_BLOCKED: remote_authority_ref_missing"
               exit 1
             fi
-          else
-            git_ls_remote_ref "$REPO_ROOT" "refs/heads/${TARGET_BRANCH_NAME}"
-            if [[ "$_LS_REMOTE_STATUS" == "MISSING" ]]; then
+            if [[ "$_ra_sha" != "$EFF_AUTH_SHA" ]]; then
+              printf 'MERGE_BLOCKED: stale_remote_ref(authority local=%s remote=%s)\n' "$EFF_AUTH_SHA" "$_ra_sha"
+              exit 1
+            fi
+          fi
+          if [[ -n "$_loc_tgt_ref" ]]; then
+            _rt_sha=""
+            if ! _rt_sha="$(git_ls_remote_lookup "$_loc_tgt_ref")"; then
               echo "MERGE_BLOCKED: remote_target_ref_missing"
               exit 1
             fi
-            if [[ "$_LS_REMOTE_STATUS" == "OK" && "$_LS_REMOTE_SHA" != "$RES_BASE_SHA" ]]; then
-              printf 'MERGE_BLOCKED: stale_remote_ref(target local=%s remote=%s)\n' "$RES_BASE_SHA" "$_LS_REMOTE_SHA"
+            if [[ "$_rt_sha" != "$RES_BASE_SHA" ]]; then
+              printf 'MERGE_BLOCKED: stale_remote_ref(target local=%s remote=%s)\n' "$RES_BASE_SHA" "$_rt_sha"
               exit 1
-            fi
-            if [[ "$_LS_REMOTE_STATUS" == "UNREACHABLE" ]]; then
-              REMOTE_AUTH_STATE="remote_ref_unverifiable"
             fi
           fi
         fi
@@ -11344,7 +10939,7 @@ ${el}"
     done
 
     for raw_arg in "$ACTION" "$CACHE_PATH" "$SCOPE_ID" "$ANCHOR_PATHS" "$SCOPE_PATHS" "$GRAPH_INDEX_SHA" "$SUMMARY_REF" "$IGNORE_DIRTY_PATHS"; do
-      if has_control_chars "$raw_arg"; then
+      if has_ascii_cntrl "$raw_arg"; then
         echo "CONTEXT_ERROR: control characters not allowed"
         exit 1
       fi
