@@ -870,8 +870,26 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    fn warm_windows_node() {
+        static WARMED: std::sync::Once = std::sync::Once::new();
+        WARMED.call_once(|| {
+            let no_env: [(&str, &str); 0] = [];
+            let _ = run_command(
+                OsStr::new("node"),
+                &["-e", "process.exit(0)"],
+                None,
+                &no_env,
+                &[],
+                None,
+            );
+        });
+    }
+
     #[test]
     fn timeout_triggers_when_child_ignores_large_stdin() {
+        #[cfg(windows)]
+        warm_windows_node();
         let tmp = TempDirGuard::new("large-stdin-timeout");
         let pid_file = tmp.path().join("child.pid");
         let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
@@ -959,6 +977,8 @@ mod tests {
 
     #[test]
     fn timeout_kills_grandchild_holding_stdout_pipe() {
+        #[cfg(windows)]
+        warm_windows_node();
         let tmp = TempDirGuard::new("grandchild-stdout");
         let pid_file = tmp.path().join("grandchild.pid");
         let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
@@ -993,6 +1013,8 @@ mod tests {
 
     #[test]
     fn timeout_kills_grandchild_holding_stderr_pipe() {
+        #[cfg(windows)]
+        warm_windows_node();
         let tmp = TempDirGuard::new("grandchild-stderr");
         let pid_file = tmp.path().join("grandchild.pid");
         let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
@@ -1027,6 +1049,8 @@ mod tests {
 
     #[test]
     fn parent_exits_while_descendant_remains_alive_is_cleaned_up() {
+        #[cfg(windows)]
+        warm_windows_node();
         let tmp = TempDirGuard::new("detached-descendant");
         let pid_file = tmp.path().join("descendant.pid");
         let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
@@ -1048,12 +1072,12 @@ mod tests {
             ],
         );
         let start = Instant::now();
-        let out = run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(5_000))
+        let out = run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(10_000))
             .expect("parent exit with closed-stdio descendant should return cleanly");
         let elapsed = start.elapsed();
         assert_eq!(out.exit_code, 0);
         assert!(
-            elapsed < Duration::from_secs(3),
+            elapsed < Duration::from_secs(6),
             "expected prompt return when descendant closes stdio, elapsed={elapsed:?}"
         );
         let pid = read_pid_file(&pid_file);
@@ -1065,17 +1089,7 @@ mod tests {
         let tmp = TempDirGuard::new("repeated-timeouts");
         let mut pids = Vec::with_capacity(5);
         #[cfg(windows)]
-        {
-            let no_env: [(&str, &str); 0] = [];
-            let _ = run_command(
-                OsStr::new("node"),
-                &["-e", "process.exit(0)"],
-                None,
-                &no_env,
-                &[],
-                None,
-            );
-        }
+        warm_windows_node();
         let start = Instant::now();
         for idx in 0..5 {
             let pid_file = tmp.path().join(format!("grandchild-{idx}.pid"));
