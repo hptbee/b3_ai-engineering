@@ -6,18 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-
+  fast-gate:
+    name: Fast Feedback Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -26,18 +26,24 @@ jobs:
           toolchain: "1.100.0"
           components: rustfmt, clippy
 
-      - name: Check formatting and lints
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-fast-1.100.0-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('Cargo.toml', 'src/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-fast-1.100.0-${{ hashFiles('Cargo.lock') }}-
+
+      - name: Check formatting, lints, and build debug binary
         run: |
           rustc --version
           cargo clippy --version
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
-
-      - name: Build release binary
-        run: cargo build --release
-
-      - name: Run Rust unit & integration tests
-        run: cargo test
+          cargo build --bin b3
 
       - name: Check static context budget and eval fixtures
         shell: bash
@@ -45,23 +51,149 @@ jobs:
           bash ./scripts/measure-context.sh --strict
           bash ./scripts/validate-evals.sh
 
-      - name: "Run merge-security suite (Windows: b3-guard.sh + b3-guard.ps1; Linux/macOS: native contract via bash)"
-        shell: bash
-        run: |
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            bash ./scripts/validate-merge-security.sh
-          else
-            bash ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
-          fi
+      - name: Run Rust unit tests
+        run: cargo test --lib
 
-      - name: Run Windows PowerShell behavioral suites
-        if: runner.os == 'Windows'
+  linux-verify:
+    name: Linux Verify
+    needs: fast-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # v1/master
+        with:
+          toolchain: "1.100.0"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('Cargo.toml', 'src/**/*.rs', 'tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Run Rust unit & integration tests
+        run: cargo test
+
+      - name: Run merge-security suite (native contract via bash)
+        shell: bash
+        run: bash ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
+
+  macos-verify:
+    name: macOS Verify
+    needs: fast-gate
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # v1/master
+        with:
+          toolchain: "1.100.0"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('Cargo.toml', 'src/**/*.rs', 'tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Run Rust unit & integration tests
+        run: cargo test
+
+      - name: Run merge-security suite (native contract via bash)
+        shell: bash
+        run: bash ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
+
+  windows-build:
+    name: Windows Build & Rust Tests
+    needs: fast-gate
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # v1/master
+        with:
+          toolchain: "1.100.0"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('Cargo.toml', 'src/**/*.rs', 'tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Run Rust unit & integration tests
+        run: cargo test
+
+      - name: Upload Windows release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: b3-windows-release
+          path: target/release/b3.exe
+          retention-days: 1
+
+  windows-suites:
+    name: Windows Suites (${{ matrix.shard }})
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [security, behavioral]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download prebuilt Windows release binary
+        uses: actions/download-artifact@v4
+        with:
+          name: b3-windows-release
+          path: target/release
+
+      - name: Run Windows merge-security suite (b3-guard.sh + b3-guard.ps1)
+        if: matrix.shard == 'security'
+        shell: bash
+        env:
+          B3_BIN: ${{ github.workspace }}/target/release/b3.exe
+        run: |
+          chmod +x target/release/b3.exe || true
+          bash ./scripts/validate-merge-security.sh
+
+      - name: Run Windows PowerShell wrapper, platform & contract suites
+        if: matrix.shard == 'behavioral'
         shell: powershell
+        env:
+          B3_BIN: ${{ github.workspace }}\target\release\b3.exe
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-context.ps1 -Strict
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-ship-product.ps1
+          $timings = @()
           foreach ($suite in @(
+            'scripts/measure-context.ps1',
+            'scripts/smoke-ship-product.ps1',
             'scripts/validate-pr-feedback.ps1',
             'scripts/validate-research-ship.ps1',
             'scripts/validate-ship-behavior.ps1',
@@ -73,6 +205,56 @@ jobs:
             'scripts/validate-context-routing.ps1'
           )) {
             Write-Host "=== Running $suite ==="
-            powershell -NoProfile -ExecutionPolicy Bypass -File $suite
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $t0 = Get-Date
+            if ($suite -eq 'scripts/measure-context.ps1') {
+              powershell -NoProfile -ExecutionPolicy Bypass -File $suite -Strict
+            } else {
+              powershell -NoProfile -ExecutionPolicy Bypass -File $suite
+            }
+            $code = $LASTEXITCODE
+            $sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 2)
+            $timings += [pscustomobject]@{ Suite = $suite; Sec = $sec; Exit = $code }
+            if ($code -ne 0) {
+              $timings | Format-Table -AutoSize
+              Write-Error "Suite failed: $suite (exit $code)"
+              exit $code
+            }
           }
+          $timings | Format-Table -AutoSize
+
+  ci-gate:
+    name: CI Acceptance Gate
+    if: always()
+    needs: [fast-gate, linux-verify, macos-verify, windows-build, windows-suites]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all required jobs succeeded
+        shell: bash
+        env:
+          RES_FAST: ${{ needs.fast-gate.result }}
+          RES_LINUX: ${{ needs.linux-verify.result }}
+          RES_MACOS: ${{ needs.macos-verify.result }}
+          RES_WIN_BUILD: ${{ needs.windows-build.result }}
+          RES_WIN_SUITES: ${{ needs.windows-suites.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for pair in \
+            "fast-gate:${RES_FAST}" \
+            "linux-verify:${RES_LINUX}" \
+            "macos-verify:${RES_MACOS}" \
+            "windows-build:${RES_WIN_BUILD}" \
+            "windows-suites:${RES_WIN_SUITES}"; do
+            name="${pair%%:*}"
+            res="${pair#*:}"
+            echo "Job ${name}: ${res}"
+            if [[ "$res" != "success" ]]; then
+              failed=1
+            fi
+          done
+          if [[ "$failed" -ne 0 ]]; then
+            echo "CI Acceptance Gate FAILED: one or more required jobs did not succeed." >&2
+            exit 1
+          fi
+          echo "CI Acceptance Gate PASSED."
