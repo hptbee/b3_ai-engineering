@@ -375,8 +375,12 @@ fn standalone_verify_provenance_containment_and_large_output() {
     remove_dir_link_only(&junc);
 
     // 3. Relative/nested CWD canonicalization stores repo-relative log_path
-    let abs_rec = repo.join(".b3/ship/verify/relroot.verify");
-    let abs_log = repo.join(".b3/ship/verify/relroot.log");
+    #[cfg(unix)]
+    let canon_repo = fs::canonicalize(&repo).unwrap_or_else(|_| repo.clone());
+    #[cfg(not(unix))]
+    let canon_repo = repo.clone();
+    let abs_rec = canon_repo.join(".b3/ship/verify/relroot.verify");
+    let abs_log = canon_repo.join(".b3/ship/verify/relroot.log");
     let relroot_cmd = if cfg!(windows) {
         "1..40 | ForEach-Object { \"line-$_\" }"
     } else {
@@ -395,7 +399,7 @@ fn standalone_verify_provenance_containment_and_large_output() {
             "--relevant-paths",
             "src/a.ts",
         ],
-        Some(&repo),
+        Some(&canon_repo),
         &[],
         &[],
     );
@@ -1362,6 +1366,7 @@ fn receipt_mode_type_and_submodule_invariants() {
     let r_str = repo.to_str().unwrap();
 
     // 1. chmod +x / -x + core.filemode=true untracked script
+    git_in(&repo, &["config", "core.filemode", "false"]);
     let r_chmod = ".b3/ship/verify/chmod.verify";
     assert_eq!(
         run_b3(&[
@@ -1514,6 +1519,7 @@ fn receipt_mode_type_and_submodule_invariants() {
     );
     fs::remove_file(repo.join("scripts/untr.sh")).unwrap();
     git_in(&repo, &["config", "core.filemode", "false"]);
+    git_in(&repo, &["config", "core.symlinks", "false"]);
 
     // 2. 120000 <-> 100644 index mode transition keeping identical bytes ('scripts/run.sh')
     write_lf(&repo.join("lnk"), "scripts/run.sh");
@@ -2464,7 +2470,7 @@ fn wave_attribution_and_worktree_isolation() {
             "--wave-specs",
             "T1=None;T2=api/a.ts",
             "--wave-reads",
-            "T2=NONE"
+            "T2=None",
         ])
         .0,
         2
