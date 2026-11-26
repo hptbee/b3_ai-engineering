@@ -3,5 +3,7 @@ pub mod freshness;
 pub mod precommit;
 pub mod runs;
 pub mod snapshot;
+pub mod symbol;
 pub mod verify;
+pub mod wave;
 pub mod worktree;

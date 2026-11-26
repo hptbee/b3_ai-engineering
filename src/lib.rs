@@ -125,6 +125,42 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                     &peer_roots,
                     require_isolated,
                 )?,
+                GuardSubcommand::CheckWave {
+                    repo_root,
+                    wave_specs,
+                    wave_reads,
+                    expected_base_sha,
+                    max_concurrency,
+                    partition,
+                    protected_paths,
+                    check_dirty_scope,
+                    ignore_dirty_paths,
+                } => {
+                    return guard::wave::run(
+                        &repo_root,
+                        &wave_specs,
+                        &wave_reads,
+                        &expected_base_sha,
+                        max_concurrency,
+                        partition,
+                        &protected_paths,
+                        check_dirty_scope,
+                        &ignore_dirty_paths,
+                    );
+                }
+                GuardSubcommand::SymbolCheck {
+                    repo_root,
+                    base_sha,
+                    target_ref,
+                    ignore_dirty_paths,
+                } => {
+                    return guard::symbol::run(
+                        &repo_root,
+                        &base_sha,
+                        &target_ref,
+                        &ignore_dirty_paths,
+                    );
+                }
             };
             Ok((out, 0))
         }

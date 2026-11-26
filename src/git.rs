@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use crate::error::{fail, B3Error};
 use crate::fs::{
     has_control_chars, next_tmp_suffix, normalize_path_value, resolve_unresolved_path,
-    test_checkpoint_path, test_secret_path,
+    test_checkpoint_path, test_path_match, test_secret_path,
 };
 use crate::process::{run_command, CmdOutput};
 
@@ -666,6 +666,203 @@ pub fn git_hash_text(
 /// Returns `true` if `s` is a lowercase 40-character hex SHA-1 OID.
 pub fn is_hex40(s: &str) -> bool {
     s.len() == 40 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Checks whether the repository treats paths case-insensitively (`core.ignorecase`).
+pub fn test_repo_case_insensitive(root: &Path) -> bool {
+    if root.is_dir() {
+        let no_env: [(&str, &str); 0] = [];
+        if let Ok(cfg) = run_git(
+            root,
+            &["config", "--bool", "core.ignorecase"],
+            &no_env,
+            None,
+        ) {
+            if cfg.exit_code == 0 {
+                let v = String::from_utf8_lossy(&cfg.stdout)
+                    .trim()
+                    .to_ascii_lowercase();
+                if v == "true" {
+                    return true;
+                }
+                if v == "false" {
+                    return false;
+                }
+            }
+        }
+    }
+    cfg!(windows) || cfg!(target_os = "macos")
+}
+
+pub fn resolve_auto_base_sha(root: &Path, ignored_paths: &[String]) -> Result<String, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    let head_res = run_git(
+        root,
+        &["rev-parse", "--verify", "--quiet", "HEAD"],
+        &no_env,
+        None,
+    )?;
+    let head_sha = String::from_utf8_lossy(&head_res.stdout).trim().to_string();
+    let has_head = head_res.exit_code == 0 && is_hex40(&head_sha);
+
+    let mut candidates = Vec::new();
+    if has_head {
+        candidates.extend(run_git_paths_z(
+            root,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                "HEAD",
+                "--",
+            ],
+            GitZMode::Names,
+            "GIT_ERROR",
+            &no_env,
+        )?);
+    }
+    candidates.extend(run_git_paths_z(
+        root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        GitZMode::Names,
+        "GIT_ERROR",
+        &no_env,
+    )?);
+
+    for p in candidates {
+        if test_checkpoint_path(&p) {
+            continue;
+        }
+        if !ignored_paths.is_empty() && test_path_match(&p, ignored_paths) {
+            continue;
+        }
+        return Ok("HEAD".to_string());
+    }
+
+    if has_head {
+        for r in [
+            "origin/HEAD",
+            "origin/main",
+            "origin/master",
+            "main",
+            "master",
+        ] {
+            let ref_res = run_git(
+                root,
+                &["rev-parse", "--verify", "--quiet", r],
+                &no_env,
+                None,
+            )?;
+            if ref_res.exit_code == 0 {
+                let mb_res = run_git(root, &["merge-base", r, "HEAD"], &no_env, None)?;
+                let mb = String::from_utf8_lossy(&mb_res.stdout).trim().to_string();
+                if mb_res.exit_code == 0 && !mb.is_empty() && mb != head_sha {
+                    return Ok(mb);
+                }
+            }
+        }
+    }
+
+    Ok("HEAD".to_string())
+}
+
+pub fn resolve_auto_base_for_target(
+    root: &Path,
+    target_commit_sha: &str,
+) -> Result<String, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    for r in [
+        "origin/HEAD",
+        "origin/main",
+        "origin/master",
+        "main",
+        "master",
+        "HEAD",
+    ] {
+        let ref_res = run_git(
+            root,
+            &["rev-parse", "--verify", "--quiet", r],
+            &no_env,
+            None,
+        )?;
+        if ref_res.exit_code == 0 {
+            let mb_res = run_git(root, &["merge-base", r, target_commit_sha], &no_env, None)?;
+            let mb = String::from_utf8_lossy(&mb_res.stdout).trim().to_string();
+            if mb_res.exit_code == 0 && !mb.is_empty() && mb != target_commit_sha {
+                return Ok(mb);
+            }
+        }
+    }
+    let parent_spec = format!("{target_commit_sha}^");
+    let par_res = run_git(
+        root,
+        &["rev-parse", "--verify", "--quiet", &parent_spec],
+        &no_env,
+        None,
+    )?;
+    let par = String::from_utf8_lossy(&par_res.stdout).trim().to_string();
+    if par_res.exit_code == 0 && !par.is_empty() {
+        return Ok(par);
+    }
+    Ok(target_commit_sha.to_string())
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedScopeTarget {
+    pub target_ref: String,
+    pub target_commit_sha: String,
+    pub base_sha: String,
+}
+
+/// Shared resolution for `--target-ref` and `--base-sha` (`auto` or explicit rev).
+pub fn resolve_scope_target_and_base(
+    root: &Path,
+    target_ref_raw: &str,
+    base_sha_raw: &str,
+    ignored_paths: &[String],
+    fail_prefix: &str,
+    base_rev_kind: &str,
+) -> Result<ResolvedScopeTarget, B3Error> {
+    let target_trim = target_ref_raw.trim().to_string();
+    let mut target_commit_sha = String::new();
+    if !target_trim.is_empty() {
+        if target_trim.contains('\r') || target_trim.contains('\n') {
+            return Err(fail(
+                format!("{fail_prefix}: invalid --target-ref '{target_trim}'"),
+                1,
+            ));
+        }
+        target_commit_sha =
+            assert_valid_git_rev(root, &target_trim, "commit", fail_prefix, "--target-ref")?;
+    }
+
+    let mut resolved_base = base_sha_raw.trim().to_string();
+    if resolved_base.is_empty() || resolved_base == "auto" {
+        resolved_base = if !target_trim.is_empty() {
+            resolve_auto_base_for_target(root, &target_commit_sha)?
+        } else {
+            resolve_auto_base_sha(root, ignored_paths)?
+        };
+    }
+
+    let valid_base_sha = assert_valid_git_rev(
+        root,
+        &resolved_base,
+        base_rev_kind,
+        fail_prefix,
+        "--base-sha",
+    )?;
+    Ok(ResolvedScopeTarget {
+        target_ref: target_trim,
+        target_commit_sha,
+        base_sha: if base_rev_kind == "commit" {
+            valid_base_sha
+        } else {
+            resolved_base
+        },
+    })
 }
 
 trait OsStrExtHelper {

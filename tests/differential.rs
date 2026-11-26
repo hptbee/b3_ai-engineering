@@ -1076,3 +1076,228 @@ fn differential_check_worktree_matches_powershell() {
     assert_eq!(p_dup, 2);
     assert_eq!(ro_dup, po_dup);
 }
+
+#[test]
+fn differential_check_wave_matches_powershell() {
+    let tmp = TempDirGuard::new("wave");
+    let root = &tmp.path;
+    let base_sha = init_git_repo(root);
+    fs::create_dir_all(root.join("api")).unwrap();
+    fs::create_dir_all(root.join("ui")).unwrap();
+    fs::write(root.join("api/a.ts"), "export const a = 1;\n").unwrap();
+    fs::write(root.join("ui/b.tsx"), "export const b = 2;\n").unwrap();
+    let root_str = root.to_str().unwrap();
+
+    // Disjoint waves -> WAVE_OK
+    let (r0, ro0) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        root_str,
+        "--wave-specs",
+        "T001=api/a.ts;T002=ui/b.tsx",
+    ]);
+    let (p0, po0) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-wave",
+            "-RepoRoot",
+            root_str,
+            "-WaveSpecs",
+            "T001=api/a.ts;T002=ui/b.tsx",
+        ],
+    );
+    assert_eq!(r0, 0);
+    assert_eq!(p0, 0);
+    assert_eq!(ro0, po0);
+
+    // Write-write & write-read conflict -> exit 2 parity
+    let (rc, roc) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        root_str,
+        "--wave-specs",
+        "T001=src/app.txt;T002=api/a.ts",
+        "--wave-reads",
+        "T002=src/app.txt",
+    ]);
+    let (pc, poc) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-wave",
+            "-RepoRoot",
+            root_str,
+            "-WaveSpecs",
+            "T001=src/app.txt;T002=api/a.ts",
+            "-WaveReads",
+            "T002=src/app.txt",
+        ],
+    );
+    assert_eq!(rc, 2);
+    assert_eq!(pc, 2);
+    assert_eq!(roc, poc);
+
+    // Partition with conflicts + max-concurrency=2 + protected-paths rejection
+    let (rp, rop) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        root_str,
+        "--wave-specs",
+        "T001=api/a.ts;T002=ui/b.tsx;T003=docs/guide.md;T004=api/a.ts",
+        "--partition",
+        "--max-concurrency",
+        "2",
+    ]);
+    let (pp, pop) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-wave",
+            "-RepoRoot",
+            root_str,
+            "-WaveSpecs",
+            "T001=api/a.ts;T002=ui/b.tsx;T003=docs/guide.md;T004=api/a.ts",
+            "-Partition",
+            "-MaxConcurrency",
+            "2",
+        ],
+    );
+    assert_eq!(rp, 0);
+    assert_eq!(pp, 0);
+    assert_eq!(rop, pop);
+
+    let (rprot, roprot) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        root_str,
+        "--wave-specs",
+        "T001=docs/guide.md",
+        "--protected-paths",
+        "docs",
+    ]);
+    let (pprot, poprot) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-wave",
+            "-RepoRoot",
+            root_str,
+            "-WaveSpecs",
+            "T001=docs/guide.md",
+            "-ProtectedPaths",
+            "docs",
+        ],
+    );
+    assert_eq!(rprot, 1);
+    assert_eq!(pprot, 1);
+    assert_eq!(roprot, poprot);
+
+    // Dirty scope with ignore-dirty-paths blocking matching task only
+    let (rd, rod) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        root_str,
+        "--wave-specs",
+        "T001=api;T002=src/app.txt",
+        "--expected-base-sha",
+        &base_sha,
+        "--partition",
+        "--check-dirty-scope",
+        "--ignore-dirty-paths",
+        "api,ui",
+    ]);
+    let (pd, pod) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-wave",
+            "-RepoRoot",
+            root_str,
+            "-WaveSpecs",
+            "T001=api;T002=src/app.txt",
+            "-ExpectedBaseSha",
+            &base_sha,
+            "-Partition",
+            "-CheckDirtyScope",
+            "-IgnoreDirtyPaths",
+            "api,ui",
+        ],
+    );
+    assert_eq!(rd, pd);
+    assert_eq!(rod, pod);
+}
+
+#[test]
+fn differential_symbol_check_matches_powershell() {
+    let tmp = TempDirGuard::new("symbol");
+    let root = &tmp.path;
+    init_git_repo(root);
+    fs::write(
+        root.join("src/lib.ts"),
+        "export function dropFn() { return 1; }\nexport function keepFn() { return 2; }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/caller.ts"),
+        "import { dropFn } from './lib';\nexport const x = dropFn();\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/mod.rs"),
+        "pub fn old_rust_fn() -> i32 { 1 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/user.rs"),
+        "pub fn call_it() -> i32 { crate::old_rust_fn() }\n",
+    )
+    .unwrap();
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-m", "add ts and rs symbols"]);
+    let base_sha = git_in(root, &["rev-parse", "HEAD"]);
+    let root_str = root.to_str().unwrap();
+
+    // Remove exported TS and Rust functions while callers still reference them -> SYMBOL_FINDINGS (exit 2)
+    fs::write(
+        root.join("src/lib.ts"),
+        "export function keepFn() { return 2; }\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/mod.rs"), "// removed\n").unwrap();
+
+    let (rc, ro) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+    ]);
+    let (pc, po) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &["symbol-check", "-RepoRoot", root_str, "-BaseSha", &base_sha],
+    );
+    assert_eq!(rc, 2);
+    assert_eq!(pc, 2);
+    assert_eq!(ro, po);
+
+    // Update callers -> SYMBOL_OK (exit 0)
+    fs::write(root.join("src/caller.ts"), "export const x = 42;\n").unwrap();
+    fs::write(root.join("src/user.rs"), "pub fn call_it() -> i32 { 2 }\n").unwrap();
+    let (rc_ok, ro_ok) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+    ]);
+    let (pc_ok, po_ok) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &["symbol-check", "-RepoRoot", root_str, "-BaseSha", &base_sha],
+    );
+    assert_eq!(rc_ok, 0);
+    assert_eq!(pc_ok, 0);
+    assert_eq!(ro_ok, po_ok);
+}

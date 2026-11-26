@@ -78,6 +78,23 @@ pub enum GuardSubcommand {
         peer_roots: String,
         require_isolated: bool,
     },
+    CheckWave {
+        repo_root: String,
+        wave_specs: String,
+        wave_reads: String,
+        expected_base_sha: String,
+        max_concurrency: i32,
+        partition: bool,
+        protected_paths: String,
+        check_dirty_scope: bool,
+        ignore_dirty_paths: String,
+    },
+    SymbolCheck {
+        repo_root: String,
+        base_sha: String,
+        target_ref: String,
+        ignore_dirty_paths: String,
+    },
 }
 
 pub fn help_text() -> &'static str {
@@ -97,6 +114,8 @@ GUARD SUBCOMMANDS:
   verify-run        Execute verification command and write b3-verify-v1 receipt
   verify-check      Validate b3-verify-v1 receipt against working tree or target commit
   check-worktree    Validate worktree identity, isolation, and peer non-overlap
+  check-wave        Validate wave task ownership conflicts, reads, and partition plan
+  symbol-check      Detect removed symbols with dangling refs or orphan internal symbols
   new-run           Create a timestamped run directory and update CURRENT
   resolve-run       Resolve active or named run path
   list-runs         List runs for a namespace
@@ -591,6 +610,102 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                 expected_base_sha,
                 peer_roots,
                 require_isolated,
+            })
+        }
+        "check-wave" => {
+            let mut repo_root = ".".to_string();
+            let mut wave_specs = String::new();
+            let mut wave_reads = String::new();
+            let mut expected_base_sha = String::new();
+            let mut max_concurrency = 3i32;
+            let mut partition = false;
+            let mut protected_paths = String::new();
+            let mut check_dirty_scope = false;
+            let mut ignore_dirty_paths = String::new();
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "WAVE_FAIL")?;
+                    }
+                    "--wave-specs" => {
+                        wave_specs = take_val(rest, &mut i, "--wave-specs", iv, "WAVE_FAIL")?;
+                    }
+                    "--wave-reads" => {
+                        wave_reads = take_val(rest, &mut i, "--wave-reads", iv, "WAVE_FAIL")?;
+                    }
+                    "--expected-base-sha" => {
+                        expected_base_sha =
+                            take_val(rest, &mut i, "--expected-base-sha", iv, "WAVE_FAIL")?;
+                    }
+                    "--max-concurrency" => {
+                        let raw = take_val(rest, &mut i, "--max-concurrency", iv, "WAVE_FAIL")?;
+                        max_concurrency = raw.trim().parse::<i32>().map_err(|_| {
+                            fail("WAVE_FAIL: --max-concurrency must be between 1 and 4", 1)
+                        })?;
+                    }
+                    "--partition" if iv.is_none() => partition = true,
+                    "--protected-paths" => {
+                        protected_paths =
+                            take_val(rest, &mut i, "--protected-paths", iv, "WAVE_FAIL")?;
+                    }
+                    "--check-dirty-scope" if iv.is_none() => check_dirty_scope = true,
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "WAVE_FAIL")?;
+                    }
+                    other => {
+                        return Err(fail(format!("WAVE_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::CheckWave {
+                repo_root,
+                wave_specs,
+                wave_reads,
+                expected_base_sha,
+                max_concurrency,
+                partition,
+                protected_paths,
+                check_dirty_scope,
+                ignore_dirty_paths,
+            })
+        }
+        "symbol-check" => {
+            let mut repo_root = ".".to_string();
+            let mut base_sha = String::new();
+            let mut target_ref = String::new();
+            let mut ignore_dirty_paths = String::new();
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "SYMBOL_FAIL")?;
+                    }
+                    "--base-sha" => {
+                        base_sha = take_val(rest, &mut i, "--base-sha", iv, "SYMBOL_FAIL")?;
+                    }
+                    "--target-ref" => {
+                        target_ref = take_val(rest, &mut i, "--target-ref", iv, "SYMBOL_FAIL")?;
+                    }
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "SYMBOL_FAIL")?;
+                    }
+                    other => {
+                        return Err(fail(format!("SYMBOL_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::SymbolCheck {
+                repo_root,
+                base_sha,
+                target_ref,
+                ignore_dirty_paths,
             })
         }
         other => Err(fail(

@@ -752,3 +752,349 @@ pub fn test_worktree_root_overlap(root_a: &str, root_b: &str, case_insensitive: 
     }
     a.starts_with(&format!("{b_base}/")) || b.starts_with(&format!("{a_base}/"))
 }
+
+/// Noise file predicate matching `Test-NoiseFile` (`b3-guard.ps1`).
+pub fn test_noise_file(path_val: &str) -> bool {
+    let leaf = path_val.rsplit('/').next().unwrap_or("");
+    if matches!(
+        leaf,
+        "package-lock.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "bun.lockb"
+            | "packages.lock.json"
+            | "Cargo.lock"
+            | "poetry.lock"
+    ) {
+        return true;
+    }
+    let lower = leaf.to_ascii_lowercase();
+    lower.ends_with(".min.js")
+        || lower.ends_with(".min.css")
+        || lower.ends_with(".snap")
+        || lower.ends_with(".designer.cs")
+        || lower.ends_with(".g.cs")
+        || lower.ends_with(".map")
+}
+
+/// Test file path predicate matching `Test-TestPath` (`b3-guard.ps1`).
+pub fn test_test_path(path_val: &str) -> bool {
+    let lower = path_val.to_ascii_lowercase();
+    if lower
+        .split('/')
+        .any(|seg| matches!(seg, "test" | "tests" | "__tests__"))
+    {
+        return true;
+    }
+    lower.contains(".test.") || lower.contains(".spec.")
+}
+
+/// Source code file extension predicate matching `Test-CodePath` (`b3-guard.ps1`).
+pub fn test_code_path(path_val: &str) -> bool {
+    matches!(
+        Path::new(path_val).extension().and_then(|e| e.to_str()),
+        Some(
+            "js" | "jsx"
+                | "ts"
+                | "tsx"
+                | "mjs"
+                | "cjs"
+                | "py"
+                | "go"
+                | "cs"
+                | "java"
+                | "rs"
+                | "ps1"
+                | "sh"
+        )
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaveOverlap {
+    None,
+    Equal,
+    Prefix,
+}
+
+/// Computes overlap kind between two normalized wave paths.
+pub fn test_wave_path_overlap(path_a: &str, path_b: &str, case_insensitive: bool) -> WaveOverlap {
+    let (a, b) = if case_insensitive {
+        (path_a.to_ascii_lowercase(), path_b.to_ascii_lowercase())
+    } else {
+        (path_a.to_string(), path_b.to_string())
+    };
+    if a == b {
+        return WaveOverlap::Equal;
+    }
+    if a == "." || b == "." || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/")) {
+        return WaveOverlap::Prefix;
+    }
+    WaveOverlap::None
+}
+
+/// Validates that `norm_path` under `root` is strictly contained and has no
+/// symlink/reparse segments or descendants (skipping `.git`).
+pub fn test_wave_path_contained(root: &Path, norm_path: &str) -> bool {
+    if !root.is_dir() || norm_path.is_empty() || norm_path == "." {
+        return true;
+    }
+    let full = resolve_unresolved_path(root, norm_path);
+    if !test_resolved_path_within_root(root, &full) {
+        return false;
+    }
+    if !test_no_reparse_segments(root, norm_path) {
+        return false;
+    }
+    if full.is_dir() {
+        let mut stack = vec![full];
+        while let Some(dir_cur) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir_cur) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().eq_ignore_ascii_case(".git") {
+                    continue;
+                }
+                let child = entry.path();
+                if is_reparse_or_symlink(&child) {
+                    return false;
+                }
+                if let Ok(meta) = fs::symlink_metadata(&child) {
+                    if meta.is_dir() {
+                        stack.push(child);
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedWavePaths {
+    pub paths: Vec<String>,
+    pub explicit_empty: bool,
+}
+
+fn is_protected_wave_path(norm: &str) -> bool {
+    let low = norm.to_ascii_lowercase();
+    if low == ".b3" || low.starts_with(".b3/") {
+        return true;
+    }
+    if low.split('/').any(|seg| seg == ".git") {
+        return true;
+    }
+    low == ".gitmodules" || low.ends_with("/.gitmodules")
+}
+
+/// Parses and validates a CSV list of wave paths matching `ConvertTo-WavePaths`.
+pub fn convert_to_wave_paths(
+    csv: &str,
+    reject_protected: bool,
+    reject_dot: bool,
+    err_prefix: &str,
+) -> Result<ParsedWavePaths, B3Error> {
+    if csv.is_empty() {
+        return Ok(ParsedWavePaths {
+            paths: Vec::new(),
+            explicit_empty: false,
+        });
+    }
+    let mut cleaned = csv.trim();
+    if cleaned == "[]" || cleaned == "none" {
+        return Ok(ParsedWavePaths {
+            paths: Vec::new(),
+            explicit_empty: true,
+        });
+    }
+    if cleaned.starts_with('[') && cleaned.ends_with(']') && cleaned.len() >= 2 {
+        cleaned = &cleaned[1..cleaned.len() - 1];
+    }
+
+    let mut list = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for part in cleaned.split(',') {
+        if has_control_chars(part) {
+            let trimmed = part.trim();
+            let disp = if trimmed.is_empty() { part } else { trimmed };
+            return Err(fail(format!("{err_prefix}: invalid path '{disp}'"), 1));
+        }
+        let tok = part.trim();
+        if tok.is_empty() || tok == "none" {
+            continue;
+        }
+        let slash = tok.replace('\\', "/");
+        if slash.contains('|')
+            || slash.contains(':')
+            || slash.starts_with('/')
+            || slash.contains("//")
+            || has_dotdot_segment(&slash)
+            || slash.contains('*')
+            || slash.contains('?')
+        {
+            return Err(fail(format!("{err_prefix}: invalid path '{tok}'"), 1));
+        }
+
+        let norm = if slash == "." || slash == "./" {
+            ".".to_string()
+        } else {
+            if slash.contains("/./") || slash.ends_with("/.") {
+                return Err(fail(format!("{err_prefix}: invalid path '{tok}'"), 1));
+            }
+            let stripped = slash.strip_prefix("./").unwrap_or(&slash);
+            let trimmed = stripped.trim_end_matches('/').to_string();
+            if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+                return Err(fail(format!("{err_prefix}: invalid path '{tok}'"), 1));
+            }
+            for seg in trimmed.split('/') {
+                if seg.is_empty()
+                    || seg == "."
+                    || seg == ".."
+                    || seg.ends_with('.')
+                    || seg.ends_with(' ')
+                {
+                    return Err(fail(format!("{err_prefix}: invalid path '{tok}'"), 1));
+                }
+            }
+            trimmed
+        };
+
+        if reject_protected && is_protected_wave_path(&norm) {
+            return Err(fail(
+                format!("{err_prefix}: protected path '{norm}' cannot be worker-owned"),
+                1,
+            ));
+        }
+        if reject_dot && norm == "." {
+            return Err(fail(
+                format!(
+                    "{err_prefix}: protected path '.' cannot be worker-owned in parallel partition"
+                ),
+                1,
+            ));
+        }
+        if seen.insert(norm.clone()) {
+            list.push(norm);
+        }
+    }
+
+    Ok(ParsedWavePaths {
+        paths: list,
+        explicit_empty: false,
+    })
+}
+
+pub struct ParsedWaveTaskMap {
+    pub order: Vec<String>,
+    pub map: std::collections::HashMap<String, Vec<String>>,
+    pub total_paths: usize,
+}
+
+pub fn is_valid_task_id(tid: &str) -> bool {
+    !tid.is_empty()
+        && tid
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Parses `TaskId=path1,path2;...` specs matching `ConvertTo-WaveTaskMap`.
+#[allow(clippy::too_many_arguments)]
+pub fn convert_to_wave_task_map(
+    specs: &str,
+    root: &Path,
+    err_prefix: &str,
+    spec_label: &str,
+    empty_arg_label: &str,
+    reject_protected: bool,
+    reject_dot: bool,
+    allow_empty: bool,
+    allowed_task_ids: Option<&std::collections::HashSet<String>>,
+) -> Result<ParsedWaveTaskMap, B3Error> {
+    let mut order = Vec::new();
+    let mut map = std::collections::HashMap::new();
+    let mut total_paths = 0usize;
+    let repo_exists = root.is_dir();
+    let entry_label = if spec_label == "WaveSpecs" {
+        "entry".to_string()
+    } else {
+        format!("{spec_label} entry")
+    };
+
+    for entry in specs.split(';') {
+        let trim_entry = entry.trim();
+        if trim_entry.is_empty() {
+            continue;
+        }
+        let Some(eq_idx) = trim_entry.find('=') else {
+            return Err(fail(
+                format!("{err_prefix}: invalid {entry_label} '{trim_entry}' (expected TaskId=path1,path2)"),
+                1,
+            ));
+        };
+        let tid = trim_entry[..eq_idx].trim().to_string();
+        let raw_csv = &trim_entry[eq_idx + 1..];
+        if tid.is_empty() {
+            return Err(fail(
+                format!("{err_prefix}: empty task id in '{trim_entry}'"),
+                1,
+            ));
+        }
+        if !is_valid_task_id(&tid) {
+            return Err(fail(format!("{err_prefix}: invalid task id '{tid}'"), 1));
+        }
+        if map.contains_key(&tid) {
+            let dup_suffix = if spec_label == "WaveSpecs" {
+                String::new()
+            } else {
+                format!(" in {spec_label}")
+            };
+            return Err(fail(
+                format!("{err_prefix}: duplicate task id '{tid}'{dup_suffix}"),
+                1,
+            ));
+        }
+        if let Some(allowed) = allowed_task_ids {
+            if !allowed.contains(&tid) {
+                return Err(fail(
+                    format!("{err_prefix}: unknown task id '{tid}' in {spec_label}"),
+                    1,
+                ));
+            }
+        }
+        let parsed = convert_to_wave_paths(raw_csv, reject_protected, reject_dot, err_prefix)?;
+        if parsed.paths.is_empty() && !(allow_empty && parsed.explicit_empty) {
+            return Err(fail(
+                format!("{err_prefix}: task '{tid}' has no owned paths"),
+                1,
+            ));
+        }
+        if repo_exists {
+            for wp in &parsed.paths {
+                if !test_wave_path_contained(root, wp) {
+                    return Err(fail(
+                        format!("{err_prefix}: unsafe symlink or junction alias in path '{wp}'"),
+                        1,
+                    ));
+                }
+            }
+        }
+        total_paths += parsed.paths.len();
+        order.push(tid.clone());
+        map.insert(tid, parsed.paths);
+    }
+
+    if order.is_empty() {
+        return Err(fail(
+            format!("{err_prefix}: no tasks in {empty_arg_label}"),
+            1,
+        ));
+    }
+
+    Ok(ParsedWaveTaskMap {
+        order,
+        map,
+        total_paths,
+    })
+}
