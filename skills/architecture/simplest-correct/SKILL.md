@@ -29,10 +29,16 @@ This skill is **system shape**: extra services, layers, and patterns need a **na
 ## Procedure
 
 1. **List actual requirements** (users, consistency, deploy units, team ownership).
-2. **Default:** modular monolith, explicit modules, one deploy unit.
-3. **Add a layer** only to protect a real boundary (e.g. EF not leaking into API).
-4. **DDD/CQRS/events/microservices:** allow when requirements match (multiple writers, independent scale, separate failure domains) — not as prestige.
-5. **Record the tradeoff** if skipping a richer pattern.
+2. **Pre-implementation proportionality check** (before designing new components or subsystems):
+   - Can existing code, native platform features, or the standard library solve this?
+   - Is the proposed component actually necessary, or can a simpler representation/workflow (e.g., plain Markdown/config file over a custom parser or config framework) satisfy the requirement?
+   - Are we building a reusable subsystem for a one-off convenience feature?
+   - Is every added layer or abstraction justified by a concrete requirement?
+   - Prefer reusing existing components, standard libraries, simple config files, direct workflows, and existing patterns over speculative abstractions.
+3. **Default:** modular monolith, explicit modules, one deploy unit.
+4. **Add a layer or subsystem** only to protect a real boundary (e.g. EF not leaking into API) or meet a concrete requirement (security, correctness, portability, explicit requirements, verified performance constraints — these take precedence over simplicity).
+5. **DDD/CQRS/events/microservices:** allow when requirements match (multiple writers, independent scale, separate failure domains) — not as prestige.
+6. **Record the tradeoff** if skipping a richer pattern.
 
 Personal taste (Clean Architecture everywhere) never beats project requirements or this principle as a strong guideline.
 

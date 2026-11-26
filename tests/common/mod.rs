@@ -40,6 +40,10 @@ impl Drop for TempDirGuard {
     }
 }
 
+pub fn remove_tree_safe(path: &Path) {
+    let _ = b3::fs::remove_dir_tree_safely(path);
+}
+
 pub fn norm_lf(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .replace("\r\n", "\n")
@@ -49,6 +53,10 @@ pub fn norm_lf(bytes: &[u8]) -> String {
 
 pub fn run_b3(args: &[&str]) -> (i32, String, String) {
     run_b3_env(args, None, &[], &[])
+}
+
+pub fn run_b3_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, String) {
+    run_b3_env(args, None, envs, &[])
 }
 
 pub fn run_b3_env(
@@ -155,6 +163,17 @@ pub fn clone_seeded_git_repo(dest: &Path) -> String {
     }
     copy_dir_recursive(seed_dir, dest);
     seed_sha.clone()
+}
+
+pub fn init_git_repo(dir: &Path) -> String {
+    clone_seeded_git_repo(dir)
+}
+
+pub fn create_dir_link(link: &Path, target: &Path) {
+    if let Some(parent) = link.parent() {
+        fs::create_dir_all(parent).expect("create link parent");
+    }
+    b3::adapters::common::create_dir_link(link, target).expect("create_dir_link");
 }
 
 pub fn write_mock_gh(dir: &Path, stem: &str, js_body: &str) -> PathBuf {

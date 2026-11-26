@@ -1,0 +1,6 @@
+id: simplest-correct-config-framework-simple-feature
+artifact: skills/architecture/simplest-correct/SKILL.md
+intent: Catch unnecessary configuration framework for a simple single-flag feature
+input: "We need one optional timeout setting for a CLI helper. Let's introduce a multi-source hierarchical configuration framework with env/file/profile merging and plugin loaders."
+expected_bucket: should-trigger
+notes: Speculative configuration framework without a concrete requirement; direct config or flag is sufficient.

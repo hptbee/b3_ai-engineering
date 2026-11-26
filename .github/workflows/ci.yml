@@ -7,18 +7,17 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  preflight:
-    name: Preflight (fmt, clippy, context, evals)
+  fast-gate:
+    name: Fast Feedback Gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - uses: actions/checkout@v4
 
@@ -27,35 +26,40 @@ jobs:
           toolchain: "1.100.0"
           components: rustfmt, clippy
 
-      - name: Check formatting and lints
-        shell: bash
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-fast-1.100.0-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('Cargo.toml', 'src/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-fast-1.100.0-${{ hashFiles('Cargo.lock') }}-
+
+      - name: Check formatting, lints, and build debug binary
         run: |
           rustc --version
           cargo clippy --version
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
+          cargo build --bin b3
 
-      - name: Build release binary and check strict context budget
-        shell: bash
-        run: |
-          cargo build --release
-          ./target/release/b3 --version
-          ./target/release/b3 context measure --strict
+      - name: Check strict context budget
+        run: ./target/debug/b3 context measure --strict
 
-      - name: Run eval contracts and schema suite
-        shell: bash
-        run: cargo test --test eval_contracts
+      - name: Run Rust unit tests & eval contracts
+        run: cargo test --lib --test eval_contracts
 
   verify:
     name: Verify (${{ matrix.os }})
-    needs: preflight
+    needs: fast-gate
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -64,16 +68,18 @@ jobs:
           toolchain: "1.100.0"
           components: rustfmt, clippy
 
-      - name: Check formatting and lints
-        shell: bash
-        run: |
-          rustc --version
-          cargo clippy --version
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('Cargo.toml', 'src/**/*.rs', 'tests/**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-verify-1.100.0-${{ hashFiles('Cargo.lock') }}-
 
       - name: Build release binary
-        shell: bash
         run: cargo build --release
 
       - name: Run native CLI smoke checks and strict context budget
@@ -89,22 +95,26 @@ jobs:
           "$bin" guard fingerprint --depends-on T2,T1 --scope src/a.rs --criteria ok
 
       - name: Run all native Rust unit & integration tests
-        shell: bash
         run: cargo test
 
-  gate:
-    name: Final Acceptance Gate
-    needs: [preflight, verify]
+  ci-gate:
+    name: CI Acceptance Gate
     if: always()
+    needs: [fast-gate, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 5
-
     steps:
-      - name: Enforce all required CI jobs passed
+      - name: Verify all required jobs succeeded
         shell: bash
+        env:
+          RES_FAST: ${{ needs.fast-gate.result }}
+          RES_VERIFY: ${{ needs.verify.result }}
         run: |
-          if [[ "${{ needs.preflight.result }}" != "success" || "${{ needs.verify.result }}" != "success" ]]; then
-            echo "CI_GATE_FAIL: preflight=${{ needs.preflight.result }} verify=${{ needs.verify.result }}" >&2
+          set -euo pipefail
+          echo "Job fast-gate: ${RES_FAST}"
+          echo "Job verify: ${RES_VERIFY}"
+          if [[ "${RES_FAST}" != "success" || "${RES_VERIFY}" != "success" ]]; then
+            echo "CI Acceptance Gate FAILED: one or more required jobs did not succeed." >&2
             exit 1
           fi
-          echo "CI_GATE_PASS: preflight=success verify=success"
+          echo "CI Acceptance Gate PASSED."
