@@ -4,8 +4,8 @@ Human-facing guide (`0 B` runtime tokens — never loaded by `AGENTS.md`, `rules
 
 ## Architecture & Single-Source Contract
 
-- **Canonical runtime contract:** [`workflows/references/context-routing.md`](../workflows/references/context-routing.md) (`2784 B` LF, cap `<= 3000 B`), loaded **on demand** at most once per phase across the 6 scoped workflows (`/b3-ship`, `/b3-research-ship`, `/b3-review`, `/b3-review-loop`, `/b3-debug`, and `/b3-implement` / `feature-implementation`) **only when triggered** (optional MCPs active, cross-file symbol/impact navigation, or multi-iter `context-cache` reuse) and skipped on native-only / direct-known diffs.
-- **Zero always-on overhead:** `AGENTS.md` and `rules/*.md` do not load or reference context routing or MCP servers (`always_on_total` is `15830 B` across 35 skills, `+0 B` MCP routing tax).
+- **Canonical runtime contract:** [`workflows/references/context-routing.md`](../workflows/references/context-routing.md) (`<= 3000 B` LF cap), loaded **on demand** at most once per phase across the 6 scoped workflows (`/b3-ship`, `/b3-research-ship`, `/b3-review`, `/b3-review-loop`, `/b3-debug`, and `/b3-implement` / `feature-implementation`) **only when triggered** (optional MCPs active, cross-file symbol/impact navigation, or multi-iter `context-cache` reuse) and skipped on native-only / direct-known diffs.
+- **Zero always-on overhead:** `AGENTS.md` and `rules/*.md` do not load or reference context routing or MCP servers (`+0 B` MCP routing tax).
 - **Hint-only subagents:** Orchestrators never paste `context-routing.md` into subagents. `agents/b3-reviewer.md` and `agents/b3-fixer.md` consume only a 1-line `context_hint: tools=<both|codebase-memory|serena|native> cache=<ref|none> delta=<files|none>` and explicitly never reload `context-routing.md`.
 - **Bounded disclosure & short-circuit:** Prefer bounded slices, symbol bodies, and compact summaries — never dump entire repositories, raw graphs, or full files. When target files/symbols are already known (**direct-known short-circuit**), read directly (or apply surgical `serena` edit) and skip graph scans and absent-MCP probing.
 
@@ -65,24 +65,9 @@ In [`workflows/research-ship.md`](../workflows/research-ship.md) and [`workflows
 
 ## Measured Static Context Overhead
 
-Exact canonical LF byte measurements from [`scripts/measure-context.ps1`](../scripts/measure-context.ps1) / [`scripts/measure-context.sh`](../scripts/measure-context.sh) (`-Strict` / `--strict`; token estimates use `(bytes + 2) / 4`):
-
-| Metric | Baseline (`52e77c10`) | Post-Consolidation | Delta | Cap / Gate |
-| --- | --- | --- | --- | --- |
-| `always_on_total` (35 skills) | `16197 B` (~4050 tok) | `15830 B` (~3958 tok) | **`-367 B`** (`+0 B` MCP routing) | `AGENTS.md <= 3600 B`, `frontmatter <= 280 B` |
-| `context_routing` (conditional on-demand) | `2784 B` (~696 tok) | `2784 B` (~696 tok) | `0 B` (`0 B` when skipped) | `<= 3000 B` |
-| `dispatch_naming` (on-demand) | `9176 B` (~2294 tok) | `9124 B` (~2281 tok) | `-52 B` | `<= 9200 B` |
-| `ship_core_load` (`ship.md`) | `10506 B` (`9497 B`) | `9661 B` (`8598 B`) | `-845 B` (`-899 B`) | `ship.md <= 9500 B` |
-| `ship_refs_load` | `5965 B` (~1492 tok) | `5454 B` (~1364 tok) | `-511 B` | `<= 6000 B` |
-| `research_ship_core` (`research-ship.md`) | `10546 B` (`9494 B`) | `8704 B` (`7408 B`) | `-1842 B` (`-2086 B`) | `research-ship.md <= 9500 B` |
-| `research_ship_refs` | `11900 B` (~2975 tok) | `11061 B` (~2765 tok) | `-839 B` | `<= 12000 B` |
-| `review_loop_op` (`strategy.md`) | `7848 B` (`5188 B`) | `7373 B` (`4713 B`) | `-475 B` (`-475 B`) | `strategy.md <= 5200 B` |
-| `review_delta_load` (`b3-reviewer.md`) | `1942 B` (~486 tok) | `1942 B` (~486 tok) | `0 B` | self-contained |
-| `review_iter_subag` (`reviewer + fixer`) | `3709 B` (~927 tok) | `3709 B` (~927 tok) | `0 B` | self-contained |
-| `standalone_cmds` (`plan` / `impl` / `debug` / `review` / `verify`) | `4125` / `5057` / `4022` / `4838` / `3896 B` | `4378` / `4866` / `4265` / `4952` / `3849 B` | `+253` / `-191` / `+243` / `+114` / `-47 B` | `SKILL.md <= 4000 B` |
-| `pr_feedback_load` (`SKILL.md + refs`) | `20844 B` (`3589 + 17255 B`) | `20844 B` (`3589 + 17255 B`) | `0 B` (on-demand) | `SKILL.md <= 4000 B` |
-| `agents_roles_total` (5 roles) | `7905 B` (~1976 tok) | `7905 B` (~1976 tok) | `0 B` | `<= 8500 B` |
-| `warnings` | `0` | `0` | `0` | `0` (`-Strict`) |
+Live exact LF byte counts, `(bytes + 2) / 4` token estimates, and strict cap checks are owned by [`scripts/measure-context.ps1`](../scripts/measure-context.ps1) / [`scripts/measure-context.sh`](../scripts/measure-context.sh) (`-Strict` / `--strict`):
+- Enforce `0` warnings across static caps (`AGENTS.md <= 3600 B`, `SKILL.md <= 4000 B`, skill frontmatter `<= 280 B`, `workflows/ship.md <= 9500 B`, `workflows/research-ship.md <= 9500 B`, `workflows/references/context-routing.md <= 3000 B`, `workflows/references/dispatch-naming.md <= 9200 B`, `review-loop/strategy.md <= 5200 B`, `agents/b3-*.md <= 8500 B`).
+- `AGENTS.md` and `rules/*.md` impose `+0 B` MCP routing tax (`context-routing.md` loads strictly on demand).
 
 Validation: run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-context-routing.ps1` (PS + Git Bash parity across all 6 test groups).
 

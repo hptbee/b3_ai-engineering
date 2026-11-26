@@ -233,20 +233,9 @@ Status as of the catalog after decision-008/009 (subsequently evolved to host-ne
 5. **Capability evals** and extra reviewer agents — only after repeated real-task evidence.
 6. **Owner profile** when Tùng records it (`profiles/` is not invented for symmetry).
 
-## Track C initial baseline vs current state (outside `research/`)
+## Track C initial baseline vs current live indexes (outside `research/`)
 
-Initial Phase 1 / Track C counts (`169` fixtures across Cursor/Codex/Claude). For current 4-host adapters (including Antigravity), `11` commands, `35` total `SKILL.md` files (`24` canonical + `11` command-skills), and the **`299` YAML eval fixtures** + CLI validators, see [`../adapters/README.md`](../adapters/README.md), [`../evals/README.md`](../evals/README.md), and [`../scripts/README.md`](../scripts/README.md).
-
-| Artifact | Location |
-| --- | --- |
-| Host path matrix | `adapters/README.md` |
-| Per-host mapping | `adapters/{cursor,codex,claude,antigravity}/README.md` |
-| Skill symlink script | `adapters/sync-skills.{ps1,sh}` |
-| Skill trigger fixtures | `evals/skills/**` (`148` initial → `176` current YAML cases) |
-| Review-loop scenarios | `evals/review-loop/**` (`15` initial → `26` current YAML cases) |
-| Rule samples | `evals/rules/**` (`6` initial → `10` current YAML cases) |
-| Workflow & command cases | `evals/workflows/**` (`64` YAML cases), `evals/commands/` (`16` YAML cases), `evals/agents/**` (`7` YAML cases) |
-| Fixture validator | `scripts/validate-evals.sh` (`299` total YAML cases) |
+Initial Phase 1 / Track C baseline created `169` initial YAML fixtures (`148` skill triggers, `15` review-loop scenarios, `6` rule samples across Cursor, Codex, and Claude Code) and `sync-skills.{ps1,sh}`. For live host matrices, command/skill counts, eval breakdowns, and CLI validators maintained outside `research/`, see [`../adapters/README.md`](../adapters/README.md), [`../evals/README.md`](../evals/README.md), and [`../scripts/README.md`](../scripts/README.md).
 
 ---
 
