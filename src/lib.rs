@@ -61,6 +61,70 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                     keep,
                     namespace,
                 } => guard::runs::prune(&repo_root, keep, &namespace)?,
+                GuardSubcommand::Precommit {
+                    repo_root,
+                    allowed_paths,
+                    require_verify_receipt,
+                    ignore_dirty_paths,
+                } => guard::precommit::run(
+                    &repo_root,
+                    &allowed_paths,
+                    &require_verify_receipt,
+                    &ignore_dirty_paths,
+                )?,
+                GuardSubcommand::VerifyRun {
+                    repo_root,
+                    verify_cmd,
+                    receipt_path,
+                    task_id,
+                    scope,
+                    relevant_paths,
+                    ignore_dirty_paths,
+                    log_path,
+                } => {
+                    return guard::verify::verify_run(
+                        &repo_root,
+                        &verify_cmd,
+                        &receipt_path,
+                        &task_id,
+                        &scope,
+                        &relevant_paths,
+                        &ignore_dirty_paths,
+                        &log_path,
+                    );
+                }
+                GuardSubcommand::VerifyCheck {
+                    repo_root,
+                    receipt_path,
+                    expected_cmd,
+                    relevant_paths,
+                    ignore_dirty_paths,
+                    target_commit_sha,
+                    has_target_commit_sha,
+                } => {
+                    return guard::verify::verify_check(
+                        &repo_root,
+                        &receipt_path,
+                        &expected_cmd,
+                        &relevant_paths,
+                        &ignore_dirty_paths,
+                        &target_commit_sha,
+                        has_target_commit_sha,
+                    );
+                }
+                GuardSubcommand::CheckWorktree {
+                    repo_root,
+                    expected_root,
+                    expected_base_sha,
+                    peer_roots,
+                    require_isolated,
+                } => guard::worktree::run(
+                    &repo_root,
+                    &expected_root,
+                    &expected_base_sha,
+                    &peer_roots,
+                    require_isolated,
+                )?,
             };
             Ok((out, 0))
         }

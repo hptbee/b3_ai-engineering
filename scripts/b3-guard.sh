@@ -269,6 +269,35 @@ if [[ -z "$CMD" ]]; then
 fi
 shift
 
+if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
+  _b3_bin=""
+  if [[ -n "${B3_BIN:-}" && -f "$B3_BIN" ]]; then
+    _b3_bin="$B3_BIN"
+  elif [[ -f "${_B3_GUARD_DIR}/../target/release/b3.exe" ]]; then
+    _b3_bin="${_B3_GUARD_DIR}/../target/release/b3.exe"
+  elif [[ -f "${_B3_GUARD_DIR}/../target/release/b3" ]]; then
+    _b3_bin="${_B3_GUARD_DIR}/../target/release/b3"
+  fi
+  if [[ -n "$_b3_bin" ]]; then
+    case "$CMD" in
+      fingerprint|check-freshness|snapshot|new-run|resolve-run|list-runs|prune|precommit|verify-run|verify-check|check-worktree)
+        _lpwd="$(pwd -L 2>/dev/null || pwd)"
+        case "$(uname -s 2>/dev/null || true)" in
+          MINGW*|MSYS*|CYGWIN*)
+            if [[ "$_lpwd" =~ ^/([A-Za-z])(/.*)?$ ]]; then
+              _lpwd="${BASH_REMATCH[1]}:${BASH_REMATCH[2]:-/}"
+            elif command -v cygpath >/dev/null 2>&1; then
+              _lpwd="$(cygpath -m "$_lpwd" 2>/dev/null || printf '%s' "$_lpwd")"
+            fi
+            ;;
+        esac
+        _cleanup_tmp
+        B3_LOGICAL_PWD="$_lpwd" exec "$_b3_bin" guard "$CMD" "$@"
+        ;;
+    esac
+  fi
+fi
+
 _B3_IS_WINDOWS=false
 _B3_IS_MACOS=false
 _B3_IS_CASE_INSENSITIVE_FS=false

@@ -5,8 +5,8 @@ use std::sync::OnceLock;
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    has_control_chars, next_tmp_suffix, resolve_unresolved_path, test_checkpoint_path,
-    test_secret_path,
+    has_control_chars, next_tmp_suffix, normalize_path_value, resolve_unresolved_path,
+    test_checkpoint_path, test_secret_path,
 };
 use crate::process::{run_command, CmdOutput};
 
@@ -598,6 +598,74 @@ pub fn new_working_tree_oid(root: &Path, fail_prefix: &str) -> Result<String, B3
         ));
     }
     Ok(tree_sha)
+}
+
+/// Resolves `--git-dir` (or another `--git-*` rev-parse flag) to a normalized slash path.
+pub fn get_canonical_git_path(dir: &Path, rev_flag: &str) -> Option<String> {
+    let no_env: [(&str, &str); 0] = [];
+    let res = run_git(dir, &["rev-parse", rev_flag], &no_env, None).ok()?;
+    let gd = String::from_utf8_lossy(&res.stdout).trim().to_string();
+    if res.exit_code != 0 || gd.is_empty() {
+        return None;
+    }
+    let resolved = resolve_unresolved_path(dir, &gd);
+    Some(normalize_path_value(&resolved.to_string_lossy()))
+}
+
+/// Resolves the active `.git` directory for `root`.
+pub fn get_resolved_git_dir(root: &Path) -> Option<PathBuf> {
+    let no_env: [(&str, &str); 0] = [];
+    let res = run_git(root, &["rev-parse", "--git-dir"], &no_env, None).ok()?;
+    let gd = String::from_utf8_lossy(&res.stdout).trim().to_string();
+    if res.exit_code != 0 || gd.is_empty() {
+        return None;
+    }
+    Some(resolve_unresolved_path(root, &gd))
+}
+
+/// Checks for in-progress merge, rebase, cherry-pick, revert, or bisect operations.
+pub fn test_git_mid_operation(root: &Path) -> Option<&'static str> {
+    let git_dir = get_resolved_git_dir(root)?;
+    [
+        "MERGE_HEAD",
+        "REBASE_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+    ]
+    .into_iter()
+    .find(|&marker| git_dir.join(marker).exists())
+}
+
+/// Computes canonical Git blob OID for UTF-8 `text` via `git hash-object -t blob --stdin`.
+pub fn git_hash_text(
+    root: &Path,
+    text: &str,
+    fail_prefix: &str,
+    fail_desc: &str,
+) -> Result<String, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    let res = run_git(
+        root,
+        &["hash-object", "-t", "blob", "--stdin"],
+        &no_env,
+        Some(text.as_bytes()),
+    )?;
+    let sha = String::from_utf8_lossy(&res.stdout).trim().to_string();
+    if res.exit_code != 0 || !is_hex40(&sha) {
+        return Err(fail(
+            format!("{fail_prefix}: {fail_desc}: {}", git_err_detail(&res)),
+            1,
+        ));
+    }
+    Ok(sha)
+}
+
+/// Returns `true` if `s` is a lowercase 40-character hex SHA-1 OID.
+pub fn is_hex40(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 trait OsStrExtHelper {

@@ -9,6 +9,23 @@ if (-not $RepoRoot) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 $RepoRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepoRoot)
+
+if ($env:B3_USE_LEGACY -ne '1') {
+    $b3Home = Split-Path -Parent $PSScriptRoot
+    $b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
+    $b3Candidate = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
+        $env:B3_BIN
+    } else {
+        $relBin = Join-Path $b3Home "target\release\$b3BinName"
+        if (Test-Path -LiteralPath $relBin -PathType Leaf) { $relBin } else { $null }
+    }
+    if ($b3Candidate) {
+        $b3Args = @('context', 'measure', "--repo-root=$RepoRoot")
+        if ($Strict) { $b3Args += '--strict' }
+        & $b3Candidate @b3Args
+        exit $LASTEXITCODE
+    }
+}
 $rootBase = [IO.Path]::GetPathRoot($RepoRoot)
 if ($RepoRoot -eq '/' -or $RepoRoot -eq '\') {
     $RepoRoot = '/'

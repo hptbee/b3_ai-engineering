@@ -18,6 +18,22 @@ while [[ $# -gt 0 ]]; do
 done
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
 
+if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
+  _b3_bin=""
+  if [[ -n "${B3_BIN:-}" && -f "$B3_BIN" ]]; then
+    _b3_bin="$B3_BIN"
+  elif [[ -f "${SCRIPT_DIR}/../target/release/b3.exe" ]]; then
+    _b3_bin="${SCRIPT_DIR}/../target/release/b3.exe"
+  elif [[ -f "${SCRIPT_DIR}/../target/release/b3" ]]; then
+    _b3_bin="${SCRIPT_DIR}/../target/release/b3"
+  fi
+  if [[ -n "$_b3_bin" ]]; then
+    _b3_args=("context" "measure" "--repo-root=${REPO_ROOT}")
+    $STRICT && _b3_args+=("--strict")
+    exec "$_b3_bin" "${_b3_args[@]}"
+  fi
+fi
+
 raw_lf_bytes() {
   if [[ -f "$1" ]]; then
     tr -d '\r' < "$1" | wc -c | tr -d ' '

@@ -253,7 +253,16 @@ pub fn remove_dir_tree_safely(target: &Path) -> Result<(), B3Error> {
         })?;
 
         if is_reparse_or_symlink(&child_path) {
-            if child_meta.is_dir() {
+            #[cfg(windows)]
+            let is_dir_link = {
+                use std::os::windows::fs::MetadataExt;
+                const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0010;
+                (child_meta.file_attributes() & FILE_ATTRIBUTE_DIRECTORY) != 0
+            };
+            #[cfg(not(windows))]
+            let is_dir_link = child_meta.is_dir();
+
+            if is_dir_link {
                 fs::remove_dir(&child_path).map_err(|e| {
                     fail(
                         format!(
@@ -478,4 +487,268 @@ pub fn sort_ordinal(items: impl IntoIterator<Item = String>, descending: bool) -
         vec.reverse();
     }
     vec
+}
+
+/// Splits a CSV list (optionally `[...]`) and normalizes each item as a slash path.
+pub fn split_csv_list_as_paths(csv: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in split_csv_list(csv) {
+        let norm = normalize_path_value(&item);
+        if !norm.is_empty() && !out.iter().any(|existing| existing == &norm) {
+            out.push(norm);
+        }
+    }
+    out
+}
+
+/// Normalizes a path lexically matching `Normalize-LogicalPath` (`b3-guard.ps1`).
+pub fn normalize_logical_path(raw: &str) -> Result<PathBuf, B3Error> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| fail(format!("WORKTREE_FAIL: unable to get cwd: {e}"), 1))?;
+    let base = if let Ok(lpwd) = std::env::var("B3_LOGICAL_PWD") {
+        let lp = PathBuf::from(lpwd.trim());
+        if lp.is_absolute()
+            && !is_reparse_or_symlink(&cwd)
+            && fs::canonicalize(&lp).ok() == fs::canonicalize(&cwd).ok()
+        {
+            lp
+        } else {
+            cwd
+        }
+    } else {
+        cwd
+    };
+    Ok(resolve_unresolved_path(&base, raw))
+}
+
+/// Returns `true` if `full` lies strictly inside `root`.
+pub fn test_resolved_path_within_root(root: &Path, full: &Path) -> bool {
+    let root_norm = normalize_path_value(&root.to_string_lossy());
+    let full_norm = normalize_path_value(&full.to_string_lossy());
+    if full_norm.is_empty() {
+        return false;
+    }
+    if root_norm.is_empty() || root_norm == "/" {
+        return full_norm.starts_with('/') && full_norm != "/";
+    }
+    if cfg!(windows) {
+        let r_low = root_norm.to_ascii_lowercase();
+        let f_low = full_norm.to_ascii_lowercase();
+        f_low != r_low && f_low.starts_with(&format!("{r_low}/"))
+    } else {
+        full_norm != root_norm && full_norm.starts_with(&format!("{root_norm}/"))
+    }
+}
+
+/// Checks every prefix segment of `rel_slash` under `root` to ensure none is a
+/// symlink or reparse point (or unreadable).
+pub fn test_no_reparse_segments(root: &Path, rel_slash: &str) -> bool {
+    let mut cur = root.to_path_buf();
+    for seg in rel_slash.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        cur.push(seg);
+        match fs::symlink_metadata(&cur) {
+            Ok(_) => {
+                if is_reparse_or_symlink(&cur) {
+                    return false;
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// Scans each component of an absolute path `abs_path` and returns the first
+/// symlink/reparse segment if found.
+pub fn find_reparse_in_path_hierarchy(abs_path: &Path) -> Option<PathBuf> {
+    let mut cur = PathBuf::new();
+    for comp in abs_path.components() {
+        match comp {
+            Component::Prefix(p) => cur.push(p.as_os_str()),
+            Component::RootDir => cur.push(std::path::MAIN_SEPARATOR_STR),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                cur.pop();
+            }
+            Component::Normal(seg) => {
+                cur.push(seg);
+                #[cfg(target_os = "macos")]
+                {
+                    if cur == Path::new("/var") || cur == Path::new("/tmp") {
+                        continue;
+                    }
+                }
+                if is_reparse_or_symlink(&cur) {
+                    return Some(cur);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Validates repo-relative segments (optional `.git` blocking), matching
+/// `Test-SafeRepoPathSegments`.
+pub fn test_safe_repo_path_segments(path_val: &str, block_git: bool) -> bool {
+    if path_val.is_empty() || has_control_chars(path_val) {
+        return false;
+    }
+    let s = path_val.replace('\\', "/");
+    if s.contains(':')
+        || s.starts_with('/')
+        || s.ends_with('/')
+        || s.starts_with('~')
+        || s.contains('*')
+        || s.contains('?')
+    {
+        return false;
+    }
+    for seg in s.split('/') {
+        if seg.is_empty() || seg == "." || seg == ".." || seg.ends_with('.') || seg.ends_with(' ') {
+            return false;
+        }
+    }
+    if block_git && s.split('/').any(|seg| seg.eq_ignore_ascii_case(".git")) {
+        return false;
+    }
+    true
+}
+
+/// Computes repo-relative slash path from `root` and `full`.
+pub fn get_repo_relative_path(root: &Path, full: &Path) -> String {
+    let root_norm = normalize_path_value(&root.to_string_lossy());
+    let full_norm = normalize_path_value(&full.to_string_lossy());
+    if root_norm == "." {
+        return full_norm;
+    }
+    let r_low = root_norm.to_ascii_lowercase();
+    let f_low = full_norm.to_ascii_lowercase();
+    if f_low.starts_with(&format!("{r_low}/")) {
+        return full_norm[root_norm.len() + 1..].to_string();
+    }
+    if f_low == r_low {
+        return ".".to_string();
+    }
+    full_norm
+}
+
+/// Validates and resolves a safe repo-contained write path (`FullPath`, `RelPath`),
+/// matching `Resolve-SafeRepoWritePath`.
+pub fn resolve_safe_repo_write_path(root: &Path, path_arg: &str) -> Option<(PathBuf, String)> {
+    if path_arg.trim().is_empty() || has_control_chars(path_arg) || path_arg.ends_with(' ') {
+        return None;
+    }
+    let trimmed = path_arg.trim();
+    let slash_arg = trimmed.replace('\\', "/");
+    if slash_arg.is_empty()
+        || slash_arg == "."
+        || slash_arg.starts_with('~')
+        || slash_arg.ends_with('/')
+    {
+        return None;
+    }
+    let raw_tail = if cfg!(windows)
+        && slash_arg.len() >= 3
+        && slash_arg.as_bytes()[0].is_ascii_alphabetic()
+        && &slash_arg.as_bytes()[1..3] == b":/"
+    {
+        &slash_arg[3..]
+    } else if let Some(rest) = slash_arg.strip_prefix('/') {
+        rest
+    } else {
+        slash_arg.as_str()
+    };
+    if !test_safe_repo_path_segments(raw_tail, false) {
+        return None;
+    }
+
+    let full = resolve_unresolved_path(root, trimmed);
+    if !test_resolved_path_within_root(root, &full) {
+        return None;
+    }
+    let rel = get_repo_relative_path(root, &full);
+    if rel.is_empty() || Path::new(&rel).is_absolute() || !test_safe_repo_path_segments(&rel, true)
+    {
+        return None;
+    }
+    if !test_no_reparse_segments(root, &rel) {
+        return None;
+    }
+    Some((full, rel))
+}
+
+/// Validates a repo-relative path strictly contained in `root` (blocks wildcards,
+/// brackets, `.git`, reparse segments), matching `Test-ContainedRepoPath`.
+pub fn test_contained_repo_path(root: &Path, path_arg: &str) -> Option<(PathBuf, String)> {
+    if path_arg.is_empty()
+        || has_control_chars(path_arg)
+        || path_arg.trim().is_empty()
+        || path_arg.ends_with(' ')
+    {
+        return None;
+    }
+    let trimmed = path_arg.trim();
+    if trimmed.contains(':') {
+        return None;
+    }
+    let raw_slash = trimmed.replace('\\', "/");
+    if raw_slash.is_empty() || raw_slash.ends_with('/') {
+        return None;
+    }
+    let p = normalize_path_value(trimmed);
+    if p.is_empty()
+        || p == "."
+        || p.starts_with('/')
+        || p.starts_with('~')
+        || p.contains(':')
+        || has_dotdot_segment(&p)
+        || p.contains('*')
+        || p.contains('?')
+        || p.contains('[')
+    {
+        return None;
+    }
+    for seg in p.split('/') {
+        if seg.is_empty() || seg.ends_with('.') || seg.ends_with(' ') {
+            return None;
+        }
+    }
+    if p.split('/').any(|seg| seg.eq_ignore_ascii_case(".git")) {
+        return None;
+    }
+    let full = resolve_unresolved_path(root, &p);
+    if !test_resolved_path_within_root(root, &full) {
+        return None;
+    }
+    if !test_no_reparse_segments(root, &p) {
+        return None;
+    }
+    Some((full, p))
+}
+
+/// Returns `true` if `root_a` and `root_b` are identical or nested inside one another.
+pub fn test_worktree_root_overlap(root_a: &str, root_b: &str, case_insensitive: bool) -> bool {
+    let a = if case_insensitive {
+        root_a.to_ascii_lowercase()
+    } else {
+        root_a.to_string()
+    };
+    let b = if case_insensitive {
+        root_b.to_ascii_lowercase()
+    } else {
+        root_b.to_string()
+    };
+    if a == b {
+        return true;
+    }
+    let a_base = a.trim_end_matches('/');
+    let b_base = b.trim_end_matches('/');
+    if a_base.is_empty() || b_base.is_empty() {
+        return false;
+    }
+    a.starts_with(&format!("{b_base}/")) || b.starts_with(&format!("{a_base}/"))
 }

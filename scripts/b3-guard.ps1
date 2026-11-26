@@ -86,6 +86,71 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:CaptureFailMode = $false
+function Format-WinArg([string]$Arg) {
+    if ($null -eq $Arg) { return '""' }
+    if ($Arg.Length -gt 0 -and $Arg -notmatch '[\s"]') { return $Arg }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $bs = 0
+    for ($i = 0; $i -lt $Arg.Length; $i++) {
+        $ch = $Arg[$i]
+        if ($ch -eq '\') {
+            $bs++
+        } elseif ($ch -eq '"') {
+            [void]$sb.Append(('\' * ($bs * 2 + 1)) + '"')
+            $bs = 0
+        } else {
+            if ($bs -gt 0) { [void]$sb.Append(('\' * $bs)); $bs = 0 }
+            [void]$sb.Append($ch)
+        }
+    }
+    if ($bs -gt 0) { [void]$sb.Append(('\' * ($bs * 2))) }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Invoke-B3Native([string]$ExePath, [string[]]$B3Args) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $ExePath
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $psi.StandardOutputEncoding = $utf8
+    $psi.StandardErrorEncoding = $utf8
+    if ($psi.PSObject.Properties['ArgumentList']) {
+        foreach ($a in $B3Args) { [void]$psi.ArgumentList.Add($a) }
+    } else {
+        $psi.Arguments = (($B3Args | ForEach-Object { Format-WinArg $_ }) -join ' ')
+    }
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    if (-not $proc) { exit 1 }
+    try {
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $proc.WaitForExit()
+        $stdout = $outTask.GetAwaiter().GetResult()
+        $stderr = $errTask.GetAwaiter().GetResult()
+        $outLines = New-Object System.Collections.Generic.List[string]
+        if ($stdout) {
+            $lines = $stdout -split "\r?\n"
+            $end = $lines.Length
+            if ($end -gt 0 -and $lines[$end - 1] -eq '') { $end-- }
+            for ($i = 0; $i -lt $end; $i++) {
+                [void]$outLines.Add($lines[$i])
+            }
+        }
+        if ($stderr) {
+            [Console]::Error.Write($stderr)
+            [Console]::Error.Flush()
+        }
+        return @{ Code = [int]$proc.ExitCode; Lines = $outLines.ToArray() }
+    } finally {
+        $proc.Dispose()
+    }
+}
+
 if ($Command -cne 'fingerprint') {
     $RepoRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepoRoot)
     $repoRootBase = [IO.Path]::GetPathRoot($RepoRoot)
@@ -96,6 +161,87 @@ if ($Command -cne 'fingerprint') {
     } elseif (-not ($repoRootBase -and $RepoRoot.Equals($repoRootBase, [System.StringComparison]::OrdinalIgnoreCase))) {
         $RepoRoot = $RepoRoot.TrimEnd('\', '/')
         if (-not $RepoRoot) { $RepoRoot = '/' }
+    }
+}
+if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshness', 'snapshot', 'new-run', 'resolve-run', 'list-runs', 'prune', 'precommit', 'verify-run', 'verify-check', 'check-worktree')) {
+    $b3Home = Split-Path -Parent $PSScriptRoot
+    $b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
+    $b3Candidate = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
+        $env:B3_BIN
+    } else {
+        $relBin = Join-Path $b3Home "target\release\$b3BinName"
+        if (Test-Path -LiteralPath $relBin -PathType Leaf) { $relBin } else { $null }
+    }
+    if ($b3Candidate) {
+        $fwdArgs = New-Object System.Collections.Generic.List[string]
+        [void]$fwdArgs.Add('guard')
+        [void]$fwdArgs.Add($Command)
+        if ($Command -cne 'fingerprint') {
+            [void]$fwdArgs.Add("--repo-root=$RepoRoot")
+        }
+        switch ($Command) {
+            'fingerprint' {
+                if ($PSBoundParameters.ContainsKey('DependsOn')) { [void]$fwdArgs.Add("--depends-on=$DependsOn") }
+                if ($PSBoundParameters.ContainsKey('Scope')) { [void]$fwdArgs.Add("--scope=$Scope") }
+                if ($PSBoundParameters.ContainsKey('Criteria')) {
+                    foreach ($c in @($Criteria)) { [void]$fwdArgs.Add("--criteria=$c") }
+                }
+            }
+            'check-freshness' {
+                if ($PSBoundParameters.ContainsKey('ApproachAtSha')) { [void]$fwdArgs.Add("--approach-at-sha=$ApproachAtSha") }
+                if ($PSBoundParameters.ContainsKey('TaskBaseSha')) { [void]$fwdArgs.Add("--task-base-sha=$TaskBaseSha") }
+                if ($PSBoundParameters.ContainsKey('WatchedPaths')) { [void]$fwdArgs.Add("--watched-paths=$WatchedPaths") }
+                if ($PSBoundParameters.ContainsKey('OwnedFiles')) { [void]$fwdArgs.Add("--owned-files=$OwnedFiles") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+            }
+            'snapshot' {}
+            'new-run' {
+                if ($PSBoundParameters.ContainsKey('Slug')) { [void]$fwdArgs.Add("--slug=$Slug") }
+                if ($PSBoundParameters.ContainsKey('Timestamp')) { [void]$fwdArgs.Add("--timestamp=$Timestamp") }
+                if ($PSBoundParameters.ContainsKey('Namespace')) { [void]$fwdArgs.Add("--namespace=$Namespace") }
+            }
+            'resolve-run' {
+                if ($PSBoundParameters.ContainsKey('RunId')) { [void]$fwdArgs.Add("--run-id=$RunId") }
+                if ($PSBoundParameters.ContainsKey('Namespace')) { [void]$fwdArgs.Add("--namespace=$Namespace") }
+            }
+            'list-runs' {
+                if ($PSBoundParameters.ContainsKey('Namespace')) { [void]$fwdArgs.Add("--namespace=$Namespace") }
+            }
+            'prune' {
+                if ($PSBoundParameters.ContainsKey('Keep')) { [void]$fwdArgs.Add("--keep=$Keep") }
+                if ($PSBoundParameters.ContainsKey('Namespace')) { [void]$fwdArgs.Add("--namespace=$Namespace") }
+            }
+            'precommit' {
+                if ($PSBoundParameters.ContainsKey('AllowedPaths')) { [void]$fwdArgs.Add("--allowed-paths=$AllowedPaths") }
+                if ($PSBoundParameters.ContainsKey('RequireVerifyReceipt')) { [void]$fwdArgs.Add("--require-verify-receipt=$RequireVerifyReceipt") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+            }
+            'verify-run' {
+                if ($PSBoundParameters.ContainsKey('VerifyCmd')) { [void]$fwdArgs.Add("--verify-cmd=$VerifyCmd") }
+                if ($PSBoundParameters.ContainsKey('ReceiptPath')) { [void]$fwdArgs.Add("--receipt-path=$ReceiptPath") }
+                if ($PSBoundParameters.ContainsKey('TaskId')) { [void]$fwdArgs.Add("--task-id=$TaskId") }
+                if ($PSBoundParameters.ContainsKey('Scope')) { [void]$fwdArgs.Add("--scope=$Scope") }
+                if ($PSBoundParameters.ContainsKey('RelevantPaths')) { [void]$fwdArgs.Add("--relevant-paths=$RelevantPaths") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+                if ($PSBoundParameters.ContainsKey('LogPath')) { [void]$fwdArgs.Add("--log-path=$LogPath") }
+            }
+            'verify-check' {
+                if ($PSBoundParameters.ContainsKey('ReceiptPath')) { [void]$fwdArgs.Add("--receipt-path=$ReceiptPath") }
+                if ($PSBoundParameters.ContainsKey('ExpectedCmd')) { [void]$fwdArgs.Add("--expected-cmd=$ExpectedCmd") }
+                if ($PSBoundParameters.ContainsKey('RelevantPaths')) { [void]$fwdArgs.Add("--relevant-paths=$RelevantPaths") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+                if ($PSBoundParameters.ContainsKey('TargetCommitSha')) { [void]$fwdArgs.Add("--target-commit-sha=$TargetCommitSha") }
+            }
+            'check-worktree' {
+                if ($PSBoundParameters.ContainsKey('ExpectedRoot')) { [void]$fwdArgs.Add("--expected-root=$ExpectedRoot") }
+                if ($PSBoundParameters.ContainsKey('ExpectedBaseSha')) { [void]$fwdArgs.Add("--expected-base-sha=$ExpectedBaseSha") }
+                if ($PSBoundParameters.ContainsKey('PeerRoots')) { [void]$fwdArgs.Add("--peer-roots=$PeerRoots") }
+                if ($RequireIsolated) { [void]$fwdArgs.Add('--require-isolated') }
+            }
+        }
+        $b3Res = Invoke-B3Native $b3Candidate @($fwdArgs.ToArray())
+        foreach ($ln in @($b3Res.Lines)) { Write-Output $ln }
+        exit ([int]$b3Res.Code)
     }
 }
 
@@ -456,29 +602,6 @@ function Test-WorktreeRootOverlap([string]$RootA, [string]$RootB, [bool]$CaseIns
     $bBase = $b.TrimEnd('/')
     if ($aBase -eq '' -or $bBase -eq '') { return $false }
     return ($a.StartsWith("$bBase/", [System.StringComparison]::Ordinal) -or $b.StartsWith("$aBase/", [System.StringComparison]::Ordinal))
-}
-
-function Format-WinArg([string]$Arg) {
-    if ($null -eq $Arg) { return '""' }
-    if ($Arg.Length -gt 0 -and $Arg -notmatch '[\s"]') { return $Arg }
-    $sb = New-Object System.Text.StringBuilder
-    [void]$sb.Append('"')
-    $bs = 0
-    for ($i = 0; $i -lt $Arg.Length; $i++) {
-        $ch = $Arg[$i]
-        if ($ch -eq '\') {
-            $bs++
-        } elseif ($ch -eq '"') {
-            [void]$sb.Append(('\' * ($bs * 2 + 1)) + '"')
-            $bs = 0
-        } else {
-            if ($bs -gt 0) { [void]$sb.Append(('\' * $bs)); $bs = 0 }
-            [void]$sb.Append($ch)
-        }
-    }
-    if ($bs -gt 0) { [void]$sb.Append(('\' * ($bs * 2))) }
-    [void]$sb.Append('"')
-    return $sb.ToString()
 }
 
 function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '', [hashtable]$ExtraEnv = $null, [int]$TimeoutMs = 0) {

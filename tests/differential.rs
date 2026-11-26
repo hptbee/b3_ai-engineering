@@ -56,6 +56,7 @@ fn run_b3(args: &[&str]) -> (i32, String) {
 fn run_ps_script(script_rel: &str, args: &[&str]) -> (i32, String) {
     let script = repo_root().join(script_rel);
     let out: Output = Command::new("powershell")
+        .env("B3_USE_LEGACY", "1")
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
@@ -589,5 +590,489 @@ fn differential_runs_lifecycle_and_link_guards() {
         let (lc2, lo2) = run_b3(&["guard", "prune", "--repo-root", lr_str]);
         assert_eq!(lc2, 1);
         assert_eq!(lo2, "PRUNE_FAIL: runs directory is a link");
+
+        // Nested NTFS directory junction inside a PASS run being pruned must be unlinked without traversing target
+        let nested_tmp = TempDirGuard::new("nestedjunc");
+        let nroot = &nested_tmp.path;
+        let nr_str = nroot.to_str().unwrap();
+        let decoy_target = nroot.join("decoy-outside");
+        fs::create_dir_all(&decoy_target).unwrap();
+        fs::write(decoy_target.join("keep.txt"), "safe\n").unwrap();
+        let (_, old_id) = run_b3(&[
+            "guard",
+            "new-run",
+            "--repo-root",
+            nr_str,
+            "--slug",
+            "old",
+            "--timestamp",
+            "20261126-0900",
+        ]);
+        let old_dir = nroot.join(".b3/ship/runs").join(&old_id);
+        fs::write(old_dir.join("progress.md"), "- run_status: PASS\n").unwrap();
+        let (_, cur_id) = run_b3(&[
+            "guard",
+            "new-run",
+            "--repo-root",
+            nr_str,
+            "--slug",
+            "cur",
+            "--timestamp",
+            "20261126-0901",
+        ]);
+        fs::write(
+            nroot
+                .join(".b3/ship/runs")
+                .join(&cur_id)
+                .join("progress.md"),
+            "- run_status: PASS\n",
+        )
+        .unwrap();
+        let nested_junc = old_dir.join("nested-junc");
+        let mk_nj = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "New-Item -ItemType Junction -Path '{}' -Target '{}' | Out-Null",
+                    nested_junc.display(),
+                    decoy_target.display()
+                ),
+            ])
+            .output()
+            .expect("create nested junction");
+        assert!(mk_nj.status.success(), "nested junction setup failed");
+
+        let (npr_c, npr_o) = run_b3(&["guard", "prune", "--repo-root", nr_str, "--keep", "1"]);
+        assert_eq!(npr_c, 0, "prune with nested junction failed: {npr_o}");
+        assert!(npr_o.contains("PRUNE_OK: 1 removed"));
+        assert!(!old_dir.exists());
+        assert!(decoy_target.join("keep.txt").is_file());
     }
+}
+
+#[test]
+fn differential_verify_run_and_verify_check_match_powershell() {
+    let tmp = TempDirGuard::new("verify");
+    let root = &tmp.path;
+    let head_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Passing verify-run (scoped) compared against PS legacy tree_hash
+    fs::write(root.join("src/app.txt"), "v2\n").unwrap();
+    fs::write(root.join("src/extra.txt"), "untracked\n").unwrap();
+    fs::write(root.join("docs/ignored.md"), "ignored\n").unwrap();
+
+    let (r_c, r_o) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        root_str,
+        "--verify-cmd",
+        "Write-Output 'ok'",
+        "--receipt-path",
+        ".b3/ship/r-rust.txt",
+        "--task-id",
+        "T001",
+        "--scope",
+        "src",
+        "--relevant-paths",
+        "src",
+        "--ignore-dirty-paths",
+        "docs/ignored.md",
+    ]);
+    let (p_c, p_o) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "verify-run",
+            "-RepoRoot",
+            root_str,
+            "-VerifyCmd",
+            "Write-Output 'ok'",
+            "-ReceiptPath",
+            ".b3/ship/r-ps.txt",
+            "-TaskId",
+            "T001",
+            "-Scope",
+            "src",
+            "-RelevantPaths",
+            "src",
+            "-IgnoreDirtyPaths",
+            "docs/ignored.md",
+        ],
+    );
+    assert_eq!(r_c, 0);
+    assert_eq!(p_c, 0);
+    assert!(r_o.starts_with("VERIFY_PASS: exit=0 tree="));
+    assert!(p_o.starts_with("VERIFY_PASS: exit=0 tree="));
+
+    let rust_rec = fs::read_to_string(root.join(".b3/ship/r-rust.txt")).unwrap();
+    let ps_rec = fs::read_to_string(root.join(".b3/ship/r-ps.txt")).unwrap();
+    let extract = |txt: &str, key: &str| -> String {
+        txt.lines()
+            .find_map(|l| l.strip_prefix(&format!("{key}=")))
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(extract(&rust_rec, "schema"), "b3-verify-v1");
+    assert_eq!(extract(&rust_rec, "head_sha"), head_sha);
+    assert_eq!(
+        extract(&rust_rec, "tree_hash"),
+        extract(&ps_rec, "tree_hash")
+    );
+    assert_eq!(extract(&rust_rec, "relevant_paths"), "src");
+    assert_eq!(extract(&rust_rec, "log_path"), "none");
+
+    // Cross-validate receipt: Rust verify-check passes PS receipt and vice versa
+    let (chk_rc, chk_ro) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        root_str,
+        "--receipt-path",
+        ".b3/ship/r-ps.txt",
+        "--expected-cmd",
+        "Write-Output 'ok'",
+        "--relevant-paths",
+        "src",
+        "--ignore-dirty-paths",
+        "docs/ignored.md",
+    ]);
+    assert_eq!(chk_rc, 0);
+    assert!(chk_ro.starts_with("VERIFY_VALID: task=T001 scope=src tree="));
+
+    // Empty --target-commit-sha rejected fail-closed
+    let (emp_c, emp_o) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        root_str,
+        "--receipt-path",
+        ".b3/ship/r-rust.txt",
+        "--target-commit-sha",
+        "   ",
+    ]);
+    assert_eq!(emp_c, 1);
+    assert_eq!(emp_o, "VERIFY_CHECK_FAIL: empty --target-commit-sha");
+
+    // Command mismatch and uncovered path mismatch
+    let (mm_c, mm_o) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        root_str,
+        "--receipt-path",
+        ".b3/ship/r-rust.txt",
+        "--expected-cmd",
+        "other-cmd",
+    ]);
+    assert_eq!(mm_c, 1);
+    assert_eq!(mm_o, "VERIFY_MISMATCH: command mismatch");
+
+    // Target commit check on HEAD fails against dirty working-tree receipt, passes after commit of clean tree
+    let (t_c, t_o) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        root_str,
+        "--receipt-path",
+        ".b3/ship/r-rust.txt",
+        "--target-commit-sha",
+        &head_sha,
+    ]);
+    assert_eq!(t_c, 2);
+    assert!(t_o.starts_with("VERIFY_STALE:"));
+
+    // Modify file in scope -> VERIFY_STALE (exit 2) matching PS
+    fs::write(root.join("src/app.txt"), "v3\n").unwrap();
+    let (st_rc, st_ro) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        root_str,
+        "--receipt-path",
+        ".b3/ship/r-rust.txt",
+    ]);
+    let (st_pc, st_po) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "verify-check",
+            "-RepoRoot",
+            root_str,
+            "-ReceiptPath",
+            ".b3/ship/r-rust.txt",
+        ],
+    );
+    assert_eq!(st_rc, 2);
+    assert_eq!(st_pc, 2);
+    assert_eq!(st_ro, st_po);
+
+    // Failing verify-run writes log file and exits 1
+    let (fail_c, fail_o) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        root_str,
+        "--verify-cmd",
+        "Write-Output 'boom'; exit 3",
+        "--receipt-path",
+        ".b3/ship/r-fail.txt",
+    ]);
+    assert_eq!(fail_c, 1);
+    assert!(fail_o.starts_with("VERIFY_FAIL: exit=3 tree="));
+    assert!(fail_o.contains("boom"));
+    assert!(root.join(".b3/ship/r-fail.txt.log").is_file());
+
+    // Wrapper verify-run preserves inner quotes when forwarding through PowerShell 5.1
+    let wrapper_ps1 = repo_root().join("scripts/b3-guard.ps1");
+    let wrap_out = Command::new("powershell")
+        .env("B3_BIN", b3_bin())
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(&wrapper_ps1)
+        .args([
+            "verify-run",
+            "-RepoRoot",
+            root_str,
+            "-VerifyCmd",
+            "1..40 | ForEach-Object { \"line-$_\" }",
+            "-ReceiptPath",
+            ".b3/ship/r-wrap.txt",
+        ])
+        .output()
+        .expect("run wrapper verify-run");
+    assert_eq!(wrap_out.status.code(), Some(0));
+    let wrap_rec = fs::read_to_string(root.join(".b3/ship/r-wrap.txt")).unwrap();
+    assert_eq!(extract(&wrap_rec, "log_path"), ".b3/ship/r-wrap.txt.log");
+}
+
+#[test]
+fn differential_precommit_matches_powershell() {
+    let tmp = TempDirGuard::new("precommit");
+    let root = &tmp.path;
+    let _head = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Nothing staged
+    let (r0, ro0) = run_b3(&["guard", "precommit", "--repo-root", root_str]);
+    let (p0, po0) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &["precommit", "-RepoRoot", root_str],
+    );
+    assert_eq!(r0, 1);
+    assert_eq!(p0, 1);
+    assert_eq!(ro0, "PRECOMMIT_FAIL: nothing staged");
+    assert_eq!(ro0, po0);
+
+    // Stage allowed file and undeclared file
+    fs::write(root.join("src/app.txt"), "v2\n").unwrap();
+    fs::write(root.join("docs/guide.md"), "doc v2\n").unwrap();
+    git_in(root, &["add", "src/app.txt", "docs/guide.md"]);
+
+    let (ru, ruo) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        root_str,
+        "--allowed-paths",
+        "src",
+    ]);
+    let (pu, puo) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &["precommit", "-RepoRoot", root_str, "-AllowedPaths", "src"],
+    );
+    assert_eq!(ru, 1);
+    assert_eq!(pu, 1);
+    assert_eq!(ruo, puo);
+
+    // Unstage docs/guide.md, verify receipt, check precommit --require-verify-receipt
+    git_in(root, &["reset", "-q", "HEAD", "--", "docs/guide.md"]);
+    let (vc, _) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        root_str,
+        "--verify-cmd",
+        "exit 0",
+        "--receipt-path",
+        ".b3/ship/precommit-rec.txt",
+        "--relevant-paths",
+        "src",
+    ]);
+    assert_eq!(vc, 0);
+
+    let (rp_c, rp_o) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        root_str,
+        "--allowed-paths",
+        "src",
+        "--require-verify-receipt",
+        ".b3/ship/precommit-rec.txt",
+    ]);
+    let (pp_c, pp_o) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "precommit",
+            "-RepoRoot",
+            root_str,
+            "-AllowedPaths",
+            "src",
+            "-RequireVerifyReceipt",
+            ".b3/ship/precommit-rec.txt",
+        ],
+    );
+    assert_eq!(rp_c, 0);
+    assert_eq!(pp_c, 0);
+    assert_eq!(rp_o, "PRECOMMIT_OK");
+    assert_eq!(pp_o, "PRECOMMIT_OK");
+
+    // Secret file without exact allow rejected
+    fs::write(root.join(".env"), "KEY=val\n").unwrap();
+    git_in(root, &["add", "-f", ".env"]);
+    let (rs_c, rs_o) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        root_str,
+        "--allowed-paths",
+        ".,src",
+    ]);
+    let (ps_c, ps_o) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &["precommit", "-RepoRoot", root_str, "-AllowedPaths", ".,src"],
+    );
+    assert_eq!(rs_c, 1);
+    assert_eq!(ps_c, 1);
+    assert_eq!(rs_o, ps_o);
+}
+
+#[test]
+fn differential_check_worktree_matches_powershell() {
+    let tmp = TempDirGuard::new("worktree");
+    let main_repo = tmp.path.join("main");
+    let linked_wt = tmp.path.join("wt-worker");
+    let wt2 = tmp.path.join("wt-peer");
+    fs::create_dir_all(&main_repo).unwrap();
+    let head_sha = init_git_repo(&main_repo);
+    git_in(
+        &main_repo,
+        &["worktree", "add", "-b", "w1", linked_wt.to_str().unwrap()],
+    );
+    git_in(
+        &main_repo,
+        &["worktree", "add", "-b", "w2", wt2.to_str().unwrap()],
+    );
+
+    let main_str = main_repo.to_str().unwrap();
+    let linked_str = linked_wt.to_str().unwrap();
+    let wt2_str = wt2.to_str().unwrap();
+
+    // Valid isolated linked worktree with peer
+    let (rc, ro) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        linked_str,
+        "--expected-root",
+        main_str,
+        "--expected-base-sha",
+        &head_sha,
+        "--peer-roots",
+        wt2_str,
+        "--require-isolated",
+    ]);
+    let (pc, po) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-worktree",
+            "-RepoRoot",
+            linked_str,
+            "-ExpectedRoot",
+            main_str,
+            "-ExpectedBaseSha",
+            &head_sha,
+            "-PeerRoots",
+            wt2_str,
+            "-RequireIsolated",
+        ],
+    );
+    assert_eq!(rc, 0);
+    assert_eq!(pc, 0);
+    assert_eq!(ro, po);
+    assert!(ro.contains("linked=true isolated=true"));
+
+    // Parent root reused when --require-isolated is set -> exit 2 parity
+    let (r_bad, ro_bad) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        main_str,
+        "--expected-root",
+        main_str,
+        "--require-isolated",
+    ]);
+    let (p_bad, po_bad) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-worktree",
+            "-RepoRoot",
+            main_str,
+            "-ExpectedRoot",
+            main_str,
+            "-RequireIsolated",
+        ],
+    );
+    assert_eq!(r_bad, 2);
+    assert_eq!(p_bad, 2);
+    assert_eq!(ro_bad, po_bad);
+
+    // Base SHA mismatch -> exit 2 parity
+    let (r_bm, ro_bm) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        linked_str,
+        "--expected-base-sha",
+        "0000000000000000000000000000000000000000",
+    ]);
+    let (p_bm, po_bm) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-worktree",
+            "-RepoRoot",
+            linked_str,
+            "-ExpectedBaseSha",
+            "0000000000000000000000000000000000000000",
+        ],
+    );
+    assert_eq!(r_bm, 2);
+    assert_eq!(p_bm, 2);
+    assert_eq!(ro_bm, po_bm);
+
+    // Duplicate peer root -> exit 2 parity
+    let (r_dup, ro_dup) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        linked_str,
+        "--peer-roots",
+        linked_str,
+    ]);
+    let (p_dup, po_dup) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "check-worktree",
+            "-RepoRoot",
+            linked_str,
+            "-PeerRoots",
+            linked_str,
+        ],
+    );
+    assert_eq!(r_dup, 2);
+    assert_eq!(p_dup, 2);
+    assert_eq!(ro_dup, po_dup);
 }
