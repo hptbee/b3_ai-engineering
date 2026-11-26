@@ -290,7 +290,7 @@ fn flatten_pages(parsed: &JsonValue) -> Vec<&JsonValue> {
     out
 }
 
-/// Executes `b3 pr verify` mirroring `scripts/b3-github-verify.{ps1,sh}` + `b3-github-verify.mjs`.
+/// Executes `b3 pr verify` GitHub PR pre-merge / post-merge verification.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     mode: &str,

@@ -75,7 +75,7 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 - **Standalone commands** ([`commands/README.md`](commands/README.md), `11` commands): `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-verify`.
 - **Single-pass `/b3-review`** ([`commands/b3-review.md`](commands/b3-review.md) / [`code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): local diff/branch review, read-only GitHub PR inspection, or optional `--post` via [`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md).
-- **PR feedback (`/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`)** ([`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md)): single-writer PR thread/comment lifecycle via `scripts/b3-pr-github.{ps1,sh}` (`scripts/lib/b3-gh-exec.mjs`).
+- **PR feedback (`/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`)** ([`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md)): single-writer PR thread/comment lifecycle via native `b3 pr` (`scripts/b3-pr-github.{ps1,sh}`).
 - **Iterative `/b3-review-loop`** ([`review-loop/strategy.md`](review-loop/strategy.md)): self-sufficient loop orchestrator; normative contracts in [`review-loop/spec.md`](review-loop/spec.md) and [`review-loop/models.md`](review-loop/models.md).
 
 ## Full lifecycles (`/b3-ship` & `/b3-research-ship`)

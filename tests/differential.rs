@@ -56,7 +56,7 @@ fn run_b3(args: &[&str]) -> (i32, String) {
 fn run_ps_script(script_rel: &str, args: &[&str]) -> (i32, String) {
     let script = repo_root().join(script_rel);
     let out: Output = Command::new("powershell")
-        .env("B3_USE_LEGACY", "1")
+        .env("B3_BIN", b3_bin())
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
@@ -2418,7 +2418,7 @@ fn differential_pr_verify_matches_node() {
 
         let ps_path = repo_root().join("scripts/b3-github-verify.ps1");
         let p_out = Command::new("powershell")
-            .env("B3_USE_LEGACY", "1")
+            .env("B3_BIN", b3_bin())
             .env("B3_GH_BIN", gh_cmd_str)
             .env("B3_MOCK_MODE", mock_env)
             .arg("-NoProfile")
@@ -2428,7 +2428,7 @@ fn differential_pr_verify_matches_node() {
             .arg(&ps_path)
             .args(["-Mode", mode_val, "-RepoRoot", root_str, "-PrNumber", "42"])
             .output()
-            .expect("run legacy ps verify");
+            .expect("run thin ps verify wrapper");
         let p_res = (
             p_out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&p_out.stdout)
@@ -2598,7 +2598,7 @@ process.exit(1);
     let init_state = format!(
         "{{\"head\":\"{fix_sha}\",\"seq\":100,\"thread\":{{\"id\":\"PRRT_1\",\"isResolved\":false,\"path\":\"src/app.txt\",\"comments\":[]}},\"issueComments\":[],\"reviews\":[]}}"
     );
-    let mjs_path = repo_root().join("scripts/lib/b3-pr-github.mjs");
+    let ps_adapter = repo_root().join("scripts/b3-pr-github.ps1");
 
     let run_pair = |case_tag: &str, args: &[&str]| -> ((i32, String), (i32, String)) {
         let st_r = fixtures.join(format!("st-r-{case_tag}.json"));
@@ -2628,13 +2628,18 @@ process.exit(1);
         if state_dir.exists() {
             fs::remove_dir_all(&state_dir).unwrap();
         }
-        let n_out = Command::new("node")
+        let n_out = Command::new("powershell")
+            .env("B3_BIN", b3_bin())
             .env("B3_GH_BIN", gh_cmd_str)
             .env("MOCK_STATE_FILE", &st_n)
-            .arg(&mjs_path)
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(&ps_adapter)
             .args(args)
             .output()
-            .expect("run node b3-pr-github.mjs");
+            .expect("run ps b3-pr-github.ps1 wrapper");
         let n_res = (
             n_out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&n_out.stdout)
@@ -2829,7 +2834,6 @@ fn differential_sync_and_install_product_match_powershell() {
             &b3_home.join("adapters/command-skills"),
             &fx.join("adapters/command-skills"),
         );
-        copy_dir(&b3_home.join("adapters/lib"), &fx.join("adapters/lib"));
         fs::copy(
             b3_home.join("adapters/sync-skills.ps1"),
             fx.join("adapters/sync-skills.ps1"),
@@ -2860,7 +2864,7 @@ fn differential_sync_and_install_product_match_powershell() {
         .unwrap();
     assert_eq!(r_ag.status.code(), Some(0));
     let p_ag = Command::new("powershell")
-        .env("B3_USE_LEGACY", "1")
+        .env("B3_BIN", b3_bin())
         .env("B3_MODELS_PERSONAL", &mod_p)
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
@@ -2922,9 +2926,9 @@ fn differential_sync_and_install_product_match_powershell() {
         .unwrap();
     assert_eq!(r_cx_v.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&r_cx_v.stdout).contains("verify ok:"));
-    // Confirm PowerShell itself sees the created junction identically via legacy -VerifyOnly
+    // Confirm PowerShell wrapper sees the created junction identically via -VerifyOnly
     let p_cx_v = Command::new("powershell")
-        .env("B3_USE_LEGACY", "1")
+        .env("B3_BIN", b3_bin())
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
@@ -2961,7 +2965,7 @@ fn differential_sync_and_install_product_match_powershell() {
         .unwrap();
     assert_eq!(r_ip.status.code(), Some(0));
     let p_ip = Command::new("powershell")
-        .env("B3_USE_LEGACY", "1")
+        .env("B3_BIN", b3_bin())
         .env("B3_MODELS_PERSONAL", &mod_pp)
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
@@ -3026,7 +3030,7 @@ fn differential_install_global_cursor_and_antigravity_match_powershell() {
                 .output()
                 .unwrap();
             let p_out = Command::new("powershell")
-                .env("B3_USE_LEGACY", "1")
+                .env("B3_BIN", b3_bin())
                 .env("USERPROFILE", ps_home)
                 .arg("-NoProfile")
                 .arg("-ExecutionPolicy")
@@ -3072,20 +3076,6 @@ fn differential_install_global_cursor_and_antigravity_match_powershell() {
         let ((rc, ro), (pc, po)) = run_pair(action, &uh_r, &uh_p);
         assert_eq!(rc, 0, "rust failed for {action}: {ro}");
         assert_eq!(pc, 0, "ps failed for {action}: {po}");
-        if matches!(action, "install" | "verify" | "update") {
-            let actual_bytes =
-                fs::metadata(uh_r.join(".gemini/config/plugins/b3-ai-engineering/rules/AGENTS.md"))
-                    .unwrap()
-                    .len();
-            let ro_norm = ro.replace(&format!("rules_bytes={actual_bytes}"), "rules_bytes=N");
-            // PS legacy counts CRLF inside its source-file here-string before Write-Utf8NoBom strips \r.
-            let po_norm = po.replace(
-                &format!("rules_bytes={}", actual_bytes + 6),
-                "rules_bytes=N",
-            );
-            assert_eq!(ro_norm, po_norm, "stdout mismatch for action={action}");
-        } else {
-            assert_eq!(ro, po, "stdout mismatch for action={action}");
-        }
+        assert_eq!(ro, po, "stdout mismatch for action={action}");
     }
 }
