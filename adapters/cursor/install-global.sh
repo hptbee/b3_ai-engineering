@@ -45,6 +45,33 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_b3_repo_default="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
+  _b3_bin=""
+  if [[ -n "${B3_BIN:-}" && -f "$B3_BIN" ]]; then
+    _b3_bin="$B3_BIN"
+  elif [[ -f "${_b3_repo_default}/target/release/b3.exe" ]]; then
+    _b3_bin="${_b3_repo_default}/target/release/b3.exe"
+  elif [[ -f "${_b3_repo_default}/target/release/b3" ]]; then
+    _b3_bin="${_b3_repo_default}/target/release/b3"
+  fi
+  if [[ -n "$_b3_bin" ]]; then
+    _eff_home="${B3_HOME:-$_b3_repo_default}"
+    _ch_arg="$CURSOR_HOME"
+    _uh_arg="$USER_HOME"
+    if command -v cygpath >/dev/null 2>&1; then
+      _eff_home="$(cygpath -m "$_eff_home" 2>/dev/null || printf '%s' "$_eff_home")"
+      [[ -z "$_ch_arg" ]] || _ch_arg="$(cygpath -m "$_ch_arg" 2>/dev/null || printf '%s' "$_ch_arg")"
+      [[ -z "$_uh_arg" ]] || _uh_arg="$(cygpath -m "$_uh_arg" 2>/dev/null || printf '%s' "$_uh_arg")"
+    fi
+    _cur_args=("install" "cursor" "--action" "$ACTION" "--b3-home" "$_eff_home")
+    [[ -z "$_ch_arg" ]] || _cur_args+=("--cursor-home" "$_ch_arg")
+    [[ -z "$_uh_arg" ]] || _cur_args+=("--user-home" "$_uh_arg")
+    if $DRY_RUN; then _cur_args+=("--dry-run"); fi
+    if $FORCE; then _cur_args+=("--force"); fi
+    exec "$_b3_bin" "${_cur_args[@]}"
+  fi
+fi
 # shellcheck source=../lib/global-common.sh
 source "${SCRIPT_DIR}/../lib/global-common.sh"
 

@@ -13,6 +13,72 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($env:B3_USE_LEGACY -ne '1') {
+    $b3RepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
+    $b3Candidate = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
+        $env:B3_BIN
+    } else {
+        $relBin = Join-Path $b3RepoRoot "target\release\$b3BinName"
+        if (Test-Path -LiteralPath $relBin -PathType Leaf) { $relBin } else { $null }
+    }
+    if ($b3Candidate) {
+        $effectiveHome = if ($B3Home) { $B3Home } else { $b3RepoRoot }
+        $fwdArgs = New-Object System.Collections.Generic.List[string]
+        [void]$fwdArgs.Add('install')
+        [void]$fwdArgs.Add('cursor')
+        [void]$fwdArgs.Add("--action=$Action")
+        [void]$fwdArgs.Add("--b3-home=$effectiveHome")
+        if ($CursorHome) { [void]$fwdArgs.Add("--cursor-home=$CursorHome") }
+        if ($UserHome) { [void]$fwdArgs.Add("--user-home=$UserHome") }
+        if ($DryRun) { [void]$fwdArgs.Add('--dry-run') }
+        if ($Force) { [void]$fwdArgs.Add('--force') }
+
+        $psiB = New-Object System.Diagnostics.ProcessStartInfo
+        $psiB.FileName = $b3Candidate
+        $psiB.UseShellExecute = $false
+        $psiB.RedirectStandardOutput = $true
+        $psiB.RedirectStandardError = $true
+        $psiB.CreateNoWindow = $true
+        $utf8B = New-Object System.Text.UTF8Encoding($false)
+        $psiB.StandardOutputEncoding = $utf8B
+        $psiB.StandardErrorEncoding = $utf8B
+        if ($psiB.PSObject.Properties['ArgumentList']) {
+            foreach ($fa in $fwdArgs) { [void]$psiB.ArgumentList.Add($fa) }
+        } else {
+            $psiB.Arguments = (($fwdArgs | ForEach-Object {
+                if ($null -eq $_ -or $_.Length -eq 0) { '""' }
+                elseif ($_ -match '[\s"]') { '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }
+                else { $_ }
+            }) -join ' ')
+        }
+        $pB = [System.Diagnostics.Process]::Start($psiB)
+        if (-not $pB) { exit 1 }
+        try {
+            $eBTask = $pB.StandardError.ReadToEndAsync()
+            $oBTask = $pB.StandardOutput.ReadToEndAsync()
+            $pB.WaitForExit()
+            $oBTxt = $oBTask.GetAwaiter().GetResult()
+            $eBTxt = $eBTask.GetAwaiter().GetResult()
+            $ecB = [int]$pB.ExitCode
+            if ($oBTxt) {
+                $linesB = $oBTxt -split "\r?\n"
+                $endB = $linesB.Length
+                if ($endB -gt 0 -and $linesB[$endB - 1] -eq '') { $endB-- }
+                for ($ib = 0; $ib -lt $endB; $ib++) { Write-Output $linesB[$ib] }
+            }
+            if ($eBTxt) {
+                [Console]::Error.Write($eBTxt)
+                [Console]::Error.Flush()
+            }
+            exit $ecB
+        } finally {
+            $pB.Dispose()
+        }
+    }
+}
+
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\global-common.ps1')
 
 function Check-CrossHostCoexistence([string]$UserHomeDir, [string[]]$SkillNames) {

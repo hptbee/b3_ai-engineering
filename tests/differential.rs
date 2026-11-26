@@ -2990,3 +2990,102 @@ fn differential_sync_and_install_product_match_powershell() {
             .replace("\r\n", "\n")
     );
 }
+
+#[test]
+fn differential_install_global_cursor_and_antigravity_match_powershell() {
+    let tmp = TempDirGuard::new("global-diff");
+    let b3_home = repo_root();
+    let b3_home_str = b3_home.to_str().unwrap();
+    let gl_ps = b3_home.join("adapters/install-global.ps1");
+
+    let run_pair =
+        |action: &str, rust_home: &Path, ps_home: &Path| -> ((i32, String), (i32, String)) {
+            let r_cur = rust_home.join(".cursor");
+            let r_ag = rust_home.join(".gemini/config/plugins/b3-ai-engineering");
+            let p_cur = ps_home.join(".cursor");
+            let p_ag = ps_home.join(".gemini/config/plugins/b3-ai-engineering");
+
+            let r_out = Command::new(b3_bin())
+                .env("USERPROFILE", rust_home)
+                .args([
+                    "install",
+                    "global",
+                    "--action",
+                    action,
+                    "--host",
+                    "all",
+                    "--b3-home",
+                    b3_home_str,
+                    "--cursor-home",
+                    r_cur.to_str().unwrap(),
+                    "--plugin-root",
+                    r_ag.to_str().unwrap(),
+                    "--user-home",
+                    rust_home.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            let p_out = Command::new("powershell")
+                .env("B3_USE_LEGACY", "1")
+                .env("USERPROFILE", ps_home)
+                .arg("-NoProfile")
+                .arg("-ExecutionPolicy")
+                .arg("Bypass")
+                .arg("-File")
+                .arg(&gl_ps)
+                .args([
+                    "-Action",
+                    action,
+                    "-HostName",
+                    "all",
+                    "-B3Home",
+                    b3_home_str,
+                    "-CursorHome",
+                    p_cur.to_str().unwrap(),
+                    "-AntigravityPluginRoot",
+                    p_ag.to_str().unwrap(),
+                    "-UserHome",
+                    ps_home.to_str().unwrap(),
+                ])
+                .output()
+                .unwrap();
+            let r_str = String::from_utf8_lossy(&r_out.stdout)
+                .replace(rust_home.to_str().unwrap(), "UHOME")
+                .replace(&rust_home.to_string_lossy().replace('\\', "/"), "UHOME_FWD")
+                .replace("\r\n", "\n");
+            let p_str = String::from_utf8_lossy(&p_out.stdout)
+                .replace(ps_home.to_str().unwrap(), "UHOME")
+                .replace(&ps_home.to_string_lossy().replace('\\', "/"), "UHOME_FWD")
+                .replace("\r\n", "\n");
+            (
+                (r_out.status.code().unwrap_or(-1), r_str),
+                (p_out.status.code().unwrap_or(-1), p_str),
+            )
+        };
+
+    let uh_r = tmp.path.join("home-rust");
+    let uh_p = tmp.path.join("home-ps");
+    fs::create_dir_all(&uh_r).unwrap();
+    fs::create_dir_all(&uh_p).unwrap();
+
+    for action in ["install", "verify", "update", "uninstall"] {
+        let ((rc, ro), (pc, po)) = run_pair(action, &uh_r, &uh_p);
+        assert_eq!(rc, 0, "rust failed for {action}: {ro}");
+        assert_eq!(pc, 0, "ps failed for {action}: {po}");
+        if matches!(action, "install" | "verify" | "update") {
+            let actual_bytes =
+                fs::metadata(uh_r.join(".gemini/config/plugins/b3-ai-engineering/rules/AGENTS.md"))
+                    .unwrap()
+                    .len();
+            let ro_norm = ro.replace(&format!("rules_bytes={actual_bytes}"), "rules_bytes=N");
+            // PS legacy counts CRLF inside its source-file here-string before Write-Utf8NoBom strips \r.
+            let po_norm = po.replace(
+                &format!("rules_bytes={}", actual_bytes + 6),
+                "rules_bytes=N",
+            );
+            assert_eq!(ro_norm, po_norm, "stdout mismatch for action={action}");
+        } else {
+            assert_eq!(ro, po, "stdout mismatch for action={action}");
+        }
+    }
+}

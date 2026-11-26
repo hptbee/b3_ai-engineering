@@ -30,6 +30,32 @@ pub enum InstallSubcommand {
         dry_run: bool,
         force: bool,
     },
+    Cursor {
+        action: String,
+        cursor_home: String,
+        b3_home: String,
+        user_home: String,
+        dry_run: bool,
+        force: bool,
+    },
+    Antigravity {
+        action: String,
+        plugin_root: String,
+        b3_home: String,
+        user_home: String,
+        dry_run: bool,
+        force: bool,
+    },
+    Global {
+        action: String,
+        host_name: String,
+        b3_home: String,
+        cursor_home: String,
+        plugin_root: String,
+        user_home: String,
+        dry_run: bool,
+        force: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,7 +266,7 @@ USAGE:
   b3 context measure [--repo-root <path>] [--strict]
   b3 pr <verify|fetch|reconcile|reply|resolve|comment> [flags]
   b3 sync --host cursor|codex|claude|antigravity [--repo-root <dir>] [--dry-run] [--verify-only] [--force]
-  b3 install product --product-root <dir> [--b3-home <dir>] [--host cursor|codex|claude|antigravity|all] [--dry-run] [--force]
+  b3 install <product|cursor|antigravity|global> [flags]
   b3 guard <subcommand> [flags]
 
 GUARD SUBCOMMANDS:
@@ -357,11 +383,183 @@ fn parse_install(args: &[String]) -> Result<InstallSubcommand, B3Error> {
     }
     match args[0].as_str() {
         "product" => parse_install_product(&args[1..]),
+        "cursor" => parse_install_cursor(&args[1..]),
+        "antigravity" => parse_install_antigravity(&args[1..]),
+        "global" => parse_install_global(&args[1..]),
         other => Err(fail(
             format!("INSTALL_FAIL: unknown install subcommand '{other}'"),
             1,
         )),
     }
+}
+
+fn parse_install_cursor(rest: &[String]) -> Result<InstallSubcommand, B3Error> {
+    let mut action = "install".to_string();
+    let mut action_set = false;
+    let mut cursor_home = String::new();
+    let mut b3_home = String::new();
+    let mut user_home = String::new();
+    let mut dry_run = false;
+    let mut force = false;
+    let mut i = 0usize;
+    while i < rest.len() {
+        let (flag, iv) = parse_opt(&rest[i]);
+        match flag {
+            pos @ ("install" | "update" | "verify" | "uninstall") if iv.is_none() => {
+                if action_set {
+                    return Err(fail(format!("error: duplicate action '{pos}'"), 1));
+                }
+                action = pos.to_string();
+                action_set = true;
+            }
+            "--action" | "-Action" => {
+                let v = take_val(rest, &mut i, "--action", iv, "INSTALL_FAIL")?;
+                if action_set {
+                    return Err(fail(format!("error: duplicate action '{v}'"), 1));
+                }
+                action = v;
+                action_set = true;
+            }
+            "--cursor-home" | "-CursorHome" => {
+                cursor_home = take_val(rest, &mut i, "--cursor-home", iv, "INSTALL_FAIL")?;
+            }
+            "--b3-home" | "-B3Home" => {
+                b3_home = take_val(rest, &mut i, "--b3-home", iv, "INSTALL_FAIL")?;
+            }
+            "--user-home" | "-UserHome" => {
+                user_home = take_val(rest, &mut i, "--user-home", iv, "INSTALL_FAIL")?;
+            }
+            "--dry-run" | "-DryRun" if iv.is_none() => dry_run = true,
+            "--force" | "-Force" if iv.is_none() => force = true,
+            other => return Err(fail(format!("INSTALL_FAIL: unknown option '{other}'"), 1)),
+        }
+        i += 1;
+    }
+    Ok(InstallSubcommand::Cursor {
+        action,
+        cursor_home,
+        b3_home,
+        user_home,
+        dry_run,
+        force,
+    })
+}
+
+fn parse_install_antigravity(rest: &[String]) -> Result<InstallSubcommand, B3Error> {
+    let mut action = "install".to_string();
+    let mut action_set = false;
+    let mut plugin_root = String::new();
+    let mut b3_home = String::new();
+    let mut user_home = String::new();
+    let mut dry_run = false;
+    let mut force = false;
+    let mut i = 0usize;
+    while i < rest.len() {
+        let (flag, iv) = parse_opt(&rest[i]);
+        match flag {
+            pos @ ("install" | "update" | "verify" | "uninstall") if iv.is_none() => {
+                if action_set {
+                    return Err(fail(format!("error: duplicate action '{pos}'"), 1));
+                }
+                action = pos.to_string();
+                action_set = true;
+            }
+            "--action" | "-Action" => {
+                let v = take_val(rest, &mut i, "--action", iv, "INSTALL_FAIL")?;
+                if action_set {
+                    return Err(fail(format!("error: duplicate action '{v}'"), 1));
+                }
+                action = v;
+                action_set = true;
+            }
+            "--plugin-root" | "-PluginRoot" => {
+                plugin_root = take_val(rest, &mut i, "--plugin-root", iv, "INSTALL_FAIL")?;
+            }
+            "--b3-home" | "-B3Home" => {
+                b3_home = take_val(rest, &mut i, "--b3-home", iv, "INSTALL_FAIL")?;
+            }
+            "--user-home" | "-UserHome" => {
+                user_home = take_val(rest, &mut i, "--user-home", iv, "INSTALL_FAIL")?;
+            }
+            "--dry-run" | "-DryRun" if iv.is_none() => dry_run = true,
+            "--force" | "-Force" if iv.is_none() => force = true,
+            other => return Err(fail(format!("INSTALL_FAIL: unknown option '{other}'"), 1)),
+        }
+        i += 1;
+    }
+    Ok(InstallSubcommand::Antigravity {
+        action,
+        plugin_root,
+        b3_home,
+        user_home,
+        dry_run,
+        force,
+    })
+}
+
+fn parse_install_global(rest: &[String]) -> Result<InstallSubcommand, B3Error> {
+    let mut action = "install".to_string();
+    let mut action_set = false;
+    let mut host_name = "all".to_string();
+    let mut b3_home = String::new();
+    let mut cursor_home = String::new();
+    let mut plugin_root = String::new();
+    let mut user_home = String::new();
+    let mut dry_run = false;
+    let mut force = false;
+    let mut i = 0usize;
+    while i < rest.len() {
+        let (flag, iv) = parse_opt(&rest[i]);
+        match flag {
+            pos @ ("install" | "update" | "verify" | "uninstall") if iv.is_none() => {
+                if action_set {
+                    return Err(fail(format!("error: duplicate action '{pos}'"), 1));
+                }
+                action = pos.to_string();
+                action_set = true;
+            }
+            "--action" | "-Action" => {
+                let v = take_val(rest, &mut i, "--action", iv, "INSTALL_FAIL")?;
+                if action_set {
+                    return Err(fail(format!("error: duplicate action '{v}'"), 1));
+                }
+                action = v;
+                action_set = true;
+            }
+            "--host" | "--host-name" | "-HostName" => {
+                host_name = take_val(rest, &mut i, "--host", iv, "INSTALL_FAIL")?;
+            }
+            "--b3-home" | "-B3Home" => {
+                b3_home = take_val(rest, &mut i, "--b3-home", iv, "INSTALL_FAIL")?;
+            }
+            "--cursor-home" | "-CursorHome" => {
+                cursor_home = take_val(rest, &mut i, "--cursor-home", iv, "INSTALL_FAIL")?;
+            }
+            "--plugin-root"
+            | "-PluginRoot"
+            | "--antigravity-plugin-root"
+            | "-AntigravityPluginRoot" => {
+                plugin_root = take_val(rest, &mut i, "--plugin-root", iv, "INSTALL_FAIL")?;
+            }
+            "--user-home" | "-UserHome" => {
+                user_home = take_val(rest, &mut i, "--user-home", iv, "INSTALL_FAIL")?;
+            }
+            "--dry-run" | "-DryRun" if iv.is_none() => dry_run = true,
+            "--force" | "-Force" if iv.is_none() => force = true,
+            other => return Err(fail(format!("INSTALL_FAIL: unknown option '{other}'"), 1)),
+        }
+        i += 1;
+    }
+    Ok(InstallSubcommand::Global {
+        action,
+        host_name,
+        b3_home,
+        cursor_home,
+        plugin_root,
+        user_home,
+        dry_run,
+        force,
+    })
 }
 
 fn parse_install_product(rest: &[String]) -> Result<InstallSubcommand, B3Error> {

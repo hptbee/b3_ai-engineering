@@ -200,8 +200,11 @@ pub fn remove_link_only(link_path: &Path) -> Result<(), B3Error> {
             1,
         ));
     }
-    if cfg!(windows) {
-        if meta.is_dir() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_DIRECTORY) != 0 {
             fs::remove_dir(link_path).map_err(|e| {
                 fail(
                     format!(
@@ -225,7 +228,9 @@ pub fn remove_link_only(link_path: &Path) -> Result<(), B3Error> {
                 1,
             ));
         }
-    } else {
+    }
+    #[cfg(not(windows))]
+    {
         fs::remove_file(link_path).map_err(|e| {
             fail(
                 format!("could not remove link {}: {e}", link_path.display()),
@@ -675,4 +680,566 @@ pub fn resolve_b3_home_dir(b3_home_arg: &str, default_root: &Path) -> Result<Pat
     }
     let norm = normalize_abs_path_str(&cand);
     Ok(PathBuf::from(norm))
+}
+
+#[derive(Debug, Clone)]
+pub struct SplitFrontmatter {
+    pub has_frontmatter: bool,
+    pub frontmatter: String,
+    pub fm_lines: Vec<String>,
+    pub body: String,
+}
+
+/// Parses optional/required YAML frontmatter cleanly with LF line endings.
+pub fn split_yaml_frontmatter(
+    file_path: &Path,
+    require_frontmatter: bool,
+) -> Result<SplitFrontmatter, B3Error> {
+    let raw_bytes = fs::read(file_path).map_err(|e| {
+        fail(
+            format!("cannot read markdown {}: {e}", file_path.display()),
+            1,
+        )
+    })?;
+    let raw_str = String::from_utf8_lossy(&raw_bytes);
+    let clean = raw_str.strip_prefix('\u{FEFF}').unwrap_or(&raw_str);
+    let norm = clean.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = norm.split('\n').collect();
+    if lines.len() >= 3 && lines[0].trim() == "---" {
+        let end_idx = lines.iter().enumerate().skip(1).find_map(|(i, l)| {
+            if l.trim() == "---" {
+                Some(i)
+            } else {
+                None
+            }
+        });
+        let Some(end_i) = end_idx else {
+            if require_frontmatter {
+                return Err(fail(
+                    format!(
+                        "canonical markdown unclosed YAML frontmatter: {}",
+                        file_path.display()
+                    ),
+                    1,
+                ));
+            }
+            return Ok(SplitFrontmatter {
+                has_frontmatter: false,
+                frontmatter: String::new(),
+                fm_lines: Vec::new(),
+                body: norm.trim().to_string(),
+            });
+        };
+        let fm_lines: Vec<String> = lines[..=end_i].iter().map(|s| (*s).to_string()).collect();
+        let frontmatter = fm_lines.join("\n");
+        let body = if end_i + 1 < lines.len() {
+            lines[end_i + 1..]
+                .join("\n")
+                .trim_start_matches('\n')
+                .trim_end()
+                .to_string()
+        } else {
+            String::new()
+        };
+        return Ok(SplitFrontmatter {
+            has_frontmatter: true,
+            frontmatter,
+            fm_lines,
+            body,
+        });
+    }
+    if require_frontmatter {
+        return Err(fail(
+            format!(
+                "canonical markdown missing YAML frontmatter: {}",
+                file_path.display()
+            ),
+            1,
+        ));
+    }
+    Ok(SplitFrontmatter {
+        has_frontmatter: false,
+        frontmatter: String::new(),
+        fm_lines: Vec::new(),
+        body: norm.trim().to_string(),
+    })
+}
+
+pub fn get_canonical_markdown_names(dir_path: &Path) -> Vec<String> {
+    if !dir_path.is_dir() {
+        return Vec::new();
+    }
+    let mut full_paths = Vec::new();
+    if let Ok(rd) = fs::read_dir(dir_path) {
+        for entry in rd.flatten() {
+            if !entry.file_type().is_ok_and(|ft| ft.is_file()) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name != "README.md" && name.ends_with(".md") {
+                full_paths.push(entry.path().to_string_lossy().into_owned());
+            }
+        }
+    }
+    let sorted_paths = sort_ordinal(full_paths, false);
+    sorted_paths
+        .into_iter()
+        .filter_map(|p| {
+            Path::new(&p)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+pub fn add_canonical_skills_with_bucket(
+    root_dir: &Path,
+    all_map: &mut BTreeMap<String, PathBuf>,
+    mut bucket_map: Option<&mut BTreeMap<String, PathBuf>>,
+) -> Result<usize, B3Error> {
+    if !root_dir.is_dir() {
+        return Ok(0);
+    }
+    let mut found_files = Vec::new();
+    collect_skill_md_files(root_dir, &mut found_files)?;
+    let path_strs = sort_ordinal(
+        found_files.iter().map(|p| p.to_string_lossy().into_owned()),
+        false,
+    );
+    let count = path_strs.len();
+    for sf_str in path_strs {
+        let sf = PathBuf::from(&sf_str);
+        let sname = get_skill_name_from_file(&sf);
+        let Some(parent_dir) = sf.parent() else {
+            continue;
+        };
+        let norm_dir = PathBuf::from(normalize_abs_path_str(parent_dir));
+        if let Some(prev) = all_map.get(&sname) {
+            return Err(fail(
+                format!(
+                    "duplicate canonical skill name '{sname}': {} and {}",
+                    prev.display(),
+                    sf.display()
+                ),
+                1,
+            ));
+        }
+        all_map.insert(sname.clone(), norm_dir.clone());
+        if let Some(b) = bucket_map.as_deref_mut() {
+            b.insert(sname, norm_dir);
+        }
+    }
+    Ok(count)
+}
+
+pub fn get_skill_overlaps(root_dir: &Path, skill_names: &[String]) -> Vec<String> {
+    if !root_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut overlaps = Vec::new();
+    for sn in skill_names {
+        let p = root_dir.join(sn);
+        if path_exists_or_link(&p) {
+            overlaps.push(sn.clone());
+        }
+    }
+    overlaps
+}
+
+pub fn remove_dir_tree_safely(dir_path: &Path) -> Result<(), B3Error> {
+    let Ok(meta) = fs::symlink_metadata(dir_path) else {
+        return Ok(());
+    };
+    if meta.file_type().is_symlink() || is_reparse_link(dir_path) {
+        return Err(fail(
+            format!(
+                "refusing recursive delete of link path: {}",
+                dir_path.display()
+            ),
+            1,
+        ));
+    }
+    if !meta.is_dir() {
+        fs::remove_file(dir_path)
+            .map_err(|e| fail(format!("cannot remove file {}: {e}", dir_path.display()), 1))?;
+        return Ok(());
+    }
+    let entries = fs::read_dir(dir_path).map_err(|e| {
+        fail(
+            format!("cannot read directory {}: {e}", dir_path.display()),
+            1,
+        )
+    })?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if is_reparse_link(&p) {
+            remove_link_only(&p)?;
+        } else if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+            remove_dir_tree_safely(&p)?;
+        } else {
+            fs::remove_file(&p)
+                .map_err(|e| fail(format!("cannot remove file {}: {e}", p.display()), 1))?;
+        }
+    }
+    fs::remove_dir(dir_path).map_err(|e| {
+        fail(
+            format!("cannot remove directory {}: {e}", dir_path.display()),
+            1,
+        )
+    })
+}
+
+pub fn remove_empty_regular_dir(dir_path: &Path) {
+    if dir_path.is_dir()
+        && !is_reparse_link(dir_path)
+        && fs::read_dir(dir_path)
+            .map(|mut it| it.next().is_none())
+            .unwrap_or(false)
+    {
+        let _ = fs::remove_dir(dir_path);
+    }
+}
+
+pub fn test_path_within_root(root_dir: &Path, candidate_path: &Path) -> bool {
+    let Ok(root_full) = normalize_path_str(&root_dir.to_string_lossy()) else {
+        return false;
+    };
+    let Ok(cand_full) = normalize_path_str(&candidate_path.to_string_lossy()) else {
+        return false;
+    };
+    if root_full.is_empty() || cand_full.is_empty() {
+        return false;
+    }
+    let sep = std::path::MAIN_SEPARATOR;
+    let root_prefix = if root_full.ends_with(sep) {
+        root_full
+    } else {
+        format!("{root_full}{sep}")
+    };
+    if cfg!(windows) {
+        cand_full.len() >= root_prefix.len()
+            && cand_full[..root_prefix.len()].eq_ignore_ascii_case(&root_prefix)
+    } else {
+        cand_full.starts_with(&root_prefix)
+    }
+}
+
+pub fn test_safe_header_path(val: &str) -> bool {
+    if val.is_empty() || val != val.trim() || has_control_chars(val) {
+        return false;
+    }
+    let b = val.as_bytes();
+    for seg in val.split(['\\', '/']) {
+        if seg == ".." {
+            return false;
+        }
+    }
+    val.starts_with('/')
+        || (b.len() >= 3
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && matches!(b[2], b'\\' | b'/'))
+}
+
+pub fn test_safe_manifest_key(kind: &str, key: &str) -> bool {
+    if key.is_empty()
+        || key != key.trim()
+        || key.starts_with('/')
+        || key.ends_with('/')
+        || key.starts_with('~')
+        || key.contains('\\')
+        || key.contains(':')
+        || key.contains("//")
+        || has_control_chars(key)
+    {
+        return false;
+    }
+    let segs: Vec<&str> = key.split('/').collect();
+    if segs.iter().any(|s| s.is_empty() || *s == "." || *s == "..") {
+        return false;
+    }
+    match kind {
+        "skill" | "command" | "agent" => segs.len() == 1,
+        "link" => segs.len() == 2 && segs[0] == "skills",
+        "file" => {
+            segs.len() == 1 || (segs.len() == 2 && (segs[0] == "rules" || segs[0] == "agents"))
+        }
+        _ => false,
+    }
+}
+
+pub fn test_safe_manifest_value(kind: &str, val: &str) -> bool {
+    if val.is_empty() || val != val.trim() || has_control_chars(val) {
+        return false;
+    }
+    match kind {
+        "command" | "agent" | "file" => {
+            val.len() == 64 && val.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        }
+        "skill" | "link" => !val.contains('|') && test_safe_header_path(val),
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct B3Manifest {
+    pub exists: bool,
+    pub corrupt: bool,
+    pub schema: String,
+    pub b3_home: String,
+    pub plugin_root: String,
+    pub sections: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl B3Manifest {
+    pub fn empty() -> Self {
+        let mut sections = BTreeMap::new();
+        for s in ["skill", "command", "agent", "file", "link"] {
+            sections.insert(s.to_string(), BTreeMap::new());
+        }
+        Self {
+            exists: false,
+            corrupt: false,
+            schema: String::new(),
+            b3_home: String::new(),
+            plugin_root: String::new(),
+            sections,
+        }
+    }
+
+    pub fn section(&self, name: &str) -> &BTreeMap<String, String> {
+        &self.sections[name]
+    }
+}
+
+pub fn read_b3_manifest(manifest_path: &Path) -> B3Manifest {
+    let mut m = B3Manifest::empty();
+    if !manifest_path.is_file() {
+        return m;
+    }
+    m.exists = true;
+    let Ok(raw_bytes) = fs::read(manifest_path) else {
+        m.corrupt = true;
+        return m;
+    };
+    let raw = String::from_utf8_lossy(&raw_bytes);
+    let mut seen_schema = false;
+    let mut seen_b3_home = false;
+    let mut seen_plugin_root = false;
+
+    for line in raw.split('\n') {
+        let trimmed = line.trim_end_matches('\r');
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(hval) = trimmed.strip_prefix("schema=") {
+            if seen_schema {
+                m.corrupt = true;
+                continue;
+            }
+            seen_schema = true;
+            if hval.is_empty() || hval != hval.trim() || has_control_chars(hval) {
+                m.corrupt = true;
+                continue;
+            }
+            m.schema = hval.to_string();
+            continue;
+        }
+        if let Some(hval) = trimmed.strip_prefix("b3_home=") {
+            if seen_b3_home {
+                m.corrupt = true;
+                continue;
+            }
+            seen_b3_home = true;
+            if !test_safe_header_path(hval) {
+                m.corrupt = true;
+                continue;
+            }
+            m.b3_home = hval.to_string();
+            continue;
+        }
+        if let Some(hval) = trimmed.strip_prefix("plugin_root=") {
+            if seen_plugin_root {
+                m.corrupt = true;
+                continue;
+            }
+            seen_plugin_root = true;
+            if !test_safe_header_path(hval) {
+                m.corrupt = true;
+                continue;
+            }
+            m.plugin_root = hval.to_string();
+            continue;
+        }
+        let parts: Vec<&str> = trimmed.splitn(3, '|').collect();
+        if parts.len() != 3 {
+            m.corrupt = true;
+            continue;
+        }
+        let (kind, key, val) = (parts[0], parts[1], parts[2]);
+        let Some(sec) = m.sections.get_mut(kind) else {
+            m.corrupt = true;
+            continue;
+        };
+        if !test_safe_manifest_key(kind, key)
+            || sec.contains_key(key)
+            || !test_safe_manifest_value(kind, val)
+        {
+            m.corrupt = true;
+            continue;
+        }
+        sec.insert(key.to_string(), val.to_string());
+    }
+    m
+}
+
+pub fn write_b3_manifest(
+    manifest_path: &Path,
+    schema: &str,
+    b3_home_forward: &str,
+    plugin_root_forward: &str,
+    entry_lines: &[String],
+) -> Result<(), B3Error> {
+    let mut lines = Vec::with_capacity(3 + entry_lines.len());
+    lines.push(format!("schema={schema}"));
+    lines.push(format!("b3_home={b3_home_forward}"));
+    if !plugin_root_forward.is_empty() {
+        lines.push(format!("plugin_root={plugin_root_forward}"));
+    }
+    for ln in entry_lines {
+        if !ln.is_empty() {
+            lines.push(ln.clone());
+        }
+    }
+    write_utf8_no_bom_lf(manifest_path, &format!("{}\n", lines.join("\n")))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn uninstall_managed_link(
+    root_dir: &Path,
+    root_label: &str,
+    path: &Path,
+    expected_target: &str,
+    verify_expected: bool,
+    force: bool,
+    dry_run: bool,
+    unmanaged_label: &str,
+    removed: &mut usize,
+    skipped: &mut usize,
+    out: &mut Vec<String>,
+) -> Result<(), B3Error> {
+    if !test_path_within_root(root_dir, path) {
+        return Err(fail(
+            format!(
+                "refusing to uninstall path outside {root_label}: {}",
+                path.display()
+            ),
+            1,
+        ));
+    }
+    if is_reparse_link(path) {
+        if verify_expected && !force {
+            let exp_path = Path::new(expected_target);
+            if expected_target.is_empty() || !test_link_target(path, exp_path, false) {
+                eprintln!(
+                    "WARNING: skipping retargeted skill link: {} (expected {expected_target}; re-run with -Force to remove)",
+                    path.display()
+                );
+                *skipped += 1;
+                return Ok(());
+            }
+        }
+        if dry_run {
+            out.push(format!("dry-run: remove skill link {}", path.display()));
+        } else {
+            remove_link_only(path)?;
+        }
+        *removed += 1;
+    } else if path_exists_or_link(path) {
+        eprintln!("WARNING: skipping {unmanaged_label}: {}", path.display());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn uninstall_managed_file(
+    root_dir: &Path,
+    root_label: &str,
+    path: &Path,
+    expected_sha: &str,
+    verify_sha: bool,
+    marker_substr: &str,
+    label: &str,
+    sha_mismatch_label: &str,
+    warned_containers: &mut Option<&mut std::collections::BTreeSet<String>>,
+    force: bool,
+    dry_run: bool,
+    removed: &mut usize,
+    skipped: &mut usize,
+    out: &mut Vec<String>,
+) -> Result<(), B3Error> {
+    if !test_path_within_root(root_dir, path) {
+        return Err(fail(
+            format!(
+                "refusing to uninstall path outside {root_label}: {}",
+                path.display()
+            ),
+            1,
+        ));
+    }
+    if let Some(warned) = warned_containers.as_deref_mut() {
+        if let Some(parent_dir) = path.parent() {
+            let p_norm = normalize_abs_path_str(parent_dir);
+            let r_norm = normalize_abs_path_str(root_dir);
+            let same = if cfg!(windows) {
+                p_norm.eq_ignore_ascii_case(&r_norm)
+            } else {
+                p_norm == r_norm
+            };
+            if !same && is_reparse_link(parent_dir) {
+                if warned.insert(p_norm) {
+                    eprintln!(
+                        "WARNING: skipping symlinked container directory: {}",
+                        parent_dir.display()
+                    );
+                }
+                *skipped += 1;
+                return Ok(());
+            }
+        }
+    }
+    if is_reparse_link(path) {
+        eprintln!("WARNING: skipping symlinked {label}: {}", path.display());
+        *skipped += 1;
+        return Ok(());
+    }
+    if !path.is_file() {
+        return Ok(());
+    }
+    if !marker_substr.is_empty() {
+        let txt = fs::read_to_string(path).unwrap_or_default();
+        if !txt.contains(marker_substr) {
+            eprintln!("WARNING: skipping unmanaged {label}: {}", path.display());
+            return Ok(());
+        }
+    }
+    if verify_sha && !force {
+        let actual_sha = file_sha256(path).unwrap_or_default();
+        if expected_sha.is_empty() || actual_sha != expected_sha {
+            eprintln!(
+                "WARNING: skipping {sha_mismatch_label}: {} (re-run with -Force to remove)",
+                path.display()
+            );
+            *skipped += 1;
+            return Ok(());
+        }
+    }
+    if dry_run {
+        out.push(format!("dry-run: remove {}", path.display()));
+    } else {
+        fs::remove_file(path)
+            .map_err(|e| fail(format!("cannot remove {}: {e}", path.display()), 1))?;
+    }
+    *removed += 1;
+    Ok(())
 }
