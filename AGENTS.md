@@ -22,9 +22,9 @@ Loop (`docs/architecture.md`; conflicts: `docs/precedence.md`): `Knowledge → S
 
 ## Operating constraints
 
-1. Apply `rules/` via `docs/precedence.md` (claims/provenance in `rules/evidence-and-provenance.md`; executed-evidence rules in `rules/verification.md`); preference never silently wins.
-2. Load the smallest relevant skill; keep handoffs and replies compact.
-3. Empty **named review target** (empty code diff, or missing approach in explicit `design-only`) or iteration cap → `UNKNOWN / INCOMPLETE`, never `PASS`.
+1. Apply `rules/` via `docs/precedence.md`; personal taste (`knowledge/personal/`) never overrides hard rules or project policy.
+2. Keep handoffs and replies compact; never load files outside the active scope.
+3. Empty **named review target** (empty diff, or missing approach in explicit `design-only`) or iteration cap → `UNKNOWN / INCOMPLETE`, never `PASS`.
 4. Never claim unimplemented layers; lessons never auto-become rules (`docs/system-lifecycle.md`).
 5. Host link dirs (`.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}`, `.codex/skills`) are gitignored links via `adapters/sync-skills.{ps1,sh}` — never edit through them or mix discovery roots.
 6. In products, resolve `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo); never copy `skills/` (`adapters/install-product.{ps1,sh}`).

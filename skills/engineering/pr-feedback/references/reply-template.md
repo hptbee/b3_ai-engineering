@@ -74,25 +74,9 @@ Post ONLY `CONFIRMED` findings backed by concrete evidence. Use strictly `CRITIC
 
 ---
 
-## Review Summary
+## Review Summary (`b3-pr-comment`, `b3-review --post`)
 
-When inline findings are posted alongside the summary (`both` mode), do **not** repeat full inline descriptions in the summary — summarize counts, verdict, verification, and cross-cutting risk only. Omit `**Not verified:**` if everything in scope was verified.
-
-```markdown
-## Review Summary
-
-**Verdict:** `<PASS | CHANGES_NEEDED | UNKNOWN / INCOMPLETE>`
-
-**Reviewed commit:** `<SHA>`
-
-**Findings:** Critical: N | High: N | Medium: N | Low: N
-
-<Concise overall assessment.>
-
-**Verification:** <Actual checks and results>
-
-**Not verified:** <Remaining limitations, if any>
-```
+Use the canonical [`## Review Summary` format in `review-template.md`](../../code-review/references/review-template.md) (include **`Reviewed commit:`** `<SHA>` in metadata). In `both` mode, omit full inline finding descriptions from the summary — keep counts, verdict, executed verification, and cross-cutting risk only. Omit `## Speculative / Questions for Author` and unverified placeholders when posting `CONFIRMED` PR reviews.
 
 ---
 

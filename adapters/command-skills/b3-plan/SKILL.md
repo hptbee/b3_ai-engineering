@@ -5,6 +5,7 @@ description: Explicit command wrapper ($b3-plan, /b3-plan, b3-plan) for scoped p
 
 # b3-plan
 
-**Action now:** produce a scoped plan with testable ACs and 1:1 checks (risk-adaptive depth); do not write product code unless the user also asked to implement.
+**Action now:** resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, host global fallback, or this repo), produce a scoped plan with testable ACs and 1:1 checks (risk-adaptive depth), and stay plan-only unless implementation was explicitly requested.
 
-Resolve `B3_HOME` (`B3_HOME` env, `.b3/home`, or this repo) and open `{B3_HOME}/skills/engineering/planning/SKILL.md` directly (plus `{B3_HOME}/skills/architecture/simplest-correct/SKILL.md` if choosing system shape).
+- **Skills:** open `{B3_HOME}/skills/engineering/planning/SKILL.md` directly (+ `{B3_HOME}/skills/architecture/simplest-correct/SKILL.md` if choosing system shape).
+- **Model preference:** if the host supports subagents and `.b3/models.md` or `~/.b3/models.md` (`B3_MODELS_PERSONAL`, per `{B3_HOME}/workflows/references/dispatch-naming.md`) sets a non-`auto` `planning` model differing from `main`, dispatch a read-only planning subagent on that model; otherwise plan inline on `main`.
