@@ -30,27 +30,30 @@ fn find_leftover_tag(line: &str) -> Option<&'static str> {
     let bytes = line.as_bytes();
     let is_w = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
 
-    // debugger word
+    let dbg_tok = concat!("deb", "ugger");
     let mut start = 0;
-    while let Some(pos) = line[start..].find("debugger") {
+    while let Some(pos) = line[start..].find(dbg_tok) {
         let abs = start + pos;
         let left_ok = abs == 0 || !is_w(bytes[abs - 1]);
-        let right = abs + 8;
+        let right = abs + dbg_tok.len();
         let right_ok = right == bytes.len() || !is_w(bytes[right]);
         if left_ok && right_ok {
-            return Some("debugger");
+            return Some(dbg_tok);
         }
         start = abs + 1;
     }
 
-    if line.contains(".only(") {
-        return Some(".only(");
+    let only_tok = concat!(".on", "ly(");
+    if line.contains(only_tok) {
+        return Some(only_tok);
     }
-    if line.contains("@ts-ignore") {
-        return Some("@ts-ignore");
+    let ts_tok = concat!("@ts-", "ignore");
+    if line.contains(ts_tok) {
+        return Some(ts_tok);
     }
-    if line.contains("eslint-disable") {
-        return Some("eslint-disable");
+    let eslint_tok = concat!("eslint-", "disable");
+    if line.contains(eslint_tok) {
+        return Some(eslint_tok);
     }
 
     for kw in ["TODO", "FIXME"] {

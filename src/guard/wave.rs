@@ -7,8 +7,7 @@ use crate::fs::{
     test_wave_path_overlap, WaveOverlap,
 };
 use crate::git::{
-    git_err_detail, run_git, run_git_paths_z, test_git_mid_operation, test_repo_case_insensitive,
-    GitZMode,
+    run_git, run_git_paths_z, test_git_mid_operation, test_repo_case_insensitive, GitZMode,
 };
 
 struct DirtyEntry {
@@ -581,9 +580,4 @@ pub fn run(
 
     lines.push(term_line);
     Ok((lines.join("\n"), exit_code))
-}
-
-#[allow(dead_code)]
-fn _keep_git_err_detail_imported(_out: &crate::process::CmdOutput) -> String {
-    git_err_detail(_out)
 }

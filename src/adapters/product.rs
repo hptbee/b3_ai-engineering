@@ -199,8 +199,9 @@ fn replace_exact_trimmed_line(text: &str, target: &str, replacement: &str) -> St
 
 fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
     let gi = root.join(".gitignore");
+    assert_regular_file_or_missing(&gi, ".gitignore")?;
     let block = "\n# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/pr-feedback/\n.b3/models.md\n";
-    if !gi.is_file() {
+    if !path_exists_or_link(&gi) {
         let content = format!("{}\n", block.trim_start());
         fs::write(&gi, content.as_bytes())
             .map_err(|e| fail(format!("cannot write {}: {e}", gi.display()), 1))?;
@@ -268,7 +269,8 @@ fn update_host_skill_gitignore(root: &Path, target_host: &str) -> Result<&'stati
         return Ok("n/a");
     }
     let gi = root.join(".gitignore");
-    if !gi.is_file() {
+    assert_regular_file_or_missing(&gi, ".gitignore")?;
+    if !path_exists_or_link(&gi) {
         let content = format!(
             "# B3: local host links (do not commit)\n{}\n",
             lines.join("\n")
@@ -334,6 +336,15 @@ pub fn run(
         ));
     }
     let product_root = PathBuf::from(normalize_abs_path_str(&prod_cand));
+    if is_reparse_link(&product_root) {
+        return Err(fail(
+            format!(
+                "refusing to install into link-based ProductRoot: {}",
+                product_root.display()
+            ),
+            1,
+        ));
+    }
 
     let fallback_root = if let Ok(env_home) = std::env::var("B3_HOME") {
         if !env_home.trim().is_empty() {
@@ -423,6 +434,15 @@ pub fn run(
 
     assert_regular_dir_or_missing(&product_root.join(".b3"), ".b3")?;
     assert_regular_file_or_missing(&home_dest, ".b3/home")?;
+    assert_regular_file_or_missing(&product_root.join(".gitignore"), ".gitignore")?;
+    assert_regular_file_or_missing(&agents_md_dest, "AGENTS.md")?;
+    if use_claude {
+        assert_regular_file_or_missing(&claude_md_dest, "CLAUDE.md")?;
+        assert_regular_dir_or_missing(&product_root.join(".claude"), ".claude")?;
+    }
+    if use_flat_agents_skills {
+        assert_regular_dir_or_missing(&product_root.join(".agents"), ".agents")?;
+    }
     let mut rewrite_home = !home_dest.is_file() || force;
     if home_dest.is_file() {
         let existing_home = fs::read_to_string(&home_dest)
@@ -631,11 +651,11 @@ pub fn run(
         fs::write(&home_dest, b3_home_str.as_bytes())
             .map_err(|e| fail(format!("cannot write {}: {e}", home_dest.display()), 1))?;
     }
-    if !agents_md_dest.exists() && agents_md_template.is_file() {
+    if !path_exists_or_link(&agents_md_dest) && agents_md_template.is_file() {
         fs::copy(&agents_md_template, &agents_md_dest)
             .map_err(|e| fail(format!("cannot copy {}: {e}", agents_md_dest.display()), 1))?;
     }
-    if use_claude && !claude_md_dest.exists() && claude_md_template.is_file() {
+    if use_claude && !path_exists_or_link(&claude_md_dest) && claude_md_template.is_file() {
         fs::copy(&claude_md_template, &claude_md_dest)
             .map_err(|e| fail(format!("cannot copy {}: {e}", claude_md_dest.display()), 1))?;
     }

@@ -9,8 +9,8 @@ use crate::fs::{
     test_contained_repo_path, test_ownership_path_match,
 };
 use crate::git::{
-    is_hex40, run_git, run_git_paths_z, test_repo_case_insensitive, test_valid_literal_git_path,
-    GitZMode,
+    git_program, is_hex40, run_git, run_git_paths_z, test_repo_case_insensitive,
+    test_valid_literal_git_path, GitZMode,
 };
 use crate::guard::ledger::{invoke_review_ledger_check, ReviewLedger};
 use crate::guard::verify::test_verify_receipt;
@@ -195,11 +195,11 @@ fn invoke_git_ls_remote_refs(root: &Path, full_refs: &[String]) -> Result<LsRemo
         ("SSH_ASKPASS", ""),
     ];
     let res = run_command_timeout(
-        OsStr::new("git"),
+        git_program(),
         &args,
         Some(root),
         &env_ls,
-        &[],
+        &["MSYS2_ARG_CONV_EXCL"],
         None,
         Some(8000),
     )?;

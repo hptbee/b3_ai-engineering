@@ -12,7 +12,8 @@ use crate::process::{run_command, CmdOutput};
 
 static GIT_BIN: OnceLock<OsString> = OnceLock::new();
 
-fn git_program() -> &'static OsStr {
+/// Resolves the canonical `git` executable path cleanly across platforms.
+pub fn git_program() -> &'static OsStr {
     GIT_BIN
         .get_or_init(|| {
             #[cfg(windows)]
@@ -49,6 +50,12 @@ fn find_windows_cmd_git() -> Option<PathBuf> {
                 }
             }
             return Some(candidate);
+        }
+        for shim_name in ["git.cmd", "git.bat"] {
+            let shim = dir.join(shim_name);
+            if shim.is_file() {
+                return Some(shim);
+            }
         }
     }
     None

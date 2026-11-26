@@ -274,6 +274,14 @@ fn is_diff_hunk_header(ln: &str) -> bool {
     valid_nums(old_part) && valid_nums(new_part)
 }
 
+fn is_rust_test_attr(trimmed: &str) -> bool {
+    trimmed == "#[test]"
+        || trimmed.starts_with("#[test]")
+        || trimmed.starts_with("#[tokio::test")
+        || trimmed.starts_with("#[async_std::test")
+        || trimmed.starts_with("#[rstest")
+}
+
 fn should_skip_symbol_file(path_val: &str, ignored: &[String]) -> bool {
     path_val.is_empty()
         || test_checkpoint_path(path_val)
@@ -343,6 +351,7 @@ pub fn run(
     let mut skip_old = true;
     let mut skip_new = true;
     let mut in_hunk = false;
+    let mut pending_rust_test = false;
 
     let dl_text = String::from_utf8_lossy(&dl_res.stdout);
     for raw_line in dl_text.lines() {
@@ -353,6 +362,7 @@ pub fn run(
             skip_old = true;
             skip_new = true;
             in_hunk = false;
+            pending_rust_test = false;
             continue;
         }
         if !in_hunk && ln.starts_with("--- ") {
@@ -379,6 +389,7 @@ pub fn run(
         }
         if is_diff_hunk_header(ln) {
             in_hunk = true;
+            pending_rust_test = false;
             continue;
         }
         if !in_hunk {
@@ -397,15 +408,38 @@ pub fn run(
             }
         } else if let Some(body) = ln.strip_prefix('+') {
             if !skip_new {
-                if let Some(sym) = extract_symbol_decl(&new_file, body) {
-                    let entry = added_by_file
-                        .entry(new_file.clone())
-                        .or_default()
-                        .entry(sym.name)
-                        .or_insert(false);
-                    *entry = *entry || sym.exported;
+                let is_rs = new_file.to_ascii_lowercase().ends_with(".rs");
+                let tr = body.trim();
+                if is_rs {
+                    if is_rust_test_attr(tr) {
+                        pending_rust_test = true;
+                        continue;
+                    }
+                    if pending_rust_test
+                        && (tr.is_empty() || tr.starts_with("#[") || tr.starts_with("//"))
+                    {
+                        continue;
+                    }
+                }
+                let sym_opt = extract_symbol_decl(&new_file, body);
+                let skip_as_test =
+                    pending_rust_test && is_rs && body.contains("fn ") && sym_opt.is_some();
+                if is_rs {
+                    pending_rust_test = false;
+                }
+                if !skip_as_test {
+                    if let Some(sym) = sym_opt {
+                        let entry = added_by_file
+                            .entry(new_file.clone())
+                            .or_default()
+                            .entry(sym.name)
+                            .or_insert(false);
+                        *entry = *entry || sym.exported;
+                    }
                 }
             }
+        } else {
+            pending_rust_test = false;
         }
     }
 
@@ -426,14 +460,36 @@ pub fn run(
                 continue;
             }
             if let Ok(content) = std::fs::read_to_string(&full) {
+                let is_rs = u.to_ascii_lowercase().ends_with(".rs");
+                let mut u_pending_test = false;
                 for fl in content.lines() {
-                    if let Some(sym) = extract_symbol_decl(&u, fl) {
-                        let entry = added_by_file
-                            .entry(u.clone())
-                            .or_default()
-                            .entry(sym.name)
-                            .or_insert(false);
-                        *entry = *entry || sym.exported;
+                    let tr = fl.trim();
+                    if is_rs {
+                        if is_rust_test_attr(tr) {
+                            u_pending_test = true;
+                            continue;
+                        }
+                        if u_pending_test
+                            && (tr.is_empty() || tr.starts_with("#[") || tr.starts_with("//"))
+                        {
+                            continue;
+                        }
+                    }
+                    let sym_opt = extract_symbol_decl(&u, fl);
+                    let skip_as_test =
+                        u_pending_test && is_rs && fl.contains("fn ") && sym_opt.is_some();
+                    if is_rs {
+                        u_pending_test = false;
+                    }
+                    if !skip_as_test {
+                        if let Some(sym) = sym_opt {
+                            let entry = added_by_file
+                                .entry(u.clone())
+                                .or_default()
+                                .entry(sym.name)
+                                .or_insert(false);
+                            *entry = *entry || sym.exported;
+                        }
                     }
                 }
             }

@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use crate::fs::has_control_chars;
 use crate::process::run_command_timeout;
@@ -523,9 +522,8 @@ fn exec_win_batch_cmd(
     stdin_bytes: Option<&[u8]>,
     timeout_ms: u64,
 ) -> GhExecResult {
-    use std::io::{Read, Write};
     use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
 
     let mut cmd = Command::new(comspec);
     cmd.env("GH_PROMPT_DISABLED", "1");
@@ -548,82 +546,18 @@ fn exec_win_batch_cmd(
         .raw_arg("/s")
         .raw_arg("/c")
         .raw_arg(&cmd_line);
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    if stdin_bytes.is_some() {
-        cmd.stdin(Stdio::piped());
-    } else {
-        cmd.stdin(Stdio::null());
+
+    match crate::process::run_command_prepared(cmd, stdin_bytes, Some(timeout_ms)) {
+        Ok(out) if out.exit_code == 124 => fail_gh_exec("timeout"),
+        Ok(out) => GhExecResult {
+            ok: true,
+            reason: "",
+            status: Some(out.exit_code),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        },
+        Err(_) => fail_gh_exec("spawn_error"),
     }
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-
-    let Ok(mut child) = cmd.spawn() else {
-        return fail_gh_exec("spawn_error");
-    };
-    let mut child_stdin = child.stdin.take();
-    let Some(mut child_stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        return fail_gh_exec("spawn_error");
-    };
-    let Some(mut child_stderr) = child.stderr.take() else {
-        let _ = child.kill();
-        return fail_gh_exec("spawn_error");
-    };
-
-    std::thread::scope(|scope| {
-        let sin_h = stdin_bytes.map(|bytes| {
-            scope.spawn(move || {
-                if let Some(mut s) = child_stdin.take() {
-                    if !bytes.is_empty() {
-                        let _ = s.write_all(bytes);
-                    }
-                    let _ = s.flush();
-                }
-            })
-        });
-        let sout_h = scope.spawn(move || {
-            let mut buf = Vec::new();
-            let _ = child_stdout.read_to_end(&mut buf);
-            buf
-        });
-        let serr_h = scope.spawn(move || {
-            let mut buf = Vec::new();
-            let _ = child_stderr.read_to_end(&mut buf);
-            buf
-        });
-
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-        let status_code = loop {
-            match child.try_wait() {
-                Ok(Some(st)) => break Some(st.code().unwrap_or(1)),
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break None;
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(_) => break Some(1),
-            }
-        };
-        if let Some(h) = sin_h {
-            let _ = h.join();
-        }
-        let stdout_bytes = sout_h.join().unwrap_or_default();
-        let stderr_bytes = serr_h.join().unwrap_or_default();
-        match status_code {
-            None => fail_gh_exec("timeout"),
-            Some(code) => GhExecResult {
-                ok: true,
-                reason: "",
-                status: Some(code),
-                stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
-                stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
-            },
-        }
-    })
 }
 
 #[cfg(test)]

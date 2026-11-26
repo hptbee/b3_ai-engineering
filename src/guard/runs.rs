@@ -131,7 +131,15 @@ fn current_local_timestamp() -> Result<String, B3Error> {
         if !out.status.success() || !valid_timestamp(&ts) {
             return Err(fail("NEW_RUN_FAIL: unable to format local timestamp", 1));
         }
-        return Ok(ts);
+        Ok(ts)
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        Err(fail(
+            "NEW_RUN_FAIL: unsupported target platform for local timestamp",
+            1,
+        ))
     }
 }
 

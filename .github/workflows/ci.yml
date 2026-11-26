@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting and lints
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Run Rust unit & integration tests
+        run: cargo test
+
+      - name: Check static context budget and eval fixtures
+        shell: bash
+        run: |
+          ./scripts/measure-context.sh --strict
+          ./scripts/validate-evals.sh
+
+      - name: Run merge-security regression suite
+        shell: bash
+        run: |
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            ./scripts/validate-merge-security.sh
+          else
+            ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
+          fi
+
+      - name: Run Windows PowerShell behavioral suites
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-context.ps1 -Strict
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-ship-product.ps1
+          foreach ($suite in @(
+            'scripts/validate-pr-feedback.ps1',
+            'scripts/validate-research-ship.ps1',
+            'scripts/validate-ship-behavior.ps1',
+            'scripts/validate-standalone-commands.ps1',
+            'scripts/validate-cursor-global.ps1',
+            'scripts/validate-antigravity-global.ps1',
+            'scripts/validate-model-preferences.ps1',
+            'scripts/validate-tshirt-hierarchical.ps1',
+            'scripts/validate-context-routing.ps1'
+          )) {
+            Write-Host "=== Running $suite ==="
+            powershell -NoProfile -ExecutionPolicy Bypass -File $suite
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

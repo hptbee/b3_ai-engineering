@@ -3,10 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::common::{
-    add_canonical_skills, collect_skill_md_files, create_dir_link, format_personal_models_status,
-    get_skill_name_from_file, has_active_path, initialize_personal_models_file, is_reparse_link,
-    normalize_abs_path_str, path_exists_or_link, remove_link_only, test_link_target,
-    write_utf8_no_bom_lf,
+    add_canonical_skills, assert_regular_dir_or_missing, assert_regular_file_or_missing,
+    collect_skill_md_files, create_dir_link, format_personal_models_status, has_active_path,
+    initialize_personal_models_file, is_reparse_link, normalize_abs_path_str, path_exists_or_link,
+    remove_link_only, test_link_target, write_utf8_no_bom_lf,
 };
 use crate::error::{fail, B3Error};
 use crate::fs::{normalize_repo_root, sort_ordinal};
@@ -364,7 +364,6 @@ fn test_antigravity_manifest(repo_root: &Path, manifest_path: &Path) -> Result<u
     if total_skills < 1 {
         return Err("manifest resolved 0 skills".to_string());
     }
-    let _ = get_skill_name_from_file; // keep shared module cleanly coupled
     Ok(total_skills)
 }
 
@@ -419,6 +418,12 @@ pub fn run(
     };
     let root_resolved = normalize_repo_root(root_raw_or_dot)?;
     let root = PathBuf::from(normalize_abs_path_str(&root_resolved));
+    if !verify_only && is_reparse_link(&root) {
+        return Err(fail(
+            format!("refusing to sync link-based repo root: {}", root.display()),
+            1,
+        ));
+    }
     let skills_source = root.join("skills");
     let commands_source = root.join("commands");
     let agents_source = root.join("agents");
@@ -487,6 +492,9 @@ pub fn run(
                     0,
                 ));
             }
+
+            assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
+            assert_regular_file_or_missing(&antigravity_manifest, ".agents/skills.json")?;
 
             let mut json_lines = Vec::new();
             json_lines.push("{".to_string());
@@ -557,6 +565,9 @@ pub fn run(
                     ));
                 }
             }
+            if !dry_run {
+                assert_regular_dir_or_missing(&root.join(".cursor"), ".cursor")?;
+            }
             sync_directory_link(
                 &cursor_skills_dest,
                 &skills_source,
@@ -617,6 +628,9 @@ pub fn run(
                     "WARNING: coexistence notice: .agents/skills.json is committed for Antigravity; if Antigravity also opens this checkout, it may read both .agents/skills.json and .agents/skills."
                 );
             }
+            if !dry_run {
+                assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
+            }
             sync_flat_skill_index(
                 &codex_skills_dest,
                 &expected_flat,
@@ -663,6 +677,9 @@ pub fn run(
                     "coexistence guard: .cursor/skills exists; Cursor cross-loads .claude/skills and would duplicate skills. Remove .cursor/skills or re-run with -Force",
                     1,
                 ));
+            }
+            if !dry_run {
+                assert_regular_dir_or_missing(&root.join(".claude"), ".claude")?;
             }
             sync_flat_skill_index(
                 &claude_skills_dest,

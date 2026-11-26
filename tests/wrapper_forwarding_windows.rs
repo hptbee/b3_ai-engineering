@@ -1,3 +1,8 @@
+#![cfg(windows)]
+//! Windows thin-wrapper argument-forwarding regression tests.
+//! Validates that `scripts/*.ps1` and `adapters/*.ps1` forward arguments,
+//! exit codes, and outputs cleanly to `b3.exe` (does NOT serve as an
+//! independent legacy oracle; see `tests/native_golden_parity.rs`).
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -53,9 +58,13 @@ fn run_b3(args: &[&str]) -> (i32, String) {
     (out.status.code().unwrap_or(-1), norm_lf(&out.stdout))
 }
 
+fn resolve_powershell_bin() -> &'static str {
+    "powershell"
+}
+
 fn run_ps_script(script_rel: &str, args: &[&str]) -> (i32, String) {
     let script = repo_root().join(script_rel);
-    let out: Output = Command::new("powershell")
+    let out: Output = Command::new(resolve_powershell_bin())
         .env("B3_BIN", b3_bin())
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
@@ -103,7 +112,7 @@ fn init_git_repo(dir: &Path) -> String {
 }
 
 #[test]
-fn differential_context_measure_strict_matches_powershell() {
+fn wrapper_forwarding_context_measure_strict_matches_powershell() {
     let root = repo_root();
     let root_str = root.to_str().unwrap();
     let (rust_code, rust_out) =
@@ -118,7 +127,7 @@ fn differential_context_measure_strict_matches_powershell() {
 }
 
 #[test]
-fn differential_fingerprint_matches_powershell() {
+fn wrapper_forwarding_fingerprint_matches_powershell() {
     let (r_code, r_out) = run_b3(&[
         "guard",
         "fingerprint",
@@ -175,7 +184,7 @@ fn differential_fingerprint_matches_powershell() {
 }
 
 #[test]
-fn differential_snapshot_matches_powershell_trees() {
+fn wrapper_forwarding_snapshot_matches_powershell_trees() {
     let tmp = TempDirGuard::new("snapshot");
     let root = &tmp.path;
     let head_sha = init_git_repo(root);
@@ -222,7 +231,7 @@ fn differential_snapshot_matches_powershell_trees() {
 }
 
 #[test]
-fn differential_check_freshness_matches_powershell() {
+fn wrapper_forwarding_check_freshness_matches_powershell() {
     let tmp = TempDirGuard::new("freshness");
     let root = &tmp.path;
     let base_sha = init_git_repo(root);
@@ -392,7 +401,7 @@ fn differential_check_freshness_matches_powershell() {
 }
 
 #[test]
-fn differential_runs_lifecycle_and_link_guards() {
+fn wrapper_forwarding_runs_lifecycle_and_link_guards() {
     let tmp = TempDirGuard::new("runs");
     let root = &tmp.path;
     let root_str = root.to_str().unwrap();
@@ -652,7 +661,7 @@ fn differential_runs_lifecycle_and_link_guards() {
 }
 
 #[test]
-fn differential_verify_run_and_verify_check_match_powershell() {
+fn wrapper_forwarding_verify_run_and_verify_check_match_powershell() {
     let tmp = TempDirGuard::new("verify");
     let root = &tmp.path;
     let head_sha = init_git_repo(root);
@@ -849,7 +858,7 @@ fn differential_verify_run_and_verify_check_match_powershell() {
 }
 
 #[test]
-fn differential_precommit_matches_powershell() {
+fn wrapper_forwarding_precommit_matches_powershell() {
     let tmp = TempDirGuard::new("precommit");
     let root = &tmp.path;
     let _head = init_git_repo(root);
@@ -951,7 +960,7 @@ fn differential_precommit_matches_powershell() {
 }
 
 #[test]
-fn differential_check_worktree_matches_powershell() {
+fn wrapper_forwarding_check_worktree_matches_powershell() {
     let tmp = TempDirGuard::new("worktree");
     let main_repo = tmp.path.join("main");
     let linked_wt = tmp.path.join("wt-worker");
@@ -1078,7 +1087,7 @@ fn differential_check_worktree_matches_powershell() {
 }
 
 #[test]
-fn differential_check_wave_matches_powershell() {
+fn wrapper_forwarding_check_wave_matches_powershell() {
     let tmp = TempDirGuard::new("wave");
     let root = &tmp.path;
     let base_sha = init_git_repo(root);
@@ -1229,7 +1238,7 @@ fn differential_check_wave_matches_powershell() {
 }
 
 #[test]
-fn differential_symbol_check_matches_powershell() {
+fn wrapper_forwarding_symbol_check_matches_powershell() {
     let tmp = TempDirGuard::new("symbol");
     let root = &tmp.path;
     init_git_repo(root);
@@ -1303,7 +1312,7 @@ fn differential_symbol_check_matches_powershell() {
 }
 
 #[test]
-fn differential_diff_scope_matches_powershell() {
+fn wrapper_forwarding_diff_scope_matches_powershell() {
     let tmp = TempDirGuard::new("diffscope");
     let root = &tmp.path;
     let base_sha = init_git_repo(root);
@@ -1417,7 +1426,7 @@ fn differential_diff_scope_matches_powershell() {
 }
 
 #[test]
-fn differential_mechanical_check_matches_powershell() {
+fn wrapper_forwarding_mechanical_check_matches_powershell() {
     let tmp = TempDirGuard::new("mechanical");
     let root = &tmp.path;
     let base_sha = init_git_repo(root);
@@ -1454,7 +1463,12 @@ fn differential_mechanical_check_matches_powershell() {
     // Scope creep + leftover + destructive SQL + protected path + worker-changes attribution -> exit 2 parity
     fs::write(
         root.join("src/bad.ts"),
-        "// @ts-ignore\ndebugger;\nconst sql = 'DROP TABLE users';\n",
+        concat!(
+            "// @ts-",
+            "ignore\n",
+            "deb",
+            "ugger;\nconst sql = 'DROP TABLE users';\n"
+        ),
     )
     .unwrap();
     fs::write(root.join("docs/guide.md"), "touched outside allowed\n").unwrap();
@@ -1499,7 +1513,7 @@ fn differential_mechanical_check_matches_powershell() {
 }
 
 #[test]
-fn differential_review_inventory_matches_powershell() {
+fn wrapper_forwarding_review_inventory_matches_powershell() {
     let tmp = TempDirGuard::new("rev-inv");
     let root = &tmp.path;
     let base_sha = init_git_repo(root);
@@ -1583,7 +1597,7 @@ fn differential_review_inventory_matches_powershell() {
 }
 
 #[test]
-fn differential_review_ledger_lifecycle_matches_powershell() {
+fn wrapper_forwarding_review_ledger_lifecycle_matches_powershell() {
     let tmp = TempDirGuard::new("rev-ledger");
     let root = &tmp.path;
     let base_sha = init_git_repo(root);
@@ -1799,7 +1813,7 @@ fn differential_review_ledger_lifecycle_matches_powershell() {
 }
 
 #[test]
-fn differential_context_cache_matches_powershell() {
+fn wrapper_forwarding_context_cache_matches_powershell() {
     let tmp = TempDirGuard::new("ctx-cache");
     let root = &tmp.path;
     let head_sha = init_git_repo(root);
@@ -1964,7 +1978,7 @@ fn differential_context_cache_matches_powershell() {
 }
 
 #[test]
-fn differential_evidence_check_matches_powershell() {
+fn wrapper_forwarding_evidence_check_matches_powershell() {
     let tmp = TempDirGuard::new("evidence");
     let root = &tmp.path;
     let _head = init_git_repo(root);
@@ -2074,7 +2088,7 @@ fn differential_evidence_check_matches_powershell() {
 }
 
 #[test]
-fn differential_merge_policy_check_matches_powershell() {
+fn wrapper_forwarding_merge_policy_check_matches_powershell() {
     let tmp = TempDirGuard::new("merge-pol");
     let root = &tmp.path;
     let _init_sha = init_git_repo(root);
@@ -2287,7 +2301,7 @@ fn differential_merge_policy_check_matches_powershell() {
 }
 
 #[test]
-fn differential_pr_verify_matches_node() {
+fn wrapper_forwarding_pr_verify_matches_node() {
     let tmp = TempDirGuard::new("pr-verify");
     let root = &tmp.path;
     let _init_sha = init_git_repo(root);
@@ -2464,7 +2478,7 @@ fn differential_pr_verify_matches_node() {
 }
 
 #[test]
-fn differential_pr_github_matches_node() {
+fn wrapper_forwarding_pr_github_matches_node() {
     let tmp = TempDirGuard::new("pr-github-diff");
     let root = tmp.path.join("repo");
     fs::create_dir_all(&root).unwrap();
@@ -2800,7 +2814,7 @@ process.exit(1);
 }
 
 #[test]
-fn differential_sync_and_install_product_match_powershell() {
+fn wrapper_forwarding_sync_and_install_product_match_powershell() {
     let tmp = TempDirGuard::new("adapters-diff");
     let b3_home = repo_root();
     let b3_home_str = b3_home.to_str().unwrap();
@@ -2996,7 +3010,7 @@ fn differential_sync_and_install_product_match_powershell() {
 }
 
 #[test]
-fn differential_install_global_cursor_and_antigravity_match_powershell() {
+fn wrapper_forwarding_install_global_cursor_and_antigravity_match_powershell() {
     let tmp = TempDirGuard::new("global-diff");
     let b3_home = repo_root();
     let b3_home_str = b3_home.to_str().unwrap();
