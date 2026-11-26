@@ -93,7 +93,7 @@ if [[ -n "$REAL_BASH" && "$REAL_BASH" != *" "* ]]; then
   SHIM_SHEBANG="#!${REAL_BASH}"
 fi
 
-for _tool in bash sh git awk mawk gawk sed tr sort paste mktemp cat rm mv cp chmod dirname basename head tail wc grep cut uniq env pwd readlink realpath node python3 python cygpath; do
+for _tool in bash sh git awk mawk gawk sed tr sort paste mktemp cat rm mv cp chmod dirname basename head tail wc grep cut uniq env pwd readlink realpath node python3 python cygpath timeout; do
   _tp="$(command -v "$_tool" 2>/dev/null || true)"
   if [[ -n "$_tp" && -x "$_tp" ]] && ! is_winapps_stub "$_tp" && [[ ! -e "${NOGH_BIN}/${_tool}" ]]; then
     if [[ "$_tool" == "bash" || "$_tool" == "env" ]]; then
@@ -1054,20 +1054,28 @@ run_dual "$fx11b" "mock" "merge-policy-check" \
   -RepoRoot "$R1" -PrNumber 11 -CiStatus PASS -ReviewStatus PASS -LedgerPath "$LED11"
 assert_dual "11b-gh-auth-401-provider-unavailable" 2 "^PROVIDER_UNAVAILABLE: .*github_auth_failed" || t11_ok=false
 
-# 11c: Missing --pr-number when --require-remote-ci is requested fails closed
+# 11c: Missing --pr-number when --require-remote-ci is requested never downgrades (PROVIDER_UNAVAILABLE exit 2)
 git -C "$R1" update-ref refs/remotes/origin/main "$MAIN_SHA"
 run_dual "" "mock" "merge-policy-check" \
   --repo-root "$R1" --require-remote-ci --base-sha "$MAIN_SHA" --ledger-path "$LED11" --ci-status PASS --review-status PASS --changed-paths "docs/pr-main.md" \
   -- \
   -RepoRoot "$R1" -RequireRemoteCi -BaseSha "$MAIN_SHA" -LedgerPath "$LED11" -CiStatus PASS -ReviewStatus PASS -ChangedPaths "docs/pr-main.md"
-assert_dual "11c-missing-pr-number-require-remote-ci" 1 "^MERGE_BLOCKED: missing_pr_number$" || t11_ok=false
+assert_dual "11c-missing-pr-number-require-remote-ci" 2 "^PROVIDER_UNAVAILABLE: remote_ci_requires_provider_verification$" || t11_ok=false
 
-# 11d: Explicit --local-only with auto_merge=authorized returns LOCAL_ELIGIBLE_ONLY (exit 2)
+# 11d: Explicit --local-only with auto_merge=authorized blocks caller-only CI, then with valid receipt returns LOCAL_ELIGIBLE_ONLY (exit 2)
 run_dual "" "nogh" "merge-policy-check" \
   --repo-root "$R1" --local-only --base-sha "$MAIN_SHA" --ledger-path "$LED11" --pr-state OPEN --ci-status PASS --review-status PASS --changed-paths "docs/pr-main.md" \
   -- \
   -RepoRoot "$R1" -LocalOnly -BaseSha "$MAIN_SHA" -LedgerPath "$LED11" -PrState OPEN -CiStatus PASS -ReviewStatus PASS -ChangedPaths "docs/pr-main.md"
-assert_dual "11d-local-only-authorized-never-merges" 2 "^LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized$" || t11_ok=false
+assert_dual "11d-caller-ci-blocked-on-local-only" 1 "^MERGE_BLOCKED: ci_evidence_invalid\(ledger_unit_missing_verify_receipt:U01\)$" || t11_ok=false
+
+REC11=".b3/research-ship/runs/pr-11/ci.verify"
+bash "$GUARD_SH" verify-run --repo-root "$R1" --verify-cmd "echo ci-11-ok" --receipt-path "$REC11" --task-id "CI11" >/dev/null
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R1" --local-only --receipt-path "$REC11" --base-sha "$MAIN_SHA" --ledger-path "$LED11" --pr-state OPEN --review-status PASS --changed-paths "docs/pr-main.md" \
+  -- \
+  -RepoRoot "$R1" -LocalOnly -ReceiptPath "$REC11" -BaseSha "$MAIN_SHA" -LedgerPath "$LED11" -PrState OPEN -ReviewStatus PASS -ChangedPaths "docs/pr-main.md"
+assert_dual "11d2-local-only-authorized-never-merges" 2 "^LOCAL_ELIGIBLE_ONLY: engineering_ready=true remote_authorization=UNVERIFIED\(.*\) auto_merge=authorized " || t11_ok=false
 git -C "$R1" update-ref -d refs/remotes/origin/main
 $t11_ok && pass "11-provider-unavailability-and-local-only-separation"
 
@@ -1126,10 +1134,18 @@ RGL_MAIN0="$(git -C "$RGL" rev-parse HEAD)"
 git -C "$RGL" update-ref refs/remotes/origin/main "$RGL_MAIN0"
 git -C "$RGL" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 
+REC_GL0=".b3/ship/rgl0-ci.verify"
+bash "$GUARD_SH" verify-run --repo-root "$RGL" --verify-cmd "echo gl0-ci" --receipt-path "$REC_GL0" --task-id "GL0" >/dev/null
 run_dual "" "nogh" "merge-policy-check" \
   --repo-root "$RGL" --ci-status PASS --review-status PASS --changed-paths "docs/a.md" \
   -- \
   -RepoRoot "$RGL" -CiStatus PASS -ReviewStatus PASS -ChangedPaths "docs/a.md"
+assert_dual "12b0-gitlab-disabled-caller-ci-unverified" 1 "^MERGE_BLOCKED: ci_evidence_unverified\(caller_reported_ci_cannot_authorize\)$" || t12_ok=false
+
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$RGL" --receipt-path "$REC_GL0" --review-status PASS --changed-paths "docs/a.md" \
+  -- \
+  -RepoRoot "$RGL" -ReceiptPath "$REC_GL0" -ReviewStatus PASS -ChangedPaths "docs/a.md"
 assert_dual "12b1-gitlab-disabled-pr-ready" 2 "^PR_READY: auto_merge=disabled$" || t12_ok=false
 
 run_dual "" "nogh" "merge-policy-check" \
@@ -1154,13 +1170,13 @@ run_dual "" "nogh" "merge-policy-check" \
   --repo-root "$RGL" --local-only --ledger-path "$LED_GL" \
   -- \
   -RepoRoot "$RGL" -LocalOnly -LedgerPath "$LED_GL"
-assert_dual "12b3-gitlab-local-only" 2 "^LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized$" || t12_ok=false
+assert_dual "12b3-gitlab-local-only" 2 "^LOCAL_ELIGIBLE_ONLY: engineering_ready=true remote_authorization=UNVERIFIED\(remote_ref_unverifiable\) auto_merge=authorized target_ref=refs/remotes/origin/main target_sha=${RGL_MAIN} head_sha=${RGL_HEAD} policy_authority=refs/remotes/origin/main@${RGL_MAIN} governance=CLEAR$" || t12_ok=false
 
 run_dual "" "nogh" "merge-policy-check" \
   --repo-root "$RGL" --ledger-path "$LED_GL" \
   -- \
   -RepoRoot "$RGL" -LedgerPath "$LED_GL"
-assert_dual "12b4-gitlab-merge-authorized-local" 0 "^MERGE_AUTHORIZED: mode=local target_ref=refs/remotes/origin/main target_sha=${RGL_MAIN} head_sha=${RGL_HEAD} policy_authority=refs/remotes/origin/main@${RGL_MAIN} auto_merge=authorized governance=CLEAR$" || t12_ok=false
+assert_dual "12b4-gitlab-remote-backed-never-authorizes-without-provider" 2 "^LOCAL_ELIGIBLE_ONLY: engineering_ready=true remote_authorization=UNVERIFIED\(remote_ref_unverifiable\) auto_merge=authorized target_ref=refs/remotes/origin/main target_sha=${RGL_MAIN} head_sha=${RGL_HEAD} policy_authority=refs/remotes/origin/main@${RGL_MAIN} governance=CLEAR$" || t12_ok=false
 $t12_ok && pass "12-provider-neutral-zero-remote-and-gitlab-parity"
 
 # ============================================================================
@@ -1321,6 +1337,202 @@ if [[ "$U_SH_RC" -ne 0 || "$U_PS_RC" -ne 0 || "$C_SH_RC" -ne 0 || "$C_PS_RC" -ne
   t13_ok=false
 fi
 $t13_ok && pass "13-security-review-hardening-regressions"
+
+# ============================================================================
+# TEST 14: R001 CI Evidence Binding & R003 Local Bare Remote Freshness (PS+SH)
+# ============================================================================
+t14_ok=true
+BARE_R14="${SANDBOX}/r14-bare.git"
+git init --bare -q "$BARE_R14"
+git -C "$BARE_R14" symbolic-ref HEAD refs/heads/main
+_bare_r14_p="$(cd "$BARE_R14" && pwd -W 2>/dev/null || pwd)"
+_bare_r14_p="${_bare_r14_p//\\//}"
+[[ "$_bare_r14_p" == /* ]] && BARE_R14_URI="file://${_bare_r14_p}" || BARE_R14_URI="file:///${_bare_r14_p}"
+R14="${SANDBOX}/r14-local"
+init_repo "$R14" "$BARE_R14_URI" "main"
+mkdir -p "${R14}/.b3" "${R14}/docs"
+printf '{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true}\n' > "${R14}/.b3/research-policy.json"
+printf 'base14\n' > "${R14}/docs/a.md"
+printf 'base14b\n' > "${R14}/docs/b.md"
+git -C "$R14" add . && git -C "$R14" commit -qm "r14 main"
+git -C "$R14" push -q -u origin main
+R14_MAIN="$(git -C "$R14" rev-parse HEAD)"
+git -C "$R14" checkout -qb "feat/r14" "$R14_MAIN"
+printf 'feat a 1\n' > "${R14}/docs/a.md"
+printf 'feat b 1\n' > "${R14}/docs/b.md"
+git -C "$R14" add . && git -C "$R14" commit -qm "r14 feat commit 1"
+R14_C1="$(git -C "$R14" rev-parse HEAD)"
+REC14_STALE=".b3/ship/r14-stale.verify"
+bash "$GUARD_SH" verify-run --repo-root "$R14" --verify-cmd "echo c1-ok" --receipt-path "$REC14_STALE" --task-id "R14S" >/dev/null
+
+printf 'feat b 2\n' > "${R14}/docs/b.md"
+git -C "$R14" add . && git -C "$R14" commit -qm "r14 feat commit 2"
+R14_HEAD="$(git -C "$R14" rev-parse HEAD)"
+REC14_NARROW=".b3/ship/r14-narrow.verify"
+REC14_FULL=".b3/ship/r14-full.verify"
+bash "$GUARD_SH" verify-run --repo-root "$R14" --verify-cmd "echo narrow-ok" --receipt-path "$REC14_NARROW" --task-id "R14N" --relevant-paths "docs/a.md" >/dev/null
+bash "$GUARD_SH" verify-run --repo-root "$R14" --verify-cmd "echo full-ok" --receipt-path "$REC14_FULL" --task-id "R14F" >/dev/null
+
+LED14_NO_REC=".b3/ship/r14-norec-ledger.md"
+bash "$GUARD_SH" review-ledger --repo-root "$R14" --action init --ledger-path "$LED14_NO_REC" --base-sha "$R14_MAIN" --review-independence INDEPENDENT >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R14" --action update --ledger-path "$LED14_NO_REC" --unit-id U01 --status REVIEWED >/dev/null
+
+LED14_WITH_REC=".b3/ship/r14-rec-ledger.md"
+bash "$GUARD_SH" review-ledger --repo-root "$R14" --action init --ledger-path "$LED14_WITH_REC" --base-sha "$R14_MAIN" --review-independence INDEPENDENT >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R14" --action update --ledger-path "$LED14_WITH_REC" --unit-id U01 --status REVIEWED --receipt-path "$REC14_FULL" >/dev/null
+
+# 14a: Missing, caller-only PASS, stale SHA, and narrow-scope receipts all block
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R14" --ledger-path "$LED14_NO_REC" --ci-status PASS --changed-paths "docs/a.md,docs/b.md" \
+  -- \
+  -RepoRoot "$R14" -LedgerPath "$LED14_NO_REC" -CiStatus PASS -ChangedPaths "docs/a.md,docs/b.md"
+assert_dual "14a1-fabricated-caller-ci-pass-blocked" 1 "^MERGE_BLOCKED: ci_evidence_invalid\(ledger_unit_missing_verify_receipt:U01\)$" || t14_ok=false
+
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R14" --receipt-path "$REC14_STALE" --ledger-path "$LED14_NO_REC" --changed-paths "docs/a.md,docs/b.md" \
+  -- \
+  -RepoRoot "$R14" -ReceiptPath "$REC14_STALE" -LedgerPath "$LED14_NO_REC" -ChangedPaths "docs/a.md,docs/b.md"
+assert_dual "14a2-stale-sha-receipt-blocked" 1 "^MERGE_BLOCKED: ci_evidence_invalid\(.*\)$" || t14_ok=false
+
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R14" --receipt-path "$REC14_NARROW" --ledger-path "$LED14_NO_REC" --changed-paths "docs/a.md,docs/b.md" \
+  -- \
+  -RepoRoot "$R14" -ReceiptPath "$REC14_NARROW" -LedgerPath "$LED14_NO_REC" -ChangedPaths "docs/a.md,docs/b.md"
+assert_dual "14a3-narrow-scope-receipt-blocked" 1 "^MERGE_BLOCKED: ci_evidence_invalid\(.*\)$" || t14_ok=false
+
+# 14b: --require-remote-ci NEVER silently downgrades to local receipt
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R14" --require-remote-ci --receipt-path "$REC14_FULL" --ledger-path "$LED14_WITH_REC" --changed-paths "docs/a.md,docs/b.md" \
+  -- \
+  -RepoRoot "$R14" -RequireRemoteCi -ReceiptPath "$REC14_FULL" -LedgerPath "$LED14_WITH_REC" -ChangedPaths "docs/a.md,docs/b.md"
+assert_dual "14b-require-remote-ci-never-downgrades-to-local-receipt" 2 "^PROVIDER_UNAVAILABLE: remote_ci_requires_provider_verification$" || t14_ok=false
+
+# 14c: Reachable file:// bare remote with fresh ls-remote + ledger-embedded verify_receipt -> LOCAL_ELIGIBLE_ONLY (never MERGE_AUTHORIZED!)
+run_dual "" "mock" "merge-policy-check" \
+  --repo-root "$R14" --ledger-path "$LED14_WITH_REC" --changed-paths "docs/a.md,docs/b.md" \
+  -- \
+  -RepoRoot "$R14" -LedgerPath "$LED14_WITH_REC" -ChangedPaths "docs/a.md,docs/b.md"
+assert_dual "14c1-fresh-bare-remote-local-eligible-only" 2 "^LOCAL_ELIGIBLE_ONLY: engineering_ready=true remote_authorization=UNVERIFIED\(no_provider_verification\) auto_merge=authorized target_ref=refs/remotes/origin/main target_sha=${R14_MAIN} head_sha=${R14_HEAD} policy_authority=refs/remotes/origin/main@${R14_MAIN} governance=CLEAR$" || t14_ok=false
+
+# Advance bare remote refs/heads/main WITHOUT fetching so local refs/remotes/origin/main is stale -> MERGE_BLOCKED: stale_remote_ref
+R14_CLONE="${SANDBOX}/r14-other-clone"
+git clone -q -b main "$BARE_R14_URI" "$R14_CLONE"
+git -C "$R14_CLONE" config user.email "other@example.com"
+git -C "$R14_CLONE" config user.name "Other User"
+printf 'advance remote\n' > "${R14_CLONE}/docs/remote-advance.md"
+git -C "$R14_CLONE" add . && git -C "$R14_CLONE" commit -qm "advance bare main"
+git -C "$R14_CLONE" push -q origin main
+R14_REMOTE_NEW="$(git -C "$R14_CLONE" rev-parse HEAD)"
+
+run_dual "" "mock" "merge-policy-check" \
+  --repo-root "$R14" --ledger-path "$LED14_WITH_REC" --changed-paths "docs/a.md,docs/b.md" \
+  -- \
+  -RepoRoot "$R14" -LedgerPath "$LED14_WITH_REC" -ChangedPaths "docs/a.md,docs/b.md"
+assert_dual "14c2-stale-remote-ref-blocked" 1 "^MERGE_BLOCKED: stale_remote_ref\((authority|target) local=${R14_MAIN} remote=${R14_REMOTE_NEW}\)$" || t14_ok=false
+
+# 14d: Post-merge against reachable bare remote:
+#   (1) Unpushed local merge after fetch -> remote ref fresh, commit not in remote target -> POST_MERGE_FAILED: merge_commit_not_in_remote_target
+#   (2) Advance bare remote again without fetching -> stale_remote_target_ref
+#   (3) Push merge & fetch -> POST_MERGE_VERIFIED mode=local
+git -C "$R14" fetch -q origin
+git -C "$R14" checkout -q main
+git -C "$R14" merge --ff-only -q origin/main
+git -C "$R14" merge --no-ff -qm "merge r14 feat" "$R14_HEAD"
+R14_MERGE="$(git -C "$R14" rev-parse HEAD)"
+run_dual "" "mock" "merge-policy-check" \
+  --repo-root "$R14" --post-merge --target-ref main --head-sha "$R14_HEAD" --merged-sha "$R14_MERGE" \
+  -- \
+  -RepoRoot "$R14" -PostMerge -TargetRef main -HeadSha "$R14_HEAD" -MergedSha "$R14_MERGE"
+assert_dual "14d0-post-merge-unpushed-bare-remote-fails" 1 "^POST_MERGE_FAILED: merge_commit_not_in_remote_target\(target_ref=main\)$" || t14_ok=false
+
+# Push bare main from R14_CLONE without fetching in R14 -> local origin/main is stale -> POST_MERGE_FAILED: stale_remote_target_ref
+printf 'advance remote 2\n' > "${R14_CLONE}/docs/remote-advance-2.md"
+git -C "$R14_CLONE" add . && git -C "$R14_CLONE" commit -qm "advance bare main 2"
+git -C "$R14_CLONE" push -q origin main
+run_dual "" "mock" "merge-policy-check" \
+  --repo-root "$R14" --post-merge --target-ref main --head-sha "$R14_HEAD" --merged-sha "$R14_MERGE" \
+  -- \
+  -RepoRoot "$R14" -PostMerge -TargetRef main -HeadSha "$R14_HEAD" -MergedSha "$R14_MERGE"
+assert_dual "14d1-post-merge-stale-bare-remote-fails" 1 "^POST_MERGE_FAILED: stale_remote_target_ref\(" || t14_ok=false
+
+# Rebase/reset local main on top of bare remote, re-merge feat, push & fetch -> POST_MERGE_VERIFIED mode=local
+git -C "$R14" fetch -q origin
+git -C "$R14" reset --hard -q origin/main
+git -C "$R14" merge --no-ff -qm "merge r14 feat cleanly" "$R14_HEAD"
+R14_MERGE="$(git -C "$R14" rev-parse HEAD)"
+git -C "$R14" push -q origin main
+git -C "$R14" fetch -q origin
+run_dual "" "mock" "merge-policy-check" \
+  --repo-root "$R14" --post-merge --target-ref main --head-sha "$R14_HEAD" --merged-sha "$R14_MERGE" \
+  -- \
+  -RepoRoot "$R14" -PostMerge -TargetRef main -HeadSha "$R14_HEAD" -MergedSha "$R14_MERGE"
+assert_dual "14d2-post-merge-fresh-bare-remote-passes" 0 "^POST_MERGE_VERIFIED: mode=local sha=${R14_MERGE} " || t14_ok=false
+
+$t14_ok && pass "14-r001-ci-receipts-and-r003-bare-remote-freshness"
+
+# ============================================================================
+# TEST 15: R002 Literal Unicode/Space/Bracket/Rename Paths + Worker Attribution
+# ============================================================================
+t15_ok=true
+R15="${SANDBOX}/r15-literal-paths"
+init_repo "$R15" "" "main"
+mkdir -p "${R15}/.b3" "${R15}/releases" "${R15}/docs"
+printf '{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true}\n' > "${R15}/.b3/research-policy.json"
+printf 'keep\n' > "${R15}/releases/v1.json"
+git -C "$R15" add . && git -C "$R15" commit -qm "init r15"
+R15_MAIN="$(git -C "$R15" rev-parse HEAD)"
+git -C "$R15" checkout -qb "feat/literal" "$R15_MAIN"
+printf '{"u":1}\n' > "${R15}/releases/tài liệu [v1] copy.json"
+git -C "$R15" add . && git -C "$R15" commit -qm "add protected unicode bracket space path"
+R15_HEAD_U="$(git -C "$R15" rev-parse HEAD)"
+REC15_U=".b3/ship/r15u.verify"
+LED15_U=".b3/ship/r15u-ledger.md"
+bash "$GUARD_SH" verify-run --repo-root "$R15" --verify-cmd "echo r15u" --receipt-path "$REC15_U" --task-id "R15U" >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R15" --action init --ledger-path "$LED15_U" --base-sha "$R15_MAIN" --review-independence INDEPENDENT >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R15" --action update --ledger-path "$LED15_U" --unit-id U01 --status REVIEWED --receipt-path "$REC15_U" >/dev/null
+
+# Local diff via -z detects literal Unicode + bracket + space protected file (even if caller omits exact filename via local diff or passes it)
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R15" --receipt-path "$REC15_U" --ledger-path "$LED15_U" \
+  -- \
+  -RepoRoot "$R15" -ReceiptPath "$REC15_U" -LedgerPath "$LED15_U"
+assert_dual "15a-literal-unicode-space-bracket-protected" 1 "^MERGE_BLOCKED: protected_paths=releases/tài liệu \[v1\] copy\.json$" || t15_ok=false
+
+# 15b: Rename out of protected path (git mv releases/v1.json -> docs/moved name [2].md) still caught cleanly via -z
+git -C "$R15" checkout -qb "feat/ren-lit" "$R15_MAIN"
+git -C "$R15" mv "releases/v1.json" "docs/moved name [2].md"
+git -C "$R15" commit -qm "rename out of releases"
+REC15_R=".b3/ship/r15r.verify"
+LED15_R=".b3/ship/r15r-ledger.md"
+bash "$GUARD_SH" verify-run --repo-root "$R15" --verify-cmd "echo r15r" --receipt-path "$REC15_R" --task-id "R15R" >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R15" --action init --ledger-path "$LED15_R" --base-sha "$R15_MAIN" --review-independence INDEPENDENT >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R15" --action update --ledger-path "$LED15_R" --unit-id U01 --status REVIEWED --receipt-path "$REC15_R" >/dev/null
+
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R15" --receipt-path "$REC15_R" --ledger-path "$LED15_R" \
+  -- \
+  -RepoRoot "$R15" -ReceiptPath "$REC15_R" -LedgerPath "$LED15_R"
+assert_dual "15b-rename-out-of-protected-z-caught" 1 "^MERGE_BLOCKED: protected_paths=releases/v1\.json$" || t15_ok=false
+
+# 15c: Zero-remote clean non-protected Unicode + bracket + space path with valid receipt -> MERGE_AUTHORIZED mode=local
+git -C "$R15" checkout -qb "feat/clean-lit" "$R15_MAIN"
+mkdir -p "${R15}/docs"
+printf 'ok\n' > "${R15}/docs/ghi chú [ok].md"
+git -C "$R15" add . && git -C "$R15" commit -qm "safe unicode bracket space"
+R15_CLEAN_HEAD="$(git -C "$R15" rev-parse HEAD)"
+REC15_C=".b3/ship/r15c.verify"
+LED15_C=".b3/ship/r15c-ledger.md"
+bash "$GUARD_SH" verify-run --repo-root "$R15" --verify-cmd "echo r15c" --receipt-path "$REC15_C" --task-id "R15C" >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R15" --action init --ledger-path "$LED15_C" --base-sha "$R15_MAIN" --review-independence INDEPENDENT >/dev/null
+bash "$GUARD_SH" review-ledger --repo-root "$R15" --action update --ledger-path "$LED15_C" --unit-id U01 --status REVIEWED --receipt-path "$REC15_C" >/dev/null
+
+run_dual "" "nogh" "merge-policy-check" \
+  --repo-root "$R15" --receipt-path "$REC15_C" --ledger-path "$LED15_C" \
+  -- \
+  -RepoRoot "$R15" -ReceiptPath "$REC15_C" -LedgerPath "$LED15_C"
+assert_dual "15c-safe-unicode-bracket-space-authorized" 0 "^MERGE_AUTHORIZED: mode=local target_ref=refs/heads/main target_sha=${R15_MAIN} head_sha=${R15_CLEAN_HEAD} " || t15_ok=false
+
+$t15_ok && pass "15-r002-literal-unicode-space-bracket-rename"
 
 printf '\nSummary: passed=%d failed=%d pwsh=%s\n' "$PASS_CNT" "$FAIL_CNT" "$HAS_PWSH"
 if [[ "$FAIL_CNT" -gt 0 ]]; then

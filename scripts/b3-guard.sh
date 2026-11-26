@@ -79,11 +79,17 @@ detect_repo_case_insensitive() {
   fi
 }
 
+has_ascii_cntrl() {
+  local s="$1"
+  [[ -n "$s" ]] || return 1
+  local cleaned="${s//[$'\x01'-$'\x1f'$'\x7f']/}"
+  [[ "$cleaned" != "$s" ]]
+}
+
 is_valid_literal_git_path() {
-  local LC_ALL=C
   local p="$1"
   [[ -n "$p" ]] || return 1
-  if [[ "$p" == *$'\n'* || "$p" == *$'\r'* || "$p" =~ [[:cntrl:]] ]]; then
+  if has_ascii_cntrl "$p"; then
     return 1
   fi
   [[ "$p" != /* ]] || return 1
@@ -157,7 +163,7 @@ run_git_paths_z() {
       local st="" p1="" p2=""
       while ((i < n)); do
         st="${toks[$i]}"; i=$((i + 1))
-        if [[ -z "$st" || "$st" =~ [[:cntrl:]] ]]; then
+        if [[ -z "$st" ]] || has_ascii_cntrl "$st"; then
           echo "${fail_pfx}: git_parser_failed(name-status)"
           return 1
         fi
@@ -357,7 +363,7 @@ split_path_csv_checked() {
   _CHECKED_CSV_PATHS=()
   [[ -n "$raw_csv" ]] || return 0
   local LC_ALL=C
-  if [[ "$raw_csv" =~ [[:cntrl:]] ]]; then
+  if has_ascii_cntrl "$raw_csv"; then
     echo "${err_prefix}: invalid path control character"
     exit 1
   fi
@@ -382,7 +388,7 @@ split_path_csv_checked() {
     for part in "${parts[@]}"; do
       tok="$(trim_str "$part")"
       [[ -z "$tok" || "$tok" == "none" ]] && continue
-      if [[ "$tok" == *'*'* || "$tok" == *'?'* || "$tok" == *'['* ]]; then
+      if [[ "$tok" == *'*'* || "$tok" == *'?'* ]]; then
         echo "${err_prefix}: invalid glob in path '$tok'"
         exit 1
       fi
@@ -499,7 +505,7 @@ parse_wave_paths() {
   local re_gitmodules='(^|/)\.gitmodules$'
   local prev seen
   for part in "${parts[@]}"; do
-    if [[ "$part" =~ [[:cntrl:]] ]]; then
+    if has_ascii_cntrl "$part"; then
       tok="$(trim_str "$part")"
       [[ -n "$tok" ]] || tok="$part"
       echo "${error_prefix}: invalid path '$tok'"
@@ -508,7 +514,7 @@ parse_wave_paths() {
     tok="$(trim_str "$part")"
     [[ -z "$tok" || "$tok" == "none" ]] && continue
     slash="${tok//\\//}"
-    if [[ "$slash" == *"|"* || "$slash" == *:* || "$slash" == /* || "$slash" == *"//"* || "$slash" =~ $re_dotdot || "$slash" == *'*'* || "$slash" == *'?'* || "$slash" == *'['* ]]; then
+    if [[ "$slash" == *"|"* || "$slash" == *:* || "$slash" == /* || "$slash" == *"//"* || "$slash" =~ $re_dotdot || "$slash" == *'*'* || "$slash" == *'?'* ]]; then
       echo "${error_prefix}: invalid path '$tok'"
       exit 1
     fi
@@ -1166,7 +1172,7 @@ check_contained_repo_path() {
   local root="$1"
   local raw="$2"
   [[ -n "$raw" ]] || return 1
-  if [[ "$raw" =~ [[:cntrl:]] ]]; then return 1; fi
+  if has_ascii_cntrl "$raw"; then return 1; fi
   if [[ "$raw" == *" " ]]; then return 1; fi
   local trimmed canon_root
   trimmed="$(trim_str "$raw")"
@@ -1603,7 +1609,7 @@ normalize_merge_policy_path() {
   local raw="$1"
   _MP_NORM_PATH=""
   [[ -n "$raw" ]] || return 1
-  if [[ "$raw" == *$'\n'* || "$raw" == *$'\r'* || "$raw" =~ [[:cntrl:]] ]]; then return 1; fi
+  if has_ascii_cntrl "$raw"; then return 1; fi
   local s="${raw//\\//}"
   if [[ "$s" == "." || "$s" == "./" ]]; then
     _MP_NORM_PATH="."
@@ -1647,11 +1653,18 @@ protected_path_match_ci() {
 _LS_REMOTE_STATUS=""
 _LS_REMOTE_SHA=""
 git_ls_remote_ref() {
-  local root="$1" full_ref="$2" out="" rc=0 line
+  local root="$1" full_ref="$2" out="" rc=0 line to_bin="" to_low=""
   _LS_REMOTE_STATUS="UNREACHABLE"
   _LS_REMOTE_SHA=""
-  if command -v timeout >/dev/null 2>&1; then
-    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" timeout 8 git -C "$root" -c credential.helper= ls-remote --exit-code origin "$full_ref" 2>/dev/null)"; then rc=0; else rc=$?; fi
+  if [[ -x /usr/bin/timeout ]]; then
+    to_bin="/usr/bin/timeout"
+  else
+    to_bin="$(command -v timeout 2>/dev/null || true)"
+    to_low="$(printf '%s' "$to_bin" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    [[ "$to_low" == */system32/* || "$to_low" == *\\system32\\* || "$to_low" == *windowsapps* ]] && to_bin=""
+  fi
+  if [[ -n "$to_bin" ]]; then
+    if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" "$to_bin" 8 git -C "$root" -c credential.helper= ls-remote --exit-code origin "$full_ref" 2>/dev/null)"; then rc=0; else rc=$?; fi
   else
     if out="$(GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never GIT_ASKPASS="" SSH_ASKPASS="" git -C "$root" -c credential.helper= ls-remote --exit-code origin "$full_ref" 2>/dev/null)"; then rc=0; else rc=$?; fi
   fi
@@ -1949,11 +1962,11 @@ check_safe_repo_path_segments() {
   local raw="$1"
   local block_git="${2:-true}"
   [[ -n "$raw" ]] || return 1
-  if [[ "$raw" =~ [[:cntrl:]] ]]; then
+  if has_ascii_cntrl "$raw"; then
     return 1
   fi
   local s="${raw//\\//}"
-  if [[ "$s" == *:* || "$s" == /* || "$s" == */ || "$s" == ~* || "$s" == *'*'* || "$s" == *'?'* || "$s" == *'['* ]]; then
+  if [[ "$s" == *:* || "$s" == /* || "$s" == */ || "$s" == ~* || "$s" == *'*'* || "$s" == *'?'* ]]; then
     return 1
   fi
   local rem="$s" seg
@@ -1989,7 +2002,7 @@ validate_repo_write_path() {
   local raw_root="$1"
   local raw_arg="$2"
   [[ -n "$raw_arg" ]] || return 1
-  if [[ "$raw_arg" =~ [[:cntrl:]] || "$raw_arg" == *" " ]]; then
+  if has_ascii_cntrl "$raw_arg" || [[ "$raw_arg" == *" " ]]; then
     return 1
   fi
   local root
@@ -2909,7 +2922,7 @@ run_verify_check() {
     if [[ "$_raw_vrel" == \[*\] ]]; then
       _raw_vrel="${_raw_vrel#[}"; _raw_vrel="${_raw_vrel%]}"
     fi
-    if [[ "$_raw_vrel" == *'*'* || "$_raw_vrel" == *'?'* || "$_raw_vrel" == *'['* ]]; then
+    if [[ "$_raw_vrel" == *'*'* || "$_raw_vrel" == *'?'* ]]; then
       _VR_MSG="VERIFY_CORRUPT: invalid relevant_paths"
       return 1
     fi
@@ -2943,7 +2956,7 @@ run_verify_check() {
     if [[ "$_raw_rrel" == \[*\] ]]; then
       _raw_rrel="${_raw_rrel#[}"; _raw_rrel="${_raw_rrel%]}"
     fi
-    if [[ "$_raw_rrel" == *'*'* || "$_raw_rrel" == *'?'* || "$_raw_rrel" == *'['* ]]; then
+    if [[ "$_raw_rrel" == *'*'* || "$_raw_rrel" == *'?'* ]]; then
       _VR_MSG="VERIFY_CHECK_FAIL: invalid relevant_paths"
       return 1
     fi
@@ -5193,9 +5206,8 @@ serialize_review_ledger() {
 }
 
 has_control_chars() {
-  local LC_ALL=C
   local s="$1"
-  [[ -n "$s" && "$s" =~ [[:cntrl:]] ]]
+  has_ascii_cntrl "$s"
 }
 
 join_csv() {
@@ -5226,7 +5238,7 @@ check_checkpoint_file_path() {
   _CP_REL=""
   _CP_FULL=""
   [[ -n "$raw" ]] || return 2
-  if [[ "$raw" =~ [[:cntrl:]] ]]; then return 2; fi
+  if has_ascii_cntrl "$raw"; then return 2; fi
   if [[ "$raw" == *" " ]]; then return 2; fi
   local trimmed
   trimmed="$(trim_str "$raw")"
@@ -5287,7 +5299,7 @@ split_strict_paths() {
     _CTX_BAD_TOKEN="<empty>"
     return 1
   fi
-  if [[ "$csv" =~ [[:cntrl:]] ]]; then
+  if has_ascii_cntrl "$csv"; then
     _CTX_BAD_TOKEN="$csv"
     return 1
   fi
@@ -10846,15 +10858,15 @@ ${el}"
           [[ $_led_dis_rc -eq 0 ]] && OPT_LED_OUT="$_led_dis_out"
         fi
       fi
+      if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#LOCAL_PRE_CHANGED_ARR[@]} -eq 0 ]]; then
+        echo "MERGE_BLOCKED: missing_changed_paths"
+        exit 1
+      fi
       if [[ "$REQ_CI" == "true" || -n "$(trim_str "$RECEIPT_PATH")" ]]; then
         assert_local_ci_evidence "$REPO_ROOT" "$LIVE_HEAD_SHA" "$RECEIPT_PATH" "$OPT_LED_OUT" "$IGNORE_DIRTY" "$CI_STATUS" "$REQ_CI" "$_MP_CASE_INSENSITIVE" ${LOCAL_PRE_CHANGED_ARR[@]+"${LOCAL_PRE_CHANGED_ARR[@]}"}
       fi
       if [[ "$REQ_REV" == "true" && "$REVIEW_STATUS" != "PASS" && -z "$LED_OPT_TRIM" ]]; then
         echo "MERGE_BLOCKED: review_status=$REVIEW_STATUS"
-        exit 1
-      fi
-      if [[ ${#PROT_ARR[@]} -gt 0 && "$ALLOW_PROT" != "true" && ${#LOCAL_PRE_CHANGED_ARR[@]} -eq 0 ]]; then
-        echo "MERGE_BLOCKED: missing_changed_paths"
         exit 1
       fi
       BASE_OPT_TRIM="$(trim_str "$BASE_SHA")"

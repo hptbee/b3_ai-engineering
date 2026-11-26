@@ -150,7 +150,7 @@ function Split-PathCsvChecked([string]$Csv, [string]$ErrorPrefix, [switch]$Rejec
     foreach ($part in ($cleaned -split ',')) {
         $tok = $part.Trim()
         if (-not $tok -or $tok -ceq 'none') { continue }
-        if ($tok -match '[\*\?\[]') {
+        if ($tok -match '[\*\?]') {
             Fail "${ErrorPrefix}: invalid glob in path '$tok'" 1
         }
         $slash = $tok -replace '\\', '/'
@@ -195,7 +195,7 @@ function ConvertTo-WavePaths([string]$Csv, [switch]$RejectProtected, [switch]$Re
         $tok = $part.Trim()
         if (-not $tok -or $tok -ceq 'none') { continue }
         $slash = $tok -replace '\\', '/'
-        if ($slash.Contains('|') -or $slash.Contains(':') -or $slash.StartsWith('/') -or $slash.Contains('//') -or ($slash -match '(^|/)\.\.(/|$)') -or ($slash -match '[\*\?\[]')) {
+        if ($slash.Contains('|') -or $slash.Contains(':') -or $slash.StartsWith('/') -or $slash.Contains('//') -or ($slash -match '(^|/)\.\.(/|$)') -or ($slash -match '[\*\?]')) {
             return @{ Error = "${ErrorPrefix}: invalid path '$tok'"; Paths = @(); ExplicitEmpty = $false }
         }
         $norm = ''
@@ -488,9 +488,16 @@ function Format-WinArg([string]$Arg) {
 function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '', [hashtable]$ExtraEnv = $null, [int]$TimeoutMs = 0) {
     $useStdIn = $PSBoundParameters.ContainsKey('StdInText')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'git'
+    $gitExeName = 'git'
+    $gCmd = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($gCmd -and $gCmd.Source -and ($gCmd.Source -imatch '[\\/]mingw(?:32|64)[\\/]bin[\\/]git\.exe$')) {
+        $cmdWrap = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $gCmd.Source))) 'cmd\git.exe'
+        if (Test-Path -LiteralPath $cmdWrap -PathType Leaf) { $gitExeName = $cmdWrap }
+    }
+    $psi.FileName = $gitExeName
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables.Remove('MSYS2_ARG_CONV_EXCL')
     if ($ExtraEnv) {
         foreach ($kv in $ExtraEnv.GetEnumerator()) {
             $psi.EnvironmentVariables[[string]$kv.Key] = [string]$kv.Value
@@ -1055,7 +1062,7 @@ function Test-SafeRepoPathSegments([string]$PathValue, [bool]$BlockGit = $true) 
     if ([string]::IsNullOrEmpty($PathValue)) { return $false }
     if ($PathValue -match '[\x00-\x1F\x7F]') { return $false }
     $s = $PathValue -replace '\\', '/'
-    if ($s.Contains(':') -or $s.StartsWith('/') -or $s.EndsWith('/') -or $s.StartsWith('~') -or ($s -match '[\*\?\[]')) { return $false }
+    if ($s.Contains(':') -or $s.StartsWith('/') -or $s.EndsWith('/') -or $s.StartsWith('~') -or ($s -match '[\*\?]')) { return $false }
     foreach ($seg in ($s -split '/')) {
         if ([string]::IsNullOrEmpty($seg) -or $seg -ceq '.' -or $seg -ceq '..' -or ($seg -match '[\. ]$')) {
             return $false
@@ -1589,7 +1596,7 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
         if ($rawRelKv.StartsWith('[') -and $rawRelKv.EndsWith(']')) {
             $rawRelKv = $rawRelKv.Substring(1, $rawRelKv.Length - 2)
         }
-        if ($rawRelKv -match '[\*\?\[]') {
+        if ($rawRelKv -match '[\*\?]') {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid relevant_paths' }
         }
         $relSpec = @(Split-CsvList $kv['relevant_paths'] -AsPaths)
@@ -1611,7 +1618,7 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
         if ($rawReqRel.StartsWith('[') -and $rawReqRel.EndsWith(']')) {
             $rawReqRel = $rawReqRel.Substring(1, $rawReqRel.Length - 2)
         }
-        if ($rawReqRel -match '[\*\?\[]') {
+        if ($rawReqRel -match '[\*\?]') {
             return @{ Code = 1; Message = 'VERIFY_CHECK_FAIL: invalid relevant_paths' }
         }
         $reqSpec = @(Split-CsvList $ReqRelPathsArg -AsPaths)
@@ -7313,14 +7320,14 @@ switch ($Command) {
                     }
                 }
             }
+            if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $localPreChangedArr.Count -eq 0) {
+                Fail 'MERGE_BLOCKED: missing_changed_paths' 1
+            }
             if ($requireCi -or ($ReceiptPath -and $ReceiptPath.Trim())) {
                 [void](Assert-LocalCiEvidence $RepoRoot $liveHeadSha $localPreChangedArr $ReceiptPath $optLedObj $ignored $ciSt $requireCi $mpCaseInsensitive)
             }
             if ($requireReview -and $revSt -cne 'PASS' -and (-not ($LedgerPath -and $LedgerPath.Trim()))) {
                 Fail "MERGE_BLOCKED: review_status=$revSt" 1
-            }
-            if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $localPreChangedArr.Count -eq 0) {
-                Fail 'MERGE_BLOCKED: missing_changed_paths' 1
             }
             if ($BaseSha -and $BaseSha.Trim()) {
                 $bt = $BaseSha.Trim()

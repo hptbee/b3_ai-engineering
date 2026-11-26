@@ -1,4 +1,4 @@
-# Behavioral checks for ship hardening. Not a host skill-discovery test.
+﻿# Behavioral checks for ship hardening. Not a host skill-discovery test.
 # Usage: powershell -File scripts/validate-ship-behavior.ps1
 param(
     [switch]$AllowIncompleteBash
@@ -3261,6 +3261,102 @@ try {
         Pass 'ship-parallel-wave-contracts-and-recovery'
     } else {
         FailCheck 'ship-parallel-wave-contracts-and-recovery' ($crErrs -join '; ')
+    }
+
+    # --- R002 / LOW #2 / Git Fail-Closed / Worker Attribution Adversarial Regressions (PS + Bash) ---
+    $advErrs = New-Object System.Collections.Generic.List[string]
+    $rAdv = Join-Path $sandbox 'adv-r002-low2'
+    $rAdvPosix = To-PosixPath $rAdv
+    $utf8NoBomAdv = New-Object System.Text.UTF8Encoding($false)
+    Init-B3TestRepo -RepoPath $rAdv -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'adv-base'
+    New-Item -ItemType Directory -Path (Join-Path $rAdv 'docs'), (Join-Path $rAdv 'src') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $rAdv 'docs\tài liệu [1] spaced.md'), "uni1`n", $utf8NoBomAdv)
+    [IO.File]::WriteAllText((Join-Path $rAdv 'docs\ lead.md'), "leadspace`n", $utf8NoBomAdv)
+    [IO.File]::WriteAllText((Join-Path $rAdv 'src\a.ts'), "export const a = 1;`n", $utf8NoBomAdv)
+    & git -C $rAdv add . | Out-Null
+    & git -C $rAdv commit -qm 'adv-seed' | Out-Null
+    $advBase = (& git -C $rAdv rev-parse HEAD).Trim()
+
+    # Check worker attribution UNVERIFIED_COMBINED_ONLY (combined wave without -WorkerChanges NEVER claims verified)
+    [IO.File]::WriteAllText((Join-Path $rAdv 'src\a.ts'), "export const a = 2;`n", $utf8NoBomAdv)
+    $mcUnvPs = Invoke-PsGuard @('mechanical-check', '-RepoRoot', $rAdv, '-BaseSha', $advBase, '-WaveSpecs', 'T01=src/a.ts')
+    if ($mcUnvPs.Code -ne 0 -or ($mcUnvPs.Text -notmatch 'UNVERIFIED_COMBINED_ONLY')) {
+        $advErrs.Add("PS worker attribution expected UNVERIFIED_COMBINED_ONLY: $($mcUnvPs.Text)")
+    }
+    if ($script:HasBash) {
+        $mcUnvSh = Invoke-ShGuard @('mechanical-check', '--repo-root', $rAdvPosix, '--base-sha', $advBase, '--wave-specs', 'T01=src/a.ts')
+        if ($mcUnvSh.Code -ne 0 -or ($mcUnvSh.Text -notmatch 'UNVERIFIED_COMBINED_ONLY')) {
+            $advErrs.Add("SH worker attribution expected UNVERIFIED_COMBINED_ONLY: $($mcUnvSh.Text)")
+        }
+    }
+
+    # Check literal Unicode/bracket/leading-space precommit & verify-run/check across PS + SH
+    & git -C $rAdv checkout -- src/a.ts | Out-Null
+    [IO.File]::WriteAllText((Join-Path $rAdv 'docs\tài liệu [1] spaced.md'), "uni2`n", $utf8NoBomAdv)
+    [IO.File]::WriteAllText((Join-Path $rAdv 'docs\ lead.md'), "leadspace2`n", $utf8NoBomAdv)
+    $advRec = '.b3/ship/runs/r-adv/evidence/lit.verify'
+    $advVr = Invoke-PsGuard @('verify-run', '-RepoRoot', $rAdv, '-VerifyCmd', 'echo lit-ok', '-ReceiptPath', $advRec, '-TaskId', 'ADVLIT', '-RelevantPaths', 'docs/tài liệu [1] spaced.md,docs/ lead.md')
+    & git -C $rAdv add 'docs/tài liệu [1] spaced.md' 'docs/ lead.md' | Out-Null
+    $advPcPs = Invoke-PsGuard @('precommit', '-RepoRoot', $rAdv, '-AllowedPaths', 'docs/tài liệu [1] spaced.md,docs/ lead.md', '-RequireVerifyReceipt', $advRec)
+    if ($advVr.Code -ne 0 -or $advPcPs.Code -ne 0 -or ($advPcPs.Text.Trim() -cne 'PRECOMMIT_OK')) {
+        $advErrs.Add("PS literal Unicode/space/bracket precommit failed: vr=$($advVr.Code) pc=$($advPcPs.Code) $($advPcPs.Text)")
+    }
+    $guardShAdvPosix = (To-PosixPath $root) + '/scripts/b3-guard.sh'
+    if ($script:HasBash) {
+        $advPcSh = Invoke-ShGuard @('precommit', '--repo-root', $rAdvPosix, '--allowed-paths', 'docs/tài liệu [1] spaced.md,docs/ lead.md', '--require-verify-receipt', $advRec)
+        if ($advPcSh.Code -ne 0 -or ($advPcSh.Text.Trim() -cne 'PRECOMMIT_OK')) {
+            $advErrs.Add("SH literal Unicode/space/bracket precommit failed: pc=$($advPcSh.Code) $($advPcSh.Text)")
+        }
+        # Case-sensitive FS check (core.ignorecase=false vs true): Protected dir 'releases/' MUST NOT block 'Releases/v1.json' when core.ignorecase=false
+        $rCs = Join-Path $sandbox 'adv-case-sens'
+        $rCsPosix = To-PosixPath $rCs
+        Init-B3TestRepo -RepoPath $rCs -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'cs'
+        & git -C $rCs config core.ignorecase false
+        New-Item -ItemType Directory -Path (Join-Path $rCs '.b3'), (Join-Path $rCs 'Releases') -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $rCs '.b3\research-policy.json'), '{"auto_merge":"disabled","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}', $utf8NoBomAdv)
+        & git -C $rCs add . | Out-Null
+        & git -C $rCs commit -qm 'cs-base' | Out-Null
+        $csBase = (& git -C $rCs rev-parse HEAD).Trim()
+        & git -C $rCs checkout -qb 'feat/cs' | Out-Null
+        [IO.File]::WriteAllText((Join-Path $rCs 'Releases\v1.json'), '{"v":1}', $utf8NoBomAdv)
+        & git -C $rCs add . | Out-Null
+        & git -C $rCs commit -qm 'cs-upper' | Out-Null
+        $csMpPs = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rCs, '-BaseSha', $csBase, '-ReviewStatus', 'PASS')
+        $csMpSh = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rCsPosix, '--base-sha', $csBase, '--review-status', 'PASS')
+        if ($csMpPs.Code -ne 2 -or $csMpPs.Text -notmatch '^PR_READY:' -or $csMpSh.Text -cne $csMpPs.Text) {
+            $advErrs.Add("Case-sensitive ignorecase=false parity failed: ps=$($csMpPs.Code)/$($csMpPs.Text) sh=$($csMpSh.Code)/$($csMpSh.Text)")
+        }
+        # Confirm ignorecase=true DOES fold Releases/v1.json against releases/
+        & git -C $rCs config core.ignorecase true
+        $ciMpPs = Invoke-PsGuard @('merge-policy-check', '-RepoRoot', $rCs, '-BaseSha', $csBase, '-ReviewStatus', 'PASS')
+        $ciMpSh = Invoke-ShGuard @('merge-policy-check', '--repo-root', $rCsPosix, '--base-sha', $csBase, '--review-status', 'PASS')
+        if ($ciMpPs.Code -ne 1 -or $ciMpPs.Text -notmatch '^MERGE_BLOCKED: protected_paths=Releases/v1\.json$' -or $ciMpSh.Text -cne $ciMpPs.Text) {
+            $advErrs.Add("Case-insensitive ignorecase=true parity failed: ps=$($ciMpPs.Code)/$($ciMpPs.Text) sh=$($ciMpSh.Code)/$($ciMpSh.Text)")
+        }
+    }
+
+    # Failing git binary on PATH fails closed on verify-check
+    $badGitDir = Join-Path $sandbox 'bad-git-bin'
+    New-Item -ItemType Directory -Path $badGitDir -Force | Out-Null
+    Add-Type -TypeDefinition 'public class B3BadGit { public static int Main() { System.Console.Error.WriteLine("fatal: simulated git failure"); return 128; } }' -OutputAssembly (Join-Path $badGitDir 'git.exe') -OutputType ConsoleApplication
+    [IO.File]::WriteAllText((Join-Path $badGitDir 'git'), "#!/usr/bin/env bash`necho 'fatal: simulated git failure' >&2`nexit 128`n", $utf8NoBomAdv)
+    $prevPathAdv = $env:PATH
+    try {
+        $env:PATH = "$badGitDir;$prevPathAdv"
+        $badVcPs = Invoke-PsGuard @('verify-check', '-RepoRoot', $rAdv, '-ReceiptPath', $advRec)
+        if ($badVcPs.Code -eq 0) { $advErrs.Add("PS verify-check did not fail closed on broken git binary") }
+    } finally {
+        $env:PATH = $prevPathAdv
+    }
+    if ($script:HasBash) {
+        $badShOut = & $script:GitBash -c "PATH='$($badGitDir -replace '\\','/'):/usr/bin:/bin' '$guardShAdvPosix' verify-check --repo-root '$rAdvPosix' --receipt-path '$advRec' 2>&1"
+        if ($LASTEXITCODE -eq 0) { $advErrs.Add("SH verify-check did not fail closed on broken git binary: $($badShOut -join ' ')") }
+    }
+
+    if ($advErrs.Count -eq 0) {
+        Pass 'r002-low2-git-fail-worker-attribution'
+    } else {
+        FailCheck 'r002-low2-git-fail-worker-attribution' ($advErrs -join '; ')
     }
 
     $ctxOut = (& powershell -NoProfile -File (Join-Path $root 'scripts\measure-context.ps1') -RepoRoot $root -Strict) -join "`n"
