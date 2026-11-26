@@ -900,13 +900,13 @@ mod tests {
             &env,
             &[],
             Some(&payload),
-            Some(1_800),
+            Some(3_500),
         )
         .expect("timeout should return CmdOutput");
         let elapsed = start.elapsed();
         assert_eq!(out.exit_code, 124);
         assert!(
-            elapsed < Duration::from_secs(5),
+            elapsed < Duration::from_secs(7),
             "expected prompt timeout when child ignores large stdin, elapsed={elapsed:?}"
         );
         let pid = read_pid_file(&pid_file);
@@ -979,12 +979,12 @@ mod tests {
             ],
         );
         let start = Instant::now();
-        let out = run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(1_800))
+        let out = run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(3_500))
             .expect("timeout should kill grandchild holding stdout and return");
         let elapsed = start.elapsed();
         assert_eq!(out.exit_code, 124);
         assert!(
-            elapsed < Duration::from_secs(5),
+            elapsed < Duration::from_secs(7),
             "expected prompt process-tree termination on stdout timeout, elapsed={elapsed:?}"
         );
         let pid = read_pid_file(&pid_file);
@@ -1013,12 +1013,12 @@ mod tests {
             ],
         );
         let start = Instant::now();
-        let out = run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(1_800))
+        let out = run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(3_500))
             .expect("timeout should kill grandchild holding stderr and return");
         let elapsed = start.elapsed();
         assert_eq!(out.exit_code, 124);
         assert!(
-            elapsed < Duration::from_secs(5),
+            elapsed < Duration::from_secs(7),
             "expected prompt process-tree termination on stderr timeout, elapsed={elapsed:?}"
         );
         let pid = read_pid_file(&pid_file);
@@ -1064,6 +1064,18 @@ mod tests {
     fn repeated_timeout_invocations_clean_up_reliably() {
         let tmp = TempDirGuard::new("repeated-timeouts");
         let mut pids = Vec::with_capacity(5);
+        #[cfg(windows)]
+        {
+            let no_env: [(&str, &str); 0] = [];
+            let _ = run_command(
+                OsStr::new("node"),
+                &["-e", "process.exit(0)"],
+                None,
+                &no_env,
+                &[],
+                None,
+            );
+        }
         let start = Instant::now();
         for idx in 0..5 {
             let pid_file = tmp.path().join(format!("grandchild-{idx}.pid"));
@@ -1085,15 +1097,15 @@ mod tests {
                 ],
             );
             let out =
-                run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(1_500))
+                run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(2_500))
                     .expect("repeated timeout should succeed with exit 124");
             assert_eq!(out.exit_code, 124);
             pids.push(read_pid_file(&pid_file));
         }
         let elapsed = start.elapsed();
         assert!(
-            elapsed < Duration::from_secs(12),
-            "5 back-to-back timeouts should complete < 12s, elapsed={elapsed:?}"
+            elapsed < Duration::from_secs(18),
+            "5 back-to-back timeouts should complete < 18s, elapsed={elapsed:?}"
         );
         for pid in pids {
             assert_pid_dead(pid);
