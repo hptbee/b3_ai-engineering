@@ -430,8 +430,12 @@ pub fn test_link_target(link_path: &Path, expected_dir: &Path, raw_target_only: 
     } else {
         raw_target
     };
-    let cand_norm = normalize_abs_path_str(&abs_cand);
-    let exp_norm = normalize_abs_path_str(expected_dir);
+    let cand_raw = normalize_abs_path_str(&abs_cand);
+    let exp_raw = normalize_abs_path_str(expected_dir);
+    let cand_norm =
+        normalize_abs_path_str(&crate::fs::expand_windows_long_path(Path::new(&cand_raw)));
+    let exp_norm =
+        normalize_abs_path_str(&crate::fs::expand_windows_long_path(Path::new(&exp_raw)));
     if cand_norm.is_empty() {
         return false;
     }
@@ -1242,4 +1246,73 @@ pub fn uninstall_managed_file(
     }
     *removed += 1;
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::{create_dir_link, test_link_target};
+    use crate::fs::expand_windows_long_path;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    extern "system" {
+        fn GetShortPathNameW(
+            lpsz_long_path: *const u16,
+            lpsz_short_path: *mut u16,
+            cch_buffer: u32,
+        ) -> u32;
+    }
+
+    fn to_short_path(path: &Path) -> Option<PathBuf> {
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+        if needed == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; needed as usize];
+        let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
+        if written == 0 || written >= needed {
+            return None;
+        }
+        Some(PathBuf::from(OsString::from_wide(&buf[..written as usize])))
+    }
+
+    #[test]
+    fn test_link_target_matches_across_windows_83_and_long_paths() {
+        let root =
+            std::env::temp_dir().join(format!("b3-adapter-link-test-{}", std::process::id()));
+        if root.exists() {
+            let _ = fs::remove_dir_all(&root);
+        }
+        let target = root.join("long_skill_target_directory");
+        let other = root.join("other_skill_target_directory");
+        let link = root.join("skill_junction");
+        fs::create_dir_all(&target).expect("create target dir");
+        fs::create_dir_all(&other).expect("create other dir");
+
+        let link_target_arg = to_short_path(&target).unwrap_or_else(|| target.clone());
+        create_dir_link(&link, &link_target_arg).expect("create junction");
+
+        let long_target = expand_windows_long_path(&target);
+        assert!(
+            test_link_target(&link, &long_target, false),
+            "test_link_target must match junction across 8.3 and long paths"
+        );
+        assert!(
+            !test_link_target(&link, &other, false),
+            "test_link_target must reject distinct target"
+        );
+
+        let _ = Command::new("cmd")
+            .args(["/d", "/c", "rmdir", &link.to_string_lossy()])
+            .status();
+        let _ = fs::remove_dir_all(&root);
+    }
 }
