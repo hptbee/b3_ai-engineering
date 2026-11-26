@@ -1,0 +1,22 @@
+[package]
+name = "b3"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "B3 AI Engineering deterministic native core"
+
+[lib]
+name = "b3"
+path = "src/lib.rs"
+
+[[bin]]
+name = "b3"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
