@@ -870,35 +870,19 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
-    fn write_ps1_script(dir: &Path, name: &str, body: &str) -> PathBuf {
-        let p = dir.join(name);
-        std::fs::write(&p, body).expect("write test ps1");
-        p
-    }
-
     #[test]
     fn timeout_triggers_when_child_ignores_large_stdin() {
         let tmp = TempDirGuard::new("large-stdin-timeout");
         let pid_file = tmp.path().join("child.pid");
         let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
         #[cfg(windows)]
-        let script = write_ps1_script(
-            tmp.path(),
-            "sleep_stdin.ps1",
-            "[IO.File]::WriteAllText($env:B3_TEST_PID_FILE, \"$PID\")\r\nStart-Sleep -Seconds 30\r\n",
+        let (prog, args) = (
+            "node",
+            vec![
+                "-e".to_string(),
+                "require('fs').writeFileSync(process.env.B3_TEST_PID_FILE,String(process.pid));setTimeout(()=>{},30000);".to_string(),
+            ],
         );
-        #[cfg(windows)]
-        let args = vec![
-            "-NoProfile".to_string(),
-            "-NonInteractive".to_string(),
-            "-ExecutionPolicy".to_string(),
-            "Bypass".to_string(),
-            "-File".to_string(),
-            script.to_string_lossy().into_owned(),
-        ];
-        #[cfg(windows)]
-        let prog = "powershell";
         #[cfg(not(windows))]
         let (prog, args) = (
             "sh",
@@ -979,21 +963,11 @@ mod tests {
         let pid_file = tmp.path().join("grandchild.pid");
         let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
         #[cfg(windows)]
-        let script = write_ps1_script(
-            tmp.path(),
-            "gc_stdout.ps1",
-            "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','30','127.0.0.1' -NoNewWindow -PassThru\r\n[IO.File]::WriteAllText($env:B3_TEST_PID_FILE, \"$($p.Id)\")\r\n",
-        );
-        #[cfg(windows)]
         let (prog, args) = (
-            "powershell",
+            "node",
             vec![
-                "-NoProfile".to_string(),
-                "-NonInteractive".to_string(),
-                "-ExecutionPolicy".to_string(),
-                "Bypass".to_string(),
-                "-File".to_string(),
-                script.to_string_lossy().into_owned(),
+                "-e".to_string(),
+                "const fs=require('fs'),{spawn}=require('child_process');const p=spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{stdio:['ignore',1,'ignore']});fs.writeFileSync(process.env.B3_TEST_PID_FILE,String(p.pid));".to_string(),
             ],
         );
         #[cfg(not(windows))]
@@ -1021,33 +995,15 @@ mod tests {
     fn timeout_kills_grandchild_holding_stderr_pipe() {
         let tmp = TempDirGuard::new("grandchild-stderr");
         let pid_file = tmp.path().join("grandchild.pid");
-        #[cfg(windows)]
-        let out_file = tmp.path().join("child.out");
-        #[cfg(windows)]
-        let script = write_ps1_script(
-            tmp.path(),
-            "gc_stderr.ps1",
-            "$psi = [Diagnostics.ProcessStartInfo]::new('ping.exe', '-n 30 127.0.0.1')\r\n$psi.UseShellExecute = $false\r\n$psi.CreateNoWindow = $true\r\n$psi.RedirectStandardOutput = $true\r\n$psi.RedirectStandardError = $false\r\n$p = [Diagnostics.Process]::Start($psi)\r\n[IO.File]::WriteAllText($env:B3_TEST_PID_FILE, \"$($p.Id)\")\r\n",
-        );
-        #[cfg(windows)]
-        let env = [
-            ("B3_TEST_PID_FILE", pid_file.as_os_str()),
-            ("B3_TEST_OUT_FILE", out_file.as_os_str()),
-        ];
+        let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
         #[cfg(windows)]
         let (prog, args) = (
-            "powershell",
+            "node",
             vec![
-                "-NoProfile".to_string(),
-                "-NonInteractive".to_string(),
-                "-ExecutionPolicy".to_string(),
-                "Bypass".to_string(),
-                "-File".to_string(),
-                script.to_string_lossy().into_owned(),
+                "-e".to_string(),
+                "const fs=require('fs'),{spawn}=require('child_process');const p=spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{stdio:['ignore','ignore',2]});fs.writeFileSync(process.env.B3_TEST_PID_FILE,String(p.pid));".to_string(),
             ],
         );
-        #[cfg(not(windows))]
-        let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
         #[cfg(not(windows))]
         let (prog, args) = (
             "sh",
@@ -1073,28 +1029,15 @@ mod tests {
     fn parent_exits_while_descendant_remains_alive_is_cleaned_up() {
         let tmp = TempDirGuard::new("detached-descendant");
         let pid_file = tmp.path().join("descendant.pid");
-        #[cfg(windows)]
-        let script = write_ps1_script(
-            tmp.path(),
-            "detached.ps1",
-            "$psi = [Diagnostics.ProcessStartInfo]::new('ping.exe', '-n 30 127.0.0.1')\r\n$psi.UseShellExecute = $true\r\n$psi.WindowStyle = 'Hidden'\r\n$p = [Diagnostics.Process]::Start($psi)\r\n[IO.File]::WriteAllText($env:B3_TEST_PID_FILE, \"$($p.Id)\")\r\n",
-        );
-        #[cfg(windows)]
         let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
         #[cfg(windows)]
         let (prog, args) = (
-            "powershell",
+            "node",
             vec![
-                "-NoProfile".to_string(),
-                "-NonInteractive".to_string(),
-                "-ExecutionPolicy".to_string(),
-                "Bypass".to_string(),
-                "-File".to_string(),
-                script.to_string_lossy().into_owned(),
+                "-e".to_string(),
+                "const fs=require('fs'),{spawn}=require('child_process');const p=spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{stdio:'ignore',detached:true});fs.writeFileSync(process.env.B3_TEST_PID_FILE,String(p.pid));process.exit(0);".to_string(),
             ],
         );
-        #[cfg(not(windows))]
-        let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
         #[cfg(not(windows))]
         let (prog, args) = (
             "sh",
@@ -1121,26 +1064,16 @@ mod tests {
     fn repeated_timeout_invocations_clean_up_reliably() {
         let tmp = TempDirGuard::new("repeated-timeouts");
         let mut pids = Vec::with_capacity(5);
-        #[cfg(windows)]
-        let script = write_ps1_script(
-            tmp.path(),
-            "repeat_gc.ps1",
-            "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','30','127.0.0.1' -NoNewWindow -PassThru\r\n[IO.File]::WriteAllText($env:B3_TEST_PID_FILE, \"$($p.Id)\")\r\nStart-Sleep -Seconds 30\r\n",
-        );
         let start = Instant::now();
         for idx in 0..5 {
             let pid_file = tmp.path().join(format!("grandchild-{idx}.pid"));
             let env = [("B3_TEST_PID_FILE", pid_file.as_os_str())];
             #[cfg(windows)]
             let (prog, args) = (
-                "powershell",
+                "node",
                 vec![
-                    "-NoProfile".to_string(),
-                    "-NonInteractive".to_string(),
-                    "-ExecutionPolicy".to_string(),
-                    "Bypass".to_string(),
-                    "-File".to_string(),
-                    script.to_string_lossy().into_owned(),
+                    "-e".to_string(),
+                    "const fs=require('fs'),{spawn}=require('child_process');const p=spawn(process.execPath,['-e','setTimeout(()=>{},30000)'],{stdio:['ignore',1,2]});fs.writeFileSync(process.env.B3_TEST_PID_FILE,String(p.pid));setTimeout(()=>{},30000);".to_string(),
                 ],
             );
             #[cfg(not(windows))]
@@ -1152,7 +1085,7 @@ mod tests {
                 ],
             );
             let out =
-                run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(1_600))
+                run_command_timeout(OsStr::new(prog), &args, None, &env, &[], None, Some(1_500))
                     .expect("repeated timeout should succeed with exit 124");
             assert_eq!(out.exit_code, 124);
             pids.push(read_pid_file(&pid_file));

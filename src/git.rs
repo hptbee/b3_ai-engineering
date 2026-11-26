@@ -726,7 +726,18 @@ pub fn get_canonical_git_path(dir: &Path, rev_flag: &str) -> Option<String> {
         return None;
     }
     let resolved = resolve_unresolved_path(dir, &gd);
-    Some(normalize_path_value(&resolved.to_string_lossy()))
+    let norm = normalize_path_value(&resolved.to_string_lossy());
+    #[cfg(target_os = "macos")]
+    {
+        if norm == "/var"
+            || norm.starts_with("/var/")
+            || norm == "/tmp"
+            || norm.starts_with("/tmp/")
+        {
+            return Some(format!("/private{norm}"));
+        }
+    }
+    Some(norm)
 }
 
 /// Resolves the active `.git` directory for `root`.

@@ -42,16 +42,16 @@ jobs:
       - name: Check static context budget and eval fixtures
         shell: bash
         run: |
-          ./scripts/measure-context.sh --strict
-          ./scripts/validate-evals.sh
+          bash ./scripts/measure-context.sh --strict
+          bash ./scripts/validate-evals.sh
 
       - name: "Run merge-security suite (Windows: b3-guard.sh + b3-guard.ps1; Linux/macOS: native contract via bash)"
         shell: bash
         run: |
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            ./scripts/validate-merge-security.sh
+            bash ./scripts/validate-merge-security.sh
           else
-            ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
+            bash ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
           fi
 
       - name: Run Windows PowerShell behavioral suites

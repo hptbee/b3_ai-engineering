@@ -1283,7 +1283,11 @@ fn golden_legacy_baseline_65eaaae_contracts() {
     ]);
     assert_eq!(ec, c_wt_ok.legacy_exit_code);
     let common4 = main4.join(".git");
-    let norm_wt = replace_path_variants(out, &common4, "<COMMON_DIR>");
+    let common4_canon = fs::canonicalize(&common4).unwrap_or_else(|_| common4.clone());
+    let wt4_canon = fs::canonicalize(&wt4).unwrap_or_else(|_| wt4.clone());
+    let norm_wt = replace_path_variants(out, &common4_canon, "<COMMON_DIR>");
+    let norm_wt = replace_path_variants(norm_wt, &common4, "<COMMON_DIR>");
+    let norm_wt = replace_path_variants(norm_wt, &wt4_canon, "<WT_ROOT>");
     let norm_wt = replace_path_variants(norm_wt, &wt4, "<WT_ROOT>");
     let norm_wt = normalize_dynamic_tokens(norm_wt, &[("<BASE_SHA>", &base4)]);
     assert_eq!(norm_wt, c_wt_ok.legacy_stdout_normalized);
@@ -1301,7 +1305,8 @@ fn golden_legacy_baseline_65eaaae_contracts() {
         "--require-isolated",
     ]);
     assert_eq!(ec, c_wt_ov.legacy_exit_code);
-    let norm_ov = replace_path_variants(out, &wt4, "<WT_ROOT>");
+    let norm_ov = replace_path_variants(out, &wt4_canon, "<WT_ROOT>");
+    let norm_ov = replace_path_variants(norm_ov, &wt4, "<WT_ROOT>");
     assert_eq!(norm_ov, c_wt_ov.legacy_stdout_normalized);
 
     for (id, specs, extra) in [
