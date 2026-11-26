@@ -33,6 +33,30 @@ esac
 [[ -n "$PRODUCT_ROOT" ]] || { echo "error: --product-root is required" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_b3_home_default="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
+  _b3_bin=""
+  if [[ -n "${B3_BIN:-}" && -f "$B3_BIN" ]]; then
+    _b3_bin="$B3_BIN"
+  elif [[ -f "${_b3_home_default}/target/release/b3.exe" ]]; then
+    _b3_bin="${_b3_home_default}/target/release/b3.exe"
+  elif [[ -f "${_b3_home_default}/target/release/b3" ]]; then
+    _b3_bin="${_b3_home_default}/target/release/b3"
+  fi
+  if [[ -n "$_b3_bin" ]]; then
+    _eff_home="${B3_HOME:-$_b3_home_default}"
+    _prod_arg="$PRODUCT_ROOT"
+    _home_arg="$_eff_home"
+    if command -v cygpath >/dev/null 2>&1; then
+      _prod_arg="$(cygpath -m "$PRODUCT_ROOT" 2>/dev/null || printf '%s' "$PRODUCT_ROOT")"
+      _home_arg="$(cygpath -m "$_eff_home" 2>/dev/null || printf '%s' "$_eff_home")"
+    fi
+    _inst_args=("install" "product" "--product-root" "$_prod_arg" "--b3-home" "$_home_arg" "--host" "$HOST_NAME")
+    if $DRY_RUN; then _inst_args+=("--dry-run"); fi
+    if $FORCE; then _inst_args+=("--force"); fi
+    exec "$_b3_bin" "${_inst_args[@]}"
+  fi
+fi
 # shellcheck source=lib/global-common.sh
 source "${SCRIPT_DIR}/lib/global-common.sh"
 B3_HOME="$(resolve_b3_home "$B3_HOME" "${SCRIPT_DIR}/..")"

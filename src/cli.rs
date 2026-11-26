@@ -5,9 +5,31 @@ use crate::error::{fail, B3Error};
 pub enum Command {
     Version,
     Help,
-    ContextMeasure { repo_root: String, strict: bool },
+    ContextMeasure {
+        repo_root: String,
+        strict: bool,
+    },
     Guard(GuardSubcommand),
     Pr(PrSubcommand),
+    Sync {
+        repo_root: String,
+        host_name: String,
+        dry_run: bool,
+        verify_only: bool,
+        force: bool,
+    },
+    Install(InstallSubcommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallSubcommand {
+    Product {
+        product_root: String,
+        b3_home: String,
+        host_name: String,
+        dry_run: bool,
+        force: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,7 +238,9 @@ b3 - B3 AI Engineering deterministic native core
 USAGE:
   b3 --version | --help
   b3 context measure [--repo-root <path>] [--strict]
-  b3 pr verify --mode pre-merge|post-merge [--repo-root <dir>] [--repo <owner/name>] --pr-number <N>
+  b3 pr <verify|fetch|reconcile|reply|resolve|comment> [flags]
+  b3 sync --host cursor|codex|claude|antigravity [--repo-root <dir>] [--dry-run] [--verify-only] [--force]
+  b3 install product --product-root <dir> [--b3-home <dir>] [--host cursor|codex|claude|antigravity|all] [--dry-run] [--force]
   b3 guard <subcommand> [flags]
 
 GUARD SUBCOMMANDS:
@@ -278,8 +302,102 @@ pub fn parse_args(args: &[String]) -> Result<Command, B3Error> {
         "context" => parse_context(&args[1..]),
         "guard" => parse_guard(&args[1..]).map(Command::Guard),
         "pr" => parse_pr(&args[1..]).map(Command::Pr),
+        "sync" => parse_sync(&args[1..]),
+        "install" => parse_install(&args[1..]).map(Command::Install),
         other => Err(fail(format!("B3_CLI_FAIL: unknown command '{other}'"), 1)),
     }
+}
+
+fn parse_sync(rest: &[String]) -> Result<Command, B3Error> {
+    let mut repo_root = String::new();
+    let mut host_name = String::new();
+    let mut dry_run = false;
+    let mut verify_only = false;
+    let mut force = false;
+    let mut i = 0usize;
+    while i < rest.len() {
+        let (flag, iv) = parse_opt(&rest[i]);
+        match flag {
+            "--repo-root" | "-RepoRoot" => {
+                repo_root = take_val(rest, &mut i, "--repo-root", iv, "SYNC_FAIL")?;
+            }
+            "--host" | "--host-name" | "-HostName" => {
+                host_name = take_val(rest, &mut i, "--host", iv, "SYNC_FAIL")?;
+            }
+            "--dry-run" | "-DryRun" if iv.is_none() => dry_run = true,
+            "--verify-only" | "--verify" | "-VerifyOnly" if iv.is_none() => verify_only = true,
+            "--force" | "-Force" if iv.is_none() => force = true,
+            pos @ ("cursor" | "codex" | "claude" | "antigravity") if iv.is_none() => {
+                host_name = pos.to_string();
+            }
+            "-h" | "--help" if iv.is_none() => {
+                return Err(fail(
+                    "Usage: b3 sync --host cursor|codex|claude|antigravity [--repo-root <dir>] [--dry-run] [--verify-only] [--force]",
+                    0,
+                ));
+            }
+            other => {
+                return Err(fail(format!("SYNC_FAIL: unknown option '{other}'"), 1));
+            }
+        }
+        i += 1;
+    }
+    Ok(Command::Sync {
+        repo_root,
+        host_name,
+        dry_run,
+        verify_only,
+        force,
+    })
+}
+
+fn parse_install(args: &[String]) -> Result<InstallSubcommand, B3Error> {
+    if args.is_empty() {
+        return Err(fail("INSTALL_FAIL: missing install subcommand", 1));
+    }
+    match args[0].as_str() {
+        "product" => parse_install_product(&args[1..]),
+        other => Err(fail(
+            format!("INSTALL_FAIL: unknown install subcommand '{other}'"),
+            1,
+        )),
+    }
+}
+
+fn parse_install_product(rest: &[String]) -> Result<InstallSubcommand, B3Error> {
+    let mut product_root = String::new();
+    let mut b3_home = String::new();
+    let mut host_name = "cursor".to_string();
+    let mut dry_run = false;
+    let mut force = false;
+    let mut i = 0usize;
+    while i < rest.len() {
+        let (flag, iv) = parse_opt(&rest[i]);
+        match flag {
+            "--product-root" | "-ProductRoot" => {
+                product_root = take_val(rest, &mut i, "--product-root", iv, "INSTALL_FAIL")?;
+            }
+            "--b3-home" | "-B3Home" => {
+                b3_home = take_val(rest, &mut i, "--b3-home", iv, "INSTALL_FAIL")?;
+            }
+            "--host" | "--host-name" | "-HostName" => {
+                host_name = take_val(rest, &mut i, "--host", iv, "INSTALL_FAIL")?;
+            }
+            "--dry-run" | "-DryRun" if iv.is_none() => dry_run = true,
+            "--force" | "-Force" if iv.is_none() => force = true,
+            other => {
+                return Err(fail(format!("INSTALL_FAIL: unknown option '{other}'"), 1));
+            }
+        }
+        i += 1;
+    }
+    Ok(InstallSubcommand::Product {
+        product_root,
+        b3_home,
+        host_name,
+        dry_run,
+        force,
+    })
 }
 
 fn parse_pr(args: &[String]) -> Result<PrSubcommand, B3Error> {

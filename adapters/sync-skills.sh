@@ -34,6 +34,27 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
+  _b3_bin=""
+  if [[ -n "${B3_BIN:-}" && -f "$B3_BIN" ]]; then
+    _b3_bin="$B3_BIN"
+  elif [[ -f "${ROOT}/target/release/b3.exe" ]]; then
+    _b3_bin="${ROOT}/target/release/b3.exe"
+  elif [[ -f "${ROOT}/target/release/b3" ]]; then
+    _b3_bin="${ROOT}/target/release/b3"
+  fi
+  if [[ -n "$_b3_bin" ]]; then
+    _root_arg="$ROOT"
+    if command -v cygpath >/dev/null 2>&1; then
+      _root_arg="$(cygpath -m "$ROOT" 2>/dev/null || printf '%s' "$ROOT")"
+    fi
+    _sync_args=("sync" "--repo-root" "$_root_arg" "--host" "$TARGET")
+    if $DRY_RUN; then _sync_args+=("--dry-run"); fi
+    if $VERIFY_ONLY; then _sync_args+=("--verify-only"); fi
+    if $FORCE; then _sync_args+=("--force"); fi
+    exec "$_b3_bin" "${_sync_args[@]}"
+  fi
+fi
 # shellcheck source=lib/global-common.sh
 source "${SCRIPT_DIR}/lib/global-common.sh"
 SKILLS_SRC="${ROOT}/skills"

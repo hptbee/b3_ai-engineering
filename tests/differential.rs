@@ -2793,3 +2793,200 @@ process.exit(1);
     assert_eq!(n7c, 0);
     assert_eq!(r7o, n7o);
 }
+
+#[test]
+fn differential_sync_and_install_product_match_powershell() {
+    let tmp = TempDirGuard::new("adapters-diff");
+    let b3_home = repo_root();
+    let b3_home_str = b3_home.to_str().unwrap();
+
+    // Clone a minimal B3 checkout copy with real skills/, commands/, agents/, adapters/, config/
+    let copy_dir = |src: &Path, dst: &Path| {
+        fs::create_dir_all(dst).unwrap();
+        let out = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Copy-Item -LiteralPath '{}' -Destination '{}' -Recurse -Force",
+                    src.display(),
+                    dst.parent().unwrap().display()
+                ),
+            ])
+            .output()
+            .expect("copy dir");
+        assert!(out.status.success());
+    };
+
+    let fx_r = tmp.path.join("fx-rust");
+    let fx_p = tmp.path.join("fx-ps");
+    for fx in [&fx_r, &fx_p] {
+        fs::create_dir_all(fx.join("adapters/command-skills")).unwrap();
+        copy_dir(&b3_home.join("skills"), &fx.join("skills"));
+        copy_dir(&b3_home.join("commands"), &fx.join("commands"));
+        copy_dir(&b3_home.join("agents"), &fx.join("agents"));
+        copy_dir(
+            &b3_home.join("adapters/command-skills"),
+            &fx.join("adapters/command-skills"),
+        );
+        copy_dir(&b3_home.join("adapters/lib"), &fx.join("adapters/lib"));
+        fs::copy(
+            b3_home.join("adapters/sync-skills.ps1"),
+            fx.join("adapters/sync-skills.ps1"),
+        )
+        .unwrap();
+        fs::create_dir_all(fx.join("config")).unwrap();
+        fs::copy(
+            b3_home.join("config/models.example.md"),
+            fx.join("config/models.example.md"),
+        )
+        .unwrap();
+    }
+
+    let mod_r = tmp.path.join("models-r.md");
+    let mod_p = tmp.path.join("models-p.md");
+
+    // 1. b3 sync antigravity + verify-only vs PS legacy
+    let r_ag = Command::new(b3_bin())
+        .env("B3_MODELS_PERSONAL", &mod_r)
+        .args([
+            "sync",
+            "--repo-root",
+            fx_r.to_str().unwrap(),
+            "--host",
+            "antigravity",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(r_ag.status.code(), Some(0));
+    let p_ag = Command::new("powershell")
+        .env("B3_USE_LEGACY", "1")
+        .env("B3_MODELS_PERSONAL", &mod_p)
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(fx_p.join("adapters/sync-skills.ps1"))
+        .args(["-HostName", "antigravity"])
+        .output()
+        .unwrap();
+    assert_eq!(p_ag.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&r_ag.stdout)
+            .replace(fx_r.to_str().unwrap(), "FX")
+            .replace(mod_r.to_str().unwrap(), "MOD")
+            .replace("\r\n", "\n"),
+        String::from_utf8_lossy(&p_ag.stdout)
+            .replace(fx_p.to_str().unwrap(), "FX")
+            .replace(mod_p.to_str().unwrap(), "MOD")
+            .replace("\r\n", "\n")
+    );
+
+    let r_ag_v = Command::new(b3_bin())
+        .args([
+            "sync",
+            "--repo-root",
+            fx_r.to_str().unwrap(),
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(r_ag_v.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&r_ag_v.stdout).contains("verify ok:"));
+
+    // 2. b3 sync codex (NTFS junction flattened index via Win32 DeviceIoControl) + verify-only
+    let r_cx = Command::new(b3_bin())
+        .env("B3_SKIP_MODEL_INIT", "1")
+        .args([
+            "sync",
+            "--repo-root",
+            fx_r.to_str().unwrap(),
+            "--host",
+            "codex",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(r_cx.status.code(), Some(0));
+    let r_cx_v = Command::new(b3_bin())
+        .args([
+            "sync",
+            "--repo-root",
+            fx_r.to_str().unwrap(),
+            "--host",
+            "codex",
+            "--verify-only",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(r_cx_v.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&r_cx_v.stdout).contains("verify ok:"));
+    // Confirm PowerShell itself sees the created junction identically via legacy -VerifyOnly
+    let p_cx_v = Command::new("powershell")
+        .env("B3_USE_LEGACY", "1")
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(fx_r.join("adapters/sync-skills.ps1"))
+        .args(["-HostName", "codex", "-VerifyOnly"])
+        .output()
+        .unwrap();
+    assert_eq!(p_cx_v.status.code(), Some(0));
+
+    // 3. b3 install product codex parity vs legacy install-product.ps1
+    let prod_r = tmp.path.join("prod-rust");
+    let prod_p = tmp.path.join("prod-ps");
+    fs::create_dir_all(&prod_r).unwrap();
+    fs::create_dir_all(&prod_p).unwrap();
+
+    let mod_pr = tmp.path.join("models-prod-r.md");
+    let mod_pp = tmp.path.join("models-prod-p.md");
+    let inst_ps = b3_home.join("adapters/install-product.ps1");
+
+    let r_ip = Command::new(b3_bin())
+        .env("B3_MODELS_PERSONAL", &mod_pr)
+        .args([
+            "install",
+            "product",
+            "--product-root",
+            prod_r.to_str().unwrap(),
+            "--b3-home",
+            b3_home_str,
+            "--host",
+            "codex",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(r_ip.status.code(), Some(0));
+    let p_ip = Command::new("powershell")
+        .env("B3_USE_LEGACY", "1")
+        .env("B3_MODELS_PERSONAL", &mod_pp)
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-File")
+        .arg(&inst_ps)
+        .args([
+            "-ProductRoot",
+            prod_p.to_str().unwrap(),
+            "-B3Home",
+            b3_home_str,
+            "-HostName",
+            "codex",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(p_ip.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&r_ip.stdout)
+            .replace(prod_r.to_str().unwrap(), "PROD")
+            .replace(mod_pr.to_str().unwrap(), "MOD")
+            .replace("\r\n", "\n"),
+        String::from_utf8_lossy(&p_ip.stdout)
+            .replace(prod_p.to_str().unwrap(), "PROD")
+            .replace(mod_pp.to_str().unwrap(), "MOD")
+            .replace("\r\n", "\n")
+    );
+}

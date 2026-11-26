@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod cli;
 pub mod context;
 pub mod error;
@@ -8,7 +9,7 @@ pub mod json;
 pub mod pr;
 pub mod process;
 
-use cli::{help_text, parse_args, Command, GuardSubcommand, PrSubcommand};
+use cli::{help_text, parse_args, Command, GuardSubcommand, InstallSubcommand, PrSubcommand};
 use error::B3Error;
 
 /// Executes a parsed `b3` CLI invocation and returns `(stdout_text, exit_code)`.
@@ -20,6 +21,22 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
         Command::ContextMeasure { repo_root, strict } => {
             context::measure_context(&repo_root, strict)
         }
+        Command::Sync {
+            repo_root,
+            host_name,
+            dry_run,
+            verify_only,
+            force,
+        } => adapters::sync::run(&repo_root, &host_name, dry_run, verify_only, force),
+        Command::Install(inst_cmd) => match inst_cmd {
+            InstallSubcommand::Product {
+                product_root,
+                b3_home,
+                host_name,
+                dry_run,
+                force,
+            } => adapters::product::run(&product_root, &b3_home, &host_name, dry_run, force),
+        },
         Command::Pr(pr_cmd) => match pr_cmd {
             PrSubcommand::Verify {
                 mode,
