@@ -1,0 +1,9 @@
+id: orch-host-limitation-sequential-fallback-001
+artifact: workflows/references/dispatch-naming.md
+intent: Host limitations preventing parallel subagents or required isolation degrade to disclosed SEQUENTIAL fallback without false PARALLEL claims
+scenario: |
+  Host lacks concurrent subagent spawning or required worktree isolation for conflicting/high-risk edits
+  Orchestrator degrades to SEQUENTIAL, discloses reason=no_host_isolation or reason=sequential_host_fallback in last_wave, and never reports dispatch=PARALLEL
+expected_outcome: PASS
+failure_mode: silent-sequential-or-false-parallel-report-under-host-limit
+notes: Supports Cursor, Claude Code, Codex, and Antigravity consistently while allowing SHARED_READ_ONLY when supported

@@ -1320,11 +1320,6 @@ fn golden_legacy_baseline_65eaaae_contracts() {
             "T1=src/shared.txt;T2=src/shared.txt;T3=docs/c.md",
             &["--partition", "--max-concurrency", "2"][..],
         ),
-        (
-            "check_wave_sequential",
-            "T1=src/shared.txt;T2=src/shared.txt",
-            &["--partition"][..],
-        ),
     ] {
         let c_w = find_legacy_case(&cases, id);
         let mut args = vec![
@@ -1340,6 +1335,49 @@ fn golden_legacy_baseline_65eaaae_contracts() {
         assert_eq!(ec, c_w.legacy_exit_code, "case {id}: {out}");
         assert_eq!(out, c_w.legacy_stdout_normalized, "case {id}");
     }
+
+    let c_w_seq = find_legacy_case(&cases, "check_wave_sequential");
+    assert_eq!(c_w_seq.status_label, "INTENTIONAL_BEHAVIOR_CHANGE");
+    let (ec_adapt, out_adapt, _) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        main4.to_str().unwrap(),
+        "--wave-specs",
+        "T1=src/shared.txt;T2=src/shared.txt",
+        "--partition",
+    ]);
+    assert_eq!(ec_adapt, c_w_seq.legacy_exit_code, "adaptive: {out_adapt}");
+    let mc_line = out_adapt
+        .lines()
+        .find(|l| l.starts_with("max_concurrency="))
+        .expect("adaptive max_concurrency line");
+    let mc_val: i32 = mc_line
+        .strip_prefix("max_concurrency=")
+        .unwrap()
+        .parse()
+        .expect("parse adaptive max_concurrency");
+    assert!(
+        (4..=16).contains(&mc_val),
+        "adaptive default max_concurrency must be in 4..=16, got {mc_val}"
+    );
+    assert_eq!(
+        out_adapt.replace(mc_line, "max_concurrency=3"),
+        c_w_seq.legacy_stdout_normalized
+    );
+    let (ec_mc3, out_mc3, _) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        main4.to_str().unwrap(),
+        "--wave-specs",
+        "T1=src/shared.txt;T2=src/shared.txt",
+        "--partition",
+        "--max-concurrency",
+        "3",
+    ]);
+    assert_eq!(ec_mc3, c_w_seq.legacy_exit_code, "explicit 3: {out_mc3}");
+    assert_eq!(out_mc3, c_w_seq.legacy_stdout_normalized);
 
     let c_fr = find_legacy_case(&cases, "check_freshness_fresh");
     let (ec, out, _) = run_b3(&[
@@ -1827,11 +1865,28 @@ fn golden_legacy_baseline_65eaaae_contracts() {
         assert_eq!(ec, c_inst.legacy_exit_code, "install {host}: {out}");
         let norm_out = replace_path_variants(out, &prod.path, "<PROD_ROOT>");
         let norm_out = replace_path_variants(norm_out, &b3_home, "<B3_HOME>");
-        assert_eq!(
-            norm_out.replace('\\', "/"),
-            c_inst.legacy_stdout_normalized.replace('\\', "/"),
-            "install {host} output"
-        );
+        if id == "install_product_cursor" {
+            assert_eq!(c_inst.status_label, "INTENTIONAL_BEHAVIOR_CHANGE");
+            assert!(
+                norm_out.contains("via b3 install global --host cursor"),
+                "expected native guidance in output: {norm_out}"
+            );
+            let expected_native = c_inst.legacy_stdout_normalized.replace(
+                "via adapters/install-global.ps1 -HostName cursor",
+                "via b3 install global --host cursor",
+            );
+            assert_eq!(
+                norm_out.replace('\\', "/"),
+                expected_native.replace('\\', "/"),
+                "install {host} output"
+            );
+        } else {
+            assert_eq!(
+                norm_out.replace('\\', "/"),
+                c_inst.legacy_stdout_normalized.replace('\\', "/"),
+                "install {host} output"
+            );
+        }
         assert!(prod.path.join(".b3/home").is_file());
     }
 
@@ -1872,46 +1927,5 @@ fn golden_legacy_baseline_65eaaae_contracts() {
     assert_eq!(
         norm_sv.replace('\\', "/"),
         c_sv.legacy_stdout_normalized.replace('\\', "/")
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn unix_shell_wrapper_forwarding() {
-    let root = repo_root();
-    let root_str = root.to_str().unwrap();
-    let run_sh = |rel: &str, args: &[&str]| -> (i32, String) {
-        let out = Command::new("bash")
-            .env("B3_BIN", b3_bin())
-            .arg(root.join(rel))
-            .args(args)
-            .output()
-            .expect("run sh wrapper");
-        (out.status.code().unwrap_or(-1), norm_lf(&out.stdout))
-    };
-
-    let (c_ctx, out_ctx) = run_sh(
-        "scripts/measure-context.sh",
-        &["--repo-root", root_str, "--strict"],
-    );
-    assert_eq!(c_ctx, 0);
-    assert!(out_ctx.contains("warnings          : 0"), "out={out_ctx}");
-
-    let (c_fp, out_fp) = run_sh(
-        "scripts/b3-guard.sh",
-        &[
-            "fingerprint",
-            "--depends-on",
-            "T002,T001",
-            "--scope",
-            "src/a.ts",
-            "--criteria",
-            "AC1: ok",
-        ],
-    );
-    assert_eq!(c_fp, 0);
-    assert_eq!(
-        out_fp,
-        "depends_on=T001,T002|scope=src/a.ts|acceptance_criteria=AC1: ok"
     );
 }

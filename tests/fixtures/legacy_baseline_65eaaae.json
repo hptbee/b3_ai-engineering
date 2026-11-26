@@ -150,10 +150,10 @@
     {
       "id": "check_wave_sequential",
       "contract_family": "4_worktree_and_wave_ownership",
-      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "status_label": "INTENTIONAL_BEHAVIOR_CHANGE",
       "legacy_exit_code": 2,
       "legacy_stdout_normalized": "dirty_scope=not_checked\nuser_dirty=none\nunexpected_dirty=none\nblocked_tasks=none\nwave_count=2\nmax_concurrency=3\nmax_parallel=1\nconflicts=src/shared.txt(T1,T2)\nwave|1|SEQUENTIAL|agents=1|tasks=T1|reason=shared_write_conflict\nwave|2|SEQUENTIAL|agents=1|tasks=T2|reason=shared_write_conflict\nWAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=shared_write_conflict",
-      "notes": "check-wave returns exit 2 WAVE_SEQUENTIAL when all tasks conflict"
+      "notes": "check-wave returns exit 2 WAVE_SEQUENTIAL; legacy defaulted max_concurrency=3 whereas native defaults to default_adaptive_concurrency() (4..=16) when omitted"
     },
     {
       "id": "check_freshness_fresh",
@@ -358,10 +358,10 @@
     {
       "id": "install_product_cursor",
       "contract_family": "9_installer_ownership",
-      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "status_label": "INTENTIONAL_BEHAVIOR_CHANGE",
       "legacy_exit_code": 0,
       "legacy_stdout_normalized": "installed B3 pointer in <PROD_ROOT>\nB3_HOME=<B3_HOME>\ncommand=<PROD_ROOT>\\.cursor\\commands\\b3-ship.md\nagents.md=<PROD_ROOT>\\AGENTS.md\ngitignore.b3=created\ngitignore.skills=n/a\nmodel_preferences=skipped\nhost=cursor\nskills=user-level ~/.cursor/skills/<name> via adapters/install-global.ps1 -HostName cursor (not copied into product)\nnote: this proves files were written, not host slash-command or skill discovery",
-      "notes": "install-product cursor populates .b3/home, managed commands, and .gitignore"
+      "notes": "install-product cursor populates .b3/home, managed commands, and .gitignore; native CLI emits native 'via b3 install global --host cursor' guidance instead of legacy .ps1 hint"
     },
     {
       "id": "install_product_codex",

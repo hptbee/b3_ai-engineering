@@ -1,0 +1,10 @@
+id: orch-external-pr-single-writer-001
+artifact: skills/engineering/pr-feedback/SKILL.md
+intent: External GitHub PR mutations stay strictly single-writer in Parent while workers may prepare --draft payloads in SHARED_READ_ONLY
+scenario: |
+  Concurrent workers analyze PR threads and prepare --draft payloads
+  A worker or linked-worktree context attempts to call b3 pr reply --authorize-write or b3 pr resolve --authorize-resolve directly
+  b3 pr blocks the mutation before write with PR_MUTATION_OWNER_REQUIRED (worker_role_forbidden / linked_worktree_forbidden), and missing --authorize-* blocks with PR_AUTH_REQUIRED
+expected_outcome: PASS
+failure_mode: worker-or-worktree-executes-external-pr-mutation
+notes: Parent owns all external PR mutations, canonical state.json updates, and explicit --authorize-write/--authorize-resolve/--authorize-review-event flags

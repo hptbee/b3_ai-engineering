@@ -1,0 +1,10 @@
+id: orch-shared-read-only-no-worktree-001
+artifact: workflows/references/dispatch-naming.md
+intent: Concurrent read-only scouts, verifiers, and reviewers run in SHARED_READ_ONLY without worktrees or dummy write paths
+scenario: |
+  Multiple discovery scouts and independent reviewers inspect overlapping source files
+  Parent runs b3 guard check-wave --partition with TaskId=none / [] and --wave-reads, receiving wave|1|PARALLEL
+  Workers execute in the existing workspace with zero extra git worktrees, dummy files, or commits
+expected_outcome: PASS
+failure_mode: wasteful-worktree-creation-or-dummy-write-for-readers
+notes: SHARED_READ_ONLY permits overlapping reads across concurrent read-only workers while still catching mixed reader/writer conflicts

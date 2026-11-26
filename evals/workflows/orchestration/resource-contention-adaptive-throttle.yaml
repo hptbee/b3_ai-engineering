@@ -1,0 +1,9 @@
+id: orch-resource-contention-adaptive-throttle-001
+artifact: workflows/references/dispatch-naming.md
+intent: Resource, CPU/memory, context-budget, or rate-limit contention throttles useful concurrency via --max-concurrency instead of thrashing
+scenario: |
+  Twelve independent tasks are ready while host memory/CPU or API rate limits constrain safe parallel throughput
+  Parent caps useful concurrency via b3 guard check-wave --partition --max-concurrency <N> (within 1..64; rejecting >64) so only bounded parallel waves launch and remaining tasks split cleanly with reason=bounded_concurrency
+expected_outcome: PASS
+failure_mode: unbounded-fanout-thrashing-under-resource-or-rate-limits
+notes: Adaptive concurrency scales up when free and scales down cleanly under contention

@@ -1,0 +1,10 @@
+id: orch-shared-disjoint-writes-001
+artifact: workflows/references/dispatch-naming.md
+intent: Safe disjoint writers share one workspace under SHARED_DISJOINT_WRITES without worktrees while keeping Git and integration single-writer
+scenario: |
+  T001 (src/api/users.ts) and T002 (src/ui/UserCard.tsx) have disjoint non-'.' owned_files, clean dirty scope, and non-colliding build/test commands
+  Parent clears check-wave --partition and dispatches both workers in SHARED_DISJOINT_WRITES without git worktree creation
+  Workers never run git add/commit/stash/checkout; Parent runs mechanical-check, post-integration verify-run, and cross-unit review before precommit
+expected_outcome: PASS
+failure_mode: worker-mutates-git-state-or-unnecessary-worktrees-on-disjoint-writes
+notes: Path ownership is not OS isolation; escalate to ISOLATED_WRITES or SEQUENTIAL when side effects collide or strict attribution is required

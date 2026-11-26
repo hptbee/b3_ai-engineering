@@ -10,4 +10,4 @@ Comply / violate samples covering all 5 canonical rules (`engineering-principles
 | `rules/simplest-correct.md` | `comply/simplest-correct-named-requirement.yaml` | `violate/simplest-correct-prestige.yaml` |
 | `rules/verification.md` | `comply/verification-reports-failure.yaml` | `violate/verification-fake-pass.yaml` |
 
-Validate: `./scripts/validate-evals.sh`
+Validate: `cargo test --test eval_contracts`

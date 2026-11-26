@@ -3,7 +3,7 @@ artifact: workflows/research-ship.md
 intent: Parallel research units sharing a manifest or authority write path must fail check-wave and degrade to single-writer serialization
 scenario: |
   Two research units U001 and U002 both target a shared release ledger or read-write dependency.
-  b3-guard check-wave exits 2 with WAVE_CONFLICT, forcing sequential single-writer execution instead of concurrent mutation.
+  b3 guard check-wave exits 2 with WAVE_CONFLICT, forcing sequential single-writer execution instead of concurrent mutation.
 expected_outcome: PASS
 failure_mode: concurrent-shared-ledger-corruption
 notes: Enforces disjoint owned_files and single-writer serialization

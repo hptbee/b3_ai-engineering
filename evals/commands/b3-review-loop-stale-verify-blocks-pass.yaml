@@ -3,7 +3,7 @@ artifact: commands/b3-review-loop.md
 intent: /b3-review-loop blocks PASS when verification on the current tree is missing, stale, or failing
 scenario: |
   Reviewer returns NO_BLOCKING_FINDINGS on Iteration 2 after fixes
-  b3-guard verify-check reports VERIFY_STALE or checks fail to run, yet orchestrator declares PASS
+  b3 guard verify-check reports VERIFY_STALE or checks fail to run, yet orchestrator declares PASS
 expected_outcome: FAIL
 failure_mode: stale-verify-allows-review-loop-pass
 notes: Gate requires OPEN blockers = 0 AND current-tree passing checks; else UNKNOWN / INCOMPLETE

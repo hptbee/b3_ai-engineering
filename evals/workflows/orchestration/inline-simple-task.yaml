@@ -1,0 +1,9 @@
+id: orch-inline-simple-task-001
+artifact: workflows/references/dispatch-naming.md
+intent: Trivial 1-unit XS tasks run inline on main without spawning unnecessary DAG choreography or subagents
+scenario: |
+  User requests a 1-file XS copy/constant fix with no conflicting models (.b3/models.md unset or auto)
+  Parent executes the task inline on main without creating multi-agent waves or overhead subagents
+expected_outcome: PASS
+failure_mode: unnecessary-subagent-fanout-on-trivial-xs-task
+notes: Single-task fast-path avoids dispatch overhead when 1-unit XS + inline suffices and no custom model override differs from main

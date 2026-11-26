@@ -3,7 +3,7 @@ artifact: workflows/research-ship.md
 intent: Missing primary or required source evidence must never produce PASS and must fail closed as INCOMPLETE or BLOCKED
 scenario: |
   A research-only unit U001 cites a classical edition that is missing from the repo or unavailable locally.
-  b3-guard evidence-check exits 1 with EVIDENCE_MISSING and the orchestrator refuses to mark U001 VERIFIED or PASS.
+  b3 guard evidence-check exits 1 with EVIDENCE_MISSING and the orchestrator refuses to mark U001 VERIFIED or PASS.
 expected_outcome: INCOMPLETE
 failure_mode: fabricated-source-citation-or-pass-without-evidence
 notes: Enforces Phase C/E source availability and never reconstructs unavailable citations from memory

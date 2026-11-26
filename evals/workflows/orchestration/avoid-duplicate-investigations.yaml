@@ -1,0 +1,9 @@
+id: orch-avoid-duplicate-investigations-001
+artifact: workflows/references/context-routing.md
+intent: Workers reuse compact Parent context_hint packets and existing subsystem context instead of repeating full-repo scans
+scenario: |
+  Parent discovers architecture/anchor summaries once per phase, caches immutable anchors via b3 guard context-cache --action record, and dispatches lean <=25L worker packets carrying 1L context_hint
+  Workers use the supplied context_hint and direct-known file paths instead of reloading context-routing.md or repeating full-repo/graph scans
+expected_outcome: PASS
+failure_mode: duplicate-repo-scans-or-orchestrator-doc-pasting-in-workers
+notes: Reuses subsystem workers where independence is not required while keeping fresh workers for independent reviews

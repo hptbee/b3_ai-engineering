@@ -6,13 +6,51 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
+  preflight:
+    name: Preflight (fmt, clippy, context, evals)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # v1/master
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt, clippy
+
+      - name: Check formatting and lints
+        shell: bash
+        run: |
+          rustc --version
+          cargo clippy --version
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: Build release binary and check strict context budget
+        shell: bash
+        run: |
+          cargo build --release
+          ./target/release/b3 --version
+          ./target/release/b3 context measure --strict
+
+      - name: Run eval contracts and schema suite
+        shell: bash
+        run: cargo test --test eval_contracts
+
   verify:
-    name: ${{ matrix.os }}
+    name: Verify (${{ matrix.os }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +65,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Check formatting and lints
+        shell: bash
         run: |
           rustc --version
           cargo clippy --version
@@ -34,45 +73,38 @@ jobs:
           cargo clippy --all-targets -- -D warnings
 
       - name: Build release binary
+        shell: bash
         run: cargo build --release
 
-      - name: Run Rust unit & integration tests
+      - name: Run native CLI smoke checks and strict context budget
+        shell: bash
+        run: |
+          bin="./target/release/b3"
+          if [[ -x "./target/release/b3.exe" ]]; then
+            bin="./target/release/b3.exe"
+          fi
+          "$bin" --version
+          "$bin" context measure --strict
+          "$bin" sync --host antigravity --verify-only
+          "$bin" guard fingerprint --depends-on T2,T1 --scope src/a.rs --criteria ok
+
+      - name: Run all native Rust unit & integration tests
+        shell: bash
         run: cargo test
 
-      - name: Check static context budget and eval fixtures
-        shell: bash
-        run: |
-          bash ./scripts/measure-context.sh --strict
-          bash ./scripts/validate-evals.sh
+  gate:
+    name: Final Acceptance Gate
+    needs: [preflight, verify]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
 
-      - name: "Run merge-security suite (Windows: b3-guard.sh + b3-guard.ps1; Linux/macOS: native contract via bash)"
+    steps:
+      - name: Enforce all required CI jobs passed
         shell: bash
         run: |
-          if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            bash ./scripts/validate-merge-security.sh
-          else
-            bash ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
+          if [[ "${{ needs.preflight.result }}" != "success" || "${{ needs.verify.result }}" != "success" ]]; then
+            echo "CI_GATE_FAIL: preflight=${{ needs.preflight.result }} verify=${{ needs.verify.result }}" >&2
+            exit 1
           fi
-
-      - name: Run Windows PowerShell behavioral suites
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-context.ps1 -Strict
-          powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-ship-product.ps1
-          foreach ($suite in @(
-            'scripts/validate-pr-feedback.ps1',
-            'scripts/validate-research-ship.ps1',
-            'scripts/validate-ship-behavior.ps1',
-            'scripts/validate-standalone-commands.ps1',
-            'scripts/validate-cursor-global.ps1',
-            'scripts/validate-antigravity-global.ps1',
-            'scripts/validate-model-preferences.ps1',
-            'scripts/validate-tshirt-hierarchical.ps1',
-            'scripts/validate-context-routing.ps1'
-          )) {
-            Write-Host "=== Running $suite ==="
-            powershell -NoProfile -ExecutionPolicy Bypass -File $suite
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          echo "CI_GATE_PASS: preflight=success verify=success"

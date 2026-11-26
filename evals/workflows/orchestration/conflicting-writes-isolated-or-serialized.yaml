@@ -1,0 +1,10 @@
+id: orch-conflicting-writes-isolated-or-serialized-001
+artifact: workflows/references/dispatch-naming.md
+intent: Conflicting write scopes or colliding side effects isolate in verified linked worktrees or serialize cleanly via check-wave
+scenario: |
+  T001 and T002 both touch src/shared/schema.ts (or share colliding build/DB/port side effects)
+  check-wave --partition reports shared_write_conflict and splits them into sequential waves unless isolated linked worktrees are verified via check-worktree --require-isolated --expected-root --peer-roots
+  Parent never runs conflicting writers concurrently in the same workspace
+expected_outcome: PASS
+failure_mode: concurrent-conflicting-writes-in-shared-workspace
+notes: WORKTREE_OK alone proves identity only; full isolation requires --require-isolated --expected-root --peer-roots or sequential fallback
