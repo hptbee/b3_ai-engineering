@@ -1309,3 +1309,134 @@ pub fn sha256_bytes_hex(data: &[u8]) -> String {
     }
     hex
 }
+
+/// Expands existing Windows 8.3 short path segments (e.g. `RUNNER~1`) to their
+/// long names via `GetLongPathNameW` without resolving symlinks or NTFS junctions.
+#[cfg(windows)]
+pub fn expand_windows_long_path(path: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    extern "system" {
+        fn GetLongPathNameW(
+            lpsz_short_path: *const u16,
+            lpsz_long_path: *mut u16,
+            cch_buffer: u32,
+        ) -> u32;
+    }
+
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is NUL-terminated UTF-16; null buffer with size 0 queries the required length.
+    let needed = unsafe { GetLongPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        return path.to_path_buf();
+    }
+    let mut buf = vec![0u16; needed as usize];
+    // SAFETY: `wide` is NUL-terminated UTF-16 and `buf` is allocated with `needed` u16 elements.
+    let written = unsafe { GetLongPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
+    if written == 0 || written >= needed {
+        return path.to_path_buf();
+    }
+    PathBuf::from(OsString::from_wide(&buf[..written as usize]))
+}
+
+/// Non-Windows no-op counterpart of `expand_windows_long_path`.
+#[cfg(not(windows))]
+pub fn expand_windows_long_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::expand_windows_long_path;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    extern "system" {
+        fn GetShortPathNameW(
+            lpsz_long_path: *const u16,
+            lpsz_short_path: *mut u16,
+            cch_buffer: u32,
+        ) -> u32;
+    }
+
+    fn to_short_path(path: &Path) -> Option<PathBuf> {
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+        if needed == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; needed as usize];
+        let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
+        if written == 0 || written >= needed {
+            return None;
+        }
+        Some(PathBuf::from(OsString::from_wide(&buf[..written as usize])))
+    }
+
+    #[test]
+    fn expand_windows_long_path_expands_83_and_preserves_junctions() {
+        let root = std::env::temp_dir().join(format!("b3-fs-longpath-{}", std::process::id()));
+        if root.exists() {
+            let _ = fs::remove_dir_all(&root);
+        }
+        let long_dir = root.join("long_directory_name_test");
+        let target_dir = root.join("junction_target_dir");
+        let junction_dir = root.join("junction_link");
+        fs::create_dir_all(&long_dir).expect("create long dir");
+        fs::create_dir_all(&target_dir).expect("create target dir");
+
+        let mklink = Command::new("cmd")
+            .args([
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                &junction_dir.to_string_lossy(),
+                &target_dir.to_string_lossy(),
+            ])
+            .output()
+            .expect("run mklink /J");
+        assert!(mklink.status.success(), "mklink /J failed");
+
+        let junc_expanded = expand_windows_long_path(&junction_dir);
+        assert_eq!(
+            junc_expanded.file_name().and_then(|n| n.to_str()),
+            Some("junction_link"),
+            "GetLongPathNameW must not dereference NTFS junctions: {junc_expanded:?}"
+        );
+
+        let expected_long = expand_windows_long_path(&long_dir);
+        assert_eq!(
+            expected_long.file_name().and_then(|n| n.to_str()),
+            Some("long_directory_name_test")
+        );
+        if let Some(short_path) = to_short_path(&long_dir) {
+            let from_short = expand_windows_long_path(&short_path);
+            assert_eq!(
+                from_short.to_string_lossy().to_ascii_lowercase(),
+                expected_long.to_string_lossy().to_ascii_lowercase()
+            );
+            assert_eq!(
+                from_short.file_name().and_then(|n| n.to_str()),
+                Some("long_directory_name_test")
+            );
+        }
+
+        let _ = Command::new("cmd")
+            .args(["/d", "/c", "rmdir", &junction_dir.to_string_lossy()])
+            .status();
+        let _ = fs::remove_dir_all(&root);
+    }
+}

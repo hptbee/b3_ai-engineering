@@ -90,6 +90,7 @@ pub(crate) fn resolve_safe_worktree_identity(
         ));
     }
 
+    let top_full = crate::fs::expand_windows_long_path(&top_full);
     let top_norm = normalize_path_value(&top_full.to_string_lossy());
     let common_dir = get_canonical_git_path(&logical, "--git-common-dir");
     let git_dir = get_canonical_git_path(&logical, "--git-dir");

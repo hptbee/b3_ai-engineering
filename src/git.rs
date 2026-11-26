@@ -726,6 +726,7 @@ pub fn get_canonical_git_path(dir: &Path, rev_flag: &str) -> Option<String> {
         return None;
     }
     let resolved = resolve_unresolved_path(dir, &gd);
+    let resolved = crate::fs::expand_windows_long_path(&resolved);
     let norm = normalize_path_value(&resolved.to_string_lossy());
     #[cfg(target_os = "macos")]
     {
