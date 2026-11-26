@@ -571,8 +571,8 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 316,
-        "expected >= 316 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 321,
+        "expected >= 321 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(

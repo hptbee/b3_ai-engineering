@@ -1628,8 +1628,8 @@ fn golden_legacy_baseline_65eaaae_contracts() {
     let mock_bin = tmp8.path.join("bin");
     let repo8 = tmp8.path.join("repo");
     fs::create_dir_all(&mock_bin).unwrap();
-    fs::create_dir_all(repo8.join(".b3")).unwrap();
     init_git_repo(&repo8);
+    fs::create_dir_all(repo8.join(".b3")).unwrap();
     git_in(
         &repo8,
         &[

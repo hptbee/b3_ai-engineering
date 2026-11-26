@@ -1563,7 +1563,11 @@ pub fn run(
                     .split(',')
                     .filter(|s| !s.is_empty() && *s != "none")
                     .collect();
-                let sp_arr = split_csv_list(specialists);
+                let sp_arr: Vec<String> = split_csv_list(specialists)
+                    .into_iter()
+                    .map(|item| replace_run_chars(item.trim(), &['\r', '\n', '|'], ""))
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 if sp_arr
                     .iter()
                     .any(|ns_item| !old_sp_list.contains(&ns_item.as_str()))

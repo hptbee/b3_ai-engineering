@@ -3378,41 +3378,8 @@ fn tshirt_boundaries_and_risk_routing() {
     git_in(&repo, &["reset", "-q", "HEAD", "--", "docs/loc.md"]);
     fs::remove_file(repo.join("docs/loc.md")).unwrap();
 
-    // 2. All 10 file-count boundaries (create 101 files once, stage subsets cleanly)
-    let mut files = Vec::with_capacity(101);
-    for i in 1..=101 {
-        let p = format!("docs/f{i:03}.md");
-        write_lf(&repo.join(&p), "d\n");
-        files.push(p);
-    }
-    for (count, expected) in [
-        (3, "XS"),
-        (4, "S"),
-        (8, "S"),
-        (9, "M"),
-        (20, "M"),
-        (21, "L"),
-        (49, "L"),
-        (50, "XL"),
-        (100, "XL"),
-        (101, "XXL"),
-    ] {
-        git_in(&repo, &["reset", "-q", "HEAD", "--", "docs"]);
-        let mut add_args = vec!["add", "--"];
-        for f in &files[..count] {
-            add_args.push(f.as_str());
-        }
-        git_in(&repo, &add_args);
-        // Temporarily test staged only by passing --target-ref? Wait: diff-scope includes untracked!
-        // Remove untracked beyond `count` or use clean repo per boundary? Even faster: write staged index with untracked removed?
-        // Actually removing remaining files only takes microseconds, or even simpler: start from 3 and grow upward!
-        let _ = expected;
-    }
-    // Reset and grow upward 3 -> 4 -> 8 -> 9 -> 20 -> 21 -> 49 -> 50 -> 100 -> 101 (creates each file ONCE!)
-    git_in(&repo, &["reset", "-q", "HEAD", "--", "docs"]);
-    for f in &files {
-        let _ = fs::remove_file(repo.join(f));
-    }
+    // 2. All 10 file-count boundaries (grow incrementally 3 -> 4 -> ... -> 101 so each file is created once)
+    let files: Vec<String> = (1..=101).map(|i| format!("docs/f{i:03}.md")).collect();
     let mut created = 0usize;
     for (count, expected) in [
         (3, "XS"),
@@ -4817,4 +4784,42 @@ fn review_ledger_security_tamper_and_independence() {
 
     // Silence unused helper warning on Unix/Windows if create_file_link isn't invoked on Windows
     let _ = create_file_link as fn(&Path, &Path);
+}
+
+#[test]
+fn symbol_check_literal_pathspec_handles_bracketed_route_paths() {
+    let tmp = TempDirGuard::new("sym-literal");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    // Multi-symbol diff with `[id]` route directory so scoped `git grep` uses `:(literal)`
+    write_lf(
+        &repo.join("src/[id]/page.tsx"),
+        "export function removedAlpha() { return 1; }\nexport function removedBeta() { return 2; }\nexport const useBoth = () => removedAlpha() + removedBeta();\n",
+    );
+    git_in(&repo, &["add", "src/[id]/page.tsx"]);
+    git_in(&repo, &["commit", "-m", "add bracket route"]);
+    let base_sha = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    write_lf(
+        &repo.join("src/[id]/page.tsx"),
+        "export const useBoth = () => removedAlpha() + removedBeta();\nfunction orphanInternalOne() { return 3; }\nfunction orphanInternalTwo() { return 4; }\n",
+    );
+
+    let (c, out, err) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_sha,
+    ]);
+    assert_eq!(c, 2, "expected SYMBOL_FINDINGS exit 2: {out}\n{err}");
+    assert!(out.contains("dangling_refs="), "{out}");
+    assert!(out.contains("removedAlpha(1f)"), "{out}");
+    assert!(out.contains("removedBeta(1f)"), "{out}");
+    assert!(out.contains("orphan_internal="), "{out}");
+    assert!(out.contains("src/[id]/page.tsx:orphanInternalOne"), "{out}");
+    assert!(out.contains("src/[id]/page.tsx:orphanInternalTwo"), "{out}");
 }

@@ -2296,3 +2296,79 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .unwrap()
         .contains("global personal preference - keep"));
 }
+
+#[test]
+fn b3_home_pointer_rejects_unc_and_reparse_parents() {
+    let tmp = TempDirGuard::new("b3-home-sec");
+    let decoy_snap = tmp.path.join("b3-decoy");
+    copy_b3_snapshot(&decoy_snap, true);
+
+    // 1. UNC / network paths inside `.b3/home` must be ignored without failing CLI execution.
+    for (idx, unc) in ["\\\\127.0.0.1\\share\\b3", "//127.0.0.1/share/b3"]
+        .into_iter()
+        .enumerate()
+    {
+        let cwd_unc = tmp.path.join(format!("cwd-unc-{idx}"));
+        let uh_unc = tmp.path.join(format!("uh-unc-{idx}"));
+        fs::create_dir_all(cwd_unc.join(".b3")).unwrap();
+        write_lf(&cwd_unc.join(".b3/home"), &format!("{unc}\n"));
+        let (code, out, err) = run_b3_env(
+            &[
+                "install",
+                "cursor",
+                "install",
+                "--user-home",
+                uh_unc.to_str().unwrap(),
+            ],
+            Some(&cwd_unc),
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &["B3_HOME"],
+        );
+        assert_eq!(
+            code, 0,
+            "auto-discovery should fall back cleanly: {out}\n{err}"
+        );
+        let recorded = fs::read_to_string(uh_unc.join(".cursor/b3-home")).unwrap();
+        let unc_fwd = unc.replace('\\', "/");
+        assert!(
+            !recorded.trim().replace('\\', "/").starts_with(&unc_fwd),
+            "UNC path from .b3/home must be ignored, got {recorded}"
+        );
+    }
+
+    // 2. `.b3` directory being a symlink/junction must ignore `.b3/home` cleanly.
+    let target_b3_dir = tmp.path.join("real-dot-b3");
+    fs::create_dir_all(&target_b3_dir).unwrap();
+    write_lf(
+        &target_b3_dir.join("home"),
+        &format!("{}\n", decoy_snap.display()),
+    );
+
+    let cwd_junc = tmp.path.join("cwd-junc");
+    let uh_junc = tmp.path.join("uh-junc");
+    fs::create_dir_all(&cwd_junc).unwrap();
+    create_dir_link(&cwd_junc.join(".b3"), &target_b3_dir).unwrap();
+
+    let (code_j, out_j, err_j) = run_b3_env(
+        &[
+            "install",
+            "cursor",
+            "install",
+            "--user-home",
+            uh_junc.to_str().unwrap(),
+        ],
+        Some(&cwd_junc),
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &["B3_HOME"],
+    );
+    assert_eq!(
+        code_j, 0,
+        "junctioned .b3 fallback failed: {out_j}\n{err_j}"
+    );
+    let recorded_j = fs::read_to_string(uh_junc.join(".cursor/b3-home")).unwrap();
+    assert_ne!(
+        recorded_j.trim(),
+        to_forward_path(&decoy_snap),
+        "pointer inside reparse .b3 dir must be ignored"
+    );
+}

@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    has_control_chars, is_hex64_lower, is_reparse_or_symlink, normalize_repo_root, paths_equal_fs,
-    resolve_unresolved_path, sha256_bytes_hex, sha256_file_hex, sort_ordinal,
+    find_reparse_in_path_hierarchy, has_control_chars, is_hex64_lower, is_reparse_or_symlink,
+    normalize_repo_root, paths_equal_fs, resolve_unresolved_path, sha256_bytes_hex,
+    sha256_file_hex, sort_ordinal,
 };
 
 /// Normalizes `raw` lexically against CWD, trimming trailing slashes and uppercasing Windows drive letters.
@@ -656,7 +657,37 @@ fn is_valid_b3_target_dir(dir: &Path) -> bool {
     dir.is_dir() && (dir.join("skills").is_dir() || dir.join("workflows").join("ship.md").is_file())
 }
 
+fn is_unc_or_network_path(raw: &str, p: &Path) -> bool {
+    let raw_trimmed = raw.trim();
+    let raw_bs = raw_trimmed.replace('/', "\\");
+    if raw_trimmed.starts_with("\\\\")
+        || raw_trimmed.starts_with("//")
+        || raw_bs.to_ascii_uppercase().starts_with("\\??\\")
+    {
+        return true;
+    }
+    let s = p.to_string_lossy();
+    if s.starts_with("\\\\") || s.starts_with("//") {
+        return true;
+    }
+    p.components().any(|c| {
+        matches!(
+            c,
+            Component::Prefix(pfx)
+                if matches!(
+                    pfx.kind(),
+                    Prefix::UNC(..) | Prefix::VerbatimUNC(..) | Prefix::DeviceNS(..)
+                )
+        )
+    })
+}
+
 fn read_b3_home_pointer(pointer_file: &Path, base: &Path) -> Option<PathBuf> {
+    if let Some(parent) = pointer_file.parent() {
+        if is_reparse_link(parent) {
+            return None;
+        }
+    }
     if !pointer_file.is_file() || is_reparse_link(pointer_file) {
         return None;
     }
@@ -666,6 +697,12 @@ fn read_b3_home_pointer(pointer_file: &Path, base: &Path) -> Option<PathBuf> {
         return None;
     }
     let resolved = resolve_unresolved_path(base, trimmed);
+    if is_unc_or_network_path(trimmed, &resolved) {
+        return None;
+    }
+    if find_reparse_in_path_hierarchy(&resolved).is_some() {
+        return None;
+    }
     if is_valid_b3_target_dir(&resolved) {
         Some(PathBuf::from(normalize_abs_path_str(&resolved)))
     } else {
@@ -1234,6 +1271,33 @@ pub fn uninstall_managed_file(
     }
     *removed += 1;
     Ok(())
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::read_b3_home_pointer;
+    use crate::fs::next_tmp_suffix;
+    use std::fs;
+
+    #[test]
+    fn read_b3_home_pointer_rejects_unc_and_control_paths() {
+        let root = std::env::temp_dir().join(format!("b3-home-ptr-unit-{}", next_tmp_suffix()));
+        fs::create_dir_all(&root).unwrap();
+        let ptr = root.join("home");
+        for bad in [
+            "\\\\127.0.0.1\\share\\b3",
+            "//127.0.0.1/share/b3",
+            "\\??\\UNC\\127.0.0.1\\share\\b3",
+            "\\\\?\\UNC\\127.0.0.1\\share\\b3",
+        ] {
+            fs::write(&ptr, format!("{bad}\n")).unwrap();
+            assert!(
+                read_b3_home_pointer(&ptr, &root).is_none(),
+                "must reject UNC/network path '{bad}'"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(all(test, windows))]

@@ -554,7 +554,10 @@ pub fn run(
                            syms: &[&str],
                            scope_files: Option<&[String]>|
      -> Result<crate::process::CmdOutput, B3Error> {
-        let mut args: Vec<&str> = Vec::with_capacity(syms.len() * 2 + 12);
+        let literal_files: Vec<String> = scope_files
+            .map(|files| files.iter().map(|fp| format!(":(literal){fp}")).collect())
+            .unwrap_or_default();
+        let mut args: Vec<&str> = Vec::with_capacity(syms.len() * 2 + literal_files.len() + 12);
         args.push("grep");
         if target_trim.is_empty() {
             args.push("--untracked");
@@ -570,9 +573,9 @@ pub fn run(
             args.push(&target_commit_sha);
         }
         args.push("--");
-        if let Some(files) = scope_files {
-            for fp in files {
-                args.push(fp.as_str());
+        if scope_files.is_some() {
+            for lf in &literal_files {
+                args.push(lf.as_str());
             }
         } else {
             args.extend([".", ":(exclude).b3", ":(exclude)*.md"]);
