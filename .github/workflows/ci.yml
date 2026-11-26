@@ -45,7 +45,7 @@ jobs:
           ./scripts/measure-context.sh --strict
           ./scripts/validate-evals.sh
 
-      - name: Run merge-security suite (Windows: b3-guard.sh + b3-guard.ps1; Linux/macOS: native contract via bash)
+      - name: "Run merge-security suite (Windows: b3-guard.sh + b3-guard.ps1; Linux/macOS: native contract via bash)"
         shell: bash
         run: |
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
