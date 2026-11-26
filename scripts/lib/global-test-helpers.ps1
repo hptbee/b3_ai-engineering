@@ -6,7 +6,7 @@ $script:FailedCount = 0
 $script:PassedCount = 0
 if (-not $env:B3_BIN) {
     $b3BinNameH = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
-    $relB3H = Join-Path $script:HelpersRepoRoot "target\release\$b3BinNameH"
+    $relB3H = [IO.Path]::Combine($script:HelpersRepoRoot, 'target', 'release', $b3BinNameH)
     if (Test-Path -LiteralPath $relB3H -PathType Leaf) {
         $env:B3_BIN = $relB3H
     }

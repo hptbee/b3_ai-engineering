@@ -4,15 +4,11 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  pull_request:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag to build/publish (dry-run upload when empty)'
-        required: false
-        default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -26,34 +22,96 @@ jobs:
             target: x86_64-pc-windows-msvc
             bin_name: b3.exe
             artifact_name: b3-x86_64-pc-windows-msvc.exe
+            expected_uname_s: Windows
+            expected_arch: x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_name: b3
             artifact_name: b3-x86_64-unknown-linux-gnu
-          - os: macos-14
+            expected_uname_s: Linux
+            expected_arch: x86_64
+          - os: macos-15
             target: aarch64-apple-darwin
             bin_name: b3
             artifact_name: b3-aarch64-apple-darwin
-          - os: macos-13
+            expected_uname_s: Darwin
+            expected_arch: arm64
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             bin_name: b3
             artifact_name: b3-x86_64-apple-darwin
+            expected_uname_s: Darwin
+            expected_arch: x86_64
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify native runner architecture (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          actual_os="$(uname -s)"
+          actual_arch="$(uname -m)"
+          if [[ "$actual_os" != "${{ matrix.expected_uname_s }}" || "$actual_arch" != "${{ matrix.expected_arch }}" ]]; then
+            echo "Runner host mismatch: expected ${{ matrix.expected_uname_s }}/${{ matrix.expected_arch }}, got ${actual_os}/${actual_arch}" >&2
+            exit 1
+          fi
+          echo "Verified native Unix runner: ${actual_os}/${actual_arch} -> ${{ matrix.target }}"
+
+      - name: Verify native runner architecture (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $isWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+          $actualOs = if ($isWin) { 'Windows' } else { 'Unknown' }
+          $rawArch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+          $actualArch = switch ($rawArch.ToLowerInvariant()) {
+            'x64'   { 'x86_64' }
+            'arm64' { 'arm64' }
+            default { $rawArch }
+          }
+          if ($actualOs -ne '${{ matrix.expected_uname_s }}' -or $actualArch -ne '${{ matrix.expected_arch }}') {
+            Write-Error "Runner host mismatch: expected ${{ matrix.expected_uname_s }}/${{ matrix.expected_arch }}, got ${actualOs}/${actualArch} (raw: ${rawArch})"
+            exit 1
+          }
+          Write-Host "Verified native Windows runner: ${actualOs}/${actualArch} -> ${{ matrix.target }}"
+
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # v1/master
         with:
+          toolchain: "1.100.0"
           targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          echo "rustc: $(rustc --version)"
+          cargo build --release --target "${{ matrix.target }}"
 
       - name: Smoke test binary
         shell: bash
         run: |
           bin="target/${{ matrix.target }}/release/${{ matrix.bin_name }}"
-          "$bin" --version
+          version_out="$("$bin" --version)"
+          version_out="${version_out%$'\r'}"
+          echo "version: $version_out"
+          if [[ "$version_out" != b3\ * ]]; then
+            echo "Unexpected --version output: $version_out" >&2
+            exit 1
+          fi
+
+          fp_out="$("$bin" guard fingerprint --depends-on T2,T1 --scope src/a.rs --criteria ok)"
+          fp_out="${fp_out%$'\r'}"
+          echo "fingerprint: $fp_out"
+          expected_fp="depends_on=T1,T2|scope=src/a.rs|acceptance_criteria=ok"
+          if [[ "$fp_out" != "$expected_fp" ]]; then
+            echo "Unexpected guard fingerprint output: got '$fp_out', expected '$expected_fp'" >&2
+            exit 1
+          fi
+
+          if [[ "$(uname -s)" == "Linux" || "$(uname -s)" == "Darwin" ]]; then
+            file "$bin"
+          fi
+
           mkdir -p dist
           cp "$bin" "dist/${{ matrix.artifact_name }}"
 
@@ -62,29 +120,70 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: dist/${{ matrix.artifact_name }}
 
-  publish:
+  package:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Generate SHA256SUMS.txt
+      - name: Verify bundle completeness and checksums
         shell: bash
         run: |
+          expected_artifacts=(
+            b3-aarch64-apple-darwin
+            b3-x86_64-apple-darwin
+            b3-x86_64-pc-windows-msvc.exe
+            b3-x86_64-unknown-linux-gnu
+          )
+          for art in "${expected_artifacts[@]}"; do
+            path="dist/${art}"
+            if [[ ! -s "$path" ]]; then
+              echo "Missing or non-zero-size check failed for artifact: $path" >&2
+              exit 1
+            fi
+            ls -lh "$path"
+          done
+
           cd dist
-          sha256sum b3-* > SHA256SUMS.txt
+          LC_ALL=C sha256sum b3-aarch64-apple-darwin b3-x86_64-apple-darwin b3-x86_64-pc-windows-msvc.exe b3-x86_64-unknown-linux-gnu > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
           cat SHA256SUMS.txt
+          cd ..
+
+      - name: Validate bootstrap target compatibility
+        shell: bash
+        run: |
+          ./scripts/bootstrap-b3.sh --release-dir dist --install-dir /tmp/b3-release-smoke --target x86_64-unknown-linux-gnu
+          /tmp/b3-release-smoke/b3 --version
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc; do
+            ./scripts/bootstrap-b3.sh --release-dir dist --install-dir /tmp/b3-release-smoke --target "$target" --dry-run
+          done
 
       - uses: actions/upload-artifact@v4
         with:
           name: b3-release-bundle
           path: dist/
 
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: b3-release-bundle
+          path: dist
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -92,18 +92,17 @@ pub fn is_reparse_or_symlink(path: &Path) -> bool {
         Err(e) if e.kind() == ErrorKind::NotFound => return false,
         Err(_) => return true, // fail closed on unreadable metadata
     };
-    if meta.file_type().is_symlink() {
-        return true;
-    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        if (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-            return true;
-        }
+        meta.file_type().is_symlink()
+            || (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0
     }
-    false
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
+    }
 }
 
 /// On Windows, returns `true` when `path` has a reparse point that is a non-symlink
@@ -685,10 +684,7 @@ pub fn test_safe_repo_path_segments(path_val: &str, block_git: bool) -> bool {
             return false;
         }
     }
-    if block_git && s.split('/').any(|seg| seg.eq_ignore_ascii_case(".git")) {
-        return false;
-    }
-    true
+    !(block_git && s.split('/').any(|seg| seg.eq_ignore_ascii_case(".git")))
 }
 
 /// Computes repo-relative slash path from `root` and `full`.

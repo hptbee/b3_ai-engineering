@@ -12,7 +12,7 @@ $b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 
 $b3Bin = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
     $env:B3_BIN
 } else {
-    $relB3 = Join-Path $repoRoot "target\release\$b3BinName"
+    $relB3 = [IO.Path]::Combine($repoRoot, 'target', 'release', $b3BinName)
     if (Test-Path -LiteralPath $relB3 -PathType Leaf) { $relB3 } else { $null }
 }
 if ($b3Bin -and -not $env:B3_BIN) {

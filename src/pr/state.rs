@@ -1,8 +1,8 @@
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::fs::{
     has_control_chars, is_reparse_or_symlink, next_tmp_suffix, resolve_unresolved_path,
@@ -315,11 +315,24 @@ pub struct GitContext {
 }
 
 fn run_raw_git_stdout(base: &Path, args: &[&str]) -> Result<Vec<String>, PrExit> {
-    let out = Command::new("git").arg("-C").arg(base).args(args).output();
-    let Ok(res) = out else {
+    let mut full_args: Vec<&OsStr> = Vec::with_capacity(2 + args.len());
+    full_args.push(OsStr::new("-C"));
+    full_args.push(base.as_os_str());
+    for a in args {
+        full_args.push(OsStr::new(a));
+    }
+    let no_env: [(&str, &str); 0] = [];
+    let Ok(res) = crate::process::run_command(
+        crate::git::git_program(),
+        &full_args,
+        None,
+        &no_env,
+        &["MSYS2_ARG_CONV_EXCL"],
+        None,
+    ) else {
         return Ok(Vec::new());
     };
-    if !res.status.success() {
+    if res.exit_code != 0 {
         return Ok(Vec::new());
     }
     let text = String::from_utf8_lossy(&res.stdout);

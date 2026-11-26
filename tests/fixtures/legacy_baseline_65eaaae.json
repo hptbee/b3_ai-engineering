@@ -1,0 +1,383 @@
+{
+  "baseline_sha": "65eaaaeb275ee1ce89c57d6fdd78ac3f3c1932fe",
+  "captured_at": "2026-11-26T14:35:32Z",
+  "capture_platform": "Windows_NT / PS 5.1.26100.9818",
+  "cases": [
+    {
+      "id": "fp_canonical",
+      "contract_family": "1_tree_and_task_fingerprints",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "depends_on=T001,T002|scope=src\\a.ts, src/b.ts|acceptance_criteria=AC1: ok; AC2: done",
+      "notes": "Canonical task fingerprint ordering and delimiters"
+    },
+    {
+      "id": "fp_empty_depends",
+      "contract_family": "1_tree_and_task_fingerprints",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "depends_on=[]|scope=src/a.ts|acceptance_criteria=AC1: ok",
+      "notes": "Empty JSON array sentinel [] normalizes to depends_on=[]"
+    },
+    {
+      "id": "fp_missing_scope",
+      "contract_family": "1_tree_and_task_fingerprints",
+      "status_label": "INTENTIONAL_BEHAVIOR_CHANGE",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "FINGERPRINT_FAIL: missing -Scope",
+      "notes": "CLI flag naming normalized from PowerShell -Scope to native --scope"
+    },
+    {
+      "id": "snap_clean_vs_dirty",
+      "contract_family": "1_tree_and_task_fingerprints",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "<SNAP_CLEAN_SHA>",
+      "notes": "Clean and dirty snapshot commits produce identical tree hashes and leave stash empty"
+    },
+    {
+      "id": "verify_run_schema",
+      "contract_family": "2_verification_receipts",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "VERIFY_PASS: exit=0 tree=c4582b65d0ba receipt=.b3/ship/v1.verify duration_ms=<DURATION_MS>",
+      "notes": "verify-run stdout and b3-verify-v1 receipt schema/fields/tree_hash match"
+    },
+    {
+      "id": "verify_check_valid",
+      "contract_family": "2_verification_receipts",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "VERIFY_VALID: task=T001 scope=scoped tree=c4582b65d0ba",
+      "notes": "verify-check validates matching clean working tree"
+    },
+    {
+      "id": "verify_check_cmd_mismatch",
+      "contract_family": "2_verification_receipts",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "VERIFY_MISMATCH: command mismatch",
+      "notes": "verify-check fails on expected_cmd mismatch"
+    },
+    {
+      "id": "verify_check_stale",
+      "contract_family": "2_verification_receipts",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "VERIFY_STALE: receipt=c4582b65d0ba current=077754575fa4",
+      "notes": "verify-check detects working tree mutation after receipt"
+    },
+    {
+      "id": "verify_check_target_commit_sha_valid",
+      "contract_family": "2_verification_receipts",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "VERIFY_VALID: task=T001 scope=scoped tree=c4582b65d0ba",
+      "notes": "verify-check validates against matching target_commit_sha"
+    },
+    {
+      "id": "verify_check_target_commit_sha_mismatch",
+      "contract_family": "2_verification_receipts",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "GIT_ERROR: git rev-parse 0000000000000000000000000000000000000000 failed: fatal: Needed a single revision",
+      "notes": "verify-check rejects mismatched target_commit_sha"
+    },
+    {
+      "id": "ledger_init_independent",
+      "contract_family": "3_review_ledger",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "LEDGER_INIT: path=.b3/ship/ledger.md size=XS risk=LOW units=1 max_passes=5 snapshot=<HEAD_SHA>",
+      "notes": "review-ledger init with INDEPENDENT review independence"
+    },
+    {
+      "id": "ledger_update_with_receipt",
+      "contract_family": "3_review_ledger",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "LEDGER_UPDATED: path=.b3/ship/ledger.md",
+      "notes": "review-ledger update U01 REVIEWED bound to verify receipt"
+    },
+    {
+      "id": "ledger_check_valid",
+      "contract_family": "3_review_ledger",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "LEDGER_GATE_PASS: size=XS risk=LOW units=1/1 cross_unit=N_A review_independence=INDEPENDENT",
+      "notes": "review-ledger check passes on valid independent receipt-bound ledger"
+    },
+    {
+      "id": "ledger_check_single_agent_limit",
+      "contract_family": "3_review_ledger",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "LEDGER_GATE_PASS: size=XS risk=LOW units=1/1 cross_unit=N_A review_independence=SINGLE_AGENT_LIMIT",
+      "notes": "review-ledger check reflects SINGLE_AGENT_LIMIT independence"
+    },
+    {
+      "id": "check_worktree_isolated",
+      "contract_family": "4_worktree_and_wave_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "WORKTREE_OK: root=<WT_ROOT> head=<BASE_SHA> common_dir=<COMMON_DIR> linked=true isolated=true",
+      "notes": "check-worktree passes on isolated linked worktree with peer roots"
+    },
+    {
+      "id": "check_worktree_peer_overlap_blocked",
+      "contract_family": "4_worktree_and_wave_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "WORKTREE_UNSAFE: parent_root_reused_or_nested(parent=<WT_ROOT>,worker=<WT_ROOT>)",
+      "notes": "check-worktree rejects overlapping peer root"
+    },
+    {
+      "id": "check_wave_disjoint",
+      "contract_family": "4_worktree_and_wave_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "WAVE_OK: disjoint (3 tasks, 2 paths)",
+      "notes": "check-wave disjoint returns WAVE_OK"
+    },
+    {
+      "id": "check_wave_partition",
+      "contract_family": "4_worktree_and_wave_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "dirty_scope=not_checked\nuser_dirty=none\nunexpected_dirty=none\nblocked_tasks=none\nwave_count=2\nmax_concurrency=2\nmax_parallel=2\nconflicts=src/shared.txt(T1,T2)\nwave|1|PARALLEL|agents=2|tasks=T1,T3|reason=independent_ready_tasks\nwave|2|SEQUENTIAL|agents=1|tasks=T2|reason=shared_write_conflict\nWAVE_PARTITIONED: waves=2 max_parallel=2 reason=conflicting_wave_split",
+      "notes": "check-wave --partition groups conflicting tasks into sequential waves"
+    },
+    {
+      "id": "check_wave_sequential",
+      "contract_family": "4_worktree_and_wave_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "dirty_scope=not_checked\nuser_dirty=none\nunexpected_dirty=none\nblocked_tasks=none\nwave_count=2\nmax_concurrency=3\nmax_parallel=1\nconflicts=src/shared.txt(T1,T2)\nwave|1|SEQUENTIAL|agents=1|tasks=T1|reason=shared_write_conflict\nwave|2|SEQUENTIAL|agents=1|tasks=T2|reason=shared_write_conflict\nWAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=shared_write_conflict",
+      "notes": "check-wave returns exit 2 WAVE_SEQUENTIAL when all tasks conflict"
+    },
+    {
+      "id": "check_freshness_fresh",
+      "contract_family": "4_worktree_and_wave_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "FRESH",
+      "notes": "check-freshness returns FRESH on matching base SHA"
+    },
+    {
+      "id": "merge_policy_local_authorized",
+      "contract_family": "5_merge_eligibility",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "MERGE_AUTHORIZED: mode=local target_ref=refs/heads/main target_sha=<TRUNK_SHA> head_sha=<HEAD_SHA> policy_authority=refs/heads/main@<TRUNK_SHA> auto_merge=authorized governance=CLEAR",
+      "notes": "Local merge-policy-check authorizes when independent ledger and verify receipt match"
+    },
+    {
+      "id": "merge_policy_caller_ci_pass_without_receipt_blocked",
+      "contract_family": "5_merge_eligibility",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "MERGE_BLOCKED: ci_evidence_invalid(ledger_unit_missing_verify_receipt:U01)",
+      "notes": "Caller-reported CI=PASS without verify receipt is blocked"
+    },
+    {
+      "id": "merge_policy_stale_ledger_blocked",
+      "contract_family": "5_merge_eligibility",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "MERGE_BLOCKED: ledger_check_failed (LEDGER_STALE: head_sha moved (<OLD_HEAD_SHA>-><HEAD_SHA>))",
+      "notes": "Stale ledger/receipt after commit advance blocks merge"
+    },
+    {
+      "id": "snapshot_secret_env_blocked",
+      "contract_family": "6_protected_and_secret_paths",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "SNAPSHOT_FAIL: sensitive path cannot be snapshotted (.env)",
+      "notes": "snapshot refuses untracked .env secret file"
+    },
+    {
+      "id": "merge_policy_protected_unicode_space_bracket_add",
+      "contract_family": "6_protected_and_secret_paths",
+      "status_label": "INTENTIONAL_BEHAVIOR_CHANGE",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "MERGE_BLOCKED: protected_paths=releases/v1 [draft] caf�/new.txt",
+      "notes": "Both exit 1 on protected Unicode/space/bracket add; Rust fixes PS5.1 redirected-pipe ANSI lossiness by emitting UTF-8"
+    },
+    {
+      "id": "merge_policy_protected_rename_out",
+      "contract_family": "6_protected_and_secret_paths",
+      "status_label": "INTENTIONAL_BEHAVIOR_CHANGE",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "MERGE_BLOCKED: protected_paths=releases/v1 [draft] caf�/secret.txt",
+      "notes": "Both exit 1 on protected Unicode/space/bracket rename-out; Rust fixes PS5.1 redirected-pipe ANSI lossiness by emitting UTF-8"
+    },
+    {
+      "id": "precommit_allowed_paths_fail",
+      "contract_family": "6_protected_and_secret_paths",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 1,
+      "legacy_stdout_normalized": "PRECOMMIT_FAIL: undeclared staged path (src/app.txt)",
+      "notes": "precommit rejects staged file outside allowed_paths"
+    },
+    {
+      "id": "precommit_allowed_paths_pass",
+      "contract_family": "6_protected_and_secret_paths",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "PRECOMMIT_OK",
+      "notes": "precommit passes when staged path is allowed and verify receipt is valid"
+    },
+    {
+      "id": "context_cache_record",
+      "contract_family": "7_context_cache_and_evidence_freshness",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "CONTEXT_RECORDED: .b3/ship/ctx.cache scope=T1 head=<HEAD_SHA> anchor_hash=2e1c2e86f213cdaa28907e785a210479b77e7257 graph_index_sha=none",
+      "notes": "context-cache record creates cache artifact"
+    },
+    {
+      "id": "context_cache_check_fresh",
+      "contract_family": "7_context_cache_and_evidence_freshness",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "CONTEXT_FRESH: scope=T1 head=<HEAD_SHA> anchor_status=FRESH graph_index=NOT_RECORDED live_lsp_eligible=true",
+      "notes": "context-cache check passes when anchors and scope paths are unchanged"
+    },
+    {
+      "id": "evidence_check_write",
+      "contract_family": "7_context_cache_and_evidence_freshness",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "EVIDENCE_WRITTEN: 1 files -> .b3/ship/ev.manifest",
+      "notes": "evidence-check writes SHA-256 manifest"
+    },
+    {
+      "id": "evidence_check_fresh",
+      "contract_family": "7_context_cache_and_evidence_freshness",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "EVIDENCE_FRESH: 1 files",
+      "notes": "evidence-check passes on unmodified source paths"
+    },
+    {
+      "id": "context_cache_check_stale",
+      "contract_family": "7_context_cache_and_evidence_freshness",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "CONTEXT_STALE: scope=T1 reasons=anchor_changed anchor_status=STALE graph_index=NOT_RECORDED live_lsp_eligible=true",
+      "notes": "context-cache detects stale anchor modification"
+    },
+    {
+      "id": "evidence_check_stale",
+      "contract_family": "7_context_cache_and_evidence_freshness",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "EVIDENCE_STALE: docs/guide.md",
+      "notes": "evidence-check detects stale source file digest"
+    },
+    {
+      "id": "pr_fetch",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "{\"status\":\"PR_FETCH_OK\",\"retrieval_mode\":\"metadata_first\",\"repo\":\"acme/demo\",\"pr\":42,\"viewer\":\"b3-bot\",\"untrusted_data_framed\":true,\"include_resolved\":false,\"include_bodies\":false,\"pull_request\":{\"number\":42,\"state\":\"OPEN\",\"head_sha\":\"<HEAD_SHA>\",\"title\":\"BEGIN_UNTRUSTED_PR_DATA\\nDemo PR\\nEND_UNTRUSTED_PR_DATA\",\"base_ref\":\"BEGIN_UNTRUSTED_PR_DATA\\nmain\\nEND_UNTRUSTED_PR_DATA\",\"head_ref\":\"BEGIN_UNTRUSTED_PR_DATA\\nfeat/auth\\nEND_UNTRUSTED_PR_DATA\"},\"counts\":{\"total_review_threads\":2,\"returned_review_threads\":2,\"general_comments\":0},\"review_threads\":[{\"id\":\"PRRT_t1\",\"target_kind\":\"review_thread\",\"is_resolved\":false,\"is_outdated\":false,\"path\":\"BEGIN_UNTRUSTED_PR_DATA\\nsrc/auth.ts\\nEND_UNTRUSTED_PR_DATA\",\"line\":1,\"comment_count\":1,\"authors\":[\"BEGIN_UNTRUSTED_PR_DATA\\nreviewer1\\nEND_UNTRUSTED_PR_DATA\"]},{\"id\":\"PRRT_t2\",\"target_kind\":\"review_thread\",\"is_resolved\":false,\"is_outdated\":false,\"path\":\"BEGIN_UNTRUSTED_PR_DATA\\nsrc/auth.ts\\nEND_UNTRUSTED_PR_DATA\",\"line\":1,\"comment_count\":1,\"authors\":[\"BEGIN_UNTRUSTED_PR_DATA\\nreviewer2\\nEND_UNTRUSTED_PR_DATA\"]}],\"general_comments\":[]}",
+      "notes": "b3 pr fetch returns sanitized PR payload and thread counts"
+    },
+    {
+      "id": "pr_reply_draft",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "{\"status\":\"PR_DRAFT_OK\",\"action\":\"reply\",\"mutated\":false,\"repo\":\"acme/demo\",\"pr\":42,\"expected_head\":\"<HEAD_SHA>\",\"target_kind\":\"review_thread\",\"target_id\":\"PRRT_t1\",\"idempotency_key\":\"key-reply-1\",\"operation_hash\":\"<OP_HASH>\",\"body_preview\":\"Fixed in latest commit.\\n\\n<!-- b3-pr-key:key-reply-1;op=<OP_HASH> -->\"}",
+      "notes": "b3 pr reply --draft returns PR_DRAFT_OK without mutating state"
+    },
+    {
+      "id": "pr_reply_post",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "{\"status\":\"PR_REPLY_OK\",\"action\":\"reply\",\"mutated\":true,\"repo\":\"acme/demo\",\"pr\":42,\"target_kind\":\"review_thread\",\"target_id\":\"PRRT_t1\",\"comment_id\":\"PRRC_new_101\",\"idempotency_key\":\"key-reply-1\",\"operation_hash\":\"<OP_HASH>\",\"verified_remote\":true,\"verified_head\":\"<HEAD_SHA>\"}",
+      "notes": "b3 pr reply --authorize-write posts reply and writes canonical state.json"
+    },
+    {
+      "id": "pr_reply_idempotent_skip",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "{\"status\":\"PR_IDEMPOTENT_SKIP\",\"action\":\"reply\",\"mutated\":false,\"target_kind\":\"review_thread\",\"target_id\":\"PRRT_t1\",\"key\":\"key-reply-1\",\"operation_hash\":\"<OP_HASH>\",\"existing_comment_id\":\"PRRC_new_101\"}",
+      "notes": "Repeated reply with identical idempotency key and payload emits PR_IDEMPOTENT_SKIP"
+    },
+    {
+      "id": "pr_resolve",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "{\"status\":\"PR_RESOLVE_OK\",\"action\":\"resolve\",\"mutated\":true,\"repo\":\"acme/demo\",\"pr\":42,\"thread_id\":\"PRRT_t1\",\"fix_commit\":\"<HEAD_SHA>\",\"is_resolved\":true,\"verify_check\":\"VERIFY_VALID: task=T1 scope=scoped tree=351116602cda\",\"committed_tree_verified\":true,\"verified_remote\":true,\"verified_head\":\"<HEAD_SHA>\"}",
+      "notes": "b3 pr resolve verifies receipt & evidence and resolves thread"
+    },
+    {
+      "id": "pr_comment_both",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "{\"status\":\"PR_COMMENT_OK\",\"action\":\"comment\",\"mutated\":true,\"repo\":\"acme/demo\",\"pr\":42,\"mode\":\"both\",\"event\":\"COMMENT\",\"transport\":\"pull_review\",\"created_id\":\"901\",\"idempotency_key\":\"key-cmt-1\",\"operation_hash\":\"<OP_HASH>\",\"inline_count\":1,\"verified_remote\":true,\"verified_head\":\"<HEAD_SHA>\"}",
+      "notes": "b3 pr comment --mode both posts summary and inline review comments"
+    },
+    {
+      "id": "pr_lock_live_blocked",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "{\"status\":\"PR_CONCURRENT_LOCK\",\"error\":\"Active or unverified lock held on acme__demo__pr-42.state.json (host=<LOCK_HOST>, pid=<LOCK_PID>, state=ALIVE)\",\"outcome\":\"blocked_before_write\",\"mutated\":false}",
+      "notes": "Live state lock PID blocks concurrent PR mutation"
+    },
+    {
+      "id": "pr_lock_dead_reclaimed",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "{\"status\":\"PR_REPLY_OK\",\"action\":\"reply\",\"mutated\":true,\"repo\":\"acme/demo\",\"pr\":42,\"target_kind\":\"review_thread\",\"target_id\":\"PRRT_t2\",\"comment_id\":\"PRRC_new_102\",\"idempotency_key\":\"key-dead-1\",\"operation_hash\":\"<OP_HASH>\",\"verified_remote\":true,\"verified_head\":\"<HEAD_SHA>\"}",
+      "notes": "Stale dead-PID state lock is reclaimed and write succeeds"
+    },
+    {
+      "id": "pr_verify_zero_node",
+      "contract_family": "8_pr_feedback_state_locking_idempotency",
+      "status_label": "INTENTIONAL_BEHAVIOR_CHANGE",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "GH_VERIFY_UNAVAILABLE: node_runtime_unavailable",
+      "notes": "Wave 6/8 intentional change: b3 pr verify runs natively without Node.js (legacy fails node_runtime_unavailable)"
+    },
+    {
+      "id": "merge_policy_inprocess_pr_verify",
+      "contract_family": "5_merge_eligibility",
+      "status_label": "INTENTIONAL_BEHAVIOR_CHANGE",
+      "legacy_exit_code": 2,
+      "legacy_stdout_normalized": "PROVIDER_UNAVAILABLE: github_verification_failed(node_runtime_unavailable)",
+      "notes": "Wave 8 intentional change: merge-policy-check invokes crate::pr::verify::run in-process without Node.js or external script"
+    },
+    {
+      "id": "install_product_cursor",
+      "contract_family": "9_installer_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "installed B3 pointer in <PROD_ROOT>\nB3_HOME=<B3_HOME>\ncommand=<PROD_ROOT>\\.cursor\\commands\\b3-ship.md\nagents.md=<PROD_ROOT>\\AGENTS.md\ngitignore.b3=created\ngitignore.skills=n/a\nmodel_preferences=skipped\nhost=cursor\nskills=user-level ~/.cursor/skills/<name> via adapters/install-global.ps1 -HostName cursor (not copied into product)\nnote: this proves files were written, not host slash-command or skill discovery",
+      "notes": "install-product cursor populates .b3/home, managed commands, and .gitignore"
+    },
+    {
+      "id": "install_product_codex",
+      "contract_family": "9_installer_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "installed B3 pointer in <PROD_ROOT>\nB3_HOME=<B3_HOME>\ncommand=command-skills (<PROD_ROOT>\\.agents\\skills)\nagents.md=<PROD_ROOT>\\AGENTS.md\ngitignore.b3=created\ngitignore.skills=appended\nmodel_preferences=skipped\nhost=codex\nskills=<PROD_ROOT>\\.agents\\skills (flattened junctions + command-skills linked incl. $b3-ship; gitignored, not copied)\nnote: this proves files were written, not host slash-command or skill discovery",
+      "notes": "install-product codex populates .b3/home, flat .agents/skills junctions, and .gitignore"
+    },
+    {
+      "id": "sync_skills_antigravity_verify_only",
+      "contract_family": "9_installer_ownership",
+      "status_label": "INDEPENDENT_LEGACY_PARITY",
+      "legacy_exit_code": 0,
+      "legacy_stdout_normalized": "verify ok: <SYNC_ROOT>\\.agents\\skills.json (antigravity); 1 SKILL.md entries visible",
+      "notes": "sync-skills -HostName antigravity -VerifyOnly validates flat index and skills.json"
+    }
+  ]
+}

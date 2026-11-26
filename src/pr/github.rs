@@ -1310,12 +1310,8 @@ fn verify_remote_object(
                 return false;
             }
         }
-        if !spec.expected_body_sha256.is_empty()
-            && sha256_utf8_hex(&stripped) != spec.expected_body_sha256
-        {
-            return false;
-        }
-        true
+        spec.expected_body_sha256.is_empty()
+            || sha256_utf8_hex(&stripped) == spec.expected_body_sha256
     };
     let (owner, name) = spec.repo.split_once('/').unwrap_or(("", ""));
 
@@ -1936,13 +1932,14 @@ fn assert_inside_dot_b3(repo_root: &Path, receipt_full_path: &Path) -> Result<St
     let rel_norm = if cfg!(windows) {
         let b_str = real_b3.to_string_lossy().replace('\\', "/");
         let r_str = real_receipt.to_string_lossy().replace('\\', "/");
-        if r_str.len() <= b_str.len()
-            || !r_str[..b_str.len()].eq_ignore_ascii_case(&b_str)
-            || !r_str[b_str.len()..].starts_with('/')
-        {
+        let prefix_ok = r_str
+            .get(..b_str.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(&b_str));
+        let tail = r_str.get(b_str.len()..).unwrap_or("");
+        if !prefix_ok || !tail.starts_with('/') {
             None
         } else {
-            Some(r_str[b_str.len() + 1..].to_string())
+            Some(tail[1..].to_string())
         }
     } else {
         real_receipt
@@ -3198,9 +3195,10 @@ fn format_general_reply_with_ref(
     }
     let ref_line = match html_url {
         Some(u)
-            if u.len() >= 7
-                && (u[..7].eq_ignore_ascii_case("http://")
-                    || (u.len() >= 8 && u[..8].eq_ignore_ascii_case("https://"))) =>
+            if u.get(..7)
+                .is_some_and(|p| p.eq_ignore_ascii_case("http://"))
+                || u.get(..8)
+                    .is_some_and(|p| p.eq_ignore_ascii_case("https://")) =>
         {
             format!("> Replying to [comment #{target_id}]({u})")
         }
@@ -3313,9 +3311,7 @@ fn handle_reply(flags: &ParsedFlags) -> Result<PrExit, PrExit> {
         |header| {
             let mut target_url: Option<String> = None;
             let mut base_body = normalize_text(&raw_body);
-            let scan_items: Vec<IdemCandidate>;
-
-            if target_kind == "review_thread" {
+            let scan_items: Vec<IdemCandidate> = if target_kind == "review_thread" {
                 let Some(thread) =
                     fetch_single_review_thread(&repo.full, pr_number, &target_id, max_pages, true)?
                 else {
@@ -3327,7 +3323,7 @@ fn handle_reply(flags: &ParsedFlags) -> Result<PrExit, PrExit> {
                         ),
                     ));
                 };
-                scan_items = thread
+                thread
                     .comments
                     .into_iter()
                     .map(|c| IdemCandidate {
@@ -3336,7 +3332,7 @@ fn handle_reply(flags: &ParsedFlags) -> Result<PrExit, PrExit> {
                         author: c.author,
                         body: c.body.unwrap_or_default(),
                     })
-                    .collect();
+                    .collect()
             } else {
                 let t_res = gh_rest_get(
                     &format!("repos/{}/issues/comments/{target_id}", repo.full),
@@ -3379,7 +3375,7 @@ fn handle_reply(flags: &ParsedFlags) -> Result<PrExit, PrExit> {
                     &format!("repos/{}/issues/{pr_number}/comments", repo.full),
                     max_pages,
                 )?;
-                scan_items = raw_list
+                raw_list
                     .iter()
                     .map(|c| IdemCandidate {
                         id: c
@@ -3399,8 +3395,8 @@ fn handle_reply(flags: &ParsedFlags) -> Result<PrExit, PrExit> {
                             .unwrap_or("")
                             .to_string(),
                     })
-                    .collect();
-            }
+                    .collect()
+            };
 
             let identity = compute_operation_identity(
                 &repo.full,

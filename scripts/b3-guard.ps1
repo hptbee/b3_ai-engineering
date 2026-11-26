@@ -116,7 +116,7 @@ function Resolve-B3Bin([string]$RepoBase) {
         [Console]::Error.WriteLine("b3 native binary not found; build with 'cargo build --release' or set B3_BIN")
         exit 1
     }
-    foreach ($rel in @("target\release\$binName", "target\debug\$binName")) {
+    foreach ($rel in @([IO.Path]::Combine('target', 'release', $binName), [IO.Path]::Combine('target', 'debug', $binName))) {
         $cand = Join-Path $RepoBase $rel
         if (Test-Path -LiteralPath $cand -PathType Leaf) { return $cand }
     }

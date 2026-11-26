@@ -61,6 +61,127 @@ fn norm_lf(bytes: &[u8]) -> String {
         .to_string()
 }
 
+struct LegacyBaselineCase {
+    id: String,
+    contract_family: String,
+    status_label: String,
+    legacy_exit_code: i32,
+    legacy_stdout_normalized: String,
+}
+
+fn load_legacy_baseline() -> (String, Vec<LegacyBaselineCase>) {
+    let raw = include_str!("fixtures/legacy_baseline_65eaaae.json");
+    let root = b3::json::parse_json(raw).expect("parse legacy_baseline_65eaaae.json");
+    let sha = root
+        .get("baseline_sha")
+        .and_then(|v| v.as_str())
+        .expect("baseline_sha")
+        .to_string();
+    assert_eq!(sha, "65eaaaeb275ee1ce89c57d6fdd78ac3f3c1932fe");
+    let arr = root
+        .get("cases")
+        .and_then(|v| v.as_array())
+        .expect("cases array");
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        out.push(LegacyBaselineCase {
+            id: item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .expect("case id")
+                .to_string(),
+            contract_family: item
+                .get("contract_family")
+                .and_then(|v| v.as_str())
+                .expect("contract_family")
+                .to_string(),
+            status_label: item
+                .get("status_label")
+                .and_then(|v| v.as_str())
+                .expect("status_label")
+                .to_string(),
+            legacy_exit_code: item
+                .get("legacy_exit_code")
+                .and_then(|v| v.as_i64())
+                .expect("legacy_exit_code") as i32,
+            legacy_stdout_normalized: item
+                .get("legacy_stdout_normalized")
+                .and_then(|v| v.as_str())
+                .expect("legacy_stdout_normalized")
+                .to_string(),
+        });
+    }
+    (sha, out)
+}
+
+fn find_legacy_case<'a>(cases: &'a [LegacyBaselineCase], id: &str) -> &'a LegacyBaselineCase {
+    cases
+        .iter()
+        .find(|c| c.id == id)
+        .unwrap_or_else(|| panic!("missing legacy baseline case: {id}"))
+}
+
+fn replace_path_variants(mut s: String, raw: &Path, token: &str) -> String {
+    let mut candidates = Vec::new();
+    let raw_str = raw.to_string_lossy().into_owned();
+    candidates.push(raw_str);
+    if let Ok(canon) = fs::canonicalize(raw) {
+        let cs = canon.to_string_lossy().into_owned();
+        let trimmed = cs.strip_prefix("\\\\?\\").unwrap_or(&cs).to_string();
+        candidates.push(trimmed);
+    }
+    for base in candidates {
+        let fwd = base.replace('\\', "/");
+        let low = fwd.to_ascii_lowercase();
+        for v in [base, fwd, low] {
+            if !v.is_empty() {
+                s = s.replace(v.as_str(), token);
+            }
+        }
+    }
+    s
+}
+
+fn normalize_dynamic_tokens(mut s: String, replacers: &[(&str, &str)]) -> String {
+    for (token, val) in replacers {
+        if !val.is_empty() {
+            s = s.replace(val, token);
+            let fwd = val.replace('\\', "/");
+            s = s.replace(&fwd, token);
+        }
+    }
+    if let Some(idx) = s.find("duration_ms=") {
+        let rest = &s[idx + "duration_ms=".len()..];
+        let digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+        if digits > 0 {
+            let tail = &rest[digits..];
+            s = format!("{}duration_ms=<DURATION_MS>{tail}", &s[..idx]);
+        }
+    }
+    s
+}
+
+fn run_b3_with_env(
+    args: &[&str],
+    cwd: Option<&Path>,
+    envs: &[(&str, &str)],
+) -> (i32, String, String) {
+    let mut cmd = Command::new(b3_bin());
+    cmd.args(args);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().expect("run b3 binary");
+    (
+        out.status.code().unwrap_or(-1),
+        norm_lf(&out.stdout),
+        norm_lf(&out.stderr),
+    )
+}
+
 fn run_b3(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(b3_bin())
         .args(args)
@@ -734,8 +855,9 @@ fn golden_bootstrap_checksum_and_rollback() {
 
     let dest_name = if cfg!(windows) { "b3.exe" } else { "b3" };
     let dest_bin = inst_tmp.path.join(dest_name);
-    // Seed a distinct prior binary to verify backup + rollback cleanly
-    fs::write(&dest_bin, b"PRIOR_BINARY_SENTINEL").unwrap();
+    // Seed a valid runnable prior binary (copy of b3_bin) so rollback smoke checks (`--version`) succeed
+    fs::copy(b3_bin(), &dest_bin).expect("seed runnable prior binary");
+    let prior_bytes = fs::read(&dest_bin).expect("read prior binary");
 
     let run_boot = |extra: &[&str]| -> (i32, String, String) {
         #[cfg(windows)]
@@ -801,7 +923,7 @@ fn golden_bootstrap_checksum_and_rollback() {
             || bad_err.to_ascii_lowercase().contains("sha256"),
         "err={bad_err}"
     );
-    assert_eq!(fs::read(&dest_bin).unwrap(), b"PRIOR_BINARY_SENTINEL");
+    assert_eq!(fs::read(&dest_bin).unwrap(), prior_bytes);
 
     // 2. Valid checksum installs, backs up .prev, and verifies `--version`
     fs::write(
@@ -814,7 +936,7 @@ fn golden_bootstrap_checksum_and_rollback() {
     assert!(ok_out.contains("BOOTSTRAP_OK:"), "out={ok_out}");
     assert_eq!(
         fs::read(inst_tmp.path.join(format!("{dest_name}.prev"))).unwrap(),
-        b"PRIOR_BINARY_SENTINEL"
+        prior_bytes
     );
 
     let (ver_c, ver_out, _) = {
@@ -828,7 +950,7 @@ fn golden_bootstrap_checksum_and_rollback() {
     assert_eq!(ver_c, 0);
     assert_eq!(ver_out, concat!("b3 ", env!("CARGO_PKG_VERSION")));
 
-    // 3. Rollback restores .prev sentinel
+    // 3. Rollback restores .prev binary and passes version check
     let rb_flag = if cfg!(windows) {
         "-Rollback"
     } else {
@@ -837,7 +959,915 @@ fn golden_bootstrap_checksum_and_rollback() {
     let (rb_ec, rb_out, rb_err) = run_boot(&[rb_flag]);
     assert_eq!(rb_ec, 0, "rollback failed:\n{rb_out}\n{rb_err}");
     assert!(rb_out.contains("ROLLBACK_OK:"), "out={rb_out}");
-    assert_eq!(fs::read(&dest_bin).unwrap(), b"PRIOR_BINARY_SENTINEL");
+    assert_eq!(fs::read(&dest_bin).unwrap(), prior_bytes);
+    let rb_ver = Command::new(&dest_bin).arg("--version").output().unwrap();
+    assert!(rb_ver.status.success());
+    assert_eq!(
+        norm_lf(&rb_ver.stdout),
+        concat!("b3 ", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn golden_legacy_baseline_65eaaae_contracts() {
+    let (sha, cases) = load_legacy_baseline();
+    assert_eq!(sha, "65eaaaeb275ee1ce89c57d6fdd78ac3f3c1932fe");
+    assert_eq!(cases.len(), 47);
+
+    // 1. Fingerprints & Snapshots
+    let c_fp = find_legacy_case(&cases, "fp_canonical");
+    assert_eq!(c_fp.contract_family, "1_tree_and_task_fingerprints");
+    assert_eq!(c_fp.status_label, "INDEPENDENT_LEGACY_PARITY");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "fingerprint",
+        "--depends-on",
+        "T002,T001",
+        "--scope",
+        "src\\a.ts, src/b.ts",
+        "--criteria",
+        "AC1: ok",
+        "--criteria",
+        "AC2: done",
+    ]);
+    assert_eq!(ec, c_fp.legacy_exit_code);
+    assert_eq!(out, c_fp.legacy_stdout_normalized);
+
+    let c_fp_empty = find_legacy_case(&cases, "fp_empty_depends");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "fingerprint",
+        "--depends-on",
+        "[]",
+        "--scope",
+        "src/a.ts",
+        "--criteria",
+        "AC1: ok",
+    ]);
+    assert_eq!(ec, c_fp_empty.legacy_exit_code);
+    assert_eq!(out, c_fp_empty.legacy_stdout_normalized);
+
+    let c_fp_miss = find_legacy_case(&cases, "fp_missing_scope");
+    assert_eq!(c_fp_miss.status_label, "INTENTIONAL_BEHAVIOR_CHANGE");
+    let (ec, out, _) = run_b3(&["guard", "fingerprint", "--depends-on", "[]"]);
+    assert_eq!(ec, c_fp_miss.legacy_exit_code);
+    assert_eq!(out, "FINGERPRINT_FAIL: missing --scope");
+
+    // 2. Verification Receipts
+    let tmp2 = TempDirGuard::new("leg-f2");
+    let base2 = init_git_repo(&tmp2.path);
+    let r2 = tmp2.path.to_str().unwrap();
+
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r2,
+        "--verify-cmd",
+        "echo verified-ok",
+        "--receipt-path",
+        ".b3/ship/v1.verify",
+        "--task-id",
+        "T001",
+        "--relevant-paths",
+        "src/app.txt",
+    ]);
+    let c_vr = find_legacy_case(&cases, "verify_run_schema");
+    assert_eq!(ec, c_vr.legacy_exit_code);
+    assert_eq!(
+        normalize_dynamic_tokens(out, &[("<HEAD_SHA>", &base2)]),
+        c_vr.legacy_stdout_normalized
+    );
+
+    let c_vc_ok = find_legacy_case(&cases, "verify_check_valid");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r2,
+        "--receipt-path",
+        ".b3/ship/v1.verify",
+        "--relevant-paths",
+        "src/app.txt",
+    ]);
+    assert_eq!(ec, c_vc_ok.legacy_exit_code);
+    assert_eq!(out, c_vc_ok.legacy_stdout_normalized);
+
+    let c_vc_cmd = find_legacy_case(&cases, "verify_check_cmd_mismatch");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r2,
+        "--receipt-path",
+        ".b3/ship/v1.verify",
+        "--expected-cmd",
+        "echo other",
+    ]);
+    assert_eq!(ec, c_vc_cmd.legacy_exit_code);
+    assert_eq!(out, c_vc_cmd.legacy_stdout_normalized);
+
+    let c_vc_tgt_ok = find_legacy_case(&cases, "verify_check_target_commit_sha_valid");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r2,
+        "--receipt-path",
+        ".b3/ship/v1.verify",
+        "--relevant-paths",
+        "src/app.txt",
+        "--target-commit-sha",
+        &base2,
+    ]);
+    assert_eq!(ec, c_vc_tgt_ok.legacy_exit_code);
+    assert_eq!(out, c_vc_tgt_ok.legacy_stdout_normalized);
+
+    let c_vc_tgt_bad = find_legacy_case(&cases, "verify_check_target_commit_sha_mismatch");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r2,
+        "--receipt-path",
+        ".b3/ship/v1.verify",
+        "--relevant-paths",
+        "src/app.txt",
+        "--target-commit-sha",
+        "0000000000000000000000000000000000000000",
+    ]);
+    assert_eq!(ec, c_vc_tgt_bad.legacy_exit_code);
+    assert_eq!(out, c_vc_tgt_bad.legacy_stdout_normalized);
+
+    fs::write(tmp2.path.join("src/app.txt"), "v2-mutated\n").unwrap();
+    let c_vc_stale = find_legacy_case(&cases, "verify_check_stale");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r2,
+        "--receipt-path",
+        ".b3/ship/v1.verify",
+        "--relevant-paths",
+        "src/app.txt",
+    ]);
+    assert_eq!(ec, c_vc_stale.legacy_exit_code);
+    assert_eq!(out, c_vc_stale.legacy_stdout_normalized);
+
+    // 3. Review Ledger (INDEPENDENT + SINGLE_AGENT_LIMIT)
+    let tmp3 = TempDirGuard::new("leg-f3");
+    let trunk3 = init_git_repo(&tmp3.path);
+    let r3 = tmp3.path.to_str().unwrap();
+    git_in(&tmp3.path, &["checkout", "-b", "feat/led"]);
+    fs::write(tmp3.path.join("src/app.txt"), "v2\n").unwrap();
+    git_in(&tmp3.path, &["add", "src/app.txt"]);
+    git_in(&tmp3.path, &["commit", "-m", "feat"]);
+    let head3 = git_in(&tmp3.path, &["rev-parse", "HEAD"]);
+    let (vc, _, _) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r3,
+        "--verify-cmd",
+        "echo ok",
+        "--receipt-path",
+        ".b3/ship/u1.verify",
+        "--task-id",
+        "U01",
+    ]);
+    assert_eq!(vc, 0);
+
+    let c_li = find_legacy_case(&cases, "ledger_init_independent");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r3,
+        "--action",
+        "init",
+        "--ledger-path",
+        ".b3/ship/ledger.md",
+        "--base-sha",
+        &trunk3,
+        "--review-independence",
+        "INDEPENDENT",
+    ]);
+    assert_eq!(ec, c_li.legacy_exit_code);
+    assert_eq!(
+        normalize_dynamic_tokens(out, &[("<HEAD_SHA>", &head3)]),
+        c_li.legacy_stdout_normalized
+    );
+
+    let c_lu = find_legacy_case(&cases, "ledger_update_with_receipt");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r3,
+        "--action",
+        "update",
+        "--ledger-path",
+        ".b3/ship/ledger.md",
+        "--unit-id",
+        "U01",
+        "--status",
+        "REVIEWED",
+        "--receipt-path",
+        ".b3/ship/u1.verify",
+    ]);
+    assert_eq!(ec, c_lu.legacy_exit_code);
+    assert_eq!(out, c_lu.legacy_stdout_normalized);
+
+    let c_lc = find_legacy_case(&cases, "ledger_check_valid");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r3,
+        "--action",
+        "check",
+        "--ledger-path",
+        ".b3/ship/ledger.md",
+    ]);
+    assert_eq!(ec, c_lc.legacy_exit_code);
+    assert_eq!(out, c_lc.legacy_stdout_normalized);
+
+    let (ec, _, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r3,
+        "--action",
+        "init",
+        "--ledger-path",
+        ".b3/ship/ledger-sal.md",
+        "--base-sha",
+        &trunk3,
+        "--review-independence",
+        "SINGLE_AGENT_LIMIT",
+    ]);
+    assert_eq!(ec, 0);
+    let (ec, _, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r3,
+        "--action",
+        "update",
+        "--ledger-path",
+        ".b3/ship/ledger-sal.md",
+        "--unit-id",
+        "U01",
+        "--status",
+        "REVIEWED",
+        "--receipt-path",
+        ".b3/ship/u1.verify",
+    ]);
+    assert_eq!(ec, 0);
+    let c_sal = find_legacy_case(&cases, "ledger_check_single_agent_limit");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r3,
+        "--action",
+        "check",
+        "--ledger-path",
+        ".b3/ship/ledger-sal.md",
+    ]);
+    assert_eq!(ec, c_sal.legacy_exit_code);
+    assert_eq!(out, c_sal.legacy_stdout_normalized);
+
+    // 4. Worktree & Wave Ownership
+    let tmp4 = TempDirGuard::new("leg-f4");
+    let main4 = tmp4.path.join("main");
+    let wt4 = tmp4.path.join("work");
+    let peer4 = tmp4.path.join("peer");
+    fs::create_dir_all(&main4).unwrap();
+    let base4 = init_git_repo(&main4);
+    git_in(
+        &main4,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/work",
+            wt4.to_str().unwrap(),
+            &base4,
+        ],
+    );
+    git_in(
+        &main4,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "wt/peer",
+            peer4.to_str().unwrap(),
+            &base4,
+        ],
+    );
+    let c_wt_ok = find_legacy_case(&cases, "check_worktree_isolated");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        wt4.to_str().unwrap(),
+        "--expected-root",
+        main4.to_str().unwrap(),
+        "--expected-base-sha",
+        &base4,
+        "--peer-roots",
+        peer4.to_str().unwrap(),
+        "--require-isolated",
+    ]);
+    assert_eq!(ec, c_wt_ok.legacy_exit_code);
+    let common4 = main4.join(".git");
+    let norm_wt = replace_path_variants(out, &common4, "<COMMON_DIR>");
+    let norm_wt = replace_path_variants(norm_wt, &wt4, "<WT_ROOT>");
+    let norm_wt = normalize_dynamic_tokens(norm_wt, &[("<BASE_SHA>", &base4)]);
+    assert_eq!(norm_wt, c_wt_ok.legacy_stdout_normalized);
+
+    let c_wt_ov = find_legacy_case(&cases, "check_worktree_peer_overlap_blocked");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        wt4.to_str().unwrap(),
+        "--expected-root",
+        wt4.to_str().unwrap(),
+        "--peer-roots",
+        wt4.to_str().unwrap(),
+        "--require-isolated",
+    ]);
+    assert_eq!(ec, c_wt_ov.legacy_exit_code);
+    let norm_ov = replace_path_variants(out, &wt4, "<WT_ROOT>");
+    assert_eq!(norm_ov, c_wt_ov.legacy_stdout_normalized);
+
+    for (id, specs, extra) in [
+        (
+            "check_wave_disjoint",
+            "T1=src/a.txt;T2=docs/b.md;T3=none",
+            &[][..],
+        ),
+        (
+            "check_wave_partition",
+            "T1=src/shared.txt;T2=src/shared.txt;T3=docs/c.md",
+            &["--partition", "--max-concurrency", "2"][..],
+        ),
+        (
+            "check_wave_sequential",
+            "T1=src/shared.txt;T2=src/shared.txt",
+            &["--partition"][..],
+        ),
+    ] {
+        let c_w = find_legacy_case(&cases, id);
+        let mut args = vec![
+            "guard",
+            "check-wave",
+            "--repo-root",
+            main4.to_str().unwrap(),
+            "--wave-specs",
+            specs,
+        ];
+        args.extend_from_slice(extra);
+        let (ec, out, _) = run_b3(&args);
+        assert_eq!(ec, c_w.legacy_exit_code, "case {id}: {out}");
+        assert_eq!(out, c_w.legacy_stdout_normalized, "case {id}");
+    }
+
+    let c_fr = find_legacy_case(&cases, "check_freshness_fresh");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "check-freshness",
+        "--repo-root",
+        main4.to_str().unwrap(),
+        "--approach-at-sha",
+        &base4,
+        "--task-base-sha",
+        &base4,
+        "--watched-paths",
+        "docs/guide.md",
+        "--owned-files",
+        "src/app.txt",
+    ]);
+    assert_eq!(ec, c_fr.legacy_exit_code);
+    assert_eq!(out, c_fr.legacy_stdout_normalized);
+
+    // 5 & 6. Merge Policy, Protected Unicode/Space/Bracket Paths, Secret Paths, Precommit
+    let tmp5 = TempDirGuard::new("leg-f5");
+    init_git_repo(&tmp5.path);
+    let r5 = tmp5.path.to_str().unwrap();
+    fs::create_dir_all(tmp5.path.join(".b3")).unwrap();
+    let prot_dir = tmp5.path.join("releases/v1 [draft] caf\u{00e9}");
+    fs::create_dir_all(&prot_dir).unwrap();
+    fs::write(
+        tmp5.path.join(".b3/research-policy.json"),
+        "{\"auto_merge\":\"authorized\",\"protected_paths\":[\"releases/\"],\"allow_protected_paths\":false,\"require_ci\":true,\"require_review\":true}\n",
+    )
+    .unwrap();
+    fs::write(prot_dir.join("secret.txt"), "keep\n").unwrap();
+    git_in(&tmp5.path, &["add", "-A"]);
+    git_in(&tmp5.path, &["commit", "-m", "policy and protected seed"]);
+    let trunk5 = git_in(&tmp5.path, &["rev-parse", "HEAD"]);
+
+    git_in(&tmp5.path, &["checkout", "-b", "feat/work"]);
+    fs::write(tmp5.path.join("docs/notes.md"), "clean doc\n").unwrap();
+    git_in(&tmp5.path, &["add", "docs/notes.md"]);
+    git_in(&tmp5.path, &["commit", "-m", "safe note"]);
+    let head5 = git_in(&tmp5.path, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "verify-run",
+            "--repo-root",
+            r5,
+            "--verify-cmd",
+            "echo ok",
+            "--receipt-path",
+            ".b3/ship/head.verify",
+            "--task-id",
+            "U01",
+        ])
+        .0,
+        0
+    );
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r5,
+            "--action",
+            "init",
+            "--ledger-path",
+            ".b3/ship/ledger.md",
+            "--base-sha",
+            &trunk5,
+            "--review-independence",
+            "INDEPENDENT",
+        ])
+        .0,
+        0
+    );
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r5,
+            "--action",
+            "update",
+            "--ledger-path",
+            ".b3/ship/ledger.md",
+            "--unit-id",
+            "U01",
+            "--status",
+            "REVIEWED",
+            "--receipt-path",
+            ".b3/ship/head.verify",
+        ])
+        .0,
+        0
+    );
+
+    let c_mp_ok = find_legacy_case(&cases, "merge_policy_local_authorized");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r5,
+        "--ledger-path",
+        ".b3/ship/ledger.md",
+        "--receipt-path",
+        ".b3/ship/head.verify",
+    ]);
+    assert_eq!(ec, c_mp_ok.legacy_exit_code);
+    assert_eq!(
+        normalize_dynamic_tokens(out, &[("<TRUNK_SHA>", &trunk5), ("<HEAD_SHA>", &head5)]),
+        c_mp_ok.legacy_stdout_normalized
+    );
+
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r5,
+            "--action",
+            "init",
+            "--ledger-path",
+            ".b3/ship/ledger_norec.md",
+            "--base-sha",
+            &trunk5,
+            "--review-independence",
+            "INDEPENDENT",
+        ])
+        .0,
+        0
+    );
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r5,
+            "--action",
+            "update",
+            "--ledger-path",
+            ".b3/ship/ledger_norec.md",
+            "--unit-id",
+            "U01",
+            "--status",
+            "REVIEWED",
+        ])
+        .0,
+        0
+    );
+    let c_mp_ci = find_legacy_case(
+        &cases,
+        "merge_policy_caller_ci_pass_without_receipt_blocked",
+    );
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r5,
+        "--ledger-path",
+        ".b3/ship/ledger_norec.md",
+        "--ci-status",
+        "PASS",
+        "--changed-paths",
+        "docs/notes.md",
+    ]);
+    assert_eq!(ec, c_mp_ci.legacy_exit_code);
+    assert_eq!(out, c_mp_ci.legacy_stdout_normalized);
+
+    fs::write(tmp5.path.join("docs/notes.md"), "clean doc v2\n").unwrap();
+    git_in(&tmp5.path, &["add", "docs/notes.md"]);
+    git_in(&tmp5.path, &["commit", "-m", "advance head"]);
+    let head5b = git_in(&tmp5.path, &["rev-parse", "HEAD"]);
+    let c_mp_st = find_legacy_case(&cases, "merge_policy_stale_ledger_blocked");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r5,
+        "--ledger-path",
+        ".b3/ship/ledger.md",
+        "--receipt-path",
+        ".b3/ship/head.verify",
+    ]);
+    assert_eq!(ec, c_mp_st.legacy_exit_code);
+    assert_eq!(
+        normalize_dynamic_tokens(
+            out,
+            &[
+                ("<TRUNK_SHA>", &trunk5),
+                ("<HEAD_SHA>", &head5b),
+                ("<OLD_HEAD_SHA>", &head5),
+            ]
+        ),
+        c_mp_st.legacy_stdout_normalized
+    );
+
+    fs::write(tmp5.path.join(".env"), "SECRET=1\n").unwrap();
+    let c_sec = find_legacy_case(&cases, "snapshot_secret_env_blocked");
+    let (ec, out, _) = run_b3(&["guard", "snapshot", "--repo-root", r5]);
+    assert_eq!(ec, c_sec.legacy_exit_code);
+    assert_eq!(out, c_sec.legacy_stdout_normalized);
+    fs::remove_file(tmp5.path.join(".env")).unwrap();
+
+    git_in(&tmp5.path, &["checkout", "-B", "feat/prot-add", &trunk5]);
+    fs::write(prot_dir.join("new.txt"), "release\n").unwrap();
+    git_in(&tmp5.path, &["add", "-A"]);
+    git_in(&tmp5.path, &["commit", "-m", "add protected"]);
+    let c_padd = find_legacy_case(&cases, "merge_policy_protected_unicode_space_bracket_add");
+    assert_eq!(c_padd.status_label, "INTENTIONAL_BEHAVIOR_CHANGE");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r5,
+        "--ledger-path",
+        ".b3/ship/ledger.md",
+        "--receipt-path",
+        ".b3/ship/head.verify",
+    ]);
+    assert_eq!(ec, c_padd.legacy_exit_code);
+    assert_eq!(
+        out,
+        "MERGE_BLOCKED: protected_paths=releases/v1 [draft] caf\u{00e9}/new.txt"
+    );
+
+    git_in(&tmp5.path, &["checkout", "-B", "feat/prot-ren", &trunk5]);
+    git_in(
+        &tmp5.path,
+        &[
+            "mv",
+            "releases/v1 [draft] caf\u{00e9}/secret.txt",
+            "docs/public.txt",
+        ],
+    );
+    git_in(&tmp5.path, &["commit", "-m", "rename out of protected"]);
+    let c_pren = find_legacy_case(&cases, "merge_policy_protected_rename_out");
+    assert_eq!(c_pren.status_label, "INTENTIONAL_BEHAVIOR_CHANGE");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r5,
+        "--ledger-path",
+        ".b3/ship/ledger.md",
+        "--receipt-path",
+        ".b3/ship/head.verify",
+    ]);
+    assert_eq!(ec, c_pren.legacy_exit_code);
+    assert_eq!(
+        out,
+        "MERGE_BLOCKED: protected_paths=releases/v1 [draft] caf\u{00e9}/secret.txt"
+    );
+
+    // 7. Context Cache & Evidence Freshness
+    let tmp7 = TempDirGuard::new("leg-f7");
+    let base7 = init_git_repo(&tmp7.path);
+    let r7 = tmp7.path.to_str().unwrap();
+
+    let c_cc_r = find_legacy_case(&cases, "context_cache_record");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "context-cache",
+        "--repo-root",
+        r7,
+        "--action",
+        "record",
+        "--cache-path",
+        ".b3/ship/ctx.cache",
+        "--scope-id",
+        "T1",
+        "--anchor-paths",
+        "docs/guide.md",
+        "--scope-paths",
+        "src/app.txt",
+    ]);
+    assert_eq!(ec, c_cc_r.legacy_exit_code);
+    assert_eq!(
+        normalize_dynamic_tokens(out, &[("<HEAD_SHA>", &base7)]),
+        c_cc_r.legacy_stdout_normalized
+    );
+
+    let c_cc_f = find_legacy_case(&cases, "context_cache_check_fresh");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "context-cache",
+        "--repo-root",
+        r7,
+        "--action",
+        "check",
+        "--cache-path",
+        ".b3/ship/ctx.cache",
+        "--scope-id",
+        "T1",
+        "--anchor-paths",
+        "docs/guide.md",
+        "--scope-paths",
+        "src/app.txt",
+    ]);
+    assert_eq!(ec, c_cc_f.legacy_exit_code);
+    assert_eq!(
+        normalize_dynamic_tokens(out, &[("<HEAD_SHA>", &base7)]),
+        c_cc_f.legacy_stdout_normalized
+    );
+
+    let c_ev_w = find_legacy_case(&cases, "evidence_check_write");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "evidence-check",
+        "--repo-root",
+        r7,
+        "--write-manifest",
+        "--manifest-path",
+        ".b3/ship/ev.manifest",
+        "--source-paths",
+        "docs/guide.md",
+    ]);
+    assert_eq!(ec, c_ev_w.legacy_exit_code);
+    assert_eq!(out, c_ev_w.legacy_stdout_normalized);
+
+    let c_ev_f = find_legacy_case(&cases, "evidence_check_fresh");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "evidence-check",
+        "--repo-root",
+        r7,
+        "--manifest-path",
+        ".b3/ship/ev.manifest",
+    ]);
+    assert_eq!(ec, c_ev_f.legacy_exit_code);
+    assert_eq!(out, c_ev_f.legacy_stdout_normalized);
+
+    fs::write(tmp7.path.join("docs/guide.md"), "doc v2-stale\n").unwrap();
+    let c_cc_s = find_legacy_case(&cases, "context_cache_check_stale");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "context-cache",
+        "--repo-root",
+        r7,
+        "--action",
+        "check",
+        "--cache-path",
+        ".b3/ship/ctx.cache",
+        "--scope-id",
+        "T1",
+        "--anchor-paths",
+        "docs/guide.md",
+        "--scope-paths",
+        "src/app.txt",
+    ]);
+    assert_eq!(ec, c_cc_s.legacy_exit_code);
+    assert_eq!(out, c_cc_s.legacy_stdout_normalized);
+
+    let c_ev_s = find_legacy_case(&cases, "evidence_check_stale");
+    let (ec, out, _) = run_b3(&[
+        "guard",
+        "evidence-check",
+        "--repo-root",
+        r7,
+        "--manifest-path",
+        ".b3/ship/ev.manifest",
+    ]);
+    assert_eq!(ec, c_ev_s.legacy_exit_code);
+    assert_eq!(out, c_ev_s.legacy_stdout_normalized);
+
+    // 8. PR Verify & In-Process Merge Policy (zero Node.js dependency)
+    let tmp8 = TempDirGuard::new("leg-f8");
+    let mock_bin = tmp8.path.join("bin");
+    let repo8 = tmp8.path.join("repo");
+    fs::create_dir_all(&mock_bin).unwrap();
+    fs::create_dir_all(repo8.join(".b3")).unwrap();
+    init_git_repo(&repo8);
+    git_in(
+        &repo8,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/demo.git",
+        ],
+    );
+    fs::write(
+        repo8.join(".b3/research-policy.json"),
+        "{\"auto_merge\":\"authorized\",\"require_ci\":true,\"require_review\":false}\n",
+    )
+    .unwrap();
+    git_in(&repo8, &["add", "-A"]);
+    git_in(&repo8, &["commit", "-m", "policy"]);
+    let t8 = git_in(&repo8, &["rev-parse", "HEAD"]);
+    git_in(&repo8, &["checkout", "-b", "feat/pr"]);
+    fs::write(repo8.join("src/app.txt"), "pr\n").unwrap();
+    git_in(&repo8, &["add", "-A"]);
+    git_in(&repo8, &["commit", "-m", "pr change"]);
+    let h8 = git_in(&repo8, &["rev-parse", "HEAD"]);
+
+    #[cfg(windows)]
+    {
+        fs::write(mock_bin.join("gh.cmd"), "@echo off\r\necho {}\r\n").unwrap();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let gh_sh = mock_bin.join("gh");
+        fs::write(&gh_sh, "#!/bin/sh\necho '{}'\n").unwrap();
+        let mut perms = fs::metadata(&gh_sh).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&gh_sh, perms).unwrap();
+    }
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let orig_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}{sep}{orig_path}", mock_bin.display());
+    let c_pv = find_legacy_case(&cases, "pr_verify_zero_node");
+    assert_eq!(c_pv.status_label, "INTENTIONAL_BEHAVIOR_CHANGE");
+    let (ec, out, _) = run_b3_with_env(
+        &[
+            "pr",
+            "verify",
+            "--mode",
+            "pre-merge",
+            "--repo-root",
+            repo8.to_str().unwrap(),
+            "--repo",
+            "acme/demo",
+            "--pr-number",
+            "42",
+        ],
+        Some(&repo8),
+        &[("PATH", &patched_path)],
+    );
+    assert_eq!(ec, 1);
+    assert_eq!(out, "GH_VERIFY_ERROR: pr_number_mismatch");
+
+    let c_mpv = find_legacy_case(&cases, "merge_policy_inprocess_pr_verify");
+    assert_eq!(c_mpv.status_label, "INTENTIONAL_BEHAVIOR_CHANGE");
+    let (ec, out, _) = run_b3_with_env(
+        &[
+            "guard",
+            "merge-policy-check",
+            "--repo-root",
+            repo8.to_str().unwrap(),
+            "--pr-number",
+            "42",
+            "--repo",
+            "acme/demo",
+            "--target-branch",
+            "main",
+            "--base-sha",
+            &t8,
+            "--head-sha",
+            &h8,
+        ],
+        Some(&repo8),
+        &[("PATH", &patched_path)],
+    );
+    assert_eq!(ec, 1);
+    assert_eq!(
+        out,
+        "MERGE_BLOCKED: github_verification_failed(pr_number_mismatch)"
+    );
+
+    // 9. Installer Ownership (cursor, codex, sync --verify-only)
+    let b3_home = repo_root();
+    let b3_home_str = b3_home.to_str().unwrap();
+
+    for (id, host) in [
+        ("install_product_cursor", "cursor"),
+        ("install_product_codex", "codex"),
+    ] {
+        let prod = TempDirGuard::new(&format!("leg-{host}"));
+        init_git_repo(&prod.path);
+        let c_inst = find_legacy_case(&cases, id);
+        let (ec, out, _) = run_b3_with_env(
+            &[
+                "install",
+                "product",
+                "--product-root",
+                prod.path.to_str().unwrap(),
+                "--b3-home",
+                b3_home_str,
+                "--host",
+                host,
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+        );
+        assert_eq!(ec, c_inst.legacy_exit_code, "install {host}: {out}");
+        let norm_out = replace_path_variants(out, &prod.path, "<PROD_ROOT>");
+        let norm_out = replace_path_variants(norm_out, &b3_home, "<B3_HOME>");
+        assert_eq!(
+            norm_out.replace('\\', "/"),
+            c_inst.legacy_stdout_normalized.replace('\\', "/"),
+            "install {host} output"
+        );
+        assert!(prod.path.join(".b3/home").is_file());
+    }
+
+    let sync_tmp = TempDirGuard::new("leg-sync");
+    fs::create_dir_all(sync_tmp.path.join("skills/demo/hello")).unwrap();
+    fs::write(
+        sync_tmp.path.join("skills/demo/hello/SKILL.md"),
+        "---\nname: hello\ndescription: demo\n---\n",
+    )
+    .unwrap();
+    let (sc1, _, _) = run_b3_with_env(
+        &[
+            "sync",
+            "--repo-root",
+            sync_tmp.path.to_str().unwrap(),
+            "--host",
+            "antigravity",
+        ],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+    );
+    assert_eq!(sc1, 0);
+    let c_sv = find_legacy_case(&cases, "sync_skills_antigravity_verify_only");
+    let (ec, out, _) = run_b3_with_env(
+        &[
+            "sync",
+            "--repo-root",
+            sync_tmp.path.to_str().unwrap(),
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+    );
+    assert_eq!(ec, c_sv.legacy_exit_code);
+    let norm_sv = replace_path_variants(out, &sync_tmp.path, "<SYNC_ROOT>");
+    assert_eq!(
+        norm_sv.replace('\\', "/"),
+        c_sv.legacy_stdout_normalized.replace('\\', "/")
+    );
 }
 
 #[cfg(unix)]
@@ -860,7 +1890,7 @@ fn unix_shell_wrapper_forwarding() {
         &["--repo-root", root_str, "--strict"],
     );
     assert_eq!(c_ctx, 0);
-    assert!(out_ctx.contains("warnings=0"), "out={out_ctx}");
+    assert!(out_ctx.contains("warnings          : 0"), "out={out_ctx}");
 
     let (c_fp, out_fp) = run_sh(
         "scripts/b3-guard.sh",

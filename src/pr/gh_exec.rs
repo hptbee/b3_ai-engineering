@@ -62,44 +62,46 @@ pub fn parse_github_remote_slug(remote_url: &str) -> Option<String> {
     while let Some(stripped) = u.strip_suffix('/') {
         u = stripped;
     }
-    if u.len() >= 4 && u[u.len() - 4..].eq_ignore_ascii_case(".git") {
+    if u.len()
+        .checked_sub(4)
+        .and_then(|i| u.get(i..))
+        .is_some_and(|s| s.eq_ignore_ascii_case(".git"))
+    {
         u = &u[..u.len() - 4];
     }
 
     let u_low = u.to_ascii_lowercase();
     let slug = if u_low.starts_with("https://") {
         let rest = &u["https://".len()..];
-        let host_and_path = match rest.find('/') {
-            Some(slash) => {
-                let auth_host = &rest[..slash];
-                let host = match auth_host.rsplit_once('@') {
-                    Some((_, h)) => h,
-                    None => auth_host,
-                };
-                if !host.eq_ignore_ascii_case("github.com") {
-                    return None;
-                }
-                &rest[slash + 1..]
-            }
-            None => return None,
+        let slash = rest.find('/')?;
+        let auth_host = &rest[..slash];
+        let host = match auth_host.rsplit_once('@') {
+            Some((_, h)) => h,
+            None => auth_host,
         };
-        host_and_path
-    } else if let Some(rest) = u
-        .strip_prefix("ssh://git@")
-        .or_else(|| u.strip_prefix("SSH://git@"))
-        .or_else(|| u.strip_prefix("git@"))
-        .or_else(|| {
-            if u_low.starts_with("ssh://") && u_low[6..].starts_with("git@") {
-                Some(&u[10..])
-            } else {
-                None
-            }
-        })
-    {
+        if !host.eq_ignore_ascii_case("github.com") {
+            return None;
+        }
+        &rest[slash + 1..]
+    } else {
+        let rest = u
+            .strip_prefix("ssh://git@")
+            .or_else(|| u.strip_prefix("SSH://git@"))
+            .or_else(|| u.strip_prefix("git@"))
+            .or_else(|| {
+                if u_low.starts_with("ssh://") && u_low[6..].starts_with("git@") {
+                    u.get(10..)
+                } else {
+                    None
+                }
+            })?;
         if rest.len() < 11 {
             return None;
         }
-        if !rest[..10].eq_ignore_ascii_case("github.com") {
+        if !rest
+            .get(..10)
+            .is_some_and(|h| h.eq_ignore_ascii_case("github.com"))
+        {
             return None;
         }
         let sep = rest.as_bytes()[10];
@@ -107,8 +109,6 @@ pub fn parse_github_remote_slug(remote_url: &str) -> Option<String> {
             return None;
         }
         &rest[11..]
-    } else {
-        return None;
     };
 
     if slug.contains("..") {
@@ -145,17 +145,14 @@ pub fn is_executable_or_file(file_path: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(file_path) else {
         return false;
     };
-    if !meta.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        (meta.permissions().mode() & 0o111) != 0
+        meta.is_file() && (meta.permissions().mode() & 0o111) != 0
     }
     #[cfg(not(unix))]
     {
-        true
+        meta.is_file()
     }
 }
 
@@ -607,7 +604,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             &sleep_cmd,
-            "@echo off\r\nnode -e \"setTimeout(() => {}, 5000);\"\r\n",
+            "@echo off\r\nnode -e \"const fs=require('fs');if(process.env.B3_TEST_SLEEP_PID_FILE)fs.writeFileSync(process.env.B3_TEST_SLEEP_PID_FILE,String(process.pid));setTimeout(()=>{},30000);\"\r\n",
         )
         .unwrap();
         std::fs::write(&paren_cmd, "@echo off\r\necho SHOULD_NOT_RUN\r\n").unwrap();
@@ -701,15 +698,33 @@ mod tests {
             exec_gh(&["api".into(), "ok".into()], &paren_cmd, None, None, None).reason,
             "unsafe_gh_path"
         );
+        let sleep_pid_file = dir.join("sleep-child.pid");
+        std::env::set_var("B3_TEST_SLEEP_PID_FILE", &sleep_pid_file);
         let to_res = exec_gh(
             &["api".into(), "slow".into()],
             &sleep_cmd,
             None,
             None,
-            Some(250),
+            Some(1_000),
         );
+        std::env::remove_var("B3_TEST_SLEEP_PID_FILE");
         assert!(!to_res.ok);
         assert_eq!(to_res.reason, "timeout");
+        let pid_text = std::fs::read_to_string(&sleep_pid_file)
+            .expect("sleep grandchild should have written its PID before timeout");
+        let sleep_pid: u32 = pid_text
+            .trim()
+            .parse()
+            .expect("sleep PID file should contain a valid integer PID");
+        let dead_deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+        while crate::process::is_pid_alive(sleep_pid) && std::time::Instant::now() < dead_deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !crate::process::is_pid_alive(sleep_pid),
+            "grandchild node process {sleep_pid} spawned by .cmd should be dead after timeout"
+        );
+        let _ = std::fs::remove_file(&sleep_pid_file);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

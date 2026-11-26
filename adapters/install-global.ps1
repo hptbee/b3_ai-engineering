@@ -27,7 +27,7 @@ if ($env:B3_BIN) {
     $b3Candidate = $env:B3_BIN
 } else {
     $b3Candidate = $null
-    foreach ($rel in @("target\release\$b3BinName", "target\debug\$b3BinName")) {
+    foreach ($rel in @([IO.Path]::Combine('target', 'release', $b3BinName), [IO.Path]::Combine('target', 'debug', $b3BinName))) {
         $cand = Join-Path $b3RepoRoot $rel
         if (Test-Path -LiteralPath $cand -PathType Leaf) { $b3Candidate = $cand; break }
     }

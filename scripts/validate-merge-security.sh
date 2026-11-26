@@ -1572,17 +1572,26 @@ assert_dual "15c-safe-unicode-bracket-space-authorized" 0 "^MERGE_AUTHORIZED: mo
 
 $t15_ok && pass "15-r002-literal-unicode-space-bracket-rename"
 
-printf '\nSummary: passed=%d failed=%d pwsh=%s\n' "$PASS_CNT" "$FAIL_CNT" "$HAS_PWSH"
 if [[ "$FAIL_CNT" -gt 0 ]]; then
+  if $HAS_PWSH; then
+    printf '\nSummary: passed=%d failed=%d native_contract=FAILED pwsh_wrapper_compat=FAILED\n' "$PASS_CNT" "$FAIL_CNT"
+  elif $ALLOW_INCOMPLETE_PWSH; then
+    printf '\nSummary: passed=%d failed=%d native_contract=FAILED pwsh_wrapper_compat=SKIPPED (--allow-incomplete-pwsh)\n' "$PASS_CNT" "$FAIL_CNT"
+  else
+    printf '\nSummary: passed=%d failed=%d native_contract=FAILED pwsh_wrapper_compat=UNAVAILABLE\n' "$PASS_CNT" "$FAIL_CNT"
+  fi
   exit 1
 fi
 if ! $HAS_PWSH; then
   if $ALLOW_INCOMPLETE_PWSH; then
-    echo "ok (bash-only; pwsh skipped - --allow-incomplete-pwsh)"
+    printf '\nSummary: passed=%d failed=%d native_contract=VERIFIED (bash->b3) pwsh_wrapper_compat=SKIPPED (--allow-incomplete-pwsh)\n' "$PASS_CNT" "$FAIL_CNT"
+    echo "ok (native contract verified via bash; pwsh compatibility skipped)"
     exit 0
   fi
+  printf '\nSummary: passed=%d failed=%d native_contract=VERIFIED (bash->b3) pwsh_wrapper_compat=UNAVAILABLE\n' "$PASS_CNT" "$FAIL_CNT"
   echo "INCOMPLETE: pwsh unavailable (use --allow-incomplete-pwsh to accept bash-only)"
   exit 2
 fi
+printf '\nSummary: passed=%d failed=%d native_contract=VERIFIED pwsh_wrapper_compat=VERIFIED\n' "$PASS_CNT" "$FAIL_CNT"
 echo "ok"
 exit 0
