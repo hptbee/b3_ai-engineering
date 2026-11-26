@@ -54,11 +54,7 @@ try {
 
     # --- 3. installer-seed-and-preserve ---
     $prodPs = Join-Path $sandbox 'prod-ps'
-    New-Item -ItemType Directory -Path $prodPs | Out-Null
-    Push-Location $prodPs
-    & git init -q; & git config user.email 't@e.com'; & git config user.name 'T'
-    Set-Content 'README.md' "# P`n"; & git add .; & git commit -qm 'init'
-    Pop-Location
+    Init-B3TestRepo -RepoPath $prodPs -UserEmail 't@e.com' -UserName 'T' -InitialCommit -InitialFileName 'README.md' -InitialFileContent '# P'
 
     $persPs = Join-Path $sandbox 'home-ps\.b3\models.md'
     $env:B3_MODELS_PERSONAL = $persPs
@@ -76,15 +72,7 @@ try {
     $ipPreserved = ((Get-Content -LiteralPath $persPs -Raw) -match 'custom-reasoner')
 
     $syncFx = Join-Path $sandbox 'sync-fx'
-    New-Item -ItemType Directory -Path (Join-Path $syncFx 'adapters\lib'), (Join-Path $syncFx 'config'), (Join-Path $syncFx 'skills\eng\demo'), (Join-Path $syncFx 'commands'), (Join-Path $syncFx 'agents') | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\sync-skills.ps1') -Destination (Join-Path $syncFx 'adapters\sync-skills.ps1')
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\sync-skills.sh') -Destination (Join-Path $syncFx 'adapters\sync-skills.sh')
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\lib\global-common.ps1') -Destination (Join-Path $syncFx 'adapters\lib\global-common.ps1')
-    Copy-Item -LiteralPath (Join-Path $root 'adapters\lib\global-common.sh') -Destination (Join-Path $syncFx 'adapters\lib\global-common.sh')
-    Copy-Item -LiteralPath $exPath -Destination (Join-Path $syncFx 'config\models.example.md')
-    Set-Content -LiteralPath (Join-Path $syncFx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: d`n---`n# d`n"
-    Set-Content -LiteralPath (Join-Path $syncFx 'commands\b3-plan.md') "# p`n"
-    Set-Content -LiteralPath (Join-Path $syncFx 'agents\b3-reviewer.md') "# r`n"
+    New-B3SyncFixture -FixtureDir $syncFx -RepoRoot $root -IncludeCommands -IncludeAgents -IncludeBash -IncludeModelsExample
 
     $syncPersPs = Join-Path $sandbox 'sync-ps\.b3\models.md'
     $env:B3_MODELS_PERSONAL = $syncPersPs
@@ -97,11 +85,7 @@ try {
     $shOk = $true
     if ($script:HasBash) {
         $prodSh = Join-Path $sandbox 'prod-sh'
-        New-Item -ItemType Directory -Path $prodSh | Out-Null
-        Push-Location $prodSh
-        & git init -q; & git config user.email 't@e.com'; & git config user.name 'T'
-        Set-Content 'README.md' "# S`n"; & git add .; & git commit -qm 'init'
-        Pop-Location
+        Init-B3TestRepo -RepoPath $prodSh -UserEmail 't@e.com' -UserName 'T' -InitialCommit -InitialFileName 'README.md' -InitialFileContent '# S'
         $persSh = Join-Path $sandbox 'home-sh\.b3\models.md'
         $persShP = To-PosixPath $persSh; $prodShP = To-PosixPath $prodSh; $syncFxP = To-PosixPath $syncFx
         $env:B3_MODELS_PERSONAL = $persShP

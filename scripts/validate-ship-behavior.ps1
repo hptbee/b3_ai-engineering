@@ -24,15 +24,7 @@ Push-Location $sandbox
 try {
     # --- F4: empty invalid dest is replaced; nonempty dest fails; cursor sync & coexistence guard ---
     $fx = Join-Path $sandbox 'sync-fx'
-    New-Item -ItemType Directory -Path (Join-Path $fx 'adapters\lib') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fx 'skills\eng\demo') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fx 'commands') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fx 'agents') | Out-Null
-    Set-Content (Join-Path $fx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Set-Content (Join-Path $fx 'commands\b3-plan.md') '# b3-plan'
-    Set-Content (Join-Path $fx 'agents\b3-reviewer.md') '# b3-reviewer'
-    Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fx 'adapters\sync-skills.ps1')
-    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fx 'adapters\lib\global-common.ps1')
+    New-B3SyncFixture -FixtureDir $fx -RepoRoot $root -IncludeCommands -IncludeAgents
 
     $empty = Join-Path $fx '.agents\skills'
     New-Item -ItemType Directory -Path $empty | Out-Null
@@ -60,15 +52,7 @@ try {
 
     # Cursor sync on clean fixture
     $fxCur = Join-Path $sandbox 'sync-fx-cursor'
-    New-Item -ItemType Directory -Path (Join-Path $fxCur 'adapters\lib') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fxCur 'skills\eng\demo') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fxCur 'commands') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fxCur 'agents') | Out-Null
-    Set-Content (Join-Path $fxCur 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Set-Content (Join-Path $fxCur 'commands\b3-plan.md') '# b3-plan'
-    Set-Content (Join-Path $fxCur 'agents\b3-reviewer.md') '# b3-reviewer'
-    Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCur 'adapters\sync-skills.ps1')
-    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fxCur 'adapters\lib\global-common.ps1')
+    New-B3SyncFixture -FixtureDir $fxCur -RepoRoot $root -IncludeCommands -IncludeAgents
     & powershell -NoProfile -File (Join-Path $fxCur 'adapters\sync-skills.ps1') -HostName cursor | Out-Null
     $curSyncExit = $LASTEXITCODE
     & powershell -NoProfile -File (Join-Path $fxCur 'adapters\sync-skills.ps1') -HostName cursor -VerifyOnly | Out-Null
@@ -78,13 +62,7 @@ try {
 
     # Claude sync on clean fixture
     $fxCl = Join-Path $sandbox 'sync-fx-claude'
-    New-Item -ItemType Directory -Path (Join-Path $fxCl 'adapters\lib') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fxCl 'skills\eng\demo') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fxCl 'agents') | Out-Null
-    Set-Content (Join-Path $fxCl 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Set-Content (Join-Path $fxCl 'agents\b3-reviewer.md') '# b3-reviewer'
-    Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCl 'adapters\sync-skills.ps1')
-    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fxCl 'adapters\lib\global-common.ps1')
+    New-B3SyncFixture -FixtureDir $fxCl -RepoRoot $root -IncludeAgents
     & powershell -NoProfile -File (Join-Path $fxCl 'adapters\sync-skills.ps1') -HostName claude | Out-Null
     $clSyncExit = $LASTEXITCODE
     & powershell -NoProfile -File (Join-Path $fxCl 'adapters\sync-skills.ps1') -HostName claude -VerifyOnly | Out-Null
@@ -93,11 +71,7 @@ try {
     else { FailCheck 'sync-claude' "sync=$clSyncExit verify=$clVerifyExit" }
 
     $fx2 = Join-Path $sandbox 'sync-fx-nonempty'
-    New-Item -ItemType Directory -Path (Join-Path $fx2 'adapters\lib') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $fx2 'skills\eng\demo') | Out-Null
-    Set-Content (Join-Path $fx2 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fx2 'adapters\sync-skills.ps1')
-    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fx2 'adapters\lib\global-common.ps1')
+    New-B3SyncFixture -FixtureDir $fx2 -RepoRoot $root
     New-Item -ItemType Directory -Path (Join-Path $fx2 '.agents\skills') | Out-Null
     Set-Content (Join-Path $fx2 '.agents\skills\stale.txt') 'not a link'
     $err = $null
@@ -247,11 +221,8 @@ try {
 
     # Simulated Git freshness (not a live /b3-ship agent). Named-file change vs unrelated change.
     $fresh = Join-Path $sandbox 'freshness'
-    New-Item -ItemType Directory -Path $fresh | Out-Null
+    Init-B3TestRepo -RepoPath $fresh -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     Push-Location $fresh
-    git init -q
-    git config user.email 'ship-test@example.com'
-    git config user.name 'Ship Test'
     New-Item -ItemType Directory -Path src, docs | Out-Null
     Set-Content src\api.js 'exports.x = 1'
     Set-Content docs\NOTE.md 'n'
@@ -292,11 +263,7 @@ try {
     else { FailCheck 'sync-antigravity-verify' "exit=$LASTEXITCODE out=$agVerifyOut" }
 
     $agSyncFx = Join-Path $sandbox 'ag-sync-fx'
-    New-Item -ItemType Directory -Path (Join-Path $agSyncFx 'adapters\lib') | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $agSyncFx 'skills\eng\demo') | Out-Null
-    Set-Content (Join-Path $agSyncFx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
-    Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $agSyncFx 'adapters\sync-skills.ps1')
-    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $agSyncFx 'adapters\lib\global-common.ps1')
+    New-B3SyncFixture -FixtureDir $agSyncFx -RepoRoot $root
     & powershell -NoProfile -File (Join-Path $agSyncFx 'adapters\sync-skills.ps1') -HostName antigravity | Out-Null
     if ($LASTEXITCODE -ne 0) {
         FailCheck 'sync-antigravity-generate' "exit $LASTEXITCODE"
@@ -319,15 +286,7 @@ try {
     }
 
     $agProduct = Join-Path $sandbox 'ag-product'
-    New-Item -ItemType Directory -Path $agProduct | Out-Null
-    Push-Location $agProduct
-    git init -q
-    git config user.email 'ship-test@example.com'
-    git config user.name 'Ship Test'
-    Set-Content README.md 'ag product'
-    git add README.md
-    git commit -qm 'init'
-    Pop-Location
+    Init-B3TestRepo -RepoPath $agProduct -UserEmail 'ship-test@example.com' -UserName 'Ship Test' -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'ag product'
 
     & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $agProduct -B3Home $root -HostName antigravity | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -354,15 +313,7 @@ try {
     }
 
     $clProduct = Join-Path $sandbox 'claude-product'
-    New-Item -ItemType Directory -Path $clProduct | Out-Null
-    Push-Location $clProduct
-    git init -q
-    git config user.email 'ship-test@example.com'
-    git config user.name 'Ship Test'
-    Set-Content README.md 'claude product'
-    git add README.md
-    git commit -qm 'init'
-    Pop-Location
+    Init-B3TestRepo -RepoPath $clProduct -UserEmail 'ship-test@example.com' -UserName 'Ship Test' -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'claude product'
 
     & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $clProduct -B3Home $root -HostName claude | Out-Null
     if ($LASTEXITCODE -ne 0) {
@@ -818,11 +769,8 @@ try {
     else { FailCheck 'no-cmd-exe-junction-ops' "hits=$($cmdHits -join ', ')" }
 
     $mechRepo = Join-Path $sandbox 'mech-repo'
-    New-Item -ItemType Directory -Path $mechRepo | Out-Null
+    Init-B3TestRepo -RepoPath $mechRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     Push-Location $mechRepo
-    git init -q
-    git config user.email 'ship-test@example.com'
-    git config user.name 'Ship Test'
     New-Item -ItemType Directory -Path src | Out-Null
     Set-Content src\a.ts "export const a = 1;`nexport function oldFn() { return 1; }"
     Set-Content src\b.ts "import { oldFn } from './a';`nexport const b = oldFn();"
@@ -853,11 +801,8 @@ try {
 
     # --- -TargetRef / --target-ref tests (un-checked-out PR/branch commit with dirty+untracked WT) ---
     $trRepo = Join-Path $sandbox 'target-ref-repo'
-    New-Item -ItemType Directory -Path $trRepo | Out-Null
+    Init-B3TestRepo -RepoPath $trRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     Push-Location $trRepo
-    git init -q
-    git config user.email 'ship-test@example.com'
-    git config user.name 'Ship Test'
     New-Item -ItemType Directory -Path src | Out-Null
     Set-Content src\app.ts "export const v = 1;`nexport function legacyFn() { return 1; }"
     Set-Content src\legacy.ts "export const legacy = 1;"
@@ -923,14 +868,8 @@ try {
 
     # --- guard-size-boundary: <50 files and <2000 lines = L; >=50 or >=2000 = XL (up to 100f / 5000L) ---
     $sbRepo = Join-Path $sandbox 'size-boundary-repo'
-    New-Item -ItemType Directory -Path $sbRepo | Out-Null
+    Init-B3TestRepo -RepoPath $sbRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test' -InitialCommit -InitialFileName 'README.md' -InitialFileContent 'init'
     Push-Location $sbRepo
-    git init -q
-    git config user.email 'ship-test@example.com'
-    git config user.name 'Ship Test'
-    Set-Content README.md 'init'
-    git add README.md
-    git commit -qm 'init'
     New-Item -ItemType Directory -Path src | Out-Null
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $bigPath = Join-Path $sbRepo 'src\big.ts'
@@ -1200,9 +1139,9 @@ try {
 
     # --- guard-verify-receipt-lifecycle (R005: parallel waves, Finalize reuse, Resume check, amend/edit stale) ---
     $lcRepo = Join-Path $sandbox 'lifecycle-repo'
+    Init-B3TestRepo -RepoPath $lcRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     New-Item -ItemType Directory -Path (Join-Path $lcRepo 'src') -Force | Out-Null
     Push-Location $lcRepo
-    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
     Set-Content src\a.ts 'export const a = 1;'
     Set-Content src\b.ts 'export const b = 1;'
     Set-Content src\c.ts 'export const c = 1;'
@@ -1333,9 +1272,9 @@ try {
 
     # --- guard-partial-staged-bypass (R006: block unstaged/untracked/deleted files inside receipt scope) ---
     $psRepo = Join-Path $sandbox 'partial-stage-repo'
+    Init-B3TestRepo -RepoPath $psRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     New-Item -ItemType Directory -Path (Join-Path $psRepo 'src') -Force | Out-Null
     Push-Location $psRepo
-    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
     Set-Content src\a.ts 'export const a = 1;'
     Set-Content src\b.ts 'export const b = 1;'
     Set-Content src\del.ts 'export const d = 1;'
@@ -1412,9 +1351,8 @@ try {
 
     # --- guard-verify-mode-type-submodule (chmod, symlink/type changes, submodule gitlink + dirty state, legacy migration) ---
     $subOrigin = Join-Path $sandbox 'sub-origin'
-    New-Item -ItemType Directory -Path $subOrigin -Force | Out-Null
+    Init-B3TestRepo -RepoPath $subOrigin -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     Push-Location $subOrigin
-    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
     [IO.File]::WriteAllText((Join-Path $subOrigin 's.txt'), "sub-v1`n", (New-Object System.Text.UTF8Encoding($false)))
     git add s.txt; git commit -qm 'sub-v1'
     $sub1 = (git rev-parse HEAD).Trim()
@@ -1424,10 +1362,9 @@ try {
     Pop-Location
 
     $mtRepo = Join-Path $sandbox 'mode-type-sub-repo'
-    New-Item -ItemType Directory -Path (Join-Path $mtRepo 'scripts') -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $mtRepo 'deps') -Force | Out-Null
+    Init-B3TestRepo -RepoPath $mtRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
+    New-Item -ItemType Directory -Path (Join-Path $mtRepo 'scripts'), (Join-Path $mtRepo 'deps') -Force | Out-Null
     Push-Location $mtRepo
-    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
     $utf8NoBomMt = New-Object System.Text.UTF8Encoding($false)
     [IO.File]::WriteAllText((Join-Path $mtRepo 'scripts\run.sh'), "#!/bin/sh`necho run`n", $utf8NoBomMt)
     [IO.File]::WriteAllText((Join-Path $mtRepo 'other.txt'), "other`n", $utf8NoBomMt)
@@ -1703,9 +1640,8 @@ try {
     Remove-Item -LiteralPath $subUntrFile -Force
     # Nested git repo inside deps/sub (R002)
     $nestedRepo = Join-Path $mtRepo 'deps\sub\inner-nested'
-    New-Item -ItemType Directory -Path $nestedRepo -Force | Out-Null
+    Init-B3TestRepo -RepoPath $nestedRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     Push-Location $nestedRepo
-    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
     [IO.File]::WriteAllText((Join-Path $nestedRepo 'i.txt'), "in-1`n", $utf8NoBomMt)
     git add i.txt; git commit -qm 'inner-1'
     [IO.File]::WriteAllText((Join-Path $nestedRepo 'i.txt'), "in-dirty-1`n", $utf8NoBomMt)
@@ -2140,9 +2076,9 @@ try {
 
     # --- guard-review-loop-edge-fixes (parent WatchedPaths vs OwnedFiles, secret del, rename mass_delete, untracked obsoletes, symbol move vs dropped export) ---
     $rlEdgeRepo = Join-Path $sandbox 'rl-edge-repo'
+    Init-B3TestRepo -RepoPath $rlEdgeRepo -UserEmail 'ship-test@example.com' -UserName 'Ship Test'
     New-Item -ItemType Directory -Path (Join-Path $rlEdgeRepo 'src'), (Join-Path $rlEdgeRepo 'moved'), (Join-Path $rlEdgeRepo 'secret') | Out-Null
     Push-Location $rlEdgeRepo
-    git init -q; git config user.email 'ship-test@example.com'; git config user.name 'Ship Test'
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\a.ts'), "export function movedFn() { return 1; }`n", (New-Object System.Text.UTF8Encoding($false)))
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\b.ts'), "export const b = 1;`n", (New-Object System.Text.UTF8Encoding($false)))
     [IO.File]::WriteAllText((Join-Path $rlEdgeRepo 'src\lib.ts'), "export function droppedFn() { return 2; }`n", (New-Object System.Text.UTF8Encoding($false)))

@@ -72,9 +72,19 @@ function Complete-ValidationSuite {
 
 $script:InProcRunspace = $null
 $script:ParamMetaCache = @{}
+$script:SnapshotSeedCache = @{}
 $script:RepoSeedRoot = Join-Path $env:TEMP ("b3-repo-seed-" + $PID)
 $script:RepoSeedCache = @{}
+$script:B3Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action ([scriptblock]::Create("if (Test-Path -LiteralPath '$($script:RepoSeedRoot.Replace("'", "''"))') { Remove-Item -LiteralPath '$($script:RepoSeedRoot.Replace("'", "''"))' -Recurse -Force -ErrorAction SilentlyContinue }"))
+
+function Write-B3LfFile([string]$Path, [string]$Content) {
+    $parent = Split-Path -Parent $Path
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($Path, ($Content -replace "`r`n", "`n"), $script:B3Utf8NoBom)
+}
 
 function Get-B3ScriptParamMeta([string]$FullPath) {
     $item = Get-Item -LiteralPath $FullPath -ErrorAction Stop
@@ -280,38 +290,84 @@ function Copy-B3Snapshot {
         [string]$RepoRoot = $script:HelpersRepoRoot,
         [switch]$IncludeCommandSkills
     )
-    New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
+    $cacheKey = "$RepoRoot|$($IncludeCommandSkills.IsPresent)"
+    if (-not $script:SnapshotSeedCache.ContainsKey($cacheKey) -or -not (Test-Path -LiteralPath $script:SnapshotSeedCache[$cacheKey])) {
+        New-Item -ItemType Directory -Path $script:RepoSeedRoot -Force | Out-Null
+        $seedSnap = Join-Path $script:RepoSeedRoot ('snap-' + [guid]::NewGuid().ToString('N').Substring(0, 10))
+        New-Item -ItemType Directory -Path $seedSnap -Force | Out-Null
 
-    $dirs = @('skills', 'commands', 'agents', 'rules', 'workflows', 'adapters\lib')
-    if ($IncludeCommandSkills) {
-        $dirs += 'adapters\command-skills'
-    }
-    foreach ($sub in $dirs) {
-        $srcDir = Join-Path $RepoRoot $sub
-        $dstDir = Join-Path $DestDir $sub
-        $dstParent = Split-Path -Parent $dstDir
-        if (-not (Test-Path -LiteralPath $dstParent)) {
-            New-Item -ItemType Directory -Path $dstParent -Force | Out-Null
+        $dirs = @('skills', 'commands', 'agents', 'rules', 'workflows', 'adapters\lib')
+        if ($IncludeCommandSkills) {
+            $dirs += 'adapters\command-skills'
         }
-        Copy-Item -LiteralPath $srcDir -Destination $dstDir -Recurse -Force
-    }
+        foreach ($sub in $dirs) {
+            $srcDir = Join-Path $RepoRoot $sub
+            $dstDir = Join-Path $seedSnap $sub
+            $dstParent = Split-Path -Parent $dstDir
+            if (-not (Test-Path -LiteralPath $dstParent)) {
+                New-Item -ItemType Directory -Path $dstParent -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $srcDir -Destination $dstDir -Recurse -Force
+        }
 
-    $files = @(
-        'adapters\install-global.ps1',
-        'adapters\install-global.sh',
-        'adapters\cursor\install-global.ps1',
-        'adapters\cursor\install-global.sh',
-        'adapters\antigravity\install-plugin.ps1',
-        'adapters\antigravity\install-plugin.sh'
+        $files = @(
+            'adapters\install-global.ps1',
+            'adapters\install-global.sh',
+            'adapters\cursor\install-global.ps1',
+            'adapters\cursor\install-global.sh',
+            'adapters\antigravity\install-plugin.ps1',
+            'adapters\antigravity\install-plugin.sh'
+        )
+        foreach ($relFile in $files) {
+            $srcFile = Join-Path $RepoRoot $relFile
+            $dstFile = Join-Path $seedSnap $relFile
+            $dstParent = Split-Path -Parent $dstFile
+            if (-not (Test-Path -LiteralPath $dstParent)) {
+                New-Item -ItemType Directory -Path $dstParent -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $srcFile -Destination $dstFile -Force
+        }
+        $script:SnapshotSeedCache[$cacheKey] = $seedSnap
+    }
+    Copy-B3DirectoryTree -SourceDir $script:SnapshotSeedCache[$cacheKey] -DestDir $DestDir
+}
+
+function New-B3SyncFixture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FixtureDir,
+        [string]$RepoRoot = $script:HelpersRepoRoot,
+        [switch]$IncludeCommands,
+        [switch]$IncludeAgents,
+        [switch]$IncludeCommandSkills,
+        [switch]$IncludeBash,
+        [switch]$IncludeModelsExample
     )
-    foreach ($relFile in $files) {
-        $srcFile = Join-Path $RepoRoot $relFile
-        $dstFile = Join-Path $DestDir $relFile
-        $dstParent = Split-Path -Parent $dstFile
-        if (-not (Test-Path -LiteralPath $dstParent)) {
-            New-Item -ItemType Directory -Path $dstParent -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $FixtureDir 'adapters\lib'), (Join-Path $FixtureDir 'skills\eng\demo') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\sync-skills.ps1') -Destination (Join-Path $FixtureDir 'adapters\sync-skills.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\lib\global-common.ps1') -Destination (Join-Path $FixtureDir 'adapters\lib\global-common.ps1') -Force
+    if ($IncludeBash) {
+        Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\sync-skills.sh') -Destination (Join-Path $FixtureDir 'adapters\sync-skills.sh') -Force
+        Copy-Item -LiteralPath (Join-Path $RepoRoot 'adapters\lib\global-common.sh') -Destination (Join-Path $FixtureDir 'adapters\lib\global-common.sh') -Force
+    }
+    Write-B3LfFile (Join-Path $FixtureDir 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
+    if ($IncludeCommands) {
+        New-Item -ItemType Directory -Path (Join-Path $FixtureDir 'commands') -Force | Out-Null
+        Write-B3LfFile (Join-Path $FixtureDir 'commands\b3-plan.md') "# b3-plan`n"
+    }
+    if ($IncludeAgents) {
+        New-Item -ItemType Directory -Path (Join-Path $FixtureDir 'agents') -Force | Out-Null
+        Write-B3LfFile (Join-Path $FixtureDir 'agents\b3-reviewer.md') "# b3-reviewer`n"
+    }
+    if ($IncludeCommandSkills) {
+        New-Item -ItemType Directory -Path (Join-Path $FixtureDir 'adapters\command-skills\b3-ship') -Force | Out-Null
+        Write-B3LfFile (Join-Path $FixtureDir 'adapters\command-skills\b3-ship\SKILL.md') "---`nname: b3-ship`ndescription: ship cmd`n---`n# Ship`n"
+        if ($IncludeCommands) {
+            Write-B3LfFile (Join-Path $FixtureDir 'commands\b3-ship.md') "# Ship`n"
         }
-        Copy-Item -LiteralPath $srcFile -Destination $dstFile -Force
+    }
+    if ($IncludeModelsExample) {
+        New-Item -ItemType Directory -Path (Join-Path $FixtureDir 'config') -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $RepoRoot 'config\models.example.md') -Destination (Join-Path $FixtureDir 'config\models.example.md') -Force
     }
 }
 

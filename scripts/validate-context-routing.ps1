@@ -26,35 +26,16 @@ $script:GuardFlags = [ordered]@{
     IgnoreDirtyPaths = '--ignore-dirty-paths'
 }
 
-function To-Posix([string]$PathValue) { return ($PathValue -replace '\\', '/') }
+function To-Posix([string]$PathValue) { return (To-PosixPath $PathValue) }
 function Add-Err([System.Collections.Generic.List[string]]$List, [string]$Err) { if ($Err) { $List.Add($Err) } }
-
-function Quote-BashArg([string]$Val) {
-    if ($Val -match '["\x00-\x1F\x7F]') {
-        $sb = New-Object System.Text.StringBuilder
-        [void]$sb.Append("`$'")
-        foreach ($ch in $Val.ToCharArray()) {
-            $code = [int]$ch
-            if ($ch -eq '\') { [void]$sb.Append('\\') }
-            elseif ($ch -eq "'") { [void]$sb.Append("\'") }
-            elseif ($ch -eq '"') { [void]$sb.Append('\x22') }
-            elseif ($code -le 0x1F -or $code -eq 0x7F) { [void]$sb.Append(('\x{0:x2}' -f $code)) }
-            else { [void]$sb.Append($ch) }
-        }
-        [void]$sb.Append("'")
-        return $sb.ToString()
-    }
-    return ("'" + ($Val -replace "'", "'\''") + "'")
-}
+function Quote-BashArg([string]$Val) { return (Format-BashArg $Val) }
 
 function Quote-PsSingle([string]$Val) {
     return ("'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Val) + "'")
 }
 
 function Write-LfFile([string]$PathValue, [string]$Text) {
-    $parent = Split-Path -Parent $PathValue
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-    [System.IO.File]::WriteAllText($PathValue, ($Text -replace "`r`n", "`n"), $utf8NoBom)
+    Write-B3LfFile $PathValue $Text
 }
 
 function Get-LfByteLength([string]$FullPath) {
@@ -651,13 +632,7 @@ try {
 
     foreach ($hName in @('cursor', 'codex', 'claude')) {
         $fxDir = Join-Path $sandbox "sync-fx-$hName"
-        New-Item -ItemType Directory -Path (Join-Path $fxDir 'adapters\command-skills\b3-ship'), (Join-Path $fxDir 'adapters\lib'), (Join-Path $fxDir 'skills\engineering\demo'), (Join-Path $fxDir 'commands'), (Join-Path $fxDir 'agents') -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $root 'adapters\sync-skills.ps1') -Destination (Join-Path $fxDir 'adapters\sync-skills.ps1') -Force
-        Copy-Item -LiteralPath (Join-Path $root 'adapters\lib\global-common.ps1') -Destination (Join-Path $fxDir 'adapters\lib\global-common.ps1') -Force
-        Write-LfFile (Join-Path $fxDir 'skills\engineering\demo\SKILL.md') "---`nname: demo`ndescription: demo skill`n---`n# Demo`n"
-        Write-LfFile (Join-Path $fxDir 'adapters\command-skills\b3-ship\SKILL.md') "---`nname: b3-ship`ndescription: ship cmd`n---`n# Ship`n"
-        Write-LfFile (Join-Path $fxDir 'commands\b3-ship.md') "# Ship`n"
-        Write-LfFile (Join-Path $fxDir 'agents\b3-reviewer.md') "# Reviewer`n"
+        New-B3SyncFixture -FixtureDir $fxDir -RepoRoot $root -IncludeCommands -IncludeAgents -IncludeCommandSkills
 
         $syncRes = Invoke-PsScript -ScriptPath (Join-Path $fxDir 'adapters\sync-skills.ps1') -ScriptArgs @('-HostName', $hName)
         $verRes = Invoke-PsScript -ScriptPath (Join-Path $fxDir 'adapters\sync-skills.ps1') -ScriptArgs @('-HostName', $hName, '-VerifyOnly')

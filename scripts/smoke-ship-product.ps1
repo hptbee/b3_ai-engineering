@@ -5,7 +5,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\global-test-helpers.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $sandbox = Join-Path $env:TEMP ("b3-ship-smoke-" + [guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $sandbox | Out-Null
 $prevSkipModelInit = $env:B3_SKIP_MODEL_INIT
 $env:B3_SKIP_MODEL_INIT = '1'
 
@@ -14,14 +13,9 @@ function Fail([string]$Message) {
     exit 1
 }
 
-Push-Location $sandbox
 try {
-    git init -q
-    git config user.email 'ship-smoke@example.com'
-    git config user.name 'Ship Smoke'
-    Set-Content README.md "# greet`n"
-    git add README.md
-    git commit -qm 'init product'
+    Init-B3TestRepo -RepoPath $sandbox -UserEmail 'ship-smoke@example.com' -UserName 'Ship Smoke' -InitialCommit -InitialFileName 'README.md' -InitialFileContent '# greet'
+    Push-Location $sandbox
 
     & powershell -NoProfile -File (Join-Path $root 'adapters\install-product.ps1') -ProductRoot $sandbox -B3Home $root -HostName cursor
     if ($LASTEXITCODE -ne 0) { Fail 'install-product' }
