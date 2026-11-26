@@ -7,10 +7,6 @@ use crate::fs::{
     test_binary_file, test_checkpoint_path, test_code_path, test_noise_file, test_path_match,
     test_secret_path, test_test_path,
 };
-
-pub(crate) fn test_noise_file_bridge(path_val: &str) -> bool {
-    test_noise_file(path_val)
-}
 use crate::git::{
     assert_valid_git_rev, git_err_detail, new_working_tree_oid, resolve_scope_target_and_base,
     run_git, run_git_paths_z, GitZMode,

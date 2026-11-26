@@ -6,16 +6,15 @@ use crate::fs::{
     convert_to_wave_paths, convert_to_wave_task_map, has_control_chars, is_reparse_or_symlink,
     is_valid_task_id, is_windows_junction, normalize_path_value, normalize_repo_root,
     sha256_file_hex, sort_ordinal, split_csv_list, split_path_csv_checked, test_binary_file,
-    test_checkpoint_path, test_ownership_path_match, test_path_match, test_secret_path,
-    test_test_path, test_wave_path_contained, test_wave_path_overlap, test_worktree_root_overlap,
-    WaveOverlap,
+    test_checkpoint_path, test_noise_file, test_ownership_path_match, test_path_match,
+    test_secret_path, test_test_path, test_wave_path_contained, test_wave_path_overlap,
+    test_worktree_root_overlap, WaveOverlap,
 };
 use crate::git::{
     git_err_detail, is_hex40, merge_base_is_ancestor, new_working_tree_oid,
     resolve_scope_target_and_base, run_git, run_git_paths_z, test_git_mid_operation,
     test_repo_case_insensitive, GitZMode,
 };
-use crate::guard::scope::test_noise_file_bridge;
 use crate::guard::verify::{get_submodule_entry_identity, get_symlink_blob_oid};
 use crate::guard::worktree::resolve_safe_worktree_identity;
 
@@ -964,7 +963,7 @@ pub fn run(
                     skip_file = cur_file.is_empty()
                         || test_checkpoint_path(&cur_file)
                         || test_path_match(&cur_file, &ignored)
-                        || test_noise_file_bridge(&cur_file)
+                        || test_noise_file(&cur_file)
                         || cur_file.to_ascii_lowercase().ends_with(".md");
                 }
                 continue;
@@ -1005,7 +1004,7 @@ pub fn run(
         if u.is_empty()
             || test_checkpoint_path(&u)
             || test_path_match(&u, &ignored)
-            || test_noise_file_bridge(&u)
+            || test_noise_file(&u)
             || u.to_ascii_lowercase().ends_with(".md")
         {
             continue;
@@ -1036,7 +1035,7 @@ pub fn run(
         if dp.is_empty()
             || test_checkpoint_path(dp)
             || test_ownership_path_match(dp, &ignored, case_insensitive)
-            || test_noise_file_bridge(dp)
+            || test_noise_file(dp)
         {
             continue;
         }
@@ -1072,7 +1071,7 @@ pub fn run(
             if !dp.is_empty()
                 && !test_checkpoint_path(&dp)
                 && !test_ownership_path_match(&dp, &ignored, case_insensitive)
-                && !test_noise_file_bridge(&dp)
+                && !test_noise_file(&dp)
                 && !deleted_list.iter().any(|x| x == &dp)
             {
                 deleted_list.push(dp);

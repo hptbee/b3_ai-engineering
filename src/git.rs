@@ -585,7 +585,14 @@ pub fn new_working_tree_oid(
 
     let tmp_guard = TempIndexGuard::new();
     if real_idx.is_file() {
-        std::fs::copy(&real_idx, &tmp_guard.path)
+        let mut src = std::fs::File::open(&real_idx)
+            .map_err(|e| fail(format!("{fail_prefix}: failed to copy git index: {e}"), 1))?;
+        let mut dst = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_guard.path)
+            .map_err(|e| fail(format!("{fail_prefix}: failed to copy git index: {e}"), 1))?;
+        std::io::copy(&mut src, &mut dst)
             .map_err(|e| fail(format!("{fail_prefix}: failed to copy git index: {e}"), 1))?;
     }
 

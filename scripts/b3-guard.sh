@@ -52,7 +52,11 @@ case "$(uname -s 2>/dev/null || true)" in
     elif command -v cygpath >/dev/null 2>&1; then
       _lpwd="$(cygpath -m "$_lpwd" 2>/dev/null || printf '%s' "$_lpwd")"
     fi
+    if [[ -n "${B3_GITHUB_VERIFY_ADAPTER:-}" ]] && command -v cygpath >/dev/null 2>&1; then
+      B3_GITHUB_VERIFY_ADAPTER="$(cygpath -m "$B3_GITHUB_VERIFY_ADAPTER" 2>/dev/null || printf '%s' "$B3_GITHUB_VERIFY_ADAPTER")"
+      export B3_GITHUB_VERIFY_ADAPTER
+    fi
     ;;
 esac
 
-B3_LOGICAL_PWD="$_lpwd" B3_GITHUB_VERIFY_ADAPTER="${B3_GITHUB_VERIFY_ADAPTER:-${_B3_GUARD_DIR}/b3-github-verify.sh}" exec "$_b3_bin" guard "$CMD" "$@"
+B3_LOGICAL_PWD="$_lpwd" exec "$_b3_bin" guard "$CMD" "$@"

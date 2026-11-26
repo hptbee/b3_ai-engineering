@@ -131,6 +131,7 @@ function Resolve-B3Bin([string]$RepoBase) {
 function Invoke-B3Native([string]$ExePath, [string[]]$B3Args) {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $ExePath
+    $psi.WorkingDirectory = (Get-Location -PSProvider FileSystem).ProviderPath
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true
@@ -138,9 +139,6 @@ function Invoke-B3Native([string]$ExePath, [string[]]$B3Args) {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $psi.StandardOutputEncoding = $utf8
     $psi.StandardErrorEncoding = $utf8
-    if (-not $env:B3_GITHUB_VERIFY_ADAPTER) {
-        $psi.EnvironmentVariables['B3_GITHUB_VERIFY_ADAPTER'] = Join-Path $PSScriptRoot 'b3-github-verify.ps1'
-    }
     if ($psi.PSObject.Properties['ArgumentList']) {
         foreach ($a in $B3Args) { [void]$psi.ArgumentList.Add($a) }
     } else {

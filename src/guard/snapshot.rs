@@ -1,6 +1,6 @@
 use crate::error::{fail, B3Error};
 use crate::fs::normalize_repo_root;
-use crate::git::{assert_valid_git_rev, git_err_detail, new_working_tree_oid, run_git};
+use crate::git::{assert_valid_git_rev, git_err_detail, is_hex40, new_working_tree_oid, run_git};
 
 /// Creates a snapshot commit (or returns `HEAD` if working tree matches `HEAD^{tree}`)
 /// while excluding `.b3/{ship,research-ship,autodev}` checkpoint trees.
@@ -9,13 +9,7 @@ pub fn run(repo_root_raw: &str) -> Result<String, B3Error> {
     let no_env: [(&str, &str); 0] = [];
     let batch_res = run_git(
         &repo_root,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            "HEAD^{commit}",
-            "HEAD^{tree}",
-        ],
+        &["rev-parse", "--quiet", "HEAD^{commit}", "HEAD^{tree}"],
         &no_env,
         None,
     )?;
@@ -23,7 +17,20 @@ pub fn run(repo_root_raw: &str) -> Result<String, B3Error> {
         let txt = String::from_utf8_lossy(&batch_res.stdout);
         let mut lines = txt.lines().map(str::trim).filter(|s| !s.is_empty());
         if let (Some(c), Some(t), None) = (lines.next(), lines.next(), lines.next()) {
-            (c.to_string(), t.to_string())
+            if is_hex40(c) && is_hex40(t) {
+                (c.to_string(), t.to_string())
+            } else {
+                (
+                    assert_valid_git_rev(&repo_root, "HEAD", "commit", "SNAPSHOT_FAIL", "HEAD")?,
+                    assert_valid_git_rev(
+                        &repo_root,
+                        "HEAD",
+                        "tree",
+                        "SNAPSHOT_FAIL",
+                        "HEAD^{tree}",
+                    )?,
+                )
+            }
         } else {
             (
                 assert_valid_git_rev(&repo_root, "HEAD", "commit", "SNAPSHOT_FAIL", "HEAD")?,

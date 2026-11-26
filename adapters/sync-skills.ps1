@@ -49,6 +49,7 @@ if ($Force) { [void]$fwdArgs.Add('--force') }
 
 $psiB = New-Object System.Diagnostics.ProcessStartInfo
 $psiB.FileName = $b3Candidate
+$psiB.WorkingDirectory = (Get-Location -PSProvider FileSystem).ProviderPath
 $psiB.UseShellExecute = $false
 $psiB.RedirectStandardOutput = $true
 $psiB.RedirectStandardError = $true

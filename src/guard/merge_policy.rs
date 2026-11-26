@@ -636,11 +636,15 @@ fn test_branch_pattern_match(branch_name: &str, patterns: &[String]) -> bool {
         .any(|pat| match_wildcard_glob(pat, branch_name))
 }
 
-fn resolve_github_verify_adapter() -> Option<PathBuf> {
+fn resolve_explicit_github_verify_adapter(err_prefix: &str) -> Result<Option<PathBuf>, B3Error> {
     if let Ok(explicit) = std::env::var("B3_GITHUB_VERIFY_ADAPTER") {
-        let p = PathBuf::from(explicit.trim());
-        if p.is_file() {
-            return Some(p);
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            if p.is_file() {
+                return Ok(Some(p));
+            }
+            return Err(fail(format!("{err_prefix}: github_adapter_missing"), 1));
         }
     }
     let name = if cfg!(windows) {
@@ -649,29 +653,16 @@ fn resolve_github_verify_adapter() -> Option<PathBuf> {
         "b3-github-verify.sh"
     };
     if let Ok(sdir) = std::env::var("B3_SCRIPTS_DIR") {
-        let p = PathBuf::from(sdir.trim()).join(name);
-        if p.is_file() {
-            return Some(p);
+        let trimmed = sdir.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed).join(name);
+            if p.is_file() {
+                return Ok(Some(p));
+            }
+            return Err(fail(format!("{err_prefix}: github_adapter_missing"), 1));
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let p1 = exe_dir.join(name);
-            if p1.is_file() {
-                return Some(p1);
-            }
-            if let Some(p2) = exe_dir
-                .parent()
-                .and_then(|p| p.parent())
-                .map(|r| r.join("scripts").join(name))
-            {
-                if p2.is_file() {
-                    return Some(p2);
-                }
-            }
-        }
-    }
-    None
+    Ok(None)
 }
 
 struct GhVerifyData {
@@ -686,88 +677,98 @@ fn invoke_b3_github_verify(
     pr_num: &str,
     err_prefix: &str,
 ) -> Result<GhVerifyData, B3Error> {
-    let Some(adapter_path) = resolve_github_verify_adapter() else {
-        return Err(fail(format!("{err_prefix}: github_adapter_missing"), 1));
-    };
     let root_str = root_dir.to_string_lossy().into_owned();
-    let adapter_str = adapter_path.to_string_lossy().into_owned();
-    let no_env: [(&str, &str); 0] = [];
-    let is_ps1 = adapter_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("ps1"));
+    let repo_trimmed = explicit_repo.trim();
 
-    let out = if is_ps1 {
-        let mut args = vec![
-            "-NoProfile".to_string(),
-            "-ExecutionPolicy".to_string(),
-            "Bypass".to_string(),
-            "-File".to_string(),
-            adapter_str,
-            "-Mode".to_string(),
-            mode.to_string(),
-            "-RepoRoot".to_string(),
-            root_str,
-        ];
-        if !explicit_repo.trim().is_empty() {
-            args.push("-Repo".to_string());
-            args.push(explicit_repo.trim().to_string());
+    let (exit_code, combined) = if let Some(adapter_path) =
+        resolve_explicit_github_verify_adapter(err_prefix)?
+    {
+        let adapter_str = adapter_path.to_string_lossy().into_owned();
+        let no_env: [(&str, &str); 0] = [];
+        let is_ps1 = adapter_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("ps1"));
+
+        let out = if is_ps1 {
+            let mut args = vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-File".to_string(),
+                adapter_str,
+                "-Mode".to_string(),
+                mode.to_string(),
+                "-RepoRoot".to_string(),
+                root_str,
+            ];
+            if !repo_trimmed.is_empty() {
+                args.push("-Repo".to_string());
+                args.push(repo_trimmed.to_string());
+            }
+            args.push("-PrNumber".to_string());
+            args.push(pr_num.to_string());
+            run_command_timeout(
+                OsStr::new("powershell"),
+                &args,
+                Some(root_dir),
+                &no_env,
+                &[],
+                None,
+                None,
+            )?
+        } else {
+            let bash_exe =
+                if cfg!(windows) && Path::new("C:\\Program Files\\Git\\bin\\bash.exe").is_file() {
+                    "C:\\Program Files\\Git\\bin\\bash.exe"
+                } else {
+                    "bash"
+                };
+            let mut args = vec![
+                adapter_str,
+                "--mode".to_string(),
+                mode.to_string(),
+                "--repo-root".to_string(),
+                root_str,
+            ];
+            if !repo_trimmed.is_empty() {
+                args.push("--repo".to_string());
+                args.push(repo_trimmed.to_string());
+            }
+            args.push("--pr-number".to_string());
+            args.push(pr_num.to_string());
+            run_command_timeout(
+                OsStr::new(bash_exe),
+                &args,
+                Some(root_dir),
+                &no_env,
+                &[],
+                None,
+                None,
+            )?
+        };
+
+        let mut msg = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.stderr.is_empty() {
+            if !msg.is_empty() && !msg.ends_with('\n') {
+                msg.push('\n');
+            }
+            msg.push_str(&String::from_utf8_lossy(&out.stderr));
         }
-        args.push("-PrNumber".to_string());
-        args.push(pr_num.to_string());
-        run_command_timeout(
-            OsStr::new("powershell"),
-            &args,
-            Some(root_dir),
-            &no_env,
-            &[],
-            None,
-            None,
-        )?
+        (out.exit_code, msg)
     } else {
-        let bash_exe =
-            if cfg!(windows) && Path::new("C:\\Program Files\\Git\\bin\\bash.exe").is_file() {
-                "C:\\Program Files\\Git\\bin\\bash.exe"
-            } else {
-                "bash"
-            };
-        let mut args = vec![
-            adapter_str,
-            "--mode".to_string(),
-            mode.to_string(),
-            "--repo-root".to_string(),
-            root_str,
-        ];
-        if !explicit_repo.trim().is_empty() {
-            args.push("--repo".to_string());
-            args.push(explicit_repo.trim().to_string());
+        match crate::pr::verify::run(mode, &root_str, true, repo_trimmed, pr_num, "", "") {
+            Ok((stdout, code)) => (code, stdout),
+            Err(err) => (err.code, err.message),
         }
-        args.push("--pr-number".to_string());
-        args.push(pr_num.to_string());
-        run_command_timeout(
-            OsStr::new(bash_exe),
-            &args,
-            Some(root_dir),
-            &no_env,
-            &[],
-            None,
-            None,
-        )?
     };
 
-    let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
-    if !out.stderr.is_empty() {
-        if !combined.is_empty() && !combined.ends_with('\n') {
-            combined.push('\n');
-        }
-        combined.push_str(&String::from_utf8_lossy(&out.stderr));
-    }
     let lines: Vec<&str> = combined
         .split('\n')
         .map(|l| l.strip_suffix('\r').unwrap_or(l))
         .collect();
 
-    if out.exit_code != 0 {
+    if exit_code != 0 {
         let first = lines.first().copied().unwrap_or("");
         let stripped = first
             .strip_prefix("GH_VERIFY_UNAVAILABLE:")
@@ -779,7 +780,7 @@ fn invoke_b3_github_verify(
         } else {
             stripped
         };
-        if out.exit_code == 2 {
+        if exit_code == 2 {
             return Err(fail(
                 format!("PROVIDER_UNAVAILABLE: github_verification_failed({detail})"),
                 2,
