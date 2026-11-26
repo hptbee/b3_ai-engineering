@@ -8132,6 +8132,7 @@ timestamp_utc=${TS_UTC}
     IGNORE_DIRTY=""
     EXPECTED_CMD=""
     RELEVANT_PATHS=""
+    TARGET_COMMIT_SHA=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --repo-root) REPO_ROOT="${2:-}"; shift 2 ;;
@@ -8139,6 +8140,9 @@ timestamp_utc=${TS_UTC}
         --ignore-dirty-paths) IGNORE_DIRTY="${2:-}"; shift 2 ;;
         --expected-cmd) EXPECTED_CMD="${2:-}"; shift 2 ;;
         --relevant-paths) RELEVANT_PATHS="${2:-}"; shift 2 ;;
+        --target-commit-sha)
+          [[ $# -ge 2 && -n "${2// /}" ]] || { echo "VERIFY_CHECK_FAIL: missing value for $1" >&2; exit 1; }
+          TARGET_COMMIT_SHA="$2"; shift 2 ;;
         *) echo "VERIFY_CHECK_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
     done
@@ -8149,7 +8153,7 @@ timestamp_utc=${TS_UTC}
       exit 1
     fi
     set +e
-    run_verify_check "$REPO_ROOT" "$RECEIPT_PATH" "$IGNORE_DIRTY" "$EXPECTED_CMD" "$RELEVANT_PATHS"
+    run_verify_check "$REPO_ROOT" "$RECEIPT_PATH" "$IGNORE_DIRTY" "$EXPECTED_CMD" "$RELEVANT_PATHS" "$TARGET_COMMIT_SHA"
     RC=$?
     set -e
     printf '%s\n' "$_VR_MSG"

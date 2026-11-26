@@ -809,46 +809,6 @@ function assertCleanIndexAndWorkingTree(repoRoot) {
   }
 }
 
-function computeCommittedTreeHash(repoRoot, expectedHead, receiptRelPathsRaw) {
-  const normRel = (p) => String(p || '').trim().replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
-  let cleanRel = [];
-  if (receiptRelPathsRaw && receiptRelPathsRaw !== 'ALL') {
-    const set = new Set();
-    for (const part of String(receiptRelPathsRaw).split(',')) {
-      const np = normRel(part);
-      if (np && np !== 'none' && !isB3CheckpointPath(np)) set.add(np);
-    }
-    cleanRel = sortOrdinal(set);
-    if (cleanRel.length === 0) fail('PR_VERIFY_REQUIRED', 'Receipt relevant_paths resolved empty during exact-commit check', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  const pathsCsv = cleanRel.length > 0 ? cleanRel.join(',') : 'ALL';
-  const lsArgs = ['-C', repoRoot, '-c', 'core.quotepath=false', 'ls-tree', '-r', '-z', expectedHead, ...(cleanRel.length > 0 ? ['--', ...cleanRel] : [])];
-  const lsRes = spawnSync('git', lsArgs, { encoding: 'utf8', shell: false, windowsHide: true });
-  if (lsRes.error || lsRes.status !== 0) {
-    fail('PR_VERIFY_REQUIRED', `Unable to read committed tree for ${expectedHead} in ${repoRoot}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  const effective = new Map();
-  for (const rec of String(lsRes.stdout || '').split('\0')) {
-    if (!rec) continue;
-    const tabIdx = rec.indexOf('\t');
-    if (tabIdx < 1) continue;
-    const meta = rec.slice(0, tabIdx).trim().split(/\s+/);
-    if (meta.length < 3 || !/^[0-9]{6}$/.test(meta[0]) || (meta[1] !== 'blob' && meta[1] !== 'commit') || !/^[0-9a-f]{40}$/.test(meta[2])) continue;
-    const p = normRel(rec.slice(tabIdx + 1));
-    if (!p || isB3CheckpointPath(p)) continue;
-    if (cleanRel.length > 0 && !cleanRel.some((r) => r === '.' || p === r || p.startsWith(`${r}/`))) continue;
-    effective.set(p, `${meta[0]} ${meta[1]} ${meta[2]}`);
-  }
-  const manifestLines = [`PATHS=${pathsCsv}`];
-  for (const ep of sortOrdinal(effective.keys())) manifestLines.push(`E ${effective.get(ep)} ${ep}`);
-  const hashRes = spawnSync('git', ['-C', repoRoot, 'hash-object', '--stdin'], { input: manifestLines.join('\n') + '\n', encoding: 'utf8', shell: false, windowsHide: true });
-  const hash = String(hashRes.stdout || '').trim().toLowerCase();
-  if (hashRes.error || hashRes.status !== 0 || !SHA_RE.test(hash)) {
-    fail('PR_VERIFY_REQUIRED', 'Unable to hash committed tree manifest for exact-commit verification', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  return hash;
-}
-
 function assertInsideDotB3(repoRoot, receiptFullPath) {
   const dotB3Dir = path.join(repoRoot, '.b3');
   let dotB3Ok = false;
@@ -889,13 +849,13 @@ function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expect
       ? path.join(SCRIPT_ROOT, 'b3-guard.sh').replace(/\\/g, '/')
       : path.join(SCRIPT_ROOT, 'b3-guard.sh');
     const rootArg = process.platform === 'win32' ? repoRoot.replace(/\\/g, '/') : repoRoot;
-    guardRes = spawnSync(bashBin, [guardSh, 'verify-check', '--repo-root', rootArg, '--receipt-path', relReceipt, '--expected-cmd', expectedCmd, '--relevant-paths', reqCsv], { encoding: 'utf8', shell: false, windowsHide: true });
+    guardRes = spawnSync(bashBin, [guardSh, 'verify-check', '--repo-root', rootArg, '--receipt-path', relReceipt, '--expected-cmd', expectedCmd, '--relevant-paths', reqCsv, '--target-commit-sha', expectedHead], { encoding: 'utf8', shell: false, windowsHide: true });
   } else {
     const psBin = resolvePowerShellBinary();
     if (!psBin) {
       fail('PR_VERIFY_REQUIRED', 'Neither bash nor PowerShell (pwsh/powershell) found to run b3-guard verify-check', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
     }
-    const psCmd = '& $env:B3_VC_GUARD verify-check -RepoRoot ([string]$env:B3_VC_ROOT) -ReceiptPath ([string]$env:B3_VC_RECEIPT) -ExpectedCmd ([string]$env:B3_VC_CMD) -RelevantPaths ([string]$env:B3_VC_PATHS); exit $LASTEXITCODE';
+    const psCmd = '& $env:B3_VC_GUARD verify-check -RepoRoot ([string]$env:B3_VC_ROOT) -ReceiptPath ([string]$env:B3_VC_RECEIPT) -ExpectedCmd ([string]$env:B3_VC_CMD) -RelevantPaths ([string]$env:B3_VC_PATHS) -TargetCommitSha ([string]$env:B3_VC_HEAD); exit $LASTEXITCODE';
     const psArgs = process.platform === 'win32'
       ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd]
       : ['-NoProfile', '-Command', psCmd];
@@ -915,22 +875,8 @@ function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expect
     fail('PR_VERIFY_REQUIRED', `Canonical b3-guard verify-check failed (exit ${guardRes.status ?? 'err'}): ${sanitizeUntrustedText(guardOut).slice(0, 260)}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
 
-  const receiptText = readSafeInputFile(receiptFullPath, 'verify_receipt_path');
-  const kv = {};
-  for (const line of receiptText.split(/\r?\n/)) {
-    const eq = line.indexOf('=');
-    if (eq > 0) kv[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
-  }
-  const recHead = String(kv.head_sha || '').toLowerCase();
-  if (recHead !== expectedHead) {
-    fail('PR_VERIFY_REQUIRED', `Receipt head_sha (${recHead || 'missing'}) does not match exact PR HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
   assertCleanIndexAndWorkingTree(repoRoot);
-  const committedTreeHash = computeCommittedTreeHash(repoRoot, expectedHead, kv.relevant_paths || 'ALL');
-  if (committedTreeHash !== String(kv.tree_hash || '').toLowerCase()) {
-    fail('PR_VERIFY_REQUIRED', `Receipt tree_hash (${kv.tree_hash || 'missing'}) does not match exact committed tree (${committedTreeHash}) at ${expectedHead}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
-  return { guardMessage: guardOut.split(/\r?\n/)[0], committedTreeHash };
+  return { guardMessage: guardOut.split(/\r?\n/)[0] };
 }
 
 function parseResolveEvidence(evidencePath, repoRoot, repoFull, prNumber, expectedHead, threadId, fixCommit) {

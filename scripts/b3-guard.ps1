@@ -78,6 +78,7 @@ param(
     [string]$DirtyDigests = '',
     [string]$AuthorityRef = '',
     [string]$HeadSha = '',
+    [string]$TargetCommitSha = '',
     [switch]$RequireRemoteCi,
     [switch]$Force,
     [switch]$RequireIsolated
@@ -5479,8 +5480,11 @@ switch ($Command) {
     }
 
     'verify-check' {
+        if ($PSBoundParameters.ContainsKey('TargetCommitSha') -and (-not $TargetCommitSha -or -not $TargetCommitSha.Trim())) {
+            Fail 'VERIFY_CHECK_FAIL: empty -TargetCommitSha' 1
+        }
         $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'VERIFY_CHECK_FAIL' -RejectDot)
-        $res = Test-VerifyReceipt $RepoRoot $ReceiptPath $ignored $ExpectedCmd $RelevantPaths
+        $res = Test-VerifyReceipt $RepoRoot $ReceiptPath $ignored $ExpectedCmd $RelevantPaths $TargetCommitSha
         Write-Output $res.Message
         exit $res.Code
     }
