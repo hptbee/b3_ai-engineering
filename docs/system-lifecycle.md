@@ -100,7 +100,7 @@ One responsibility → one canonical owner → thin consumers:
 | GitHub CLI exec & input validation | [`src/pr/gh_exec.rs`](../src/pr/gh_exec.rs) | Reuse shared helpers (`validate_repo_slug`, `validate_pr_number`, `resolve_gh_binary`, `parse_json_strict`) via native `b3 pr` (`src/pr/`) |
 | Guard CLI (`verify-run/check`, `diff-scope`, `mechanical-check`, `merge-policy-check`) | [`src/guard/`](../src/guard/) | Route all guard checks through native `b3 guard`; keep verification, literal Git path handling, and merge-ledger gates in canonical Rust primitives |
 | Host adapter file/link/manifest primitives | [`src/adapters/`](../src/adapters/) | Reuse canonical `resolve_b3_home`, `B3Manifest`, Win32 junction / Unix symlink helpers, and frontmatter utilities via `b3 sync` / `b3 install` |
-| Behavioral test sandbox & fixture helpers | [`tests/`](../tests/) / `scripts/lib/global-test-helpers.ps1` | Reuse shared test helpers; never inline duplicate `git init` or sync fixture copies |
+| Behavioral test sandbox & fixture helpers | [`tests/`](../tests/) / [`tests/common/mod.rs`](../tests/common/mod.rs) | Reuse shared cached-seed test helpers; never inline duplicate `git init` or sync fixture copies |
 | Workflow templates, resume & dispatch | `workflows/references/` | Workflows own step order; references own schemas, resume rules & wave dispatch contracts |
 | Review & PR summary schema | [`review-template.md`](../skills/engineering/code-review/references/review-template.md) | Link to canonical summary format instead of redefining it in secondary templates |
 | Static context budget counts | [`src/context.rs`](../src/context.rs) (`b3 context measure --strict`) | Run `--strict` instead of hardcoding volatile byte totals in docs |
