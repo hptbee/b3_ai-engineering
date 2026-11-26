@@ -50,6 +50,35 @@ fn norm_lf(bytes: &[u8]) -> String {
         .to_string()
 }
 
+fn replace_path_variants(mut s: String, path: &Path, forward_slash: bool, token: &str) -> String {
+    let long = b3::fs::expand_windows_long_path(path);
+    let long_s = if forward_slash {
+        long.to_string_lossy().replace('\\', "/")
+    } else {
+        long.to_string_lossy().into_owned()
+    };
+    let raw_s = if forward_slash {
+        path.to_string_lossy().replace('\\', "/")
+    } else {
+        path.to_string_lossy().into_owned()
+    };
+    if !long_s.is_empty() {
+        s = s.replace(&long_s, token);
+    }
+    if !raw_s.is_empty() && raw_s != long_s {
+        s = s.replace(&raw_s, token);
+    }
+    s
+}
+
+fn replace_path_both(s: String, path: &Path, token: &str) -> String {
+    replace_path_variants(s, path, false, token)
+}
+
+fn replace_path_fwd_both(s: String, path: &Path, token: &str) -> String {
+    replace_path_variants(s, path, true, token)
+}
+
 fn run_b3(args: &[&str]) -> (i32, String) {
     let out = Command::new(b3_bin())
         .args(args)
@@ -2889,16 +2918,27 @@ fn wrapper_forwarding_sync_and_install_product_match_powershell() {
         .output()
         .unwrap();
     assert_eq!(p_ag.status.code(), Some(0));
-    assert_eq!(
-        String::from_utf8_lossy(&r_ag.stdout)
-            .replace(fx_r.to_str().unwrap(), "FX")
-            .replace(mod_r.to_str().unwrap(), "MOD")
-            .replace("\r\n", "\n"),
-        String::from_utf8_lossy(&p_ag.stdout)
-            .replace(fx_p.to_str().unwrap(), "FX")
-            .replace(mod_p.to_str().unwrap(), "MOD")
-            .replace("\r\n", "\n")
-    );
+    let r_ag_norm = replace_path_both(
+        replace_path_both(
+            String::from_utf8_lossy(&r_ag.stdout).into_owned(),
+            &fx_r,
+            "FX",
+        ),
+        &mod_r,
+        "MOD",
+    )
+    .replace("\r\n", "\n");
+    let p_ag_norm = replace_path_both(
+        replace_path_both(
+            String::from_utf8_lossy(&p_ag.stdout).into_owned(),
+            &fx_p,
+            "FX",
+        ),
+        &mod_p,
+        "MOD",
+    )
+    .replace("\r\n", "\n");
+    assert_eq!(r_ag_norm, p_ag_norm);
 
     let r_ag_v = Command::new(b3_bin())
         .args([
@@ -2997,16 +3037,27 @@ fn wrapper_forwarding_sync_and_install_product_match_powershell() {
         .output()
         .unwrap();
     assert_eq!(p_ip.status.code(), Some(0));
-    assert_eq!(
-        String::from_utf8_lossy(&r_ip.stdout)
-            .replace(prod_r.to_str().unwrap(), "PROD")
-            .replace(mod_pr.to_str().unwrap(), "MOD")
-            .replace("\r\n", "\n"),
-        String::from_utf8_lossy(&p_ip.stdout)
-            .replace(prod_p.to_str().unwrap(), "PROD")
-            .replace(mod_pp.to_str().unwrap(), "MOD")
-            .replace("\r\n", "\n")
-    );
+    let r_ip_norm = replace_path_both(
+        replace_path_both(
+            String::from_utf8_lossy(&r_ip.stdout).into_owned(),
+            &prod_r,
+            "PROD",
+        ),
+        &mod_pr,
+        "MOD",
+    )
+    .replace("\r\n", "\n");
+    let p_ip_norm = replace_path_both(
+        replace_path_both(
+            String::from_utf8_lossy(&p_ip.stdout).into_owned(),
+            &prod_p,
+            "PROD",
+        ),
+        &mod_pp,
+        "MOD",
+    )
+    .replace("\r\n", "\n");
+    assert_eq!(r_ip_norm, p_ip_norm);
 }
 
 #[test]
@@ -3067,14 +3118,26 @@ fn wrapper_forwarding_install_global_cursor_and_antigravity_match_powershell() {
                 ])
                 .output()
                 .unwrap();
-            let r_str = String::from_utf8_lossy(&r_out.stdout)
-                .replace(rust_home.to_str().unwrap(), "UHOME")
-                .replace(&rust_home.to_string_lossy().replace('\\', "/"), "UHOME_FWD")
-                .replace("\r\n", "\n");
-            let p_str = String::from_utf8_lossy(&p_out.stdout)
-                .replace(ps_home.to_str().unwrap(), "UHOME")
-                .replace(&ps_home.to_string_lossy().replace('\\', "/"), "UHOME_FWD")
-                .replace("\r\n", "\n");
+            let r_str = replace_path_fwd_both(
+                replace_path_both(
+                    String::from_utf8_lossy(&r_out.stdout).into_owned(),
+                    rust_home,
+                    "UHOME",
+                ),
+                rust_home,
+                "UHOME_FWD",
+            )
+            .replace("\r\n", "\n");
+            let p_str = replace_path_fwd_both(
+                replace_path_both(
+                    String::from_utf8_lossy(&p_out.stdout).into_owned(),
+                    ps_home,
+                    "UHOME",
+                ),
+                ps_home,
+                "UHOME_FWD",
+            )
+            .replace("\r\n", "\n");
             (
                 (r_out.status.code().unwrap_or(-1), r_str),
                 (p_out.status.code().unwrap_or(-1), p_str),
