@@ -21,6 +21,10 @@ pub enum PrSubcommand {
         gh_bin: String,
         bash_bin: String,
     },
+    Github {
+        subcommand: String,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -284,6 +288,12 @@ fn parse_pr(args: &[String]) -> Result<PrSubcommand, B3Error> {
     }
     match args[0].as_str() {
         "verify" => parse_pr_verify(&args[1..]),
+        sub @ ("fetch" | "reconcile" | "reply" | "resolve" | "comment") => {
+            Ok(PrSubcommand::Github {
+                subcommand: sub.to_string(),
+                args: args[1..].to_vec(),
+            })
+        }
         other => Err(fail(format!("PR_FAIL: unknown pr subcommand '{other}'"), 1)),
     }
 }

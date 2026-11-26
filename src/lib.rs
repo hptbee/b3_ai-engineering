@@ -38,6 +38,7 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                 &gh_bin,
                 &bash_bin,
             ),
+            PrSubcommand::Github { subcommand, args } => pr::github::run(&subcommand, &args),
         },
         Command::Guard(sub) => {
             let out = match sub {

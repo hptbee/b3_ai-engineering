@@ -2462,3 +2462,334 @@ fn differential_pr_verify_matches_node() {
     assert_eq!(p4c, 2);
     assert_eq!(r4o, p4o);
 }
+
+#[test]
+fn differential_pr_github_matches_node() {
+    let tmp = TempDirGuard::new("pr-github-diff");
+    let root = tmp.path.join("repo");
+    fs::create_dir_all(&root).unwrap();
+    let _head_sha = init_git_repo(&root);
+    let root_str = root.to_str().unwrap();
+
+    // Commit a fix file for resolve verification
+    fs::write(root.join("src/app.txt"), "line1\nfixed\n").unwrap();
+    git_in(&root, &["add", "src/app.txt"]);
+    git_in(&root, &["commit", "-q", "-m", "fix app"]);
+    let fix_sha = git_in(&root, &["rev-parse", "HEAD"]);
+    let (vr_c, _) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        root_str,
+        "--task-id",
+        "T001",
+        "--receipt-path",
+        ".b3/ship/verify/pr.receipt",
+        "--verify-cmd",
+        "node -v",
+        "--relevant-paths",
+        "src/app.txt",
+    ]);
+    assert_eq!(vr_c, 0);
+
+    let fixtures = tmp.path.join("fixtures");
+    fs::create_dir_all(&fixtures).unwrap();
+    let reply_body = fixtures.join("reply.md");
+    fs::write(&reply_body, "Verified fix cleanly.\n").unwrap();
+    let summary_body = fixtures.join("summary.md");
+    fs::write(&summary_body, "## PR Review\n\nAll checked.\n").unwrap();
+    let inline_json = fixtures.join("inline.json");
+    fs::write(
+        &inline_json,
+        "[{\"status\":\"CONFIRMED\",\"severity\":\"MEDIUM\",\"path\":\"src/app.txt\",\"line\":2,\"side\":\"RIGHT\",\"title\":\"Check line\",\"body\":\"Verify line 2\",\"suggested_fix\":\"Keep fixed\"}]",
+    )
+    .unwrap();
+    let ev_json = fixtures.join("evidence.json");
+    fs::write(
+        &ev_json,
+        format!(
+            "{{\"schema\":\"b3-pr-verify-evidence-v1\",\"repo\":\"acme/demo\",\"pr\":7,\"head_sha\":\"{fix_sha}\",\"thread_id\":\"PRRT_1\",\"fix_commit\":\"{fix_sha}\",\"resolution_basis\":\"CONFIRMED_FIXED\",\"target_path\":\"src/app.txt\",\"fixed_paths\":[\"src/app.txt\"],\"checked_command\":\"node -v\",\"verify_receipt_path\":\".b3/ship/verify/pr.receipt\",\"summary\":\"Fixed line 2 cleanly.\"}}"
+        ),
+    )
+    .unwrap();
+
+    // Stateful Node mock gh CLI shared per test run
+    let mock_js = fixtures.join("mock-gh.mjs");
+    fs::write(
+        &mock_js,
+        r#"import fs from 'node:fs';
+const stateFile = process.env.MOCK_STATE_FILE;
+const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+const args = process.argv.slice(2);
+const ep = args[1] || '';
+let input = '';
+try { input = fs.readFileSync(0, 'utf8'); } catch {}
+const out = (o) => { process.stdout.write(JSON.stringify(o)); process.exit(0); };
+if (ep === 'graphql') {
+  const req = JSON.parse(input || '{}');
+  const q = req.query || '';
+  const v = req.variables || {};
+  if (q.includes('addPullRequestReviewThreadReply')) {
+    const cid = 'PRRC_' + (state.seq++);
+    state.thread.comments.push({ id: cid, author: { login: 'octocat' }, body: v.body });
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+    out({ data: { addPullRequestReviewThreadReply: { comment: { id: cid, url: 'https://example.test/' + cid } } } });
+  }
+  if (q.includes('resolveReviewThread')) {
+    state.thread.isResolved = true;
+    fs.writeFileSync(stateFile, JSON.stringify(state));
+    out({ data: { resolveReviewThread: { thread: { id: state.thread.id, isResolved: true } } } });
+  }
+  if (q.includes('comment: node(id: $commentId)')) {
+    const c = state.thread.comments.find((x) => x.id === v.commentId) || null;
+    out({ data: { repository: { pullRequest: { state: 'OPEN', headRefOid: state.head } }, thread: { id: state.thread.id, isResolved: state.thread.isResolved, pullRequest: { number: 7, repository: { nameWithOwner: 'acme/demo' } } }, comment: c ? { id: c.id, author: c.author, body: c.body, pullRequest: { number: 7 } } : null } });
+  }
+  if (q.includes('node(id: $threadId)') && q.includes('headRefOid')) {
+    out({ data: { repository: { pullRequest: { state: 'OPEN', headRefOid: state.head } }, node: { id: state.thread.id, isResolved: state.thread.isResolved, pullRequest: { number: 7, repository: { nameWithOwner: 'acme/demo' } } } } });
+  }
+  if (q.includes('node(id: $threadId)')) {
+    out({ data: { node: { id: state.thread.id, isResolved: state.thread.isResolved, isOutdated: false, path: state.thread.path, line: 2, originalLine: 2, pullRequest: { number: 7, repository: { nameWithOwner: 'acme/demo' } }, comments: { totalCount: state.thread.comments.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes: state.thread.comments } } } });
+  }
+  if (q.includes('reviewThreads(')) {
+    out({ data: { viewer: { login: 'octocat' }, repository: { pullRequest: { number: 7, state: 'OPEN', headRefOid: state.head, title: 'T<!-- untrusted -->', baseRefName: 'main', headRefName: 'feat/x', reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ id: state.thread.id, isResolved: state.thread.isResolved, isOutdated: false, path: state.thread.path, line: 2, originalLine: 2, comments: { totalCount: state.thread.comments.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes: state.thread.comments } }] } } } } });
+  }
+  out({ data: { viewer: { login: 'octocat' }, repository: { pullRequest: { number: 7, state: 'OPEN', headRefOid: state.head } } } });
+}
+if (ep.startsWith('repos/acme/demo/issues/7/comments?')) out([]);
+if (ep === 'repos/acme/demo/issues/7/comments' && args.includes('POST')) {
+  const b = JSON.parse(input || '{}');
+  const id = String(state.seq++);
+  state.issueComments.push({ id, user: { login: 'octocat' }, body: b.body, issue_url: 'https://api.github.com/repos/acme/demo/issues/7' });
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  out({ id });
+}
+if (ep.startsWith('repos/acme/demo/pulls/7/reviews?')) out(state.reviews);
+if (ep === 'repos/acme/demo/pulls/7/reviews' && args.includes('POST')) {
+  const b = JSON.parse(input || '{}');
+  const id = String(state.seq++);
+  state.reviews.push({ id, user: { login: 'octocat' }, state: 'COMMENTED', commit_id: b.commit_id, body: b.body, comments: b.comments || [] });
+  fs.writeFileSync(stateFile, JSON.stringify(state));
+  out({ id });
+}
+if (ep.startsWith('repos/acme/demo/pulls/7/reviews/') && ep.endsWith('/comments?per_page=100&page=1')) {
+  const parts = ep.split('/');
+  const rid = parts[6];
+  const rev = state.reviews.find((r) => String(r.id) === rid);
+  out(rev ? rev.comments : []);
+}
+if (ep.startsWith('repos/acme/demo/pulls/7/reviews/')) {
+  const rid = ep.split('/').pop();
+  const rev = state.reviews.find((r) => String(r.id) === rid) || null;
+  out(rev);
+}
+if (ep.startsWith('repos/acme/demo/pulls/7/files?')) out([{ filename: 'src/app.txt', patch: '@@ -1 +1,2 @@\n line1\n+fixed\n' }]);
+if (ep.startsWith('repos/acme/demo/compare/')) out({ status: 'identical', behind_by: 0 });
+if (ep.startsWith('repos/acme/demo/commits/')) out({ files: [{ filename: 'src/app.txt' }] });
+process.stderr.write('Unexpected ep: ' + ep);
+process.exit(1);
+"#,
+    )
+    .unwrap();
+
+    let gh_cmd = fixtures.join("gh.cmd");
+    fs::write(&gh_cmd, "@echo off\r\nnode \"%~dp0mock-gh.mjs\" %*\r\n").unwrap();
+    let gh_cmd_str = gh_cmd.to_str().unwrap();
+
+    let init_state = format!(
+        "{{\"head\":\"{fix_sha}\",\"seq\":100,\"thread\":{{\"id\":\"PRRT_1\",\"isResolved\":false,\"path\":\"src/app.txt\",\"comments\":[]}},\"issueComments\":[],\"reviews\":[]}}"
+    );
+    let mjs_path = repo_root().join("scripts/lib/b3-pr-github.mjs");
+
+    let run_pair = |case_tag: &str, args: &[&str]| -> ((i32, String), (i32, String)) {
+        let st_r = fixtures.join(format!("st-r-{case_tag}.json"));
+        let st_n = fixtures.join(format!("st-n-{case_tag}.json"));
+        fs::write(&st_r, &init_state).unwrap();
+        fs::write(&st_n, &init_state).unwrap();
+
+        let state_dir = root.join(".git/b3/pr-feedback");
+        if state_dir.exists() {
+            fs::remove_dir_all(&state_dir).unwrap();
+        }
+        let mut r_args = vec!["pr"];
+        r_args.extend_from_slice(args);
+        let r_out = Command::new(b3_bin())
+            .env("B3_GH_BIN", gh_cmd_str)
+            .env("MOCK_STATE_FILE", &st_r)
+            .args(&r_args)
+            .output()
+            .expect("run b3 pr");
+        let r_res = (
+            r_out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&r_out.stdout)
+                .trim_end_matches(&['\r', '\n'][..])
+                .to_string(),
+        );
+
+        if state_dir.exists() {
+            fs::remove_dir_all(&state_dir).unwrap();
+        }
+        let n_out = Command::new("node")
+            .env("B3_GH_BIN", gh_cmd_str)
+            .env("MOCK_STATE_FILE", &st_n)
+            .arg(&mjs_path)
+            .args(args)
+            .output()
+            .expect("run node b3-pr-github.mjs");
+        let n_res = (
+            n_out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&n_out.stdout)
+                .trim_end_matches(&['\r', '\n'][..])
+                .to_string(),
+        );
+        (r_res, n_res)
+    };
+
+    // 1. Draft reply parity
+    let ((r1c, r1o), (n1c, n1o)) = run_pair(
+        "reply-draft",
+        &[
+            "reply",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "7",
+            "--expected-head",
+            &fix_sha,
+            "--target-kind",
+            "review_thread",
+            "--target-id",
+            "PRRT_1",
+            "--body-file",
+            reply_body.to_str().unwrap(),
+            "--draft",
+        ],
+    );
+    assert_eq!(r1c, 0);
+    assert_eq!(n1c, 0);
+    assert_eq!(r1o, n1o);
+
+    // 2. Draft comment --mode both parity
+    let ((r2c, r2o), (n2c, n2o)) = run_pair(
+        "comment-draft",
+        &[
+            "comment",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "7",
+            "--expected-head",
+            &fix_sha,
+            "--mode",
+            "both",
+            "--summary-file",
+            summary_body.to_str().unwrap(),
+            "--inline-json",
+            inline_json.to_str().unwrap(),
+            "--draft",
+        ],
+    );
+    assert_eq!(r2c, 0);
+    assert_eq!(n2c, 0);
+    assert_eq!(r2o, n2o);
+
+    // 3. Fetch metadata_first parity
+    let ((r3c, r3o), (n3c, n3o)) =
+        run_pair("fetch", &["fetch", "--repo", "acme/demo", "--pr", "7"]);
+    assert_eq!(r3c, 0);
+    assert_eq!(n3c, 0);
+    assert_eq!(r3o, n3o);
+
+    // 4. Reply --authorize-write parity + comment --authorize-write parity
+    let ((r4c, r4o), (n4c, n4o)) = run_pair(
+        "reply-auth",
+        &[
+            "reply",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "7",
+            "--repo-root",
+            root_str,
+            "--expected-head",
+            &fix_sha,
+            "--target-kind",
+            "review_thread",
+            "--target-id",
+            "PRRT_1",
+            "--body-file",
+            reply_body.to_str().unwrap(),
+            "--authorize-write",
+        ],
+    );
+    assert_eq!(r4c, 0);
+    assert_eq!(n4c, 0);
+    assert_eq!(r4o, n4o);
+
+    let ((r5c, r5o), (n5c, n5o)) = run_pair(
+        "comment-auth",
+        &[
+            "comment",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "7",
+            "--repo-root",
+            root_str,
+            "--expected-head",
+            &fix_sha,
+            "--mode",
+            "both",
+            "--summary-file",
+            summary_body.to_str().unwrap(),
+            "--inline-json",
+            inline_json.to_str().unwrap(),
+            "--authorize-write",
+        ],
+    );
+    assert_eq!(r5c, 0);
+    assert_eq!(n5c, 0);
+    assert_eq!(r5o, n5o);
+
+    // 5. Resolve --authorize-resolve with real b3-verify receipt & clean tree
+    let ((r6c, r6o), (n6c, n6o)) = run_pair(
+        "resolve-auth",
+        &[
+            "resolve",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "7",
+            "--repo-root",
+            root_str,
+            "--expected-head",
+            &fix_sha,
+            "--thread-id",
+            "PRRT_1",
+            "--fix-commit",
+            &fix_sha,
+            "--evidence-file",
+            ev_json.to_str().unwrap(),
+            "--authorize-resolve",
+        ],
+    );
+    assert_eq!(r6c, 0);
+    assert_eq!(n6c, 0);
+    assert_eq!(r6o, n6o);
+
+    // 6. Reconcile empty state parity
+    let ((r7c, r7o), (n7c, n7o)) = run_pair(
+        "reconcile",
+        &[
+            "reconcile",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "7",
+            "--repo-root",
+            root_str,
+        ],
+    );
+    assert_eq!(r7c, 0);
+    assert_eq!(n7c, 0);
+    assert_eq!(r7o, n7o);
+}

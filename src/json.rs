@@ -75,6 +75,140 @@ impl JsonValue {
             JsonValue::Null | JsonValue::Object(_) | JsonValue::Array(_) => None,
         }
     }
+
+    pub fn str(s: impl Into<String>) -> Self {
+        JsonValue::String(s.into())
+    }
+
+    pub fn num_u64(n: u64) -> Self {
+        JsonValue::Number(n.to_string())
+    }
+
+    pub fn num_i64(n: i64) -> Self {
+        JsonValue::Number(n.to_string())
+    }
+
+    pub fn obj(entries: Vec<(String, JsonValue)>) -> Self {
+        JsonValue::Object(entries)
+    }
+
+    /// Serializes as compact RFC 8259 JSON matching `JSON.stringify`.
+    pub fn to_json_string(&self) -> String {
+        let mut out = String::new();
+        self.write_compact(&mut out);
+        out
+    }
+
+    /// Serializes as 2-space indented RFC 8259 JSON matching `JSON.stringify(v, null, 2)`.
+    pub fn to_json_pretty(&self) -> String {
+        let mut out = String::new();
+        self.write_pretty(&mut out, 0);
+        out
+    }
+
+    fn write_compact(&self, out: &mut String) {
+        match self {
+            JsonValue::Null => out.push_str("null"),
+            JsonValue::Bool(true) => out.push_str("true"),
+            JsonValue::Bool(false) => out.push_str("false"),
+            JsonValue::Number(n) => out.push_str(n),
+            JsonValue::String(s) => escape_json_str(s, out),
+            JsonValue::Array(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    item.write_compact(out);
+                }
+                out.push(']');
+            }
+            JsonValue::Object(entries) => {
+                out.push('{');
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    escape_json_str(k, out);
+                    out.push(':');
+                    v.write_compact(out);
+                }
+                out.push('}');
+            }
+        }
+    }
+
+    fn write_pretty(&self, out: &mut String, indent: usize) {
+        match self {
+            JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {
+                self.write_compact(out)
+            }
+            JsonValue::Array(items) => {
+                if items.is_empty() {
+                    out.push_str("[]");
+                    return;
+                }
+                out.push_str("[\n");
+                for (i, item) in items.iter().enumerate() {
+                    push_indent(out, indent + 2);
+                    item.write_pretty(out, indent + 2);
+                    if i + 1 < items.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                push_indent(out, indent);
+                out.push(']');
+            }
+            JsonValue::Object(entries) => {
+                if entries.is_empty() {
+                    out.push_str("{}");
+                    return;
+                }
+                out.push_str("{\n");
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    push_indent(out, indent + 2);
+                    escape_json_str(k, out);
+                    out.push_str(": ");
+                    v.write_pretty(out, indent + 2);
+                    if i + 1 < entries.len() {
+                        out.push(',');
+                    }
+                    out.push('\n');
+                }
+                push_indent(out, indent);
+                out.push('}');
+            }
+        }
+    }
+}
+
+fn push_indent(out: &mut String, count: usize) {
+    for _ in 0..count {
+        out.push(' ');
+    }
+}
+
+/// Appends `s` as a quoted RFC 8259 JSON string to `out`.
+pub fn escape_json_str(s: &str, out: &mut String) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000C}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 struct Parser<'a> {
