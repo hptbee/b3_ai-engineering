@@ -272,6 +272,43 @@ if ($env:B3_USE_LEGACY -ne '1' -and $Command -in @('fingerprint', 'check-freshne
                 if ($PSBoundParameters.ContainsKey('ProtectedPaths')) { [void]$fwdArgs.Add("--protected-paths=$ProtectedPaths") }
                 if ($PSBoundParameters.ContainsKey('DirtyDigests')) { [void]$fwdArgs.Add("--dirty-digests=$DirtyDigests") }
             }
+            'review-inventory' {
+                if ($PSBoundParameters.ContainsKey('BaseSha')) { [void]$fwdArgs.Add("--base-sha=$BaseSha") }
+                if ($PSBoundParameters.ContainsKey('TargetRef')) { [void]$fwdArgs.Add("--target-ref=$TargetRef") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+                if ($PSBoundParameters.ContainsKey('MaxConcurrency')) { [void]$fwdArgs.Add("--max-concurrency=$MaxConcurrency") }
+            }
+            'review-ledger' {
+                if ($PSBoundParameters.ContainsKey('Action')) { [void]$fwdArgs.Add("--action=$Action") }
+                if ($PSBoundParameters.ContainsKey('LedgerPath')) { [void]$fwdArgs.Add("--ledger-path=$LedgerPath") }
+                if ($PSBoundParameters.ContainsKey('BaseSha')) { [void]$fwdArgs.Add("--base-sha=$BaseSha") }
+                if ($PSBoundParameters.ContainsKey('TargetRef')) { [void]$fwdArgs.Add("--target-ref=$TargetRef") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+                if ($PSBoundParameters.ContainsKey('MaxConcurrency')) { [void]$fwdArgs.Add("--max-concurrency=$MaxConcurrency") }
+                if ($PSBoundParameters.ContainsKey('MaxPasses')) { [void]$fwdArgs.Add("--max-passes=$MaxPasses") }
+                if ($PSBoundParameters.ContainsKey('UnitId')) { [void]$fwdArgs.Add("--unit-id=$UnitId") }
+                if ($PSBoundParameters.ContainsKey('Status')) { [void]$fwdArgs.Add("--status=$Status") }
+                if ($PSBoundParameters.ContainsKey('Findings')) { [void]$fwdArgs.Add("--findings=$Findings") }
+                if ($PSBoundParameters.ContainsKey('Specialists')) { [void]$fwdArgs.Add("--specialists=$Specialists") }
+                if ($PSBoundParameters.ContainsKey('Rationale')) { [void]$fwdArgs.Add("--rationale=$Rationale") }
+                if ($PSBoundParameters.ContainsKey('ReceiptPath')) { [void]$fwdArgs.Add("--receipt-path=$ReceiptPath") }
+                if ($PSBoundParameters.ContainsKey('CrossUnitStatus')) { [void]$fwdArgs.Add("--cross-unit-status=$CrossUnitStatus") }
+                if ($PSBoundParameters.ContainsKey('BudgetStatus')) { [void]$fwdArgs.Add("--budget-status=$BudgetStatus") }
+                if ($PSBoundParameters.ContainsKey('ReviewIndependence')) { [void]$fwdArgs.Add("--review-independence=$ReviewIndependence") }
+                if ($PSBoundParameters.ContainsKey('PassesUsed')) { [void]$fwdArgs.Add("--passes-used=$PassesUsed") }
+                if ($PSBoundParameters.ContainsKey('Scope')) { [void]$fwdArgs.Add("--scope=$Scope") }
+                if ($Force) { [void]$fwdArgs.Add('--force') }
+            }
+            'context-cache' {
+                if ($PSBoundParameters.ContainsKey('Action')) { [void]$fwdArgs.Add("--action=$Action") }
+                if ($PSBoundParameters.ContainsKey('CachePath')) { [void]$fwdArgs.Add("--cache-path=$CachePath") }
+                if ($PSBoundParameters.ContainsKey('ScopeId')) { [void]$fwdArgs.Add("--scope-id=$ScopeId") }
+                if ($PSBoundParameters.ContainsKey('AnchorPaths')) { [void]$fwdArgs.Add("--anchor-paths=$AnchorPaths") }
+                if ($PSBoundParameters.ContainsKey('ScopePaths')) { [void]$fwdArgs.Add("--scope-paths=$ScopePaths") }
+                if ($PSBoundParameters.ContainsKey('GraphIndexSha')) { [void]$fwdArgs.Add("--graph-index-sha=$GraphIndexSha") }
+                if ($PSBoundParameters.ContainsKey('SummaryRef')) { [void]$fwdArgs.Add("--summary-ref=$SummaryRef") }
+                if ($PSBoundParameters.ContainsKey('IgnoreDirtyPaths')) { [void]$fwdArgs.Add("--ignore-dirty-paths=$IgnoreDirtyPaths") }
+            }
         }
         $b3Res = Invoke-B3Native $b3Candidate @($fwdArgs.ToArray())
         foreach ($ln in @($b3Res.Lines)) { Write-Output $ln }

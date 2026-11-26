@@ -1,5 +1,8 @@
+pub mod cache;
 pub mod fingerprint;
 pub mod freshness;
+pub mod inventory;
+pub mod ledger;
 pub mod mechanical;
 pub mod precommit;
 pub mod runs;

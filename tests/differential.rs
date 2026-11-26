@@ -1497,3 +1497,468 @@ fn differential_mechanical_check_matches_powershell() {
     assert_eq!(pf, 2);
     assert_eq!(rof, pof);
 }
+
+#[test]
+fn differential_review_inventory_matches_powershell() {
+    let tmp = TempDirGuard::new("rev-inv");
+    let root = &tmp.path;
+    let base_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Empty diff -> exit 2 parity
+    let (re, roe) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+    ]);
+    let (pe, poe) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-inventory",
+            "-RepoRoot",
+            root_str,
+            "-BaseSha",
+            &base_sha,
+        ],
+    );
+    assert_eq!(re, 2);
+    assert_eq!(pe, 2);
+    assert_eq!(roe, poe);
+
+    // Multi-module repo + contract + test + noise
+    fs::create_dir_all(root.join("src/contracts")).unwrap();
+    fs::create_dir_all(root.join("src/auth")).unwrap();
+    fs::create_dir_all(root.join("src/pay")).unwrap();
+    fs::create_dir_all(root.join("tests/auth")).unwrap();
+    fs::write(
+        root.join("src/contracts/api.ts"),
+        "export interface SessionDto { id: string }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/auth/login.ts"),
+        "export function login(token: string) { return token.length > 0; }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/pay/calc.ts"),
+        "export function total(n: number) { return n * 2; }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tests/auth/login.test.ts"),
+        "test('ok', () => expect(true).toBe(true));\n",
+    )
+    .unwrap();
+    fs::write(root.join("package-lock.json"), "{}\n").unwrap();
+
+    let (r1, ro1) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        root_str,
+        "--base-sha",
+        &base_sha,
+        "--max-concurrency",
+        "3",
+    ]);
+    let (p1, po1) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-inventory",
+            "-RepoRoot",
+            root_str,
+            "-BaseSha",
+            &base_sha,
+            "-MaxConcurrency",
+            "3",
+        ],
+    );
+    assert_eq!(r1, 0);
+    assert_eq!(p1, 0);
+    assert_eq!(ro1, po1);
+}
+
+#[test]
+fn differential_review_ledger_lifecycle_matches_powershell() {
+    let tmp = TempDirGuard::new("rev-ledger");
+    let root = &tmp.path;
+    let base_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    // Standalone normalize --scope
+    let (rn0, rno0) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "normalize",
+        "--scope",
+        "VERY_LARGE",
+    ]);
+    let (pn0, pno0) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-ledger",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "normalize",
+            "-Scope",
+            "VERY_LARGE",
+        ],
+    );
+    assert_eq!(rn0, 0);
+    assert_eq!(pn0, 0);
+    assert_eq!(rno0, "XL");
+    assert_eq!(rno0, pno0);
+
+    // Commit a code change for commit-bound review ledger lifecycle
+    fs::write(root.join("src/app.txt"), "v2\nv3\n").unwrap();
+    git_in(root, &["add", "src/app.txt"]);
+    git_in(root, &["commit", "-q", "-m", "v2 change"]);
+    let head_sha = git_in(root, &["rev-parse", "HEAD"]);
+
+    let (ri_r, rio_r) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "init",
+        "--ledger-path",
+        ".b3/ship/l-rust.md",
+        "--base-sha",
+        &base_sha,
+        "--target-ref",
+        &head_sha,
+    ]);
+    let (ri_p, rio_p) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-ledger",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "init",
+            "-LedgerPath",
+            ".b3/ship/l-ps.md",
+            "-BaseSha",
+            &base_sha,
+            "-TargetRef",
+            &head_sha,
+        ],
+    );
+    assert_eq!(ri_r, 0);
+    assert_eq!(ri_p, 0);
+    assert_eq!(
+        rio_r.replace("l-rust.md", "L"),
+        rio_p.replace("l-ps.md", "L")
+    );
+
+    // Check before REVIEWED -> incomplete exit 2 parity
+    let (rc_b, rco_b) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "check",
+        "--ledger-path",
+        ".b3/ship/l-rust.md",
+    ]);
+    let (pc_b, pco_b) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-ledger",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "check",
+            "-LedgerPath",
+            ".b3/ship/l-ps.md",
+        ],
+    );
+    assert_eq!(rc_b, 2);
+    assert_eq!(pc_b, 2);
+    assert_eq!(rco_b, pco_b);
+
+    // Update U01 -> REVIEWED and cross-verify
+    let (ru_r, ruo_r) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "update",
+        "--ledger-path",
+        ".b3/ship/l-rust.md",
+        "--unit-id",
+        "U01",
+        "--status",
+        "REVIEWED",
+        "--findings",
+        "none",
+        "--review-independence",
+        "INDEPENDENT",
+    ]);
+    let (ru_p, ruo_p) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-ledger",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "update",
+            "-LedgerPath",
+            ".b3/ship/l-ps.md",
+            "-UnitId",
+            "U01",
+            "-Status",
+            "REVIEWED",
+            "-Findings",
+            "none",
+            "-ReviewIndependence",
+            "INDEPENDENT",
+        ],
+    );
+    assert_eq!(ru_r, 0);
+    assert_eq!(ru_p, 0);
+    assert_eq!(
+        ruo_r.replace("l-rust.md", "L"),
+        ruo_p.replace("l-ps.md", "L")
+    );
+    let l_rust_txt = fs::read_to_string(root.join(".b3/ship/l-rust.md")).unwrap();
+    let l_ps_txt = fs::read_to_string(root.join(".b3/ship/l-ps.md")).unwrap();
+    assert_eq!(l_rust_txt, l_ps_txt);
+
+    // Check PASS (cross check PS ledger with Rust and Rust ledger with PS)
+    let (rc_p, rco_p) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "check",
+        "--ledger-path",
+        ".b3/ship/l-ps.md",
+    ]);
+    let (pc_r, pco_r) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-ledger",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "check",
+            "-LedgerPath",
+            ".b3/ship/l-rust.md",
+        ],
+    );
+    assert_eq!(rc_p, 0);
+    assert_eq!(pc_r, 0);
+    assert_eq!(rco_p, pco_r);
+
+    // Legacy file normalize parity (LARGE -> L and insert review_independence=UNKNOWN)
+    let legacy_sample = "schema=b3-review-ledger-v1\nsize_class=LARGE\nbudget_status=OK\n";
+    fs::write(root.join(".b3/ship/leg-r.md"), legacy_sample).unwrap();
+    fs::write(root.join(".b3/ship/leg-p.md"), legacy_sample).unwrap();
+    let (rnf, rnfo) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        root_str,
+        "--action",
+        "normalize",
+        "--ledger-path",
+        ".b3/ship/leg-r.md",
+    ]);
+    let (pnf, pnfo) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "review-ledger",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "normalize",
+            "-LedgerPath",
+            ".b3/ship/leg-p.md",
+        ],
+    );
+    assert_eq!(rnf, 0);
+    assert_eq!(pnf, 0);
+    assert_eq!(rnfo.replace("leg-r.md", "L"), pnfo.replace("leg-p.md", "L"));
+    assert_eq!(
+        fs::read_to_string(root.join(".b3/ship/leg-r.md")).unwrap(),
+        fs::read_to_string(root.join(".b3/ship/leg-p.md")).unwrap()
+    );
+}
+
+#[test]
+fn differential_context_cache_matches_powershell() {
+    let tmp = TempDirGuard::new("ctx-cache");
+    let root = &tmp.path;
+    let head_sha = init_git_repo(root);
+    let root_str = root.to_str().unwrap();
+
+    fs::create_dir_all(root.join(".b3/ship")).unwrap();
+    fs::write(root.join(".b3/ship/summary.md"), "summary v1\n").unwrap();
+
+    let (rr, rro) = run_b3(&[
+        "guard",
+        "context-cache",
+        "--repo-root",
+        root_str,
+        "--action",
+        "record",
+        "--cache-path",
+        ".b3/ship/ctx-r.md",
+        "--scope-id",
+        "wave/u01",
+        "--anchor-paths",
+        "src/app.txt",
+        "--graph-index-sha",
+        &head_sha,
+        "--summary-ref",
+        ".b3/ship/summary.md",
+    ]);
+    let (pr, pro) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "context-cache",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "record",
+            "-CachePath",
+            ".b3/ship/ctx-p.md",
+            "-ScopeId",
+            "wave/u01",
+            "-AnchorPaths",
+            "src/app.txt",
+            "-GraphIndexSha",
+            &head_sha,
+            "-SummaryRef",
+            ".b3/ship/summary.md",
+        ],
+    );
+    assert_eq!(rr, 0);
+    assert_eq!(pr, 0);
+    assert_eq!(rro.replace("ctx-r.md", "C"), pro.replace("ctx-p.md", "C"));
+
+    // Cross check fresh
+    let (rc1, rco1) = run_b3(&[
+        "guard",
+        "context-cache",
+        "--repo-root",
+        root_str,
+        "--action",
+        "check",
+        "--cache-path",
+        ".b3/ship/ctx-p.md",
+        "--scope-id",
+        "wave/u01",
+        "--anchor-paths",
+        "src/app.txt",
+        "--scope-paths",
+        "src/app.txt",
+        "--graph-index-sha",
+        &head_sha,
+        "--summary-ref",
+        ".b3/ship/summary.md",
+    ]);
+    let (pc1, pco1) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "context-cache",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "check",
+            "-CachePath",
+            ".b3/ship/ctx-r.md",
+            "-ScopeId",
+            "wave/u01",
+            "-AnchorPaths",
+            "src/app.txt",
+            "-ScopePaths",
+            "src/app.txt",
+            "-GraphIndexSha",
+            &head_sha,
+            "-SummaryRef",
+            ".b3/ship/summary.md",
+        ],
+    );
+    assert_eq!(rc1, 0);
+    assert_eq!(pc1, 0);
+    assert_eq!(rco1, pco1);
+
+    // Modify anchored file -> CONTEXT_STALE (exit 2 parity)
+    fs::write(root.join("src/app.txt"), "v2\n").unwrap();
+    let (rs, rso) = run_b3(&[
+        "guard",
+        "context-cache",
+        "--repo-root",
+        root_str,
+        "--action",
+        "check",
+        "--cache-path",
+        ".b3/ship/ctx-r.md",
+        "--scope-paths",
+        "src/app.txt",
+    ]);
+    let (ps_c, pso) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "context-cache",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "check",
+            "-CachePath",
+            ".b3/ship/ctx-r.md",
+            "-ScopePaths",
+            "src/app.txt",
+        ],
+    );
+    assert_eq!(rs, 2);
+    assert_eq!(ps_c, 2);
+    assert_eq!(rso, pso);
+
+    // Corrupt CRLF cache -> CONTEXT_CORRUPT (exit 1 parity)
+    let orig = fs::read_to_string(root.join(".b3/ship/ctx-r.md")).unwrap();
+    fs::write(
+        root.join(".b3/ship/ctx-crlf.md"),
+        orig.replace('\n', "\r\n"),
+    )
+    .unwrap();
+    let (rcf, rcfo) = run_b3(&[
+        "guard",
+        "context-cache",
+        "--repo-root",
+        root_str,
+        "--action",
+        "check",
+        "--cache-path",
+        ".b3/ship/ctx-crlf.md",
+    ]);
+    let (pcf, pcfo) = run_ps_script(
+        "scripts/b3-guard.ps1",
+        &[
+            "context-cache",
+            "-RepoRoot",
+            root_str,
+            "-Action",
+            "check",
+            "-CachePath",
+            ".b3/ship/ctx-crlf.md",
+        ],
+    );
+    assert_eq!(rcf, 1);
+    assert_eq!(pcf, 1);
+    assert_eq!(rcfo, pcfo);
+}

@@ -971,7 +971,7 @@ fn normalize_single_line_ws(s: &str) -> String {
     out.trim().to_string()
 }
 
-fn format_utc_iso8601_now() -> String {
+pub(crate) fn format_utc_iso8601_now() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

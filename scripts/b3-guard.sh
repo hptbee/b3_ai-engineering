@@ -280,7 +280,7 @@ if [[ "${B3_USE_LEGACY:-0}" != "1" ]]; then
   fi
   if [[ -n "$_b3_bin" ]]; then
     case "$CMD" in
-      fingerprint|check-freshness|snapshot|new-run|resolve-run|list-runs|prune|precommit|verify-run|verify-check|check-worktree|check-wave|symbol-check|diff-scope|mechanical-check)
+      fingerprint|check-freshness|snapshot|new-run|resolve-run|list-runs|prune|precommit|verify-run|verify-check|check-worktree|check-wave|symbol-check|diff-scope|mechanical-check|review-inventory|review-ledger|context-cache)
         _lpwd="$(pwd -L 2>/dev/null || pwd)"
         case "$(uname -s 2>/dev/null || true)" in
           MINGW*|MSYS*|CYGWIN*)

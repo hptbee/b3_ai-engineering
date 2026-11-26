@@ -16,6 +16,24 @@ use crate::git::{
     run_git, run_git_paths_z, GitZMode,
 };
 
+pub(crate) fn normalize_size_class(raw: &str) -> Option<&'static str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match trimmed.to_ascii_uppercase().as_str() {
+        "SMALL" | "S" => Some("S"),
+        "MEDIUM" | "M" => Some("M"),
+        "LARGE" | "L" => Some("L"),
+        "VERY_LARGE" | "XL" => Some("XL"),
+        "XS" => Some("XS"),
+        "XXL" => Some("XXL"),
+        "NOISE_ONLY" => Some("NOISE_ONLY"),
+        "CLEAN_AFTER_FIX" => Some("CLEAN_AFTER_FIX"),
+        _ => None,
+    }
+}
+
 pub fn get_tshirt_size(files_count: usize, lines_count: usize) -> &'static str {
     if files_count == 0 {
         return "NOISE_ONLY";

@@ -207,6 +207,89 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                         has_dirty_digests,
                     );
                 }
+                GuardSubcommand::ReviewInventory {
+                    repo_root,
+                    base_sha,
+                    target_ref,
+                    ignore_dirty_paths,
+                    max_concurrency,
+                } => {
+                    return guard::inventory::run(
+                        &repo_root,
+                        &base_sha,
+                        &target_ref,
+                        &ignore_dirty_paths,
+                        max_concurrency,
+                    );
+                }
+                GuardSubcommand::ReviewLedger {
+                    repo_root,
+                    action,
+                    ledger_path,
+                    base_sha,
+                    target_ref,
+                    ignore_dirty_paths,
+                    max_concurrency,
+                    max_passes,
+                    unit_id,
+                    status,
+                    findings,
+                    specialists,
+                    rationale,
+                    receipt_path,
+                    cross_unit_status,
+                    budget_status,
+                    review_independence,
+                    passes_used,
+                    scope,
+                    force,
+                } => {
+                    return guard::ledger::run(
+                        &repo_root,
+                        &action,
+                        &ledger_path,
+                        &base_sha,
+                        &target_ref,
+                        &ignore_dirty_paths,
+                        max_concurrency,
+                        max_passes,
+                        &unit_id,
+                        &status,
+                        &findings,
+                        &specialists,
+                        &rationale,
+                        &receipt_path,
+                        &cross_unit_status,
+                        &budget_status,
+                        &review_independence,
+                        passes_used,
+                        &scope,
+                        force,
+                    );
+                }
+                GuardSubcommand::ContextCache {
+                    repo_root,
+                    action,
+                    cache_path,
+                    scope_id,
+                    anchor_paths,
+                    scope_paths,
+                    graph_index_sha,
+                    summary_ref,
+                    ignore_dirty_paths,
+                } => {
+                    return guard::cache::run(
+                        &repo_root,
+                        &action,
+                        &cache_path,
+                        &scope_id,
+                        &anchor_paths,
+                        &scope_paths,
+                        &graph_index_sha,
+                        &summary_ref,
+                        &ignore_dirty_paths,
+                    );
+                }
             };
             Ok((out, 0))
         }

@@ -118,6 +118,46 @@ pub enum GuardSubcommand {
         dirty_digests: String,
         has_dirty_digests: bool,
     },
+    ReviewInventory {
+        repo_root: String,
+        base_sha: String,
+        target_ref: String,
+        ignore_dirty_paths: String,
+        max_concurrency: i32,
+    },
+    ReviewLedger {
+        repo_root: String,
+        action: String,
+        ledger_path: String,
+        base_sha: String,
+        target_ref: String,
+        ignore_dirty_paths: String,
+        max_concurrency: i32,
+        max_passes: Option<i64>,
+        unit_id: String,
+        status: String,
+        findings: String,
+        specialists: String,
+        rationale: String,
+        receipt_path: String,
+        cross_unit_status: String,
+        budget_status: String,
+        review_independence: String,
+        passes_used: Option<i64>,
+        scope: String,
+        force: bool,
+    },
+    ContextCache {
+        repo_root: String,
+        action: String,
+        cache_path: String,
+        scope_id: String,
+        anchor_paths: String,
+        scope_paths: String,
+        graph_index_sha: String,
+        summary_ref: String,
+        ignore_dirty_paths: String,
+    },
 }
 
 pub fn help_text() -> &'static str {
@@ -141,6 +181,9 @@ GUARD SUBCOMMANDS:
   symbol-check      Detect removed symbols with dangling refs or orphan internal symbols
   diff-scope        Classify T-shirt size, changed/noise files, delta files, and risk signals
   mechanical-check  Run mechanical scope, leftover, obsolete, safety, and ownership gates
+  review-inventory  Build scope inventory, specialists dispatch, and cohesive review units
+  review-ledger     Manage tamper-evident b3-review-ledger-v1 coverage state and pass chain
+  context-cache     Record and verify b3-context-v1 anchor/graph/summary cache freshness
   new-run           Create a timestamped run directory and update CURRENT
   resolve-run       Resolve active or named run path
   list-runs         List runs for a namespace
@@ -858,6 +901,239 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                 protected_paths,
                 dirty_digests,
                 has_dirty_digests,
+            })
+        }
+        "review-inventory" => {
+            let mut repo_root = ".".to_string();
+            let mut base_sha = String::new();
+            let mut target_ref = String::new();
+            let mut ignore_dirty_paths = String::new();
+            let mut max_concurrency = 4i32;
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "INVENTORY_FAIL")?;
+                    }
+                    "--base-sha" => {
+                        base_sha = take_val(rest, &mut i, "--base-sha", iv, "INVENTORY_FAIL")?;
+                    }
+                    "--target-ref" => {
+                        target_ref = take_val(rest, &mut i, "--target-ref", iv, "INVENTORY_FAIL")?;
+                    }
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "INVENTORY_FAIL")?;
+                    }
+                    "--max-concurrency" => {
+                        let raw =
+                            take_val(rest, &mut i, "--max-concurrency", iv, "INVENTORY_FAIL")?;
+                        max_concurrency = raw.trim().parse::<i32>().map_err(|_| {
+                            fail("INVENTORY_FAIL: --max-concurrency must be an integer", 1)
+                        })?;
+                    }
+                    other => {
+                        return Err(fail(format!("INVENTORY_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::ReviewInventory {
+                repo_root,
+                base_sha,
+                target_ref,
+                ignore_dirty_paths,
+                max_concurrency,
+            })
+        }
+        "review-ledger" => {
+            let mut repo_root = ".".to_string();
+            let mut action = String::new();
+            let mut ledger_path = String::new();
+            let mut base_sha = String::new();
+            let mut target_ref = String::new();
+            let mut ignore_dirty_paths = String::new();
+            let mut max_concurrency = 4i32;
+            let mut max_passes: Option<i64> = None;
+            let mut unit_id = String::new();
+            let mut status = String::new();
+            let mut findings = String::new();
+            let mut specialists = String::new();
+            let mut rationale = String::new();
+            let mut receipt_path = String::new();
+            let mut cross_unit_status = String::new();
+            let mut budget_status = String::new();
+            let mut review_independence = String::new();
+            let mut passes_used: Option<i64> = None;
+            let mut scope = String::new();
+            let mut force = false;
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "LEDGER_FAIL")?;
+                    }
+                    "--action" => {
+                        action = take_val(rest, &mut i, "--action", iv, "LEDGER_FAIL")?;
+                    }
+                    "--ledger-path" => {
+                        ledger_path = take_val(rest, &mut i, "--ledger-path", iv, "LEDGER_FAIL")?;
+                    }
+                    "--base-sha" => {
+                        base_sha = take_val(rest, &mut i, "--base-sha", iv, "LEDGER_FAIL")?;
+                    }
+                    "--target-ref" => {
+                        target_ref = take_val(rest, &mut i, "--target-ref", iv, "LEDGER_FAIL")?;
+                    }
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "LEDGER_FAIL")?;
+                    }
+                    "--max-concurrency" => {
+                        let raw = take_val(rest, &mut i, "--max-concurrency", iv, "LEDGER_FAIL")?;
+                        max_concurrency = raw.trim().parse::<i32>().map_err(|_| {
+                            fail("LEDGER_FAIL: --max-concurrency must be an integer", 1)
+                        })?;
+                    }
+                    "--max-passes" => {
+                        let raw = take_val(rest, &mut i, "--max-passes", iv, "LEDGER_FAIL")?;
+                        let v = raw.trim().parse::<i64>().map_err(|_| {
+                            fail("LEDGER_FAIL: -MaxPasses must be a positive integer", 1)
+                        })?;
+                        max_passes = Some(v);
+                    }
+                    "--unit-id" => {
+                        unit_id = take_val(rest, &mut i, "--unit-id", iv, "LEDGER_FAIL")?;
+                    }
+                    "--status" => {
+                        status = take_val(rest, &mut i, "--status", iv, "LEDGER_FAIL")?;
+                    }
+                    "--findings" => {
+                        findings = take_val(rest, &mut i, "--findings", iv, "LEDGER_FAIL")?;
+                    }
+                    "--specialists" => {
+                        specialists = take_val(rest, &mut i, "--specialists", iv, "LEDGER_FAIL")?;
+                    }
+                    "--rationale" => {
+                        rationale = take_val(rest, &mut i, "--rationale", iv, "LEDGER_FAIL")?;
+                    }
+                    "--receipt-path" => {
+                        receipt_path = take_val(rest, &mut i, "--receipt-path", iv, "LEDGER_FAIL")?;
+                    }
+                    "--cross-unit-status" => {
+                        cross_unit_status =
+                            take_val(rest, &mut i, "--cross-unit-status", iv, "LEDGER_FAIL")?;
+                    }
+                    "--budget-status" => {
+                        budget_status =
+                            take_val(rest, &mut i, "--budget-status", iv, "LEDGER_FAIL")?;
+                    }
+                    "--review-independence" => {
+                        review_independence =
+                            take_val(rest, &mut i, "--review-independence", iv, "LEDGER_FAIL")?;
+                    }
+                    "--passes-used" => {
+                        let raw = take_val(rest, &mut i, "--passes-used", iv, "LEDGER_FAIL")?;
+                        let v = raw.trim().parse::<i64>().map_err(|_| {
+                            fail("LEDGER_FAIL: -PassesUsed must be non-negative", 1)
+                        })?;
+                        passes_used = Some(v);
+                    }
+                    "--scope" => {
+                        scope = take_val(rest, &mut i, "--scope", iv, "LEDGER_FAIL")?;
+                    }
+                    "--force" if iv.is_none() => force = true,
+                    other => {
+                        return Err(fail(format!("LEDGER_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::ReviewLedger {
+                repo_root,
+                action,
+                ledger_path,
+                base_sha,
+                target_ref,
+                ignore_dirty_paths,
+                max_concurrency,
+                max_passes,
+                unit_id,
+                status,
+                findings,
+                specialists,
+                rationale,
+                receipt_path,
+                cross_unit_status,
+                budget_status,
+                review_independence,
+                passes_used,
+                scope,
+                force,
+            })
+        }
+        "context-cache" => {
+            let mut repo_root = ".".to_string();
+            let mut action = String::new();
+            let mut cache_path = String::new();
+            let mut scope_id = String::new();
+            let mut anchor_paths = String::new();
+            let mut scope_paths = String::new();
+            let mut graph_index_sha = String::new();
+            let mut summary_ref = String::new();
+            let mut ignore_dirty_paths = String::new();
+            let mut i = 0;
+            while i < rest.len() {
+                let (flag, iv) = parse_opt(&rest[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(rest, &mut i, "--repo-root", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--action" => {
+                        action = take_val(rest, &mut i, "--action", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--cache-path" => {
+                        cache_path = take_val(rest, &mut i, "--cache-path", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--scope-id" => {
+                        scope_id = take_val(rest, &mut i, "--scope-id", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--anchor-paths" => {
+                        anchor_paths =
+                            take_val(rest, &mut i, "--anchor-paths", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--scope-paths" => {
+                        scope_paths = take_val(rest, &mut i, "--scope-paths", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--graph-index-sha" => {
+                        graph_index_sha =
+                            take_val(rest, &mut i, "--graph-index-sha", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--summary-ref" => {
+                        summary_ref = take_val(rest, &mut i, "--summary-ref", iv, "CONTEXT_ERROR")?;
+                    }
+                    "--ignore-dirty-paths" => {
+                        ignore_dirty_paths =
+                            take_val(rest, &mut i, "--ignore-dirty-paths", iv, "CONTEXT_ERROR")?;
+                    }
+                    other => {
+                        return Err(fail(format!("CONTEXT_ERROR: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(GuardSubcommand::ContextCache {
+                repo_root,
+                action,
+                cache_path,
+                scope_id,
+                anchor_paths,
+                scope_paths,
+                graph_index_sha,
+                summary_ref,
+                ignore_dirty_paths,
             })
         }
         other => Err(fail(
