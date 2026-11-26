@@ -45,6 +45,9 @@ impl Drop for TempDirGuard {
 }
 
 pub fn remove_tree_safe(path: &Path) {
+    if fs::remove_dir_all(path).is_ok() {
+        return;
+    }
     #[cfg(windows)]
     {
         let _ = Command::new("cmd")
@@ -57,8 +60,8 @@ pub fn remove_tree_safe(path: &Path) {
                 ),
             ])
             .status();
+        let _ = fs::remove_dir_all(path);
     }
-    let _ = fs::remove_dir_all(path);
 }
 
 pub fn norm_lf(bytes: &[u8]) -> String {
@@ -150,4 +153,29 @@ pub fn run_b3_with_env(args: &[&str], envs: &[(&str, &str)]) -> (i32, String, St
         norm_lf(&out.stdout),
         norm_lf(&out.stderr),
     )
+}
+
+pub fn create_dir_link(link: &Path, target: &Path) {
+    if let Some(parent) = link.parent() {
+        fs::create_dir_all(parent).expect("create link parent");
+    }
+    #[cfg(windows)]
+    {
+        let status = Command::new("cmd")
+            .args([
+                "/d",
+                "/c",
+                "mklink",
+                "/J",
+                &link.to_string_lossy().replace('/', "\\"),
+                &target.to_string_lossy().replace('/', "\\"),
+            ])
+            .status()
+            .expect("mklink /J");
+        assert!(status.success(), "mklink /J failed");
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).expect("unix symlink");
+    }
 }

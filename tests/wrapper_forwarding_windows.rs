@@ -34,7 +34,10 @@ fn run_ps_script_env(script_rel: &str, args: &[&str], envs: &[(&str, &str)]) -> 
 
 fn replace_path_variants(mut s: String, path: &Path, token: &str) -> String {
     let long = b3::fs::expand_windows_long_path(path);
-    for p in [long.to_string_lossy().into_owned(), path.to_string_lossy().into_owned()] {
+    for p in [
+        long.to_string_lossy().into_owned(),
+        path.to_string_lossy().into_owned(),
+    ] {
         if !p.is_empty() {
             s = s.replace(&p, token);
             s = s.replace(&p.replace('\\', "/"), token);
@@ -125,6 +128,7 @@ fn wrapper_forwarding_b3_guard_args_quoting_and_exit_codes() {
         ],
     );
     assert_eq!(vc_ps, 0, "{vo_ps}");
+    assert!(vo_ps.contains("VERIFY_PASS:"), "{vo_ps}");
 
     // Exit code 2 forwarding (diff-scope EMPTY_DIFF)
     let (dc_rust, do_rust, _) = run_b3(&[
@@ -190,7 +194,9 @@ fn wrapper_forwarding_pr_verify_and_pr_github_match_b3() {
         .split(';')
         .filter(|p| {
             let candidate = Path::new(p);
-            !candidate.join("gh.exe").exists() && !candidate.join("gh.cmd").exists() && !candidate.join("gh").exists()
+            !candidate.join("gh.exe").exists()
+                && !candidate.join("gh.cmd").exists()
+                && !candidate.join("gh").exists()
         })
         .collect::<Vec<_>>()
         .join(";");

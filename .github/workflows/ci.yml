@@ -37,12 +37,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-fast-1.100.0-${{ hashFiles('Cargo.lock') }}-
 
-      - name: Check formatting and lints
+      - name: Check formatting, lints, and build debug binary
         run: |
           rustc --version
           cargo clippy --version
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
+          cargo build --bin b3
 
       - name: Check static context budget and eval fixtures
         shell: bash

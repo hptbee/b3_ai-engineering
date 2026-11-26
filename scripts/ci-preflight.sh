@@ -26,14 +26,17 @@ run_step() {
 
 run_step "cargo fmt --check" cargo fmt --check
 run_step "cargo clippy --all-targets -- -D warnings" cargo clippy --all-targets -- -D warnings
-run_step "measure-context.sh --strict" bash ./scripts/measure-context.sh --strict
-run_step "validate-evals.sh" bash ./scripts/validate-evals.sh
 
 if $FAST; then
+  run_step "cargo build --bin b3" cargo build --bin b3
+  run_step "measure-context.sh --strict" bash ./scripts/measure-context.sh --strict
+  run_step "validate-evals.sh" bash ./scripts/validate-evals.sh
   run_step "cargo test --lib" cargo test --lib
 else
   run_step "cargo build --release" cargo build --release
   export B3_BIN="${REPO_ROOT}/target/release/b3"
+  run_step "measure-context.sh --strict" bash ./scripts/measure-context.sh --strict
+  run_step "validate-evals.sh" bash ./scripts/validate-evals.sh
   run_step "cargo test" cargo test
   run_step "validate-merge-security.sh" bash ./scripts/validate-merge-security.sh --allow-incomplete-pwsh
 fi

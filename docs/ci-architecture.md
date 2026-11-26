@@ -48,7 +48,7 @@ Measured sequentially in worktree `refactor/native-ci-optimization` (`cedf068`, 
 | --- | --- | --- | --- |
 | `b3` deterministic core (`fingerprint`, `snapshot`, `precommit`, `diff-scope`, `review-inventory`, `review-ledger`, `check-wave`, `check-worktree`, `mechanical-check`, `symbol-check`, `context-cache`, `evidence-check`, `merge-policy-check`, `runs`, `verify-*`) | `DUPLICATE_EQUIVALENT` in PS/Bash scripts | `src/` unit tests + `tests/native_golden_parity.rs` + `tests/native_core_behaviors.rs` | No — migrated to Rust; scripts keep only wrapper-forwarding smoke |
 | Legacy baseline 47-case JSON replay (`legacy_baseline_65eaaae.json`) | `INDEPENDENT_LEGACY_PARITY` | `tests/native_golden_parity.rs` | No |
-| `b3 pr` protocol, hunk, lock, idempotency, bidi sanitization | `DUPLICATE_EQUIVALENT` (Blocks 1–9 of `validate-pr-feedback.ps1`) | `src/pr/*` + `tests/native_core_behaviors.rs` | `validate-pr-feedback.ps1` keeps wrapper parity, large OS pipe (`>250KiB`), POSIX `gh`, Win32 `CON .txt` |
+| `b3 pr` protocol, hunk, lock, idempotency, bidi sanitization, large OS pipes | `UNIQUE_REQUIRED` + `WRAPPER_COMPATIBILITY` | `src/pr/*` + `scripts/validate-pr-feedback.ps1` | Yes — `validate-pr-feedback.ps1` remains intact (already invokes `b3.exe pr` directly for Blocks 1–9) |
 | Windows PS wrapper arg forwarding, quoting, trailing `\`, exit codes, `B3_BIN` | `WRAPPER_COMPATIBILITY` | `tests/wrapper_forwarding_windows.rs` (focused) + thin script wrapper checks | Focused smoke only (~1–2 cases per wrapper) |
 | Unix Bash wrapper arg forwarding, `MSYS2_ARG_CONV_EXCL`, `cygpath` | `WRAPPER_COMPATIBILITY` | `tests/native_golden_parity.rs` (`unix_shell_wrapper_forwarding`) + `validate-merge-security.sh` | Focused dual-shell checks |
 | NTFS junctions, `core.filemode`/`autocrlf`, Win32 `CON .txt`/ADS, `Add-Type` fake `git.exe`, POSIX extensionless `gh` | `PLATFORM_SPECIFIC` | Windows PS/Bash platform suites + `src/fs.rs`/`src/adapters/common.rs` | Yes — kept in slimmed PS/Bash suites |
@@ -81,3 +81,24 @@ ci-gate (if: always()) — requires every upstream job result == 'success' (neve
 - `timeout-minutes`: explicit per-job timeouts (`fast-gate: 10`, `linux/macos-verify: 15`, `windows-build: 15`, `windows-suites: 15`).
 - `release.yml`: runs on tags `v*.*.*`, `workflow_dispatch`, or PRs touching Rust/bootstrap/release files (skipped on docs/script-only PRs).
 - **Local Preflight**: Run `.\scripts\ci-preflight.ps1` (Windows) or `./scripts/ci-preflight.sh` (Unix) before pushing.
+
+## 4. Measured Before / After Comparison (Local Windows)
+
+| Suite / Metric | Before | After | Improvement |
+| --- | --- | --- | --- |
+| `validate-ship-behavior.ps1` | 389.23s | 39.11s | -90.0% |
+| `validate-tshirt-hierarchical.ps1` | 350.41s | 5.79s | -98.3% |
+| `validate-research-ship.ps1` | 164.87s | 5.34s | -96.8% |
+| `validate-context-routing.ps1` | 115.71s | 3.07s | -97.3% |
+| `validate-standalone-commands.ps1` | 52.73s | 3.28s | -93.8% |
+| `validate-pr-feedback.ps1` | 31.49s | 28.82s | -8.5% |
+| `validate-antigravity-global.ps1` | 33.93s | 27.88s | -17.8% |
+| `validate-cursor-global.ps1` | 23.49s | 19.88s | -15.4% |
+| `validate-model-preferences.ps1` | 7.79s | 7.17s | -8.0% |
+| `smoke-ship-product.ps1` | 6.64s | 6.25s | -5.9% |
+| `measure-context.ps1 -Strict` | 0.17s | 0.16s | -5.9% |
+| **PS Behavioral Suites Total** | **1,176.36s (19.6m)** | **146.75s (2.4m)** | **-87.5%** |
+| `cargo test` (incl. new `native_core_behaviors`) | 97.36s | 64.85s | -33.4% |
+| `wrapper_forwarding_windows` (`cargo test`) | 32.40s | 5.60s | -82.7% |
+| **Total Local (`cargo test` + PS suites)** | **1,273.72s (21.2m)** | **211.60s (3.5m)** | **-83.4%** |
+| Fast feedback (`ci-preflight.ps1 -Fast`) | — | ~17s | <2m gate |

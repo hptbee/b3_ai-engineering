@@ -63,7 +63,7 @@ try {
         FailCheck 'git-noprefix-quotepath-and-msys-dot-parity' "ps=$($psCfg.Code) sh=$($shDot.Code)"
     }
 
-    Complete-ValidationSuite -SuiteName 'validate-tshirt-hierarchical'
+    Complete-ValidationSuite -AllowIncompleteBash:$AllowIncompleteBash
 } finally {
     Remove-ReparseLinksUnder $sandbox
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue

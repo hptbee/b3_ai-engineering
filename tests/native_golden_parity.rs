@@ -6,7 +6,7 @@ mod common;
 
 use common::{b3_bin, git_in, init_git_repo, norm_lf, repo_root, run_b3, TempDirGuard};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 struct LegacyBaselineCase {

@@ -30,6 +30,7 @@ try {
     Invoke-PreflightStep 'cargo clippy --all-targets -- -D warnings' { cargo clippy --all-targets -- -D warnings }
 
     if ($Fast) {
+        Invoke-PreflightStep 'cargo build --bin b3' { cargo build --bin b3 }
         Invoke-PreflightStep 'cargo test --lib' { cargo test --lib }
         Invoke-PreflightStep 'measure-context.ps1 -Strict' {
             powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-context.ps1 -Strict
@@ -58,7 +59,15 @@ try {
             }
         }
         if (-not $SkipSecurity) {
-            $bash = (Get-Command bash -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+            $bash = @(
+                "$env:ProgramFiles\Git\bin\bash.exe",
+                "$env:ProgramFiles\Git\usr\bin\bash.exe",
+                "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+            ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+            if (-not $bash) {
+                $cand = (Get-Command bash -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch 'System32|WindowsApps' } | Select-Object -First 1).Source
+                if ($cand) { $bash = $cand }
+            }
             if ($bash) {
                 Invoke-PreflightStep 'validate-merge-security.sh' { & $bash ./scripts/validate-merge-security.sh }
                 Invoke-PreflightStep 'validate-evals.sh' { & $bash ./scripts/validate-evals.sh }
