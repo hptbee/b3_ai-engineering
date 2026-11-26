@@ -84,9 +84,26 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 MJS_WIN="$(cygpath -m "$MJS_RAW" 2>/dev/null || printf '%s' "$MJS_RAW")"
+if [[ -n "${B3_GH_BIN:-}" ]]; then
+  GH_CAND="$B3_GH_BIN"
+  if [[ "$GH_CAND" != */* && "$GH_CAND" != *\\* ]]; then
+    GH_RESOLVED="$(command -v "$GH_CAND" 2>/dev/null || true)"
+    if [[ -n "$GH_RESOLVED" ]]; then
+      GH_CAND="$GH_RESOLVED"
+    fi
+  fi
+  if [[ "$GH_CAND" == */* || "$GH_CAND" == *\\* ]]; then
+    B3_GH_BIN="$(cygpath -m "$GH_CAND" 2>/dev/null || printf '%s' "$GH_CAND")"
+  else
+    B3_GH_BIN="$GH_CAND"
+  fi
+  export B3_GH_BIN
+fi
 BASH_WIN="$(cygpath -m "${B3_BASH_BIN:-$BASH}" 2>/dev/null || printf '%s' "${B3_BASH_BIN:-$BASH}")"
 
 if [[ -n "$BASH_WIN" ]]; then
+  B3_BASH_BIN="$BASH_WIN"
+  export B3_BASH_BIN
   exec node "$MJS_WIN" --mode "$MODE" --repo "$REPO_TRIM" --pr-number "$PR_TRIM" --bash-bin "$BASH_WIN"
 fi
 exec node "$MJS_WIN" --mode "$MODE" --repo "$REPO_TRIM" --pr-number "$PR_TRIM"

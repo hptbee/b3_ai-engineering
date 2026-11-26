@@ -8148,7 +8148,7 @@ timestamp_utc=${TS_UTC}
         --expected-cmd) EXPECTED_CMD="${2:-}"; shift 2 ;;
         --relevant-paths) RELEVANT_PATHS="${2:-}"; shift 2 ;;
         --target-commit-sha)
-          [[ $# -ge 2 && -n "${2// /}" ]] || { echo "VERIFY_CHECK_FAIL: missing value for $1" >&2; exit 1; }
+          [[ $# -ge 2 && -n "${2//[[:space:]]/}" ]] || { echo "VERIFY_CHECK_FAIL: empty --target-commit-sha"; exit 1; }
           TARGET_COMMIT_SHA="$2"; shift 2 ;;
         *) echo "VERIFY_CHECK_FAIL: unknown option $1" >&2; exit 1 ;;
       esac
