@@ -45,11 +45,12 @@ impl Drop for TempDirGuard {
 }
 
 pub fn remove_tree_safe(path: &Path) {
-    if fs::remove_dir_all(path).is_ok() {
-        return;
+    #[cfg(not(windows))]
+    {
+        let _ = fs::remove_dir_all(path);
     }
     #[cfg(windows)]
-    {
+    if fs::remove_dir_all(path).is_err() {
         let _ = Command::new("cmd")
             .args([
                 "/d",
