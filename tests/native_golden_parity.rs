@@ -2,64 +2,12 @@
 //! Asserts independent legacy-contract golden exit codes, outputs, and on-disk
 //! artifacts directly against `b3` with ZERO PowerShell dependency on Linux/macOS.
 
+mod common;
+
+use common::{b3_bin, git_in, init_git_repo, norm_lf, repo_root, run_b3, TempDirGuard};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static GOLDEN_SEQ: AtomicU64 = AtomicU64::new(0);
-
-fn b3_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_b3")
-}
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-struct TempDirGuard {
-    path: PathBuf,
-}
-
-impl TempDirGuard {
-    fn new(prefix: &str) -> Self {
-        let seq = GOLDEN_SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("b3-golden-{prefix}-{}-{seq}", std::process::id()));
-        if dir.exists() {
-            let _ = fs::remove_dir_all(&dir);
-        }
-        fs::create_dir_all(&dir).expect("create temp dir");
-        Self { path: dir }
-    }
-}
-
-impl Drop for TempDirGuard {
-    fn drop(&mut self) {
-        #[cfg(windows)]
-        {
-            // Clear NTFS reparse junctions without recursing into targets before removing temp tree.
-            let _ = Command::new("cmd")
-                .args([
-                    "/d",
-                    "/c",
-                    &format!(
-                        "for /d %d in (\"{}\") do @rmdir /s /q \"%d\" 2>nul",
-                        self.path.display()
-                    ),
-                ])
-                .status();
-        }
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-fn norm_lf(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes)
-        .replace("\r\n", "\n")
-        .trim_end_matches('\n')
-        .to_string()
-}
 
 struct LegacyBaselineCase {
     id: String,
@@ -180,54 +128,6 @@ fn run_b3_with_env(
         norm_lf(&out.stdout),
         norm_lf(&out.stderr),
     )
-}
-
-fn run_b3(args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(b3_bin())
-        .args(args)
-        .output()
-        .expect("run b3 binary");
-    (
-        out.status.code().unwrap_or(-1),
-        norm_lf(&out.stdout),
-        norm_lf(&out.stderr),
-    )
-}
-
-fn git_in(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
-fn init_git_repo(dir: &Path) -> String {
-    let out = Command::new("git")
-        .arg("init")
-        .arg(dir)
-        .output()
-        .expect("git init");
-    assert!(out.status.success(), "git init failed");
-    git_in(dir, &["symbolic-ref", "HEAD", "refs/heads/main"]);
-    git_in(dir, &["config", "user.email", "golden@example.com"]);
-    git_in(dir, &["config", "user.name", "Golden Tester"]);
-    git_in(dir, &["config", "core.autocrlf", "false"]);
-    fs::create_dir_all(dir.join("src")).unwrap();
-    fs::create_dir_all(dir.join("docs")).unwrap();
-    fs::write(dir.join("src/app.txt"), "v1\n").unwrap();
-    fs::write(dir.join("docs/guide.md"), "doc v1\n").unwrap();
-    git_in(dir, &["add", "."]);
-    git_in(dir, &["commit", "-m", "initial"]);
-    git_in(dir, &["rev-parse", "HEAD"])
 }
 
 #[test]
