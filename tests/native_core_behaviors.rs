@@ -901,3 +901,61 @@ fn core_precommit_adversarial_and_malformed_policy_guards() {
     ]);
     assert_eq!(c, 1, "{out}");
 }
+
+#[test]
+fn core_review_inventory_subdivides_oversized_test_only_directory() {
+    let tmp = TempDirGuard::new("rev-inv-tests-only");
+    let repo = tmp.path.join("repo");
+    let base = init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    let body_2k: String = (0..2000)
+        .map(|i| format!("pub fn case_{i}() -> i32 {{ {i} }}\n"))
+        .collect();
+    for suite in ["alpha_suite.rs", "beta_suite.rs", "gamma_suite.rs"] {
+        let p = repo.join(format!("tests/{suite}"));
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, &body_2k).unwrap();
+    }
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-m", "add three 2k test suites"]);
+
+    let (c, out, err) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base,
+    ]);
+    assert_eq!(c, 0, "expected partitioned inventory exit 0: {out}\n{err}");
+    assert!(out.contains("size_class=XXL"), "{out}");
+    let units: Vec<&str> = out.lines().filter(|l| l.starts_with("unit|")).collect();
+    assert!(units.len() >= 2, "expected >= 2 subdivided units: {out}");
+    for ul in &units {
+        let cols: Vec<&str> = ul.split('|').collect();
+        let lines_cnt: usize = cols[4].parse().expect("unit lines count");
+        assert!(lines_cnt <= 5000, "oversized unit emitted: {ul}");
+    }
+
+    let body_5100: String = (0..5100)
+        .map(|i| format!("pub fn giant_{i}() -> i32 {{ {i} }}\n"))
+        .collect();
+    fs::write(repo.join("tests/giant_suite.rs"), &body_5100).unwrap();
+    let (gc, gout, gerr) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base,
+    ]);
+    assert_eq!(
+        gc, 2,
+        "single >5000L test file must fail exit 2: {gout}\n{gerr}"
+    );
+    assert!(
+        gerr.contains("PARTITION_INCOMPLETE:") || gout.contains("PARTITION_INCOMPLETE:"),
+        "{gout}\n{gerr}"
+    );
+}

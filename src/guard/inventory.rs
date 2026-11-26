@@ -506,6 +506,9 @@ fn expand_oversized_unit(
             non_test.push(f.clone());
         }
     }
+    if non_test.is_empty() {
+        std::mem::swap(&mut non_test, &mut tests);
+    }
 
     let raw_group = &unit.group;
     let base_group = raw_group
