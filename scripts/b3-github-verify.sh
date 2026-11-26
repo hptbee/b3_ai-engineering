@@ -78,25 +78,15 @@ if $HAS_REPO_ROOT || [[ -z "$REPO_TRIM" ]]; then
   REPO_TRIM="$ORIGIN_SLUG"
 fi
 
-GH_CAND="${B3_GH_BIN:-gh}"
-GH_BIN=""
-if [[ "$GH_CAND" == */* || "$GH_CAND" == *\\* ]]; then
-  [[ -f "$GH_CAND" ]] && GH_BIN="$GH_CAND"
-else
-  GH_BIN="$(command -v "$GH_CAND" 2>/dev/null || true)"
-fi
-if [[ -z "$GH_BIN" ]]; then
-  echo "GH_VERIFY_UNAVAILABLE: gh_cli_unavailable"
-  exit 2
-fi
-
 if ! command -v node >/dev/null 2>&1; then
   echo "GH_VERIFY_UNAVAILABLE: node_runtime_unavailable"
   exit 2
 fi
 
 MJS_WIN="$(cygpath -m "$MJS_RAW" 2>/dev/null || printf '%s' "$MJS_RAW")"
-GH_BIN_WIN="$(cygpath -m "$GH_BIN" 2>/dev/null || printf '%s' "$GH_BIN")"
-BASH_WIN="$(cygpath -m "$BASH" 2>/dev/null || printf '%s' "$BASH")"
+BASH_WIN="$(cygpath -m "${B3_BASH_BIN:-$BASH}" 2>/dev/null || printf '%s' "${B3_BASH_BIN:-$BASH}")"
 
-exec node "$MJS_WIN" --mode "$MODE" --repo "$REPO_TRIM" --pr-number "$PR_TRIM" --gh-bin "$GH_BIN_WIN" --bash-bin "$BASH_WIN"
+if [[ -n "$BASH_WIN" ]]; then
+  exec node "$MJS_WIN" --mode "$MODE" --repo "$REPO_TRIM" --pr-number "$PR_TRIM" --bash-bin "$BASH_WIN"
+fi
+exec node "$MJS_WIN" --mode "$MODE" --repo "$REPO_TRIM" --pr-number "$PR_TRIM"

@@ -8,8 +8,12 @@ import {
   execGh,
   hasControlChars,
   parseGitHubRemoteSlug,
+  parseJsonStrict,
   resolveBashBinary,
   resolveGhBinary,
+  sortOrdinal,
+  validatePrNumber,
+  validateRepoSlug,
 } from "./b3-gh-exec.mjs";
 
 function failError(reason) {
@@ -35,7 +39,7 @@ function sortUnique(arr) {
   for (const x of arr) {
     if (x) set.add(x);
   }
-  return Array.from(set).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return sortOrdinal(Array.from(set));
 }
 
 let mode = "";
@@ -89,15 +93,17 @@ if (modeTrim !== "pre-merge" && modeTrim !== "post-merge") {
   failError("invalid_mode");
 }
 
-const prTrim = prArg.trim();
-if (!/^[1-9][0-9]*$/.test(prTrim)) {
+const prCheck = validatePrNumber(prArg);
+if (!prCheck.ok) {
   failError("invalid_pr_number");
 }
-const prInt = Number.parseInt(prTrim, 10);
+const prTrim = prCheck.str;
+const prInt = prCheck.num;
 
 const repoTrim = repoArg.trim();
 if (repoTrim) {
-  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repoTrim) || repoTrim.includes("..")) {
+  const repoCheck = validateRepoSlug(repoTrim);
+  if (!repoCheck.ok) {
     failError("invalid_repo");
   }
 }
@@ -183,13 +189,26 @@ function failOnApiFailure(res, endpointLabel, allow404Reason = "") {
 }
 
 function parseJson(raw, ctx) {
-  const cleaned = raw == null ? "" : String(raw).replace(/\uFEFF/g, "");
-  if (!cleaned.trim()) failError(`empty_json(${ctx})`);
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    failError(`invalid_json(${ctx})`);
+  const parsed = parseJsonStrict(raw);
+  if (!parsed.ok) {
+    failError(`${parsed.reason}(${ctx})`);
   }
+  return parsed.value;
+}
+
+function resolvePolicyAuthoritySha(baseRepoFull, defaultBranch, baseRef, liveTargetSha) {
+  if (defaultBranch === baseRef) {
+    return liveTargetSha;
+  }
+  const encDef = encodeURIComponent(defaultBranch);
+  const defBrRes = invokeGhApi([`repos/${baseRepoFull}/branches/${encDef}`]);
+  if (defBrRes.code !== 0) {
+    failOnApiFailure(defBrRes, "policy_authority");
+  }
+  const defBrObj = parseJson(defBrRes.stdout, "default_branch");
+  const sha = safeText((defBrObj.commit || {}).sha, "policy_authority_sha").trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(sha)) failError("invalid_policy_authority_sha");
+  return sha;
 }
 
 function flattenPages(parsed) {
@@ -284,18 +303,7 @@ if (modeTrim === "post-merge") {
       compareBehind = typeof cmpObj.behind_by === "number" ? cmpObj.behind_by : -1;
     }
 
-    if (defaultBranch === baseRef) {
-      policyAuthoritySha = liveTargetSha;
-    } else {
-      const encDef = encodeURIComponent(defaultBranch);
-      const defBrRes = invokeGhApi([`repos/${baseRepoFull}/branches/${encDef}`]);
-      if (defBrRes.code !== 0) {
-        failOnApiFailure(defBrRes, "policy_authority");
-      }
-      const defBrObj = parseJson(defBrRes.stdout, "default_branch");
-      policyAuthoritySha = safeText((defBrObj.commit || {}).sha, "policy_authority_sha").trim().toLowerCase();
-      if (!/^[0-9a-f]{40}$/.test(policyAuthoritySha)) failError("invalid_policy_authority_sha");
-    }
+    policyAuthoritySha = resolvePolicyAuthoritySha(baseRepoFull, defaultBranch, baseRef, liveTargetSha);
   }
 
   const postLines = [
@@ -346,17 +354,7 @@ const liveTargetSha = safeText((baseBrObj.commit || {}).sha, "live_target_sha").
 if (!/^[0-9a-f]{40}$/.test(liveTargetSha)) failError("invalid_live_target_sha");
 
 const policyAuthorityRef = defaultBranch;
-let policyAuthoritySha = liveTargetSha;
-if (defaultBranch !== baseRef) {
-  const encDef = encodeURIComponent(defaultBranch);
-  const defBrRes = invokeGhApi([`repos/${baseRepoFull}/branches/${encDef}`]);
-  if (defBrRes.code !== 0) {
-    failOnApiFailure(defBrRes, "policy_authority");
-  }
-  const defBrObj = parseJson(defBrRes.stdout, "default_branch");
-  policyAuthoritySha = safeText((defBrObj.commit || {}).sha, "policy_authority_sha").trim().toLowerCase();
-  if (!/^[0-9a-f]{40}$/.test(policyAuthoritySha)) failError("invalid_policy_authority_sha");
-}
+const policyAuthoritySha = resolvePolicyAuthoritySha(baseRepoFull, defaultBranch, baseRef, liveTargetSha);
 
 const filesRes = invokeGhApi(["--paginate", "--slurp", `repos/${baseRepoFull}/pulls/${prTrim}/files?per_page=100`]);
 if (filesRes.code !== 0) {

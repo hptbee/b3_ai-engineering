@@ -5,7 +5,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { execGh, hasControlChars, resolveBashBinary } from './b3-gh-exec.mjs';
+import {
+  execGh,
+  hasControlChars,
+  resolveBashBinary,
+  resolvePowerShellBinary,
+  sortOrdinal,
+  stripBom,
+  validatePrNumber,
+  validateRepoSlug,
+} from './b3-gh-exec.mjs';
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -20,8 +29,6 @@ const SCRIPT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const UNTRUSTED_START = 'BEGIN_UNTRUSTED_PR_DATA';
 const UNTRUSTED_END = 'END_UNTRUSTED_PR_DATA';
 
-const REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
-const PR_RE = /^[1-9][0-9]*$/;
 const SHA_RE = /^[0-9a-fA-F]{40}$/;
 const ID_RE = /^[A-Za-z0-9_=-]{1,128}$/;
 const KEY_RE = /^[A-Za-z0-9._:-]{4,80}$/;
@@ -95,17 +102,18 @@ function parseArgs(argv) {
 }
 
 function validateRepo(repo) {
-  if (!repo || hasControlChars(repo) || !REPO_RE.test(repo) || repo.includes('..')) fail('PR_INVALID_ARGS', 'Invalid --repo (expected owner/repo)');
-  const [owner, name] = repo.split('/');
-  if (!owner || !name || owner === '.' || name === '.') fail('PR_INVALID_ARGS', 'Invalid --repo segments');
-  return { owner, name, full: `${owner}/${name}` };
+  const res = validateRepoSlug(repo);
+  if (!res.ok) {
+    const msg = res.reason === 'invalid_repo_segments' ? 'Invalid --repo segments' : 'Invalid --repo (expected owner/repo)';
+    fail('PR_INVALID_ARGS', msg);
+  }
+  return { owner: res.owner, name: res.name, full: res.full };
 }
 
 function validatePr(prStr) {
-  if (!prStr || hasControlChars(prStr) || !PR_RE.test(prStr)) fail('PR_INVALID_ARGS', 'Invalid --pr (expected positive integer)');
-  const num = Number.parseInt(prStr, 10);
-  if (!Number.isSafeInteger(num) || num <= 0) fail('PR_INVALID_ARGS', 'Invalid --pr value');
-  return num;
+  const res = validatePrNumber(prStr);
+  if (!res.ok) fail('PR_INVALID_ARGS', 'Invalid --pr (expected positive integer)');
+  return res.num;
 }
 
 function validateSha(sha, flagName) {
@@ -126,8 +134,9 @@ function validateKey(key) {
 
 function validateMaxPages(val) {
   if (val === undefined) return DEFAULT_MAX_PAGES;
-  if (hasControlChars(val) || !PR_RE.test(val)) fail('PR_INVALID_ARGS', 'Invalid --max-pages');
-  const num = Number.parseInt(val, 10);
+  const res = validatePrNumber(val);
+  if (!res.ok) fail('PR_INVALID_ARGS', 'Invalid --max-pages');
+  const num = res.num;
   if (num < 1 || num > MAX_ALLOWED_PAGES) fail('PR_INVALID_ARGS', `--max-pages must be between 1 and ${MAX_ALLOWED_PAGES}`);
   return num;
 }
@@ -201,13 +210,12 @@ function validateSafePath(targetPath, flagName, { expectDir = false, mustExist =
 
 function readSafeInputFile(filePath, flagName, maxBytes = MAX_FILE_BYTES) {
   const resolved = validateSafePath(filePath, flagName, { expectDir: false, mustExist: true, maxBytes });
-  return fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, '');
+  return stripBom(fs.readFileSync(resolved, 'utf8'));
 }
 
 // --- R010 + R015: Shared <git-common-dir> PR state/lock + single-writer enforcement ---
 const sameFsPath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
-const isB3CheckpointPath = (p) => /^\.b3\/(ship|research-ship|autodev)(\/|$)/.test(p);
-const sortOrdinal = (arr) => [...arr].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+const isB3CheckpointPath = (p) => /^\.b3\/(ship|research-ship|autodev)(\/|$)/i.test(p);
 
 function resolveGitContext(rawRepoRoot) {
   const base = rawRepoRoot
@@ -841,52 +849,23 @@ function computeCommittedTreeHash(repoRoot, expectedHead, receiptRelPathsRaw) {
   return hash;
 }
 
-function isRunnableBinary(filePath) {
-  if (!filePath || hasControlChars(filePath)) return false;
-  if (process.platform === 'win32' && /\\microsoft\\windowsapps\\/i.test(filePath.replace(/\//g, '\\'))) return false;
+function assertInsideDotB3(repoRoot, receiptFullPath) {
+  const dotB3Dir = path.join(repoRoot, '.b3');
+  let dotB3Ok = false;
   try {
-    const st = fs.statSync(filePath);
-    if (!st.isFile()) return false;
-    if (process.platform !== 'win32') fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
+    const lst = fs.lstatSync(dotB3Dir);
+    dotB3Ok = !lst.isSymbolicLink() && lst.isDirectory() && fs.statSync(dotB3Dir).isDirectory();
   } catch {
-    return false;
+    dotB3Ok = false;
   }
-}
-
-let cachedPsKey = null;
-let cachedPsPath = '';
-function resolvePowerShellBinary() {
-  const pathEnv = process.env.PATH || process.env.Path || '';
-  if (cachedPsKey === pathEnv) return cachedPsPath;
-  const finish = (val) => { cachedPsKey = pathEnv; cachedPsPath = val; return val; };
-  const isWin = process.platform === 'win32';
-  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
-
-  const pwshNames = isWin ? ['pwsh.exe'] : ['pwsh'];
-  for (const d of dirs) {
-    for (const name of pwshNames) {
-      const cand = path.join(d, name);
-      if (isRunnableBinary(cand)) return finish(cand);
-    }
+  if (!dotB3Ok) {
+    fail('PR_VERIFY_REQUIRED', `Verification receipt must reside inside repository .b3/ directory (${dotB3Dir})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
-  if (isWin) {
-    const pwsh7 = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe');
-    if (isRunnableBinary(pwsh7)) return finish(pwsh7);
+  const rel = path.relative(fs.realpathSync(dotB3Dir), fs.realpathSync(receiptFullPath)).replace(/\\/g, '/');
+  if (!rel || rel === '.' || rel.startsWith('..') || path.isAbsolute(rel) || rel.includes(':')) {
+    fail('PR_VERIFY_REQUIRED', `Verification receipt must reside inside repository .b3/ directory (${dotB3Dir})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
-
-  const psNames = isWin ? ['powershell.exe'] : ['powershell'];
-  for (const d of dirs) {
-    for (const name of psNames) {
-      const cand = path.join(d, name);
-      if (isRunnableBinary(cand)) return finish(cand);
-    }
-  }
-  if (isWin) {
-    const winPs = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    if (isRunnableBinary(winPs)) return finish(winPs);
-  }
-  return finish('');
+  return `.b3/${rel}`;
 }
 
 function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expectedCmd, requiredPaths) {
@@ -900,12 +879,7 @@ function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expect
     fail('PR_VERIFY_REQUIRED', `Local repository HEAD (${localHead}) does not match expected remote PR HEAD (${expectedHead})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
 
-  const realRoot = fs.realpathSync(repoRoot);
-  const realReceipt = fs.realpathSync(receiptFullPath);
-  const relReceipt = path.relative(realRoot, realReceipt).replace(/\\/g, '/');
-  if (!relReceipt || relReceipt === '.' || relReceipt.startsWith('..') || path.isAbsolute(relReceipt) || relReceipt.includes(':') || !relReceipt.startsWith('.b3/')) {
-    fail('PR_VERIFY_REQUIRED', `Verification receipt must reside inside repository .b3/ directory (${repoRoot})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  }
+  const relReceipt = assertInsideDotB3(repoRoot, receiptFullPath);
 
   const reqCsv = requiredPaths.join(',');
   let guardRes;
@@ -984,21 +958,7 @@ function parseResolveEvidence(evidencePath, repoRoot, repoFull, prNumber, expect
   validateRawPathSyntax(receiptRel, 'verify_receipt_path', true);
   const receiptCandidate = path.isAbsolute(receiptRel) ? path.resolve(receiptRel) : path.resolve(repoRoot, receiptRel);
   const receiptFullPath = validateSafePath(receiptCandidate, 'verify_receipt_path', { expectDir: false, mustExist: true });
-  const dotB3Dir = path.join(repoRoot, '.b3');
-  let dotB3Ok = false;
-  try {
-    const lst = fs.lstatSync(dotB3Dir);
-    dotB3Ok = !lst.isSymbolicLink() && lst.isDirectory() && fs.statSync(dotB3Dir).isDirectory();
-  } catch {
-    dotB3Ok = false;
-  }
-  if (!dotB3Ok) {
-    blocked(`Verification receipt must reside inside repository .b3/ directory (${dotB3Dir})`);
-  }
-  const relCheck = path.relative(fs.realpathSync(dotB3Dir), fs.realpathSync(receiptFullPath)).replace(/\\/g, '/');
-  if (!relCheck || relCheck === '.' || relCheck.startsWith('..') || path.isAbsolute(relCheck) || relCheck.includes(':')) {
-    blocked(`Verification receipt must reside inside repository .b3/ directory (${dotB3Dir})`);
-  }
+  assertInsideDotB3(repoRoot, receiptFullPath);
   return { basis, primaryThreadId, targetPath, fixedPaths, checkedCommand, receiptFullPath };
 }
 

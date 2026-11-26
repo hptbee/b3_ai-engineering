@@ -1205,9 +1205,11 @@ console.log(JSON.stringify({
             $nnShOut = $pNnSh.StandardOutput.ReadToEnd() + $pNnSh.StandardError.ReadToEnd(); $pNnSh.WaitForExit()
             $nnShEx = $pNnSh.ExitCode; $pNnSh.Dispose()
 
+            $nodeDirRaw = Split-Path -Parent $ctx.nodeExe
+            $nodeDirPosix = if ($nodeDirRaw -match '^([A-Za-z]):[\\/](.*)$') { "/$($Matches[1].ToLowerInvariant())/$($Matches[2] -replace '\\','/')" } else { $nodeDirRaw -replace '\\','/' }
             $ngShPsi = New-Object System.Diagnostics.ProcessStartInfo
             $ngShPsi.FileName = $ctx.gitBash
-            $ngShPsi.Arguments = "-c `"PATH='$((Split-Path -Parent $ctx.nodeExe) -replace '\\','/'):/usr/bin:/bin'; B3_GH_BIN='/nonexistent/gh' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
+            $ngShPsi.Arguments = "-c `"PATH='${nodeDirPosix}:/usr/bin:/bin'; B3_GH_BIN='/nonexistent/gh' '$ghVerifySh' --mode pre-merge --repo acme/demo --pr-number 1`""
             $ngShPsi.UseShellExecute = $false; $ngShPsi.RedirectStandardOutput = $true; $ngShPsi.RedirectStandardError = $true; $ngShPsi.CreateNoWindow = $true
             $pNgSh = [System.Diagnostics.Process]::Start($ngShPsi)
             $ngShOut = $pNgSh.StandardOutput.ReadToEnd() + $pNgSh.StandardError.ReadToEnd(); $pNgSh.WaitForExit()

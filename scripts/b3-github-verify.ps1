@@ -79,94 +79,19 @@ if ($hasRepoRoot -or -not $repoTrim) {
 }
 
 $isWin = ([IO.Path]::DirectorySeparatorChar -eq '\')
-$pathDirs = @(($env:PATH -split [IO.Path]::PathSeparator) | Where-Object { $_ })
-
-function Test-IsWindowsAppsStub([string]$FilePath) {
-    if (-not $isWin -or -not $FilePath) { return $false }
-    return (($FilePath -replace '/', '\') -imatch '\\microsoft\\windowsapps\\')
-}
-
-function Test-ValidExecutable([string]$FilePath) {
-    if (-not $FilePath -or $FilePath -match '[\x00-\x1F\x7F]') { return $false }
-    if (Test-IsWindowsAppsStub $FilePath) { return $false }
-    return (Test-Path -LiteralPath $FilePath -PathType Leaf)
-}
-
-function Resolve-GhBinPath {
-    $cand = if ($env:B3_GH_BIN) { $env:B3_GH_BIN.Trim() } else { '' }
-    if ($cand) {
-        if ($cand -match '[\x00-\x1F\x7F]') { return '' }
-        if ($cand.Contains('/') -or $cand.Contains('\') -or ($isWin -and $cand -match '^[A-Za-z]:')) {
-            if (Test-ValidExecutable $cand) { return $cand }
-            if ($isWin -and $cand -notmatch '\.[A-Za-z0-9]+$') {
-                foreach ($ext in @('.exe', '.com', '.cmd', '.bat')) {
-                    if (Test-ValidExecutable ($cand + $ext)) { return ($cand + $ext) }
-                }
-            }
-            return ''
-        }
-        $names = if ($isWin -and $cand -notmatch '\.[A-Za-z0-9]+$') { @("$cand.exe", "$cand.com", "$cand.cmd", "$cand.bat", $cand) } else { @($cand) }
-        foreach ($d in $pathDirs) {
-            foreach ($n in $names) {
-                $f = Join-Path $d $n
-                if (Test-ValidExecutable $f) { return $f }
-            }
-        }
-        return ''
-    }
-    $names = if ($isWin) { @('gh.exe', 'gh.com', 'gh.cmd', 'gh.bat', 'gh') } else { @('gh') }
-    foreach ($d in $pathDirs) {
-        foreach ($n in $names) {
-            $f = Join-Path $d $n
-            if (Test-ValidExecutable $f) { return $f }
-        }
-    }
-    return ''
-}
-
-function Resolve-BashBinPath {
-    $bCand = if ($env:B3_BASH_BIN) { $env:B3_BASH_BIN.Trim() } else { '' }
-    if ($bCand -and (Test-ValidExecutable $bCand)) { return $bCand }
-    if ($isWin) {
-        $winCands = New-Object System.Collections.Generic.List[string]
-        if ($env:ProgramFiles) {
-            [void]$winCands.Add((Join-Path $env:ProgramFiles 'Git\bin\bash.exe'))
-            [void]$winCands.Add((Join-Path $env:ProgramFiles 'Git\usr\bin\bash.exe'))
-        }
-        [void]$winCands.Add('C:\Program Files\Git\bin\bash.exe')
-        [void]$winCands.Add('C:\Program Files\Git\usr\bin\bash.exe')
-        [void]$winCands.Add('C:\Program Files (x86)\Git\bin\bash.exe')
-        foreach ($c in $winCands) {
-            if ($c -and (Test-ValidExecutable $c)) { return $c }
-        }
-    }
-    $bName = if ($isWin) { 'bash.exe' } else { 'bash' }
-    foreach ($d in $pathDirs) {
-        $f = Join-Path $d $bName
-        if ($isWin) {
-            $nb = $f -replace '/', '\'
-            if ($nb -imatch '\\windows\\(system32|sysnative)\\bash\.exe$') { continue }
-        }
-        if (Test-ValidExecutable $f) { return $f }
-    }
-    return ''
-}
-
-$ghBin = Resolve-GhBinPath
-if (-not $ghBin) { Fail-GhUnavailable 'gh_cli_unavailable' }
-$bashBin = if ($isWin -and $ghBin -notmatch '\.(exe|com|cmd|bat)$') { Resolve-BashBinPath } else { '' }
-if ($isWin -and $ghBin -notmatch '\.(exe|com|cmd|bat)$' -and -not $bashBin) { Fail-GhUnavailable 'gh_cli_unavailable' }
-
 $mjsPath = Join-Path $PSScriptRoot 'lib\b3-github-verify.mjs'
 if (-not (Test-Path -LiteralPath $mjsPath -PathType Leaf)) { Fail-GhError 'missing_verifier_module' }
 
 $nodeCmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue |
-    Where-Object { Test-ValidExecutable $_.Source } |
+    Where-Object {
+        $_.Source -and
+        (-not $isWin -or (($_.Source -replace '/', '\') -inotmatch '\\microsoft\\windowsapps\\')) -and
+        (Test-Path -LiteralPath $_.Source -PathType Leaf)
+    } |
     Select-Object -First 1
 if (-not $nodeCmd) { Fail-GhUnavailable 'node_runtime_unavailable' }
 
-$nodeArgs = @($mjsPath, '--mode', $modeTrim, '--repo', $resolvedRepo, '--pr-number', $prTrim, '--gh-bin', $ghBin)
-if ($bashBin) { $nodeArgs += @('--bash-bin', $bashBin) }
+$nodeArgs = @($mjsPath, '--mode', $modeTrim, '--repo', $resolvedRepo, '--pr-number', $prTrim)
 $psiN = New-Object System.Diagnostics.ProcessStartInfo
 $psiN.FileName = $nodeCmd.Source
 $psiN.UseShellExecute = $false

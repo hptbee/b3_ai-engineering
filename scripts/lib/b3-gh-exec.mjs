@@ -5,8 +5,53 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+export const REPO_SLUG_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+export const PR_NUMBER_RE = /^[1-9][0-9]*$/;
+
 export function hasControlChars(val) {
   return /[\x00-\x1F\x7F]/.test(String(val ?? ''));
+}
+
+export function stripBom(str) {
+  return String(str ?? '').replace(/^\uFEFF/, '');
+}
+
+export function sortOrdinal(arr) {
+  return [...arr].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+export function parseJsonStrict(raw) {
+  const cleaned = stripBom(raw);
+  if (!cleaned.trim()) return { ok: false, reason: 'empty_json', value: null };
+  try {
+    return { ok: true, reason: '', value: JSON.parse(cleaned) };
+  } catch {
+    return { ok: false, reason: 'invalid_json', value: null };
+  }
+}
+
+export function validateRepoSlug(repoRaw) {
+  const repo = String(repoRaw ?? '').trim();
+  if (!repo || hasControlChars(repo) || !REPO_SLUG_RE.test(repo) || repo.includes('..')) {
+    return { ok: false, reason: 'invalid_repo', owner: '', name: '', full: '' };
+  }
+  const [owner, name] = repo.split('/');
+  if (!owner || !name || owner === '.' || name === '.') {
+    return { ok: false, reason: 'invalid_repo_segments', owner: '', name: '', full: '' };
+  }
+  return { ok: true, reason: '', owner, name, full: `${owner}/${name}` };
+}
+
+export function validatePrNumber(prRaw) {
+  const prStr = String(prRaw ?? '').trim();
+  if (!prStr || hasControlChars(prStr) || !PR_NUMBER_RE.test(prStr)) {
+    return { ok: false, reason: 'invalid_pr_number', num: 0, str: '' };
+  }
+  const num = Number.parseInt(prStr, 10);
+  if (!Number.isSafeInteger(num) || num <= 0) {
+    return { ok: false, reason: 'invalid_pr_number', num: 0, str: '' };
+  }
+  return { ok: true, reason: '', num, str: prStr };
 }
 
 export function parseGitHubRemoteSlug(remoteUrl) {
@@ -23,13 +68,13 @@ export function parseGitHubRemoteSlug(remoteUrl) {
   return '';
 }
 
-function isWindowsAppsStub(filePath) {
+export function isWindowsAppsStub(filePath) {
   if (process.platform !== 'win32') return false;
   const normBack = String(filePath || '').replace(/\//g, '\\');
   return /\\microsoft\\windowsapps\\/i.test(normBack);
 }
 
-function isExecutableOrFile(filePath) {
+export function isExecutableOrFile(filePath) {
   if (!filePath || hasControlChars(filePath)) return false;
   if (isWindowsAppsStub(filePath)) return false;
   try {
@@ -41,6 +86,16 @@ function isExecutableOrFile(filePath) {
   } catch {
     return false;
   }
+}
+
+function findFirstInPath(dirs, names) {
+  for (const d of dirs) {
+    for (const n of names) {
+      const full = path.join(d, n);
+      if (isExecutableOrFile(full)) return full;
+    }
+  }
+  return '';
 }
 
 function tryFileOrWinExts(candidate) {
@@ -130,21 +185,39 @@ export function resolveGhBinary(explicitGh = '') {
     const names = isWin && !/\.[A-Za-z0-9]+$/.test(candidateRaw)
       ? [`${candidateRaw}.exe`, `${candidateRaw}.com`, `${candidateRaw}.cmd`, `${candidateRaw}.bat`, candidateRaw]
       : [candidateRaw];
-    for (const d of dirs) {
-      for (const n of names) {
-        const full = path.join(d, n);
-        if (isExecutableOrFile(full)) return finish(full);
-      }
-    }
-    return finish('');
+    return finish(findFirstInPath(dirs, names));
   }
 
   const names = isWin ? ['gh.exe', 'gh.com', 'gh.cmd', 'gh.bat', 'gh'] : ['gh'];
-  for (const d of dirs) {
-    for (const n of names) {
-      const full = path.join(d, n);
-      if (isExecutableOrFile(full)) return finish(full);
-    }
+  return finish(findFirstInPath(dirs, names));
+}
+
+let cachedPsKey = null;
+let cachedPsPath = '';
+
+export function resolvePowerShellBinary() {
+  const pathEnv = process.env.PATH || process.env.Path || '';
+  if (cachedPsKey === pathEnv) return cachedPsPath;
+  const finish = (val) => {
+    cachedPsKey = pathEnv;
+    cachedPsPath = val;
+    return val;
+  };
+  const isWin = process.platform === 'win32';
+  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+
+  const pwshHit = findFirstInPath(dirs, isWin ? ['pwsh.exe'] : ['pwsh']);
+  if (pwshHit) return finish(pwshHit);
+  if (isWin) {
+    const pwsh7 = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe');
+    if (isExecutableOrFile(pwsh7)) return finish(pwsh7);
+  }
+
+  const psHit = findFirstInPath(dirs, isWin ? ['powershell.exe'] : ['powershell']);
+  if (psHit) return finish(psHit);
+  if (isWin) {
+    const winPs = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    if (isExecutableOrFile(winPs)) return finish(winPs);
   }
   return finish('');
 }
