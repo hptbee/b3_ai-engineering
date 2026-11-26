@@ -42,13 +42,14 @@ Evidence over opinion. Progressive disclosure. Small composable skills. Research
 
 ## Installation
 
-Full per-host setup, coexistence guards, and manual smoke checklists live in [`adapters/README.md`](adapters/README.md) (`adapters/{cursor,codex,claude,antigravity}/README.md`).
+Full per-host setup, coexistence guards, native binary distribution, and manual smoke checklists live in [`adapters/README.md`](adapters/README.md) (`adapters/{cursor,codex,claude,antigravity}/README.md`).
 
-- **Machine-global install (Cursor & Antigravity):** `./adapters/install-global.ps1 -HostName <cursor|antigravity|all>` (or `.sh --host <...>`; actions `install`, `verify`, `update`, `uninstall`; supports `-DryRun`/`-Force`). Unified `install`/`update` initializes missing `~/.b3/models.md` from [`config/models.example.md`](config/models.example.md) (`docs/model-preferences.md`). Direct installers: `adapters/cursor/install-global.{ps1,sh}`, `adapters/antigravity/install-plugin.{ps1,sh}`.
+- **Native CLI (`b3`):** Build the zero-dependency Rust executable with `cargo build --release` (`target/release/b3.exe` on Windows, `target/release/b3` on Linux/macOS). Supported subcommands: `b3 guard <cmd>`, `b3 pr <cmd>`, `b3 sync`, `b3 install <product|cursor|antigravity|global>`, and `b3 context measure`. End users require no Rust/Cargo/Node/Python runtime to run prebuilt `b3` binaries (only `git`, and optional `gh` for PR commands). Wrapper scripts in `scripts/*.{ps1,sh}` and `adapters/*.{ps1,sh}` forward to `b3` automatically (`B3_BIN` override or `target/release/b3*`). *(Runtime verified on `x86_64-pc-windows-msvc`; `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, and `x86_64-apple-darwin` builds remain untested in CI until release matrix execution.)*
+- **Machine-global install (Cursor & Antigravity):** `./adapters/install-global.ps1 -HostName <cursor|antigravity|all>` (or `b3 install global --host <...>`; actions `install`, `verify`, `update`, `uninstall`; supports `-DryRun`/`-Force`). Unified `install`/`update` initializes missing `~/.b3/models.md` from [`config/models.example.md`](config/models.example.md) (`docs/model-preferences.md`). Direct installers: `adapters/cursor/install-global.{ps1,sh}`, `adapters/antigravity/install-plugin.{ps1,sh}`.
 - **Inside this B3 checkout:**
-  - Cursor / Codex / Claude Code: `./adapters/sync-skills.{ps1,sh} <cursor|codex|claude>` (creates gitignored local links without mixing conflicting discovery roots).
-  - Antigravity: root `AGENTS.md` + committed `.agents/skills.json` work directly (`./adapters/sync-skills.{ps1,sh} antigravity --verify`).
-- **Attach a separate product repo:** `./adapters/install-product.{ps1,sh} <product-root> <host>` writes `.b3/home` + thin host bridge/links without copying `skills/` ([`decision-011`](research/decisions/decision-011-product-repo-attach.md), [`decision-013`](research/decisions/decision-013-host-neutral-multi-host-layout.md)).
+  - Cursor / Codex / Claude Code: `b3 sync --host <cursor|codex|claude>` (or `./adapters/sync-skills.{ps1,sh} <cursor|codex|claude>`) creates gitignored local links without mixing conflicting discovery roots.
+  - Antigravity: root `AGENTS.md` + committed `.agents/skills.json` work directly (`b3 sync --host antigravity --verify-only`).
+- **Attach a separate product repo:** `b3 install product --product-root <product-root> --host <host>` (or `./adapters/install-product.{ps1,sh}`) writes `.b3/home` + thin host bridge/links without copying `skills/` ([`decision-011`](research/decisions/decision-011-product-repo-attach.md), [`decision-013`](research/decisions/decision-013-host-neutral-multi-host-layout.md)).
 
 ## Architecture
 

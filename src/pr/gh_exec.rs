@@ -625,3 +625,158 @@ fn exec_win_batch_cmd(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_repo_slug_and_pr_number() {
+        assert_eq!(
+            validate_repo_slug("acme/demo").unwrap(),
+            (
+                "acme".to_string(),
+                "demo".to_string(),
+                "acme/demo".to_string()
+            )
+        );
+        assert!(validate_repo_slug("../evil").is_err());
+        assert!(validate_repo_slug("./repo").is_err());
+        assert_eq!(validate_pr_number("42").unwrap(), (42, "42".to_string()));
+        assert!(validate_pr_number("0").is_err());
+        assert!(validate_pr_number("-1").is_err());
+        assert_eq!(
+            parse_github_remote_slug("https://github.com/hptbee/b3_ai-engineering.git").as_deref(),
+            Some("hptbee/b3_ai-engineering")
+        );
+        assert_eq!(
+            parse_github_remote_slug("git@github.com:hptbee/b3_ai-engineering.git").as_deref(),
+            Some("hptbee/b3_ai-engineering")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cmd_roundtrip_preserves_metacharacters_and_enforces_safety() {
+        let dir = std::env::temp_dir().join(format!("b3-ghexec-unit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let echo_cmd = dir.join("gh-echo.cmd");
+        let sleep_cmd = dir.join("gh-sleep.cmd");
+        let paren_cmd = dir.join("gh-(paren).cmd");
+
+        std::fs::write(
+            &echo_cmd,
+            "@echo off\r\nnode -e \"const fs=require('fs');const s=fs.readFileSync(0,'utf8');console.log(JSON.stringify({argv:process.argv.slice(1),stdin:s}));\" \"%~1\" \"%~2\" \"%~3\" \"%~4\" \"%~5\" \"%~6\" \"%~7\" \"%~8\" \"%~9\"\r\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &sleep_cmd,
+            "@echo off\r\nnode -e \"setTimeout(() => {}, 5000);\"\r\n",
+        )
+        .unwrap();
+        std::fs::write(&paren_cmd, "@echo off\r\necho SHOULD_NOT_RUN\r\n").unwrap();
+
+        std::env::set_var("B3_TEST_INJ", "PWNED");
+        std::env::set_var("B3_DELAYED", "DELAYED_PWN");
+
+        let batch1: Vec<String> = vec![
+            "api",
+            "repos/acme/demo/branches/feat%2Fa%2Fb",
+            "%B3_TEST_INJ%",
+            "%PATH%",
+            "!B3_DELAYED!",
+            "a&echo PWNED",
+            "a|b",
+            "a^b",
+            "(x)",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        let res1 = exec_gh(
+            &batch1,
+            &echo_cmd,
+            None,
+            Some(br#"{"ok":true,"nested":"%B3_TEST_INJ%"}"#),
+            Some(10_000),
+        );
+        assert!(res1.ok);
+        assert_eq!(res1.status, Some(0));
+        let parsed1 = crate::json::parse_json(res1.stdout.trim()).unwrap();
+        let argv1: Vec<&str> = parsed1
+            .get("argv")
+            .and_then(|v| v.as_array())
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(
+            argv1,
+            vec![
+                "api",
+                "repos/acme/demo/branches/feat%2Fa%2Fb",
+                "%B3_TEST_INJ%",
+                "%PATH%",
+                "!B3_DELAYED!",
+                "a&echo PWNED",
+                "a|b",
+                "a^b",
+                "(x)",
+            ]
+        );
+        assert_eq!(
+            parsed1.get("stdin").and_then(|v| v.as_str()),
+            Some(r#"{"ok":true,"nested":"%B3_TEST_INJ%"}"#)
+        );
+
+        let batch2: Vec<String> = ["a<b", "a>b", "", "literal-ok"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let res2 = exec_gh(&batch2, &echo_cmd, None, None, Some(10_000));
+        assert!(res2.ok);
+        let parsed2 = crate::json::parse_json(res2.stdout.trim()).unwrap();
+        let argv2: Vec<&str> = parsed2
+            .get("argv")
+            .and_then(|v| v.as_array())
+            .unwrap()
+            .iter()
+            .take(4)
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(argv2, vec!["a<b", "a>b", "", "literal-ok"]);
+
+        assert_eq!(
+            exec_gh(&["api".into(), "bad\\".into()], &echo_cmd, None, None, None).reason,
+            "unsafe_gh_arg"
+        );
+        assert_eq!(
+            exec_gh(
+                &["api".into(), "bad\"q".into()],
+                &echo_cmd,
+                None,
+                None,
+                None
+            )
+            .reason,
+            "unsafe_gh_arg"
+        );
+        assert_eq!(
+            exec_gh(&["api".into(), "ok".into()], &paren_cmd, None, None, None).reason,
+            "unsafe_gh_path"
+        );
+        let to_res = exec_gh(
+            &["api".into(), "slow".into()],
+            &sleep_cmd,
+            None,
+            None,
+            Some(250),
+        );
+        assert!(!to_res.ok);
+        assert_eq!(to_res.reason, "timeout");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

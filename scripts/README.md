@@ -2,6 +2,8 @@
 
 Repository tooling, deterministic `/b3-ship`, `/b3-research-ship`, `/b3-review-loop`, and standalone command guard helpers, optional GitHub PR/merge adapters, context-budget measurement, and validation suites (`research/decisions/decision-010-autonomous-development.md`).
 
+> **Native engine:** Deterministic commands run directly via the zero-dependency Rust `b3` executable (`target/release/b3.exe` / `b3`: `b3 guard <subcommand>`, `b3 pr <subcommand>`, `b3 context measure`, `b3 sync`, `b3 install <subcommand>`). The `scripts/*.{ps1,sh}` entrypoints automatically forward to `b3` (`B3_BIN` override or `target/release/b3*`).
+
 ## Tooling inventory
 
 | Script | Purpose | Usage |

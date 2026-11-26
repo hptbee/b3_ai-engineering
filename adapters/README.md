@@ -2,7 +2,9 @@
 
 B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `review-loop/`) mapped onto **Cursor**, **Codex**, **Claude Code**, and **Antigravity** without duplicating prose.
 
-Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only thin committed entrypoints (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json`) are committed; local discovery links are gitignored and managed by `adapters/sync-skills.{ps1,sh}`.
+> **Native CLI & distribution:** `b3 sync` and `b3 install <product|cursor|antigravity|global>` execute all sync, product-attach, NTFS junction (`DeviceIoControl`), symlink, manifest, and uninstall flows natively via the zero-dependency `b3` binary (`cargo build --release`). The `adapters/*.{ps1,sh}` wrapper scripts forward to `b3` automatically (`B3_BIN` or `target/release/b3*`). Release targets: `x86_64-pc-windows-msvc` (verified), `x86_64-unknown-linux-gnu` / `aarch64-apple-darwin` / `x86_64-apple-darwin` (untested until built in CI).
+
+Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only thin committed entrypoints (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json`) are committed; local discovery links are gitignored and managed by `b3 sync` (`adapters/sync-skills.{ps1,sh}`).
 
 ## Host path matrix
 

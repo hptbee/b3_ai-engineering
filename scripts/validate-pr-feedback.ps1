@@ -8,6 +8,16 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$b3BinName = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
+$b3Bin = if ($env:B3_BIN -and (Test-Path -LiteralPath $env:B3_BIN -PathType Leaf)) {
+    $env:B3_BIN
+} else {
+    $relB3 = Join-Path $repoRoot "target\release\$b3BinName"
+    if (Test-Path -LiteralPath $relB3 -PathType Leaf) { $relB3 } else { $null }
+}
+if ($b3Bin -and -not $env:B3_BIN -and ($env:B3_USE_LEGACY -ne '1')) {
+    $env:B3_BIN = $b3Bin
+}
 $psAdapter = Join-Path $repoRoot 'scripts\b3-pr-github.ps1'
 $shAdapter = Join-Path $repoRoot 'scripts\b3-pr-github.sh'
 $guardPs = Join-Path $repoRoot 'scripts\b3-guard.ps1'
@@ -414,9 +424,10 @@ child.on('close', (code) => {
 
     $shells = @('ps')
     if ($gitBash) { $shells += 'sh' }
+    $matrixLabel = if ($b3Bin -and ($env:B3_USE_LEGACY -ne '1')) { 'native b3 pr matrix' } else { 'node matrix' }
 
     Write-Output "=== B3 PR Feedback Lifecycle Hardening & Simplification Suite ==="
-    Write-Output "[SIMULATED: mocked gh CLI + real isolated sandbox b3-guard verify-run/check (node matrix + $($shells -join '/') wrapper parity)]"
+    Write-Output "[SIMULATED: mocked gh CLI + real isolated sandbox b3-guard verify-run/check ($matrixLabel + $($shells -join '/') wrapper parity)]"
     Write-Output "[LIVE EXTERNAL WRITES: NOT_VERIFIED (no remote PR mutations executed)]"
 
     # Shared helper block injected into each isolated RunspacePool worker (thread-safe ProcessStartInfo execution)
@@ -527,9 +538,15 @@ function Invoke-Adapter([string]$Shell, [string]$StatePath, [string[]]$CliArgs, 
     }
 
     if ($Shell -eq 'node') {
-        $psi.FileName = $ctx.nodeExe
-        $allArgs = @($ctx.coreMjs) + @($CliArgs)
-        $psi.Arguments = ($allArgs | ForEach-Object { ConvertTo-Win32Arg $_ }) -join ' '
+        if ($ctx.b3Bin -and ($env:B3_USE_LEGACY -ne '1')) {
+            $psi.FileName = $ctx.b3Bin
+            $allArgs = @('pr') + @($CliArgs)
+            $psi.Arguments = ($allArgs | ForEach-Object { ConvertTo-Win32Arg $_ }) -join ' '
+        } else {
+            $psi.FileName = $ctx.nodeExe
+            $allArgs = @($ctx.coreMjs) + @($CliArgs)
+            $psi.Arguments = ($allArgs | ForEach-Object { ConvertTo-Win32Arg $_ }) -join ' '
+        }
     } elseif ($Shell -eq 'ps') {
         $psi.FileName = $ctx.psExe
         $allArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ctx.psAdapter) + @($CliArgs)
@@ -565,6 +582,7 @@ function Invoke-Adapter([string]$Shell, [string]$StatePath, [string[]]$CliArgs, 
 
     $sharedCtx = @{
         repoRoot = $repoRoot
+        b3Bin = $b3Bin
         psAdapter = $psAdapter
         shAdapter = $shAdapter
         coreMjs = $coreMjs

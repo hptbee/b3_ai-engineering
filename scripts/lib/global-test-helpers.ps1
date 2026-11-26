@@ -4,6 +4,13 @@
 $script:HelpersRepoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:FailedCount = 0
 $script:PassedCount = 0
+if (-not $env:B3_BIN -and ($env:B3_USE_LEGACY -ne '1')) {
+    $b3BinNameH = if ([IO.Path]::DirectorySeparatorChar -eq '\') { 'b3.exe' } else { 'b3' }
+    $relB3H = Join-Path $script:HelpersRepoRoot "target\release\$b3BinNameH"
+    if (Test-Path -LiteralPath $relB3H -PathType Leaf) {
+        $env:B3_BIN = $relB3H
+    }
+}
 
 function Resolve-B3BashPath {
     $candidates = New-Object System.Collections.Generic.List[string]
