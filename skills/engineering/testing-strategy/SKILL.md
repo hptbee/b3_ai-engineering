@@ -1,9 +1,6 @@
 ---
 name: testing-strategy
-description: >
-  Use when choosing what to test, writing tests for new behavior/bugs, or
-  judging test coverage against risk. Not for mandatory TDD rewrites,
-  running tests as evidence (verification), or visual-only QA.
+description: Use when choosing what to test, writing tests for new behavior/bugs, or judging test coverage against risk. Not for mandatory TDD rewrites, running tests as evidence (verification), or visual-only QA.
 ---
 
 # Testing strategy

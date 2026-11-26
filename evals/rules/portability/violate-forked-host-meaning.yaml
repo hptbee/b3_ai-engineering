@@ -1,0 +1,5 @@
+id: rule-portability-violate-001
+artifact: rules/portability.md
+intent: Rewriting and maintaining separate per-host copies of canonical skills or rules forks portable meaning across hosts
+input: "Copied skills/ and rules/ into .cursor/skills/ and .claude/skills/ and edited each host's copy with divergent review severity rules."
+expected_outcome: violate

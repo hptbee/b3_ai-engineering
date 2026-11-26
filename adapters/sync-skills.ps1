@@ -13,6 +13,11 @@ $commandsSource = Join-Path $root 'commands'
 $agentsSource = Join-Path $root 'agents'
 $commandSkillsSource = Join-Path $root 'adapters\command-skills'
 
+$commonLib = Join-Path $PSScriptRoot 'lib\global-common.ps1'
+if (Test-Path -LiteralPath $commonLib -PathType Leaf) {
+    . $commonLib
+}
+
 function Fail([string]$Message) {
     Write-Error $Message
     exit 1
@@ -20,6 +25,17 @@ function Fail([string]$Message) {
 
 function Initialize-PersonalModelPreferences([string]$HomeDir) {
     if ($DryRun -or $VerifyOnly -or $env:B3_SKIP_MODEL_INIT -eq '1') { return }
+    if (Get-Command Initialize-PersonalModelsFile -ErrorAction SilentlyContinue) {
+        $status = Initialize-PersonalModelsFile -B3Home $HomeDir -NonFatal
+        if ($status -like 'kept:*') {
+            Write-Output "model_preferences=$($status.Substring(5)) (kept existing)"
+        } elseif ($status -like 'created:*') {
+            Write-Output "model_preferences=$($status.Substring(8)) (created from example)"
+        } elseif ($status -like 'error:*') {
+            Write-Output "model_preferences=$status"
+        }
+        return
+    }
     $templateMd = Join-Path $HomeDir 'config\models.example.md'
     if (-not (Test-Path -LiteralPath $templateMd -PathType Leaf)) { return }
     $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
@@ -32,12 +48,17 @@ function Initialize-PersonalModelPreferences([string]$HomeDir) {
         Write-Output "model_preferences=$dest (kept existing)"
         return
     }
-    $parent = Split-Path -Parent $dest
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    try {
+        $parent = Split-Path -Parent $dest
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $templateMd -Destination $dest
+        Write-Output "model_preferences=$dest (created from example)"
+    } catch {
+        Write-Warning "optional model preferences could not be initialized at $dest : $($_.Exception.Message)"
+        Write-Output "model_preferences=error:$dest"
     }
-    Copy-Item -LiteralPath $templateMd -Destination $dest
-    Write-Output "model_preferences=$dest (created from example)"
 }
 
 function Test-IsLink([System.IO.FileSystemInfo]$Item) {

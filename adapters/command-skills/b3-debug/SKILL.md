@@ -1,9 +1,6 @@
 ---
 name: b3-debug
-description: >
-  Investigate root cause of a failure before patching. Use when a bug, test
-  failure, or unexpected behavior needs diagnosis, or the user says $b3-debug
-  or /b3-debug. Do not skip to implement-from-guess.
+description: Explicit command wrapper ($b3-debug, /b3-debug, b3-debug) for root-cause diagnosis before patching via debugging skill. Not for guess-and-patch or /b3-ship.
 ---
 
 # b3-debug

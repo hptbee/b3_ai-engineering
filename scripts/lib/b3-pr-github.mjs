@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { execGh, hasControlChars, resolveBashBinary } from './b3-gh-exec.mjs';
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -50,7 +51,6 @@ class B3Exit extends Error {
 
 const emit = (payload, code) => { throw new B3Exit(payload, code); };
 const fail = (status, message, code = EXIT_ERROR, extra = {}) => emit({ status, error: message, ...extra }, code);
-const hasControlChars = (str) => /[\x00-\x1F\x7F]/.test(str);
 const sha256Hex = (str) => crypto.createHash('sha256').update(str, 'utf8').digest('hex');
 const normalizeText = (str) => String(str || '').replace(/\r\n/g, '\n').trim();
 const stripMarkers = (str) => normalizeText(String(str || '').replace(MARKER_SCAN_RE, ''));
@@ -412,44 +412,22 @@ function withStateLock(statePath, opName, fn) {
   }
 }
 
-// --- Safe gh CLI transport (stdin-JSON only) ---
-let cachedGhPath = null;
-function resolveGhBinary() {
-  if (cachedGhPath) return cachedGhPath;
-  const dirs = (process.env.PATH || process.env.Path || '').split(path.delimiter).filter(Boolean);
-  const isWin = process.platform === 'win32';
-  const names = isWin ? ['gh.exe', 'gh.cmd', 'gh.bat'] : ['gh'];
-  for (const dir of dirs) {
-    for (const name of names) {
-      const candidate = path.join(dir, name);
-      try {
-        if (!fs.statSync(candidate).isFile()) continue;
-        if (!isWin) fs.accessSync(candidate, fs.constants.X_OK);
-        cachedGhPath = candidate;
-        return candidate;
-      } catch { /* continue */ }
-    }
-  }
-  fail('PR_API_ERROR', 'gh CLI not found in PATH');
-}
-
+// --- Safe gh CLI transport (stdin-JSON only, via shared b3-gh-exec) ---
 function invokeGh(args, stdinStr = null, options = {}) {
   for (const a of args) {
     if (!SAFE_GH_ARG_RE.test(a)) fail('PR_INVALID_ARGS', `Unsafe gh argument rejected: ${a}`);
   }
-  const ghBin = resolveGhBinary();
-  const isWinBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(ghBin);
-  const spawnOpts = { encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 };
-  if (stdinStr !== null) spawnOpts.input = stdinStr;
-  let res;
-  if (isWinBatch) {
-    if (/[%"!&|<>^\x00-\x1F\x7F]/.test(ghBin)) fail('PR_API_ERROR', 'Unsafe Windows batch path for gh CLI rejected');
-    const cmdLine = `"${ghBin}" ${args.map((a) => `"${a}"`).join(' ')}`;
-    res = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"${cmdLine}"`], { ...spawnOpts, windowsVerbatimArguments: true });
-  } else {
-    res = spawnSync(ghBin, args, { ...spawnOpts, shell: false });
+  const res = execGh(args, {
+    stdin: stdinStr,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (!res.ok) {
+    if (res.reason === 'gh_not_found') fail('PR_API_ERROR', 'gh CLI not found in PATH');
+    if (res.reason === 'unsafe_gh_path') fail('PR_API_ERROR', 'Unsafe path for gh CLI rejected');
+    if (res.reason === 'unsafe_gh_arg') fail('PR_INVALID_ARGS', res.error?.message || 'Unsafe gh argument rejected');
+    if (res.reason === 'timeout') fail('PR_API_ERROR', 'gh CLI timed out');
+    fail('PR_API_ERROR', `Failed to invoke gh: ${res.error?.message || res.reason}`);
   }
-  if (res.error) fail('PR_API_ERROR', `Failed to invoke gh: ${res.error.message}`);
   const stdout = (res.stdout || '').trim();
   const stderr = (res.stderr || '').trim();
   if (res.status !== 0) {
@@ -863,6 +841,54 @@ function computeCommittedTreeHash(repoRoot, expectedHead, receiptRelPathsRaw) {
   return hash;
 }
 
+function isRunnableBinary(filePath) {
+  if (!filePath || hasControlChars(filePath)) return false;
+  if (process.platform === 'win32' && /\\microsoft\\windowsapps\\/i.test(filePath.replace(/\//g, '\\'))) return false;
+  try {
+    const st = fs.statSync(filePath);
+    if (!st.isFile()) return false;
+    if (process.platform !== 'win32') fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let cachedPsKey = null;
+let cachedPsPath = '';
+function resolvePowerShellBinary() {
+  const pathEnv = process.env.PATH || process.env.Path || '';
+  if (cachedPsKey === pathEnv) return cachedPsPath;
+  const finish = (val) => { cachedPsKey = pathEnv; cachedPsPath = val; return val; };
+  const isWin = process.platform === 'win32';
+  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+
+  const pwshNames = isWin ? ['pwsh.exe'] : ['pwsh'];
+  for (const d of dirs) {
+    for (const name of pwshNames) {
+      const cand = path.join(d, name);
+      if (isRunnableBinary(cand)) return finish(cand);
+    }
+  }
+  if (isWin) {
+    const pwsh7 = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe');
+    if (isRunnableBinary(pwsh7)) return finish(pwsh7);
+  }
+
+  const psNames = isWin ? ['powershell.exe'] : ['powershell'];
+  for (const d of dirs) {
+    for (const name of psNames) {
+      const cand = path.join(d, name);
+      if (isRunnableBinary(cand)) return finish(cand);
+    }
+  }
+  if (isWin) {
+    const winPs = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    if (isRunnableBinary(winPs)) return finish(winPs);
+  }
+  return finish('');
+}
+
 function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expectedCmd, requiredPaths) {
   const headRes = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--verify', `${expectedHead}^{commit}`], { encoding: 'utf8', shell: false, windowsHide: true });
   const localHeadRes = spawnSync('git', ['-C', repoRoot, 'rev-parse', '--verify', 'HEAD^{commit}'], { encoding: 'utf8', shell: false, windowsHide: true });
@@ -877,14 +903,39 @@ function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expect
   const realRoot = fs.realpathSync(repoRoot);
   const realReceipt = fs.realpathSync(receiptFullPath);
   const relReceipt = path.relative(realRoot, realReceipt).replace(/\\/g, '/');
-  if (!relReceipt || relReceipt === '.' || relReceipt.startsWith('..') || path.isAbsolute(relReceipt) || relReceipt.includes(':')) {
-    fail('PR_VERIFY_REQUIRED', `Verification receipt must reside inside repository root (${repoRoot})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+  if (!relReceipt || relReceipt === '.' || relReceipt.startsWith('..') || path.isAbsolute(relReceipt) || relReceipt.includes(':') || !relReceipt.startsWith('.b3/')) {
+    fail('PR_VERIFY_REQUIRED', `Verification receipt must reside inside repository .b3/ directory (${repoRoot})`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
   }
 
   const reqCsv = requiredPaths.join(',');
-  const guardRes = process.platform === 'win32'
-    ? spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(SCRIPT_ROOT, 'b3-guard.ps1'), 'verify-check', '-RepoRoot', repoRoot, '-ReceiptPath', relReceipt, '-ExpectedCmd', expectedCmd, '-RelevantPaths', reqCsv], { encoding: 'utf8', shell: false, windowsHide: true })
-    : spawnSync('bash', [path.join(SCRIPT_ROOT, 'b3-guard.sh'), 'verify-check', '--repo-root', repoRoot, '--receipt-path', relReceipt, '--expected-cmd', expectedCmd, '--relevant-paths', reqCsv], { encoding: 'utf8', shell: false, windowsHide: true });
+  let guardRes;
+  const bashBin = resolveBashBinary();
+  if (bashBin) {
+    const guardSh = process.platform === 'win32'
+      ? path.join(SCRIPT_ROOT, 'b3-guard.sh').replace(/\\/g, '/')
+      : path.join(SCRIPT_ROOT, 'b3-guard.sh');
+    const rootArg = process.platform === 'win32' ? repoRoot.replace(/\\/g, '/') : repoRoot;
+    guardRes = spawnSync(bashBin, [guardSh, 'verify-check', '--repo-root', rootArg, '--receipt-path', relReceipt, '--expected-cmd', expectedCmd, '--relevant-paths', reqCsv], { encoding: 'utf8', shell: false, windowsHide: true });
+  } else {
+    const psBin = resolvePowerShellBinary();
+    if (!psBin) {
+      fail('PR_VERIFY_REQUIRED', 'Neither bash nor PowerShell (pwsh/powershell) found to run b3-guard verify-check', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
+    }
+    const psCmd = '& $env:B3_VC_GUARD verify-check -RepoRoot ([string]$env:B3_VC_ROOT) -ReceiptPath ([string]$env:B3_VC_RECEIPT) -ExpectedCmd ([string]$env:B3_VC_CMD) -RelevantPaths ([string]$env:B3_VC_PATHS); exit $LASTEXITCODE';
+    const psArgs = process.platform === 'win32'
+      ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psCmd]
+      : ['-NoProfile', '-Command', psCmd];
+    const vcEnv = {
+      ...process.env,
+      B3_VC_GUARD: path.join(SCRIPT_ROOT, 'b3-guard.ps1'),
+      B3_VC_ROOT: repoRoot,
+      B3_VC_RECEIPT: relReceipt,
+      B3_VC_HEAD: expectedHead,
+      B3_VC_CMD: expectedCmd,
+      B3_VC_PATHS: reqCsv,
+    };
+    guardRes = spawnSync(psBin, psArgs, { encoding: 'utf8', env: vcEnv, shell: false, windowsHide: true });
+  }
   const guardOut = `${guardRes.stdout || ''}\n${guardRes.stderr || ''}`.trim();
   if (guardRes.error || guardRes.status !== 0 || !guardOut.includes('VERIFY_VALID:')) {
     fail('PR_VERIFY_REQUIRED', `Canonical b3-guard verify-check failed (exit ${guardRes.status ?? 'err'}): ${sanitizeUntrustedText(guardOut).slice(0, 260)}`, EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
@@ -908,7 +959,7 @@ function runCanonicalVerifyCheck(repoRoot, receiptFullPath, expectedHead, expect
   return { guardMessage: guardOut.split(/\r?\n/)[0], committedTreeHash };
 }
 
-function parseResolveEvidence(evidencePath, repoFull, prNumber, expectedHead, threadId, fixCommit) {
+function parseResolveEvidence(evidencePath, repoRoot, repoFull, prNumber, expectedHead, threadId, fixCommit) {
   const raw = readSafeInputFile(evidencePath, '--evidence-file');
   let ev;
   try { ev = JSON.parse(raw); } catch { fail('PR_VERIFY_REQUIRED', '--evidence-file is not valid JSON', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false }); }
@@ -931,8 +982,23 @@ function parseResolveEvidence(evidencePath, repoFull, prNumber, expectedHead, th
   const receiptRel = String(ev.verify_receipt_path || '').trim();
   if (!receiptRel) blocked('Evidence requires verify_receipt_path');
   validateRawPathSyntax(receiptRel, 'verify_receipt_path', true);
-  const receiptFullPath = path.isAbsolute(receiptRel) ? receiptRel : path.resolve(path.dirname(path.resolve(evidencePath)), receiptRel);
-  validateSafePath(receiptFullPath, 'verify_receipt_path', { expectDir: false, mustExist: true });
+  const receiptCandidate = path.isAbsolute(receiptRel) ? path.resolve(receiptRel) : path.resolve(repoRoot, receiptRel);
+  const receiptFullPath = validateSafePath(receiptCandidate, 'verify_receipt_path', { expectDir: false, mustExist: true });
+  const dotB3Dir = path.join(repoRoot, '.b3');
+  let dotB3Ok = false;
+  try {
+    const lst = fs.lstatSync(dotB3Dir);
+    dotB3Ok = !lst.isSymbolicLink() && lst.isDirectory() && fs.statSync(dotB3Dir).isDirectory();
+  } catch {
+    dotB3Ok = false;
+  }
+  if (!dotB3Ok) {
+    blocked(`Verification receipt must reside inside repository .b3/ directory (${dotB3Dir})`);
+  }
+  const relCheck = path.relative(fs.realpathSync(dotB3Dir), fs.realpathSync(receiptFullPath)).replace(/\\/g, '/');
+  if (!relCheck || relCheck === '.' || relCheck.startsWith('..') || path.isAbsolute(relCheck) || relCheck.includes(':')) {
+    blocked(`Verification receipt must reside inside repository .b3/ directory (${dotB3Dir})`);
+  }
   return { basis, primaryThreadId, targetPath, fixedPaths, checkedCommand, receiptFullPath };
 }
 
@@ -1272,7 +1338,7 @@ function handleResolve(flags) {
     assertMutationOwnerAllowed(gitCtx, 'resolve', flags['repo-root']);
   }
   if (!flags['evidence-file']) fail('PR_VERIFY_REQUIRED', '--evidence-file (bound to repo, PR, HEAD, thread, fix commit, and canonical b3-verify-v1 receipt) is required', EXIT_BLOCKED, { outcome: 'blocked_before_write', mutated: false });
-  const evidence = parseResolveEvidence(flags['evidence-file'], repo.full, prNumber, expectedHead, threadId, fixCommit);
+  const evidence = parseResolveEvidence(flags['evidence-file'], gitCtx.repoRoot, repo.full, prNumber, expectedHead, threadId, fixCommit);
   const pathsToVerify = [...new Set([evidence.targetPath, ...evidence.fixedPaths])];
   const verifyRes = runCanonicalVerifyCheck(gitCtx.repoRoot, evidence.receiptFullPath, expectedHead, evidence.checkedCommand, pathsToVerify);
 

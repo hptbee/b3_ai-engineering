@@ -54,7 +54,7 @@ Volatile knowledge, official docs for the stack in use, and domain skills. Stale
 
 ### 7. Personal preferences
 
-Profile files under `profiles/` and personal knowledge. Useful for defaults when nothing higher speaks.
+Personal background under [`../knowledge/personal/`](../knowledge/personal/) (for example, [`engineering-context.md`](../knowledge/personal/engineering-context.md)); a separate `profiles/` directory is unimplemented per [`../AGENTS.md`](../AGENTS.md) until recorded by the owner. Useful for defaults when nothing higher speaks.
 
 ```text
 Personal Profile

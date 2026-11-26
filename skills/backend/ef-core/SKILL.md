@@ -1,9 +1,6 @@
 ---
 name: ef-core
-description: >
-  Use for EF Core LINQ-to-Entities: tracking, projections, Include/N+1,
-  round trips, pagination, transactions, concurrency tokens, migrations.
-  Not for Dapper/ADO.NET, DbContext DI (aspnet-core), or unmeasured indexes.
+description: "Use for EF Core LINQ-to-Entities: tracking, projections, Include/N+1, round trips, pagination, transactions, concurrency tokens, migrations. Not for Dapper/ADO.NET, DbContext DI (aspnet-core), or unmeasured indexes."
 ---
 
 # EF Core

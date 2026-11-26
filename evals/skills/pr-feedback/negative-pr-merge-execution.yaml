@@ -1,0 +1,6 @@
+id: skill-pr-feedback-negative-002
+artifact: skills/engineering/pr-feedback/SKILL.md
+intent: Merging a pull request or checking merge policy must not activate pr-feedback
+input: "Squash and merge PR #42 into main now that CI checks are green."
+expected_bucket: negative
+notes: pr-feedback explicitly forbids PR merge execution; governed PR merge belongs to b3-ship or b3-research-ship merge-policy gates.

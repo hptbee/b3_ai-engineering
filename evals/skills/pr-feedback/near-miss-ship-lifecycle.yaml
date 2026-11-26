@@ -1,0 +1,7 @@
+id: skill-pr-feedback-near-miss-002
+artifact: skills/engineering/pr-feedback/SKILL.md
+intent: Full autonomous feature delivery ending in opening a new PR belongs to b3-ship rather than pr-feedback
+input: "Plan, implement, verify, run the review loop, and open a pull request for the new rate-limiter endpoint."
+expected_bucket: near-miss
+preferred_skill: b3-ship
+notes: Opening a fresh PR as part of end-to-end delivery routes to /b3-ship (workflows/ship.md), not existing PR feedback handling.

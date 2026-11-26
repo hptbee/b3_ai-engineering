@@ -14,7 +14,7 @@ Schemas for [`../research-ship.md`](../research-ship.md). Active `{RUN_DIR}` = `
 - run_base_sha: <SHA>
 - initial_dirty_paths: <csv or none>
 - pr_number: <num or none>
-- merge_status: <NONE|PR_READY|MERGE_BLOCKED|MERGED_VERIFIED>
+- merge_status: <NONE|PR_READY|LOCAL_ELIGIBLE_ONLY|PROVIDER_UNAVAILABLE|MERGE_BLOCKED|MERGED_VERIFIED>
 - last_wave: <none or dispatch=PARALLEL agents=<N> isolation=<mode> | dispatch=SEQUENTIAL reason=<reason>>
 - run_status: running
 - updated: <ISO-8601>
@@ -31,18 +31,18 @@ Schemas for [`../research-ship.md`](../research-ship.md). Active `{RUN_DIR}` = `
 
 ## 2. Research Plan (`{RUN_DIR}/research-plan.md`)
 
-For small 1-unit queries, inline these fields in `progress.md` instead of creating a separate file:
+For 1-unit queries, inline these fields in `progress.md`:
 
 ```markdown
 # Research Plan: <objective>
 - version: 1
-- single_writer_paths: <csv ledgers/manifests/authority files or none>
+- single_writer_paths: <csv ledgers/manifests/authority or none>
 - protected_paths: <csv or none>
 
 ### U001 — <title>
 - question: <bounded question>
 - current_knowledge: <verified baseline>
-- missing_evidence: <gaps to resolve>
+- missing_evidence: <gaps>
 - required_sources: <primary/secondary/repo paths>
 - schools_or_domains: <applicable schools/domains>
 - depends_on: []
@@ -55,7 +55,7 @@ For small 1-unit queries, inline these fields in `progress.md` instead of creati
 
 ## 3. Evidence Index (`{RUN_DIR}/evidence-index.md`)
 
-Keep passages compact (cite path/section/edition + SHA-256 manifest, never paste entire books/logs):
+Cite path/section/edition + SHA-256 manifest (never paste full books/logs):
 
 ```markdown
 # Evidence Index
@@ -68,17 +68,18 @@ Keep passages compact (cite path/section/edition + SHA-256 manifest, never paste
 
 `class` ∈ `primary|secondary-scholarly|repo-evidence|prior-verified|unverified|conflicting`.
 
-## 4. Portable Product Policy & Profile Contract (in product repo `.b3/`)
+## 4. Product Policy & Profile Contract (in product `.b3/`)
 
-Core never embeds domain rules; products optionally provide:
-- `.b3/research-profile.md`: domain sources, school rules, protected authority paths, editorial reviewer policy, single-writer ledger paths.
-- `.b3/research-policy.json`:
+Products optionally provide:
+- `.b3/research-profile.md`: sources, school rules, authority paths, editorial policy, single-writer paths.
+- `.b3/research-policy.json` (read from canonical trunk authority for merge authorization):
 
 ```json
 {
   "auto_merge": "disabled",
   "protected_paths": ["docs/authority/", "releases/"],
   "allow_protected_paths": false,
+  "allowed_target_branches": ["main"],
   "require_ci": true,
   "require_review": true
 }

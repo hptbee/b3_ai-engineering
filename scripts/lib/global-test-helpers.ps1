@@ -70,16 +70,191 @@ function Complete-ValidationSuite {
     exit 0
 }
 
-function Invoke-PsScript([string]$ScriptPath, [string[]]$ScriptArgs) {
-    $prev = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ScriptArgs 2>&1
-        $code = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $prev
+$script:InProcRunspace = $null
+$script:ParamMetaCache = @{}
+$script:RepoSeedRoot = Join-Path $env:TEMP ("b3-repo-seed-" + $PID)
+$script:RepoSeedCache = @{}
+$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action ([scriptblock]::Create("if (Test-Path -LiteralPath '$($script:RepoSeedRoot.Replace("'", "''"))') { Remove-Item -LiteralPath '$($script:RepoSeedRoot.Replace("'", "''"))' -Recurse -Force -ErrorAction SilentlyContinue }"))
+
+function Get-B3ScriptParamMeta([string]$FullPath) {
+    $item = Get-Item -LiteralPath $FullPath -ErrorAction Stop
+    $key = "$($item.FullName)|$($item.LastWriteTimeUtc.Ticks)"
+    if ($script:ParamMetaCache.ContainsKey($key)) {
+        return $script:ParamMetaCache[$key]
     }
-    $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
+    $escapedPath = [System.Management.Automation.WildcardPattern]::Escape($item.FullName)
+    $cmdInfo = Get-Command -Name $escapedPath -CommandType ExternalScript -ErrorAction Stop
+    $allNames = New-Object System.Collections.Generic.List[string]
+    $typeByName = @{}
+    foreach ($kv in $cmdInfo.Parameters.GetEnumerator()) {
+        $canon = $kv.Key
+        $isSw = ($kv.Value.ParameterType -eq [switch])
+        $allNames.Add($canon)
+        $typeByName[$canon.ToLowerInvariant()] = @{ Name = $canon; IsSwitch = $isSw }
+        foreach ($al in $kv.Value.Aliases) {
+            $allNames.Add($al)
+            $typeByName[$al.ToLowerInvariant()] = @{ Name = $canon; IsSwitch = $isSw }
+        }
+    }
+    $meta = @{ Names = $allNames.ToArray(); Map = $typeByName }
+    $script:ParamMetaCache[$key] = $meta
+    return $meta
+}
+
+function Resolve-B3ParamToken([hashtable]$Meta, [string]$RawName) {
+    $low = $RawName.ToLowerInvariant()
+    if ($Meta.Map.ContainsKey($low)) {
+        return $Meta.Map[$low]
+    }
+    $matchesList = New-Object System.Collections.Generic.List[object]
+    $seenCanon = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($n in $Meta.Names) {
+        if ($n.ToLowerInvariant().StartsWith($low, [System.StringComparison]::Ordinal)) {
+            $entry = $Meta.Map[$n.ToLowerInvariant()]
+            if ($seenCanon.Add($entry.Name)) {
+                $matchesList.Add($entry)
+            }
+        }
+    }
+    if ($matchesList.Count -eq 1) {
+        return $matchesList[0]
+    }
+    return $null
+}
+
+function Invoke-PsScript([string]$ScriptPath, [string[]]$ScriptArgs) {
+    if ($env:B3_TEST_OUT_OF_PROC_PS -eq '1' -or -not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $raw = & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ScriptArgs 2>&1
+            $code = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        $lines = @($raw | ForEach-Object { ([string]$_).TrimEnd("`r") })
+        return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
+    }
+
+    if ($null -eq $script:InProcRunspace) {
+        $script:InProcRunspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $script:InProcRunspace.Open()
+    }
+
+    $resolvedScript = (Resolve-Path -LiteralPath $ScriptPath).ProviderPath
+    $meta = Get-B3ScriptParamMeta -FullPath $resolvedScript
+    if ($null -eq $ScriptArgs -or $ScriptArgs.Count -eq 0) {
+        $argArr = [string[]]@()
+    } else {
+        $argArr = New-Object 'string[]' $ScriptArgs.Count
+        [System.Array]::Copy($ScriptArgs, $argArr, $ScriptArgs.Count)
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('Set-Location -LiteralPath $b3Cwd; $global:LASTEXITCODE = 0; $ErrorActionPreference = "Continue"; try { & $b3Script ')
+    $expectVal = $false
+    for ($i = 0; $i -lt $argArr.Count; $i++) {
+        $tok = $argArr[$i]
+        if (-not $expectVal -and $null -ne $tok -and $tok -match '^-([A-Za-z][A-Za-z0-9_]*)(?::(.*))?$') {
+            $rawParam = $Matches[1]
+            $hasColon = $tok.Contains(':')
+            $colonVal = $Matches[2]
+            $pInfo = Resolve-B3ParamToken -Meta $meta -RawName $rawParam
+            if ($null -ne $pInfo) {
+                if ($pInfo.IsSwitch) {
+                    if ($hasColon) {
+                        $bLit = if ($colonVal -match '^(true|\$true|1)$') { '$true' } else { '$false' }
+                        [void]$sb.Append("-$($pInfo.Name):$bLit ")
+                    } else {
+                        [void]$sb.Append("-$($pInfo.Name) ")
+                    }
+                    continue
+                } else {
+                    if ($hasColon) {
+                        $argArr[$i] = [string]$colonVal
+                        [void]$sb.Append("-$($pInfo.Name) `$b3Args[$i] ")
+                    } else {
+                        [void]$sb.Append("-$($pInfo.Name) ")
+                        $expectVal = $true
+                    }
+                    continue
+                }
+            } elseif (-not $hasColon) {
+                # Unknown -Param token: let PowerShell emit native ParameterBindingException
+                [void]$sb.Append("-$rawParam ")
+                continue
+            }
+        }
+        [void]$sb.Append("`$b3Args[$i] ")
+        $expectVal = $false
+    }
+    [void]$sb.Append('2>&1 | ForEach-Object { if ($null -ne $_) { [Console]::Out.WriteLine([string]$_) } }; $b3Exit = if ($null -ne $LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 } } catch { [Console]::Out.WriteLine($_.ToString()); $b3Exit = 1 }; [PSCustomObject]@{ B3ExitCode = $b3Exit }')
+
+    $callerCwd = (Get-Location).ProviderPath
+    $callerSysCwd = [System.Environment]::CurrentDirectory
+    $needEnvSnap = ($resolvedScript -notmatch '[\\/]scripts[\\/]b3-guard\.ps1$')
+    $envSnap = $null
+    if ($needEnvSnap) {
+        $envSnap = @{}
+        foreach ($de in [System.Environment]::GetEnvironmentVariables().GetEnumerator()) {
+            $envSnap[[string]$de.Key] = [string]$de.Value
+        }
+    }
+
+    $origOut = [Console]::Out
+    $origErr = [Console]::Error
+    $swCapture = New-Object System.IO.StringWriter
+    $ps = [powershell]::Create()
+    $ps.Runspace = $script:InProcRunspace
+    $code = 0
+    try {
+        [System.Environment]::CurrentDirectory = $callerCwd
+        $script:InProcRunspace.SessionStateProxy.SetVariable('b3Cwd', $callerCwd)
+        $script:InProcRunspace.SessionStateProxy.SetVariable('b3Script', $resolvedScript)
+        $script:InProcRunspace.SessionStateProxy.SetVariable('b3Args', $argArr)
+        [Console]::SetOut($swCapture)
+        [Console]::SetError($swCapture)
+        $res = $ps.AddScript($sb.ToString()).Invoke()
+        foreach ($item in $res) {
+            if ($item -is [PSCustomObject] -and $null -ne $item.PSObject.Properties['B3ExitCode']) {
+                $code = [int]$item.B3ExitCode
+            }
+        }
+    } finally {
+        [Console]::SetOut($origOut)
+        [Console]::SetError($origErr)
+        $ps.Dispose()
+        [System.Environment]::CurrentDirectory = $callerSysCwd
+        if ($needEnvSnap) {
+            $curEnv = [System.Environment]::GetEnvironmentVariables()
+            foreach ($de in @($curEnv.GetEnumerator())) {
+                $k = [string]$de.Key
+                if (-not $envSnap.ContainsKey($k)) {
+                    [System.Environment]::SetEnvironmentVariable($k, $null)
+                } elseif ([string]$de.Value -cne $envSnap[$k]) {
+                    [System.Environment]::SetEnvironmentVariable($k, $envSnap[$k])
+                }
+            }
+            foreach ($kv in $envSnap.GetEnumerator()) {
+                if (-not $curEnv.Contains($kv.Key)) {
+                    [System.Environment]::SetEnvironmentVariable($kv.Key, $kv.Value)
+                }
+            }
+        }
+    }
+
+    $capturedText = $swCapture.ToString()
+    $swCapture.Dispose()
+    $lines = if ([string]::IsNullOrEmpty($capturedText)) {
+        @()
+    } else {
+        $split = $capturedText -split "`r?`n"
+        if ($split.Count -gt 0 -and $split[$split.Count - 1] -eq '') {
+            if ($split.Count -eq 1) { @() } else { @($split[0..($split.Count - 2)]) }
+        } else {
+            @($split)
+        }
+    }
     return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
 }
 
@@ -274,6 +449,18 @@ function Invoke-ShCmd([string]$BashCmd) {
     return @{ Code = $code; Lines = $lines; Text = ($lines -join "`n") }
 }
 
+function Copy-B3DirectoryTree([string]$SourceDir, [string]$DestDir) {
+    [System.IO.Directory]::CreateDirectory($DestDir) | Out-Null
+    foreach ($dirPath in [System.IO.Directory]::GetDirectories($SourceDir, '*', [System.IO.SearchOption]::AllDirectories)) {
+        $rel = $dirPath.Substring($SourceDir.Length).TrimStart('\', '/')
+        [System.IO.Directory]::CreateDirectory((Join-Path $DestDir $rel)) | Out-Null
+    }
+    foreach ($filePath in [System.IO.Directory]::GetFiles($SourceDir, '*', [System.IO.SearchOption]::AllDirectories)) {
+        $rel = $filePath.Substring($SourceDir.Length).TrimStart('\', '/')
+        [System.IO.File]::Copy($filePath, (Join-Path $DestDir $rel), $true)
+    }
+}
+
 function Init-B3TestRepo {
     param(
         [Parameter(Mandatory = $true, Position = 0)][string]$RepoPath,
@@ -284,7 +471,45 @@ function Init-B3TestRepo {
         [string]$InitialFileName = 'README.md',
         [string]$InitialFileContent = 'base'
     )
+    $RepoPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepoPath)
+    $preExisted = (Test-Path -LiteralPath $RepoPath) -and (@(Get-ChildItem -LiteralPath $RepoPath -Force -ErrorAction SilentlyContinue).Count -gt 0)
     New-Item -ItemType Directory -Path $RepoPath -Force | Out-Null
+
+    if (-not $preExisted) {
+        $seedKey = "$DefaultBranch|$UserEmail|$UserName|$($InitialCommit.IsPresent)|$InitialFileName|$InitialFileContent"
+        if (-not $script:RepoSeedCache.ContainsKey($seedKey) -or -not (Test-Path -LiteralPath $script:RepoSeedCache[$seedKey])) {
+            New-Item -ItemType Directory -Path $script:RepoSeedRoot -Force | Out-Null
+            $seedDir = Join-Path $script:RepoSeedRoot ([guid]::NewGuid().ToString('N').Substring(0, 12))
+            New-Item -ItemType Directory -Path $seedDir -Force | Out-Null
+            $prev = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            Push-Location $seedDir
+            try {
+                foreach ($gitArgs in @(@('init', '-q'), @('symbolic-ref', 'HEAD', "refs/heads/$DefaultBranch"), @('config', 'user.email', $UserEmail), @('config', 'user.name', $UserName))) {
+                    $out = & git @gitArgs 2>&1
+                    if ($LASTEXITCODE -ne 0) { throw "git $($gitArgs -join ' ') failed in ${seedDir}: $($out -join ' ')" }
+                }
+                if ($InitialCommit) {
+                    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                    $initTarget = Join-Path $seedDir $InitialFileName
+                    $initParent = Split-Path -Parent $initTarget
+                    if ($initParent -and -not (Test-Path -LiteralPath $initParent)) { New-Item -ItemType Directory -Path $initParent -Force | Out-Null }
+                    [System.IO.File]::WriteAllText($initTarget, "$InitialFileContent`n", $utf8NoBom)
+                    foreach ($gitArgs in @(@('add', $InitialFileName), @('commit', '-qm', 'init'))) {
+                        $out = & git @gitArgs 2>&1
+                        if ($LASTEXITCODE -ne 0) { throw "git $($gitArgs -join ' ') failed in ${seedDir}: $($out -join ' ')" }
+                    }
+                }
+            } finally {
+                Pop-Location
+                $ErrorActionPreference = $prev
+            }
+            $script:RepoSeedCache[$seedKey] = $seedDir
+        }
+        Copy-B3DirectoryTree -SourceDir $script:RepoSeedCache[$seedKey] -DestDir $RepoPath
+        return
+    }
+
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     Push-Location $RepoPath

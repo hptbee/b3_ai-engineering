@@ -1,9 +1,6 @@
 ---
 name: typescript-contracts
-description: >
-  Use for TypeScript types: narrowing, unions, generics, unknown vs any,
-  assertions, nullability, DTO vs domain types, runtime JSON validation.
-  Not for REST error/pagination design (api-design) or tsc evidence.
+description: "Use for TypeScript types: narrowing, unions, generics, unknown vs any, assertions, nullability, DTO vs domain types, runtime JSON validation. Not for REST error/pagination design (api-design) or tsc evidence."
 ---
 
 # TypeScript contracts

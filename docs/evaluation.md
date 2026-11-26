@@ -4,7 +4,7 @@ This repository will evaluate **itself**: whether the right artifact activates, 
 
 Application test suites for product work live in those products. Evals here live under `evals/` when they exist.
 
-**Status:** trigger fixtures for foundation and synthesized domain skills; review-loop scenarios. Automated runner, CI, and capability benchmarks **deferred** (decision-005). See [`evals/README.md`](../evals/README.md).
+**Status:** `299` YAML schema/activation and lifecycle fixtures across `skills/` (`176`), `workflows/` (`64`), `review-loop/` (`26`), `commands/` (`16`), `rules/` (`10`), and `agents/` (`7`). Automated LLM runner, CI, and capability benchmarks **deferred** (decision-005). See [`evals/README.md`](../evals/README.md).
 
 ## Intended layout
 
@@ -95,21 +95,24 @@ When a skill is applied to a fixture (or a recorded real task), score at least:
 
 Quality evals need fixtures with a known good outcome, not only prompt sniff tests.
 
-## Review-loop eval folders
+## Review-loop eval folders (`26` YAML cases across `8` folders)
 
-| Folder | Protects |
-| --- | --- |
-| `false-positive/` | Speculative noise not treated as confirmed defects |
-| `false-convergence/` | No-op diffs, repeated findings, papered-over disagreement |
-| `tool-failure/` | Failed/missing tools → INCOMPLETE, not PASS |
-| `iteration-limit/` | Budget exhaustion → INCOMPLETE, not PASS |
-| `finding-lifecycle/` | Status transitions and severity ≠ confidence |
+| Folder | Cases | Protects |
+| --- | ---: | --- |
+| `false-positive/` | 2 | Speculative noise not treated as confirmed defects |
+| `false-convergence/` | 2 | No-op diffs, repeated findings, papered-over disagreement |
+| `tool-failure/` | 2 | Failed/missing tools → INCOMPLETE, not PASS |
+| `iteration-limit/` | 1 | Budget exhaustion → INCOMPLETE, not PASS |
+| `finding-lifecycle/` | 2 | Status transitions and severity ≠ confidence |
+| `adaptive-sizing/` | 8 | 6-tier T-shirt sizing (`XS`..`XXL`), delta re-review, hierarchical `L0`–`L4` unit bounds, and decoupled risk dispatch |
+| `quality-gate/` | 1 | Non-blocking `LOW` remaining + zero open blockers + verified tests → `PASS` |
+| `orchestration/` | 8 | Single trigger vs single-pass `/b3-review`, independent reviewer/fixer, specialist routing, residue sweep, and `SINGLE_AGENT_LIMIT` honesty |
 
 A loop that always reports success is a failed loop. A loop that always reports dozens of speculative issues is also a failed loop.
 
 ## Workflow & command eval folders
 
-`evals/workflows/ship/` holds lifecycle fixtures for `workflows/ship.md`, `evals/workflows/research-ship/` holds research-first delivery fixtures for `workflows/research-ship.md`, and `evals/commands/` holds boundary, evidence, and convergence fixtures for the six standalone commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-review-loop`, `/b3-verify`). Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). YAML cases remain schema-checked via `scripts/validate-evals.sh`. Deterministic guard, receipt provenance, isolation, install, hierarchical review, context routing, model preferences, and resume ancestry behavior have PowerShell sandbox suites (`scripts/validate-ship-behavior.ps1`, `scripts/validate-standalone-commands.ps1`, `scripts/validate-tshirt-hierarchical.ps1`, `scripts/validate-research-ship.ps1`, `scripts/validate-context-routing.ps1`, `scripts/validate-model-preferences.ps1`, `scripts/validate-cursor-global.ps1`, `scripts/validate-antigravity-global.ps1`) and an isolated product-repo smoke (`scripts/smoke-ship-product.ps1`). Those scripts are not a Cursor slash-command or Codex runtime test.
+`evals/workflows/ship/` (`50` YAML cases) holds lifecycle fixtures for `workflows/ship.md`, `evals/workflows/research-ship/` (`14` YAML cases) holds research-first delivery fixtures for `workflows/research-ship.md`, and `evals/commands/` (`16` YAML cases) holds boundary, evidence, PR-feedback, and convergence fixtures across standalone and `/b3-pr-*` commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-review-loop`, `/b3-verify`, `/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`). Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). All `299` YAML cases are schema-checked via `scripts/validate-evals.sh`. Deterministic guard, receipt provenance, PR feedback, merge security, isolation, install, hierarchical review, context routing, model preferences, and resume ancestry behavior have dual-shell/PowerShell sandbox suites (`scripts/validate-ship-behavior.ps1`, `scripts/validate-standalone-commands.ps1`, `scripts/validate-pr-feedback.ps1`, `scripts/validate-merge-security.sh`, `scripts/validate-tshirt-hierarchical.ps1`, `scripts/validate-research-ship.ps1`, `scripts/validate-context-routing.ps1`, `scripts/validate-model-preferences.ps1`, `scripts/validate-cursor-global.ps1`, `scripts/validate-antigravity-global.ps1`) and an isolated product-repo smoke (`scripts/smoke-ship-product.ps1`). Those scripts are not a live Cursor slash-command or Codex runtime test.
 
 ## Honesty metrics
 
@@ -162,4 +165,3 @@ Subject to hard constraints: false `PASS` rate `= 0` and all precedence/verifica
 | Tiny, overhead-dominated tasks (e.g., 1–2 small edits or single-file fix) | Sequential | Orchestration, wave checks, and Context Packet overhead exceed any concurrency gain |
 | 2+ disjoint medium/large modules with worktree/path isolation | Bounded parallel wave | Independent writes/reads amortize coordination overhead and reduce wall-clock latency |
 | Partially conflicting tasks (shared contracts, ledgers, or overlapping `watched_paths`) | Partitioned sub-waves + single-writer integration | Independent slices run concurrently; shared-state updates serialize to avoid rework and `WAVE_CONFLICT` |
-

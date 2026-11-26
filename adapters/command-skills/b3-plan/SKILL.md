@@ -1,9 +1,6 @@
 ---
 name: b3-plan
-description: >
-  Produce an implementation plan without writing product code. Use when the
-  user wants a plan, breakdown, design-before-code, $b3-plan, or /b3-plan. Do not
-  use for implementing, debugging, or the full /b3-ship lifecycle.
+description: Explicit command wrapper ($b3-plan, /b3-plan, b3-plan) for scoped plan-only breakdown via planning skill without writing product code. Not for /b3-ship or implementation.
 ---
 
 # b3-plan

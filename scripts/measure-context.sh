@@ -95,10 +95,13 @@ RS_REFS=$(($(file_bytes "workflows/references/research-ship-templates.md") + $(f
 [[ "$RS_REFS" -gt 12000 ]] && WARNINGS+=("workflows/references/research-ship-{templates,resume,gates}.md (${RS_REFS} B > 12000 B)")
 
 CTX_ROUTE_B="$(file_bytes "workflows/references/context-routing.md")"
-[[ "$CTX_ROUTE_B" -gt 3200 ]] && WARNINGS+=("workflows/references/context-routing.md (${CTX_ROUTE_B} B > 3200 B)")
+[[ "$CTX_ROUTE_B" -gt 3000 ]] && WARNINGS+=("workflows/references/context-routing.md (${CTX_ROUTE_B} B > 3000 B)")
+
+DISP_NAMING_B="$(file_bytes "workflows/references/dispatch-naming.md")"
+[[ "$DISP_NAMING_B" -gt 9200 ]] && WARNINGS+=("workflows/references/dispatch-naming.md (${DISP_NAMING_B} B > 9200 B)")
 
 RL_STRAT_B="$(file_bytes "review-loop/strategy.md")"
-[[ "$RL_STRAT_B" -gt 5400 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5400 B)")
+[[ "$RL_STRAT_B" -gt 5200 ]] && WARNINGS+=("review-loop/strategy.md (${RL_STRAT_B} B > 5200 B)")
 CR_SKILL_B="$(file_bytes "skills/engineering/code-review/SKILL.md")"
 REV_TPL_B="$(file_bytes "skills/engineering/code-review/references/review-template.md")"
 REV_AGENT_B="$(file_bytes "agents/b3-reviewer.md")"
@@ -136,6 +139,7 @@ printf "ship_refs_load    : %6d B (~%4d tok)  [ship-templates.md + ship-resume.m
 printf "research_ship_core: %6d B (~%4d tok)  [research-ship.md=%d B + commands/b3-research-ship.md]\n" "$RS_CORE" "$(est_tok "$RS_CORE")" "$WF_RS_B"
 printf "research_ship_refs: %6d B (~%4d tok)  [research-ship-{templates,resume,gates}.md]\n" "$RS_REFS" "$(est_tok "$RS_REFS")"
 printf "context_routing   : %6d B (~%4d tok)  [workflows/references/context-routing.md (on-demand)]\n" "$CTX_ROUTE_B" "$(est_tok "$CTX_ROUTE_B")"
+printf "dispatch_naming   : %6d B (~%4d tok)  [workflows/references/dispatch-naming.md (on-demand)]\n" "$DISP_NAMING_B" "$(est_tok "$DISP_NAMING_B")"
 printf "review_loop_op    : %6d B (~%4d tok)  [strategy=%d B + cmd + reviewer=%d B]\n" "$RL_OP" "$(est_tok "$RL_OP")" "$RL_STRAT_B" "$REV_AGENT_B"
 printf "review_hier_load  : %6d B (~%4d tok)  [review_loop_op + hierarchical.md (L/XL/XXL on demand)]\n" "$RL_HIER" "$(est_tok "$RL_HIER")"
 printf "review_delta_load : %6d B (~%4d tok)  [b3-reviewer.md (self-contained)]\n" "$REV_DELTA_B" "$(est_tok "$REV_DELTA_B")"

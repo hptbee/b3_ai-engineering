@@ -9,10 +9,12 @@ function Fail([string]$Message) {
 }
 
 function Normalize-Path([string]$PathValue) {
+    if ([string]::IsNullOrWhiteSpace($PathValue)) { return '' }
     $raw = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PathValue)
     $p = $raw.TrimEnd('\', '/')
-    if (-not $p -and $raw.StartsWith('/')) {
-        return '/'
+    if ([string]::IsNullOrWhiteSpace($p)) {
+        if ($raw.StartsWith('/')) { return '/' }
+        return ''
     }
     if ($p -match '^([a-z]):(.*)$') {
         $p = $Matches[1].ToUpperInvariant() + ':' + $Matches[2]

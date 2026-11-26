@@ -1,9 +1,6 @@
 ---
 name: research-engineering-patterns
-description: >
-  Use when researching external repos/docs/papers to extract, compare,
-  adapt/reject patterns, or record provenance in `research/`. Not for
-  product coding, local debugging, or copying skills verbatim.
+description: Use when researching external repos/docs/papers to extract, compare, adapt/reject patterns, or record provenance in `research/`. Not for product coding, local debugging, or copying skills verbatim.
 ---
 
 # Research engineering patterns

@@ -1,5 +1,5 @@
 id: research-ship-only-pr-pub-blocked-001
-artifact: docs/research-ship-tuvi-pilot.md
+artifact: research/validation/research-ship-pilot-notes.md
 intent: Research-only PR modifying non-protected research docs may reach PR_READY even while protected publication artifacts remain locked
 scenario: |
   Product .b3/research-policy.json protects releases/ with allow_protected_paths=false.

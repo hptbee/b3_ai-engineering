@@ -1,10 +1,6 @@
 ---
 name: accessibility
-description: >
-  Use when implementing or reviewing UI accessibility: keyboard, labels,
-  names, contrast, focus, forms, images, WCAG AA hotspots. Do not use for
-  visual polish only, React performance, or claiming a11y PASS from a
-  linter alone.
+description: "Use when implementing or reviewing UI accessibility: keyboard, labels, names, contrast, focus, forms, images, WCAG AA hotspots. Do not use for visual polish only, React performance, or claiming a11y PASS from a linter alone."
 ---
 
 # Accessibility

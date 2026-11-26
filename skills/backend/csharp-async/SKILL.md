@@ -1,9 +1,6 @@
 ---
 name: csharp-async
-description: >
-  Use for C# concurrency: async/await, Task, CancellationToken,
-  IDisposable, NRT, hot-path allocations, channels. Not for ASP.NET DI,
-  EF query shape, or unmeasured Span rewrites on cold code.
+description: "Use for C# concurrency: async/await, Task, CancellationToken, IDisposable, NRT, hot-path allocations, channels. Not for ASP.NET DI, EF query shape, or unmeasured Span rewrites on cold code."
 ---
 
 # C# async and language practice

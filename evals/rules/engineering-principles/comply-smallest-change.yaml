@@ -1,0 +1,5 @@
+id: rule-engineering-principles-comply-001
+artifact: rules/engineering-principles.md
+intent: States problem and success condition before editing and applies the smallest targeted change without unapproved scope expansion
+input: "Restated the broken null-handling invariant and success check first, patched only the affected parser branch and test, and deferred unrelated module cleanup pending explicit approval."
+expected_outcome: comply

@@ -1,9 +1,6 @@
 ---
 name: b3-research-ship
-description: >
-  Research-first autonomous delivery lifecycle from source discovery through
-  verified evidence, optional implementation, PR, and governed merge
-  ($b3-research-ship, /b3-research-ship, resume, status).
+description: Research-first autonomous delivery lifecycle from source discovery through verified evidence, optional implementation, PR, and governed merge ($b3-research-ship, /b3-research-ship, b3-research-ship, resume, status).
 ---
 
 # b3-research-ship

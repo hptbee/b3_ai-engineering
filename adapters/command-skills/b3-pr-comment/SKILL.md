@@ -1,6 +1,6 @@
 ---
 name: b3-pr-comment
-description: Publish a verified B3 review result to a PR ($b3-pr-comment, /b3-pr-comment) in summary, inline, both, or draft mode.
+description: Explicit command wrapper ($b3-pr-comment, /b3-pr-comment, b3-pr-comment) to publish a verified B3 review result to a PR (summary, inline, both, or draft) via pr-feedback skill. Not for PR merge.
 ---
 
 # b3-pr-comment

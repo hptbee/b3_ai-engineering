@@ -1,0 +1,5 @@
+id: rule-portability-comply-001
+artifact: rules/portability.md
+intent: Keeps canonical skill and rule meaning in root directories while limiting adapters/ to thin linking and host metadata wrappers
+input: "Kept the canonical review procedure in skills/engineering/code-review/SKILL.md and mapped Codex, Claude Code, Antigravity, and Cursor discovery via thin junctions and frontmatter wrappers in adapters/ without duplicating prose."
+expected_outcome: comply

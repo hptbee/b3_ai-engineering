@@ -2,7 +2,7 @@
 
 Philosophy: [`docs/evaluation.md`](../docs/evaluation.md).
 
-**Status:** activation fixtures for foundation + synthesized domain skills. Automated runner and CI **deferred** (decision-005).
+**Status:** `299` YAML activation, boundary, rule, review-loop, and workflow fixtures across 6 top-level categories. Automated LLM runner and CI **deferred** (decision-005).
 
 ```bash
 ./scripts/validate-evals.sh
@@ -10,14 +10,14 @@ Philosophy: [`docs/evaluation.md`](../docs/evaluation.md).
 
 Schema check only — not semantic scoring. Capability evals **not implemented**.
 
-| Area | Notes |
-| --- | --- |
-| `skills/` | 2/2/2 minimum per new skill; foundation skills from Track C (incl. simplification/residue detection) |
-| `rules/` | comply/violate samples |
-| `agents/` | `b3-performance-reviewer` and `b3-architecture-reviewer` activation samples; security still thin |
-| `review-loop/` | Spec + orchestration v1 scenarios (incl. performance routing & fix-cycle residue) |
-| `commands/` | Standalone command activation boundaries, verify provenance, and loop convergence (`evals/commands/`, 12 YAML fixtures + `scripts/validate-standalone-commands.ps1`) |
-| `workflows/ship/` | Lifecycle scenarios for `/b3-ship` (schema fixtures, including JIT freshness/split/gate/verify receipts). Behavioral Git/install checks: `scripts/validate-ship-behavior.ps1` (simulated). Isolated product smoke: `scripts/smoke-ship-product.ps1` (simulated Git). Live `/b3-ship` agent compliance **NOT VERIFIED** |
-| `workflows/research-ship/` | Research-first delivery scenarios for `/b3-research-ship` (13 YAML schema fixtures covering evidence freshness, contradictory sources, domain-unit isolation, governance/editorial gates, PR readiness vs authorized auto-merge, and resume after compaction). Behavioral dual-shell checks: `scripts/validate-research-ship.ps1` (simulated). Live host/PR compliance **NOT VERIFIED** |
+| Area | Cases | Notes |
+| --- | ---: | --- |
+| `skills/` | 176 | `2/2/2` minimum across all `24` canonical skills (`should-trigger`, `should-not-trigger`, `near-miss`), including `6` fixtures in `skills/pr-feedback/` (`scripts/validate-pr-feedback.ps1`) and `16` in `skills/code-review/` |
+| `rules/` | 10 | Comply/violate samples across `comply/` (`3`), `violate/` (`3`), `engineering-principles/` (`2`), and `portability/` (`2`) |
+| `agents/` | 7 | `b3-architecture-reviewer` (`3`, incl. `design-only`) and `b3-performance-reviewer` (`4`); security still thin |
+| `review-loop/` | 26 | Spec + orchestration scenarios across all `8` subfolders (`adaptive-sizing/`, `orchestration/`, `quality-gate/`, `false-positive/`, `false-convergence/`, `tool-failure/`, `iteration-limit/`, `finding-lifecycle/`; see [`review-loop/README.md`](review-loop/README.md), `scripts/validate-tshirt-hierarchical.ps1`, and `scripts/validate-merge-security.sh`) |
+| `commands/` | 16 | Standalone & PR-feedback command activation boundaries, verify provenance, and loop convergence (`evals/commands/` + `scripts/validate-standalone-commands.ps1` & `scripts/validate-pr-feedback.ps1`) |
+| `workflows/ship/` | 50 | Lifecycle scenarios for `/b3-ship` (4-mode wave partitioning, ownership provenance, JIT freshness, context routing, verify receipts). Behavioral suites: `scripts/validate-ship-behavior.ps1`, `scripts/validate-context-routing.ps1`, `scripts/smoke-ship-product.ps1`. Live `/b3-ship` agent compliance **NOT VERIFIED** |
+| `workflows/research-ship/` | 14 | Research-first delivery scenarios for `/b3-research-ship` (evidence freshness, contradictory sources, domain-unit isolation, governance/editorial gates, provider-neutral `merge-policy-check`, and resume). Behavioral dual-shell checks: `scripts/validate-research-ship.ps1` & `scripts/validate-merge-security.sh`. Live host/PR compliance **NOT VERIFIED** |
 
 See [`../skills/README.md`](../skills/README.md).

@@ -104,10 +104,13 @@ $researchShipRefsBytes = (Get-FileBytes 'workflows/references/research-ship-temp
 if ($researchShipRefsBytes -gt 12000) { $warnings.Add("workflows/references/research-ship-{templates,resume,gates}.md ($researchShipRefsBytes B > 12000 B)") }
 
 $ctxRouteBytes = Get-FileBytes 'workflows/references/context-routing.md'
-if ($ctxRouteBytes -gt 3200) { $warnings.Add("workflows/references/context-routing.md ($ctxRouteBytes B > 3200 B)") }
+if ($ctxRouteBytes -gt 3000) { $warnings.Add("workflows/references/context-routing.md ($ctxRouteBytes B > 3000 B)") }
+
+$dispNamingBytes = Get-FileBytes 'workflows/references/dispatch-naming.md'
+if ($dispNamingBytes -gt 9200) { $warnings.Add("workflows/references/dispatch-naming.md ($dispNamingBytes B > 9200 B)") }
 
 $rlStrategyBytes = Get-FileBytes 'review-loop/strategy.md'
-if ($rlStrategyBytes -gt 5400) { $warnings.Add("review-loop/strategy.md ($rlStrategyBytes B > 5400 B)") }
+if ($rlStrategyBytes -gt 5200) { $warnings.Add("review-loop/strategy.md ($rlStrategyBytes B > 5200 B)") }
 
 $crSkillBytes = Get-FileBytes 'skills/engineering/code-review/SKILL.md'
 $revTplBytes = Get-FileBytes 'skills/engineering/code-review/references/review-template.md'
@@ -144,6 +147,7 @@ Write-Output ("ship_refs_load    : {0,6} B (~{1,4} tok)  [ship-templates.md + sh
 Write-Output ("research_ship_core: {0,6} B (~{1,4} tok)  [research-ship.md={2} B + commands/b3-research-ship.md]" -f $researchShipCoreBytes, (Est-Tokens $researchShipCoreBytes), $wfResearchShipBytes)
 Write-Output ("research_ship_refs: {0,6} B (~{1,4} tok)  [research-ship-{{templates,resume,gates}}.md]" -f $researchShipRefsBytes, (Est-Tokens $researchShipRefsBytes))
 Write-Output ("context_routing   : {0,6} B (~{1,4} tok)  [workflows/references/context-routing.md (on-demand)]" -f $ctxRouteBytes, (Est-Tokens $ctxRouteBytes))
+Write-Output ("dispatch_naming   : {0,6} B (~{1,4} tok)  [workflows/references/dispatch-naming.md (on-demand)]" -f $dispNamingBytes, (Est-Tokens $dispNamingBytes))
 Write-Output ("review_loop_op    : {0,6} B (~{1,4} tok)  [strategy={2} B + cmd + reviewer={3} B]" -f $rlOpBytes, (Est-Tokens $rlOpBytes), $rlStrategyBytes, $revAgentBytes)
 Write-Output ("review_hier_load  : {0,6} B (~{1,4} tok)  [review_loop_op + hierarchical.md (L/XL/XXL on demand)]" -f $rlHierBytes, (Est-Tokens $rlHierBytes))
 Write-Output ("review_delta_load : {0,6} B (~{1,4} tok)  [b3-reviewer.md (self-contained)]" -f $reviewDeltaBytes, (Est-Tokens $reviewDeltaBytes))

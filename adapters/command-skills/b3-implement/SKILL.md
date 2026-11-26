@@ -1,9 +1,6 @@
 ---
 name: b3-implement
-description: >
-  Execute a plan or specified change using the default engineering loop. Use
-  when the user asks to implement, build, code, $b3-implement, or /b3-implement.
-  Do not use for plan-only, debug-before-cause, or full /b3-ship lifecycle.
+description: Explicit command wrapper ($b3-implement, /b3-implement, b3-implement) to execute one specified change or plan via problem-solving skill. Not for plan-only or /b3-ship.
 ---
 
 # b3-implement

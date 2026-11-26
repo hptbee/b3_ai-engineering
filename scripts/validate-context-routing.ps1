@@ -1,4 +1,4 @@
-﻿# Dual-shell behavioral checks for MCP-aware context routing and b3-guard context-cache.
+# Dual-shell behavioral checks for MCP-aware context routing and b3-guard context-cache.
 # Verifies routing contract, 6 workflow hooks + hint-only subagents, Iter 2+ cache reuse/invalidation,
 # stale graph-index vs live-LSP semantics, security containment/tamper fail-closed, 4-host compat, and 0 always-on bloat.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/validate-context-routing.ps1
@@ -81,10 +81,7 @@ function Invoke-GitQuiet([string]$RepoDir, [string[]]$GitArgs) {
 }
 
 function Init-GitRepo([string]$RepoDir) {
-    New-Item -ItemType Directory -Path $RepoDir -Force | Out-Null
-    foreach ($ga in @(@('init', '-q'), @('symbolic-ref', 'HEAD', 'refs/heads/main'), @('config', 'user.email', 'ctx-test@example.com'), @('config', 'user.name', 'Context Test'))) {
-        [void](Invoke-GitQuiet $RepoDir $ga)
-    }
+    Init-B3TestRepo -RepoPath $RepoDir -DefaultBranch 'main' -UserEmail 'ctx-test@example.com' -UserName 'Context Test'
 }
 
 function Invoke-PsGuard([string[]]$GuardArgs) { return (Invoke-PsScript -ScriptPath $guardPs -ScriptArgs $GuardArgs) }
@@ -210,8 +207,8 @@ try {
     $g1Errs = New-Object System.Collections.Generic.List[string]
     $crPath = Join-Path $root 'workflows\references\context-routing.md'
     $crBytes = Get-LfByteLength $crPath
-    if ($crBytes -lt 1 -or $crBytes -gt 3200) {
-        $g1Errs.Add("context-routing.md size=$crBytes B (must be 1..3200 B LF)")
+    if ($crBytes -lt 1 -or $crBytes -gt 3000) {
+        $g1Errs.Add("context-routing.md size=$crBytes B (must be 1..3000 B LF)")
     } else {
         $crText = Get-Content -LiteralPath $crPath -Raw
         $requiredPatterns = @(
@@ -678,6 +675,12 @@ try {
         if ($crMeasured -lt 1 -or $crMeasured -gt 3000) { $g6Errs.Add("context_routing measured=$crMeasured B (> 3000 B)") }
     } else {
         $g6Errs.Add('measure-context missing context_routing line')
+    }
+    if ($mcPs.Text -match '(?m)^dispatch_naming\s*:\s*(\d+)\s+B\b') {
+        $dnMeasured = [int]$Matches[1]
+        if ($dnMeasured -lt 1 -or $dnMeasured -gt 9200) { $g6Errs.Add("dispatch_naming measured=$dnMeasured B (> 9200 B)") }
+    } else {
+        $g6Errs.Add('measure-context missing dispatch_naming line')
     }
 
     # M-13 headroom caps (LF bytes)

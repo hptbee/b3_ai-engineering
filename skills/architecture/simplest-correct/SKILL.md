@@ -1,9 +1,6 @@
 ---
 name: simplest-correct
-description: >
-  Use when choosing system architecture (layers, Clean/DDD/CQRS,
-  microservices vs monolith, buses/frameworks); complexity needs a named
-  requirement. Not for one-line bugfixes or local coding style.
+description: Use when choosing system architecture (layers, Clean/DDD/CQRS, microservices vs monolith, buses/frameworks); complexity needs a named requirement. Not for one-line bugfixes or local coding style.
 ---
 
 # Simplest correct architecture

@@ -1,9 +1,6 @@
 ---
 name: api-design
-description: >
-  Use when designing HTTP/REST APIs: contracts, errors, ProblemDetails,
-  pagination, chatty round-trips, compatibility, boundary validation. Not
-  for object-level authz, EF N+1, Node event loop, or UI APIs.
+description: "Use when designing HTTP/REST APIs: contracts, errors, ProblemDetails, pagination, chatty round-trips, compatibility, boundary validation. Not for object-level authz, EF N+1, Node event loop, or UI APIs."
 ---
 
 # API design

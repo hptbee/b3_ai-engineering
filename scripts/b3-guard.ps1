@@ -74,27 +74,36 @@ param(
     [switch]$CheckDirtyScope,
     [string]$PeerRoots = '',
     [string]$WorkerChanges = '',
+    [string]$WorkerRoots = '',
+    [string]$DirtyDigests = '',
+    [string]$AuthorityRef = '',
+    [string]$HeadSha = '',
+    [switch]$RequireRemoteCi,
+    [switch]$Force,
     [switch]$RequireIsolated
 )
 
 $ErrorActionPreference = 'Stop'
 $script:CaptureFailMode = $false
-$RepoRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepoRoot)
-$repoRootBase = [IO.Path]::GetPathRoot($RepoRoot)
-if ($RepoRoot -eq '/' -or $RepoRoot -eq '\') {
-    $RepoRoot = '/'
-} elseif ($RepoRoot -match '^([A-Za-z]:)[\\/]?$') {
-    $RepoRoot = "$($Matches[1])\"
-} elseif (-not ($repoRootBase -and $RepoRoot.Equals($repoRootBase, [System.StringComparison]::OrdinalIgnoreCase))) {
-    $RepoRoot = $RepoRoot.TrimEnd('\', '/')
-    if (-not $RepoRoot) { $RepoRoot = '/' }
+if ($Command -cne 'fingerprint') {
+    $RepoRoot = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($RepoRoot)
+    $repoRootBase = [IO.Path]::GetPathRoot($RepoRoot)
+    if ($RepoRoot -eq '/' -or $RepoRoot -eq '\') {
+        $RepoRoot = '/'
+    } elseif ($RepoRoot -match '^([A-Za-z]:)[\\/]?$') {
+        $RepoRoot = "$($Matches[1])\"
+    } elseif (-not ($repoRootBase -and $RepoRoot.Equals($repoRootBase, [System.StringComparison]::OrdinalIgnoreCase))) {
+        $RepoRoot = $RepoRoot.TrimEnd('\', '/')
+        if (-not $RepoRoot) { $RepoRoot = '/' }
+    }
 }
 
 function Fail([string]$Message, [int]$Code = 1) {
     if ($script:CaptureFailMode) {
         throw [System.Exception]::new("B3_GUARD_FAIL|${Code}|${Message}")
     }
-    Write-Output $Message
+    [Console]::Out.WriteLine($Message)
+    [Console]::Out.Flush()
     exit $Code
 }
 
@@ -127,6 +136,40 @@ function Split-CsvList([string]$Csv, [switch]$AsPaths) {
     return @($list)
 }
 
+function Split-PathCsvChecked([string]$Csv, [string]$ErrorPrefix, [switch]$RejectDot, [string]$DotMessage = '') {
+    $list = New-Object System.Collections.Generic.List[string]
+    if (-not $Csv) { return @() }
+    if ($Csv -match '[\x00-\x1F\x7F]') {
+        Fail "${ErrorPrefix}: invalid path control character" 1
+    }
+    $cleaned = $Csv.Trim()
+    if (-not $cleaned -or $cleaned -ceq '[]' -or $cleaned -ceq 'none') { return @() }
+    if ($cleaned.StartsWith('[') -and $cleaned.EndsWith(']')) {
+        $cleaned = $cleaned.Substring(1, $cleaned.Length - 2)
+    }
+    foreach ($part in ($cleaned -split ',')) {
+        $tok = $part.Trim()
+        if (-not $tok -or $tok -ceq 'none') { continue }
+        if ($tok -match '[\*\?]') {
+            Fail "${ErrorPrefix}: invalid glob in path '$tok'" 1
+        }
+        $slash = $tok -replace '\\', '/'
+        if ($slash.Contains(':') -or $slash.StartsWith('/') -or ($slash -match '(^|/)\.\.(/|$)')) {
+            Fail "${ErrorPrefix}: invalid path '$tok'" 1
+        }
+        $item = if ($slash -ceq '.' -or $slash -ceq './') { '.' } else { Normalize-PathValue $tok }
+        if (-not $item) { continue }
+        if ($RejectDot -and ($item -ceq '.')) {
+            $msg = if ($DotMessage) { $DotMessage } else { "${ErrorPrefix}: invalid ignore-dirty path '.'" }
+            Fail $msg 1
+        }
+        if (-not $list.Contains($item)) {
+            $list.Add($item)
+        }
+    }
+    return @($list)
+}
+
 function Test-CheckpointPath([string]$PathVal) {
     if (-not $PathVal) { return $false }
     return ($PathVal -match '^\.b3/(ship|research-ship|autodev)(/|$)')
@@ -152,7 +195,7 @@ function ConvertTo-WavePaths([string]$Csv, [switch]$RejectProtected, [switch]$Re
         $tok = $part.Trim()
         if (-not $tok -or $tok -ceq 'none') { continue }
         $slash = $tok -replace '\\', '/'
-        if ($slash.Contains('|') -or $slash.Contains(':') -or $slash.StartsWith('/') -or $slash.Contains('//') -or ($slash -match '(^|/)\.\.(/|$)')) {
+        if ($slash.Contains('|') -or $slash.Contains(':') -or $slash.StartsWith('/') -or $slash.Contains('//') -or ($slash -match '(^|/)\.\.(/|$)') -or ($slash -match '[\*\?]')) {
             return @{ Error = "${ErrorPrefix}: invalid path '$tok'"; Paths = @(); ExplicitEmpty = $false }
         }
         $norm = ''
@@ -338,7 +381,7 @@ function Test-ContainedRepoPath([string]$Root, [string]$PathArg) {
     $rawSlash = $trimmed -replace '\\', '/'
     if (-not $rawSlash -or $rawSlash.EndsWith('/')) { return $null }
     $p = Normalize-PathValue $trimmed
-    if (-not $p -or $p -eq '.' -or $p.StartsWith('/') -or $p.StartsWith('~') -or $p.Contains(':') -or ($p -match '(^|/)\.\.(/|$)')) {
+    if (-not $p -or $p -eq '.' -or $p.StartsWith('/') -or $p.StartsWith('~') -or $p.Contains(':') -or ($p -match '(^|/)\.\.(/|$)') -or ($p -match '[\*\?\[]')) {
         return $null
     }
     foreach ($seg in ($p -split '/')) {
@@ -442,12 +485,19 @@ function Format-WinArg([string]$Arg) {
     return $sb.ToString()
 }
 
-function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '', [hashtable]$ExtraEnv = $null) {
+function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText = '', [hashtable]$ExtraEnv = $null, [int]$TimeoutMs = 0) {
     $useStdIn = $PSBoundParameters.ContainsKey('StdInText')
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = 'git'
+    $gitExeName = 'git'
+    $gCmd = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($gCmd -and $gCmd.Source -and ($gCmd.Source -imatch '[\\/]mingw(?:32|64)[\\/]bin[\\/]git\.exe$')) {
+        $cmdWrap = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $gCmd.Source))) 'cmd\git.exe'
+        if (Test-Path -LiteralPath $cmdWrap -PathType Leaf) { $gitExeName = $cmdWrap }
+    }
+    $psi.FileName = $gitExeName
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables.Remove('MSYS2_ARG_CONV_EXCL')
     if ($ExtraEnv) {
         foreach ($kv in $ExtraEnv.GetEnumerator()) {
             $psi.EnvironmentVariables[[string]$kv.Key] = [string]$kv.Value
@@ -461,7 +511,17 @@ function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $psi.StandardOutputEncoding = $utf8
     $psi.StandardErrorEncoding = $utf8
-    $allArgs = @('-C', $Root, '-c', 'core.quotepath=false') + @($GitArgs)
+    $useLitPs = $true
+    foreach ($ga in $GitArgs) {
+        if ([string]$ga -ceq '--') { break }
+        if ([string]$ga -ceq 'grep') { $useLitPs = $false; break }
+    }
+    $allArgs = New-Object System.Collections.Generic.List[string]
+    if ($useLitPs) { [void]$allArgs.Add('--literal-pathspecs') }
+    foreach ($baseGArg in @('-C', $Root, '-c', 'core.quotepath=false', '-c', 'diff.noprefix=false', '-c', 'diff.mnemonicPrefix=false', '-c', 'diff.srcPrefix=a/', '-c', 'diff.dstPrefix=b/')) {
+        [void]$allArgs.Add($baseGArg)
+    }
+    foreach ($ga in @($GitArgs)) { [void]$allArgs.Add([string]$ga) }
     if ($psi.PSObject.Properties['ArgumentList']) {
         foreach ($a in $allArgs) { [void]$psi.ArgumentList.Add($a) }
     } else {
@@ -482,7 +542,14 @@ function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText
             }
             $proc.StandardInput.Close()
         }
-        $proc.WaitForExit()
+        if ($TimeoutMs -gt 0) {
+            if (-not $proc.WaitForExit($TimeoutMs)) {
+                try { $proc.Kill() } catch {}
+                return [PSCustomObject]@{ ExitCode = 124; StdOut = ''; StdErr = 'timeout' }
+            }
+        } else {
+            $proc.WaitForExit()
+        }
         $stdout = $outTask.GetAwaiter().GetResult()
         $stderr = $errTask.GetAwaiter().GetResult()
         $code = $proc.ExitCode
@@ -496,20 +563,118 @@ function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText
     }
 }
 
-function Invoke-GitLines([string]$Root, [string[]]$GitArgs) {
-    $res = Invoke-GitCommand $Root $GitArgs
-    if ($res.ExitCode -ne 0) {
-        $detail = if ($res.StdErr -and $res.StdErr.Trim()) { $res.StdErr.Trim() } else { $res.StdOut.Trim() }
-        Fail "GIT_ERROR: git $($GitArgs -join ' ') failed: $detail" 1
-    }
-    $lines = New-Object System.Collections.Generic.List[string]
-    foreach ($line in ($res.StdOut -split "\r?\n")) {
-        $norm = Normalize-PathValue ([string]$line)
-        if ($norm -and -not $lines.Contains($norm)) {
-            $lines.Add($norm)
+function Test-RepoCaseInsensitive([string]$Root) {
+    if ($Root -and (Test-Path -LiteralPath $Root -PathType Container)) {
+        $cfg = Invoke-GitCommand $Root @('config', '--bool', 'core.ignorecase')
+        if ($cfg.ExitCode -eq 0) {
+            $v = $cfg.StdOut.Trim().ToLowerInvariant()
+            if ($v -ceq 'true') { return $true }
+            if ($v -ceq 'false') { return $false }
         }
     }
-    return @($lines)
+    return (($env:OS -eq 'Windows_NT') -or ($IsMacOS -eq $true))
+}
+
+function Test-ValidLiteralGitPath([string]$PathValue) {
+    if ([string]::IsNullOrEmpty($PathValue)) { return $false }
+    if ($PathValue -match '[\x00-\x1F\x7F]') { return $false }
+    if ($PathValue.StartsWith('/')) { return $false }
+    foreach ($seg in ($PathValue -split '/')) {
+        if ([string]::IsNullOrEmpty($seg) -or $seg -ceq '.' -or $seg -ceq '..') { return $false }
+    }
+    return $true
+}
+
+function Invoke-GitPathsZ([string]$Root, [string[]]$GitArgs, [string]$Mode = 'names', [string]$FailPrefix = 'GIT_ERROR', [hashtable]$ExtraEnv = $null) {
+    $res = Invoke-GitCommand $Root $GitArgs -ExtraEnv $ExtraEnv
+    if ($res.ExitCode -ne 0) {
+        $detail = if ($res.StdErr -and $res.StdErr.Trim()) { $res.StdErr.Trim() } else { $res.StdOut.Trim() }
+        Fail "${FailPrefix}: git $($GitArgs -join ' ') failed: $detail" 1
+    }
+    $out = $res.StdOut
+    if ([string]::IsNullOrEmpty($out)) { return @() }
+    $nul = [char]0
+    $toks = $out.Split($nul)
+    $len = $toks.Length
+    if ($len -gt 0 -and $toks[$len - 1] -eq '') { $len-- }
+    $paths = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    $addLit = {
+        param([string]$pVal)
+        if ($pVal.Length -gt 1 -and $pVal.EndsWith('/')) { $pVal = $pVal.Substring(0, $pVal.Length - 1) }
+        if (-not (Test-ValidLiteralGitPath $pVal)) {
+            Fail "${FailPrefix}: unsupported_literal_git_path" 1
+        }
+        if ($seen.Add($pVal)) { [void]$paths.Add($pVal) }
+    }
+    if ($Mode -ceq 'names' -or $Mode -ceq 'ls-tree-z') {
+        for ($i = 0; $i -lt $len; $i++) {
+            & $addLit $toks[$i]
+        }
+    } elseif ($Mode -ceq 'name-status-z') {
+        $i = 0
+        while ($i -lt $len) {
+            $st = $toks[$i++]
+            if ([string]::IsNullOrEmpty($st) -or $st -match '[\x00-\x1F\x7F]') {
+                Fail "${FailPrefix}: git_parser_failed(name-status)" 1
+            }
+            if ($i -ge $len) { Fail "${FailPrefix}: git_parser_failed(name-status)" 1 }
+            $p1 = $toks[$i++]
+            & $addLit $p1
+            if ($st.StartsWith('R') -or $st.StartsWith('C')) {
+                if ($i -ge $len) { Fail "${FailPrefix}: git_parser_failed(name-status-rename)" 1 }
+                $p2 = $toks[$i++]
+                & $addLit $p2
+            }
+        }
+    } elseif ($Mode -ceq 'status-z') {
+        $i = 0
+        while ($i -lt $len) {
+            $rec = $toks[$i++]
+            if ([string]::IsNullOrEmpty($rec) -or $rec.Length -lt 4 -or $rec[2] -cne ' ') {
+                Fail "${FailPrefix}: git_parser_failed(status-z)" 1
+            }
+            $xy = $rec.Substring(0, 2)
+            $p1 = $rec.Substring(3)
+            if ($p1.Length -gt 1 -and $p1.EndsWith('/')) { $p1 = $p1.Substring(0, $p1.Length - 1) }
+            & $addLit $p1
+            if ($xy[0] -ceq 'R' -or $xy[0] -ceq 'C' -or $xy[1] -ceq 'R' -or $xy[1] -ceq 'C') {
+                if ($i -ge $len) { Fail "${FailPrefix}: git_parser_failed(status-z-rename)" 1 }
+                $p2 = $toks[$i++]
+                if ($p2.Length -gt 1 -and $p2.EndsWith('/')) { $p2 = $p2.Substring(0, $p2.Length - 1) }
+                & $addLit $p2
+            }
+        }
+    } elseif ($Mode -ceq 'ls-tree-full-z' -or $Mode -ceq 'ls-files-stage-z') {
+        for ($i = 0; $i -lt $len; $i++) {
+            $rec = $toks[$i]
+            $tab = $rec.IndexOf("`t")
+            if ($tab -le 0) { Fail "${FailPrefix}: git_parser_failed($Mode)" 1 }
+            $p = $rec.Substring($tab + 1)
+            & $addLit $p
+        }
+    } else {
+        Fail "${FailPrefix}: unsupported_git_paths_mode($Mode)" 1
+    }
+    return @($paths)
+}
+
+function Invoke-GitLines([string]$Root, [string[]]$GitArgs) {
+    $hasZ = ($GitArgs -contains '-z')
+    if ($hasZ) {
+        return @(Invoke-GitPathsZ $Root $GitArgs 'names' 'GIT_ERROR')
+    }
+    $ddIdx = [Array]::IndexOf($GitArgs, '--')
+    $zArgs = New-Object System.Collections.Generic.List[string]
+    if ($ddIdx -ge 0) {
+        for ($i = 0; $i -lt $ddIdx; $i++) { [void]$zArgs.Add($GitArgs[$i]) }
+        [void]$zArgs.Add('-z')
+        for ($i = $ddIdx; $i -lt $GitArgs.Length; $i++) { [void]$zArgs.Add($GitArgs[$i]) }
+    } else {
+        foreach ($ga in $GitArgs) { [void]$zArgs.Add($ga) }
+        [void]$zArgs.Add('-z')
+    }
+    return @(Invoke-GitPathsZ $Root $zArgs.ToArray() 'names' 'GIT_ERROR')
 }
 
 function Test-ValidRunId([string]$Id) {
@@ -590,27 +755,27 @@ function Assert-ValidGitRev([string]$Root, [string]$Rev, [string]$Kind, [string]
 
 function Assert-SnapshotSafe([string]$Root, [string]$FailPrefix) {
     # A temporary index still creates permanent Git blobs: reject non-deleted sensitive changes first.
-    $changed = Invoke-GitCommand $Root @('diff', '--no-renames', '--diff-filter=d', '--name-only', 'HEAD', '--')
-    $untracked = Invoke-GitCommand $Root @('ls-files', '--others', '--exclude-standard')
-    if ($changed.ExitCode -ne 0 -or $untracked.ExitCode -ne 0) {
-        Fail "${FailPrefix}: unable to inspect snapshot paths" 1
-    }
-    foreach ($line in (($changed.StdOut + "`n" + $untracked.StdOut) -split "\r?\n")) {
-        $p = Normalize-PathValue ([string]$line)
+    $changedPaths = @(Invoke-GitPathsZ $Root @('diff', '--no-ext-diff', '--no-renames', '--diff-filter=d', '--name-only', '-z', 'HEAD', '--') 'names' $FailPrefix)
+    $untrackedPaths = @(Invoke-GitPathsZ $Root @('ls-files', '--others', '--exclude-standard', '-z') 'names' $FailPrefix)
+    foreach ($p in (@($changedPaths) + @($untrackedPaths))) {
         if ($p -and (Test-SecretPath $p)) {
             Fail "${FailPrefix}: sensitive path cannot be snapshotted ($p)" 1
         }
     }
-    $links = Invoke-GitCommand $Root @('ls-files', '--stage')
-    if ($links.ExitCode -ne 0) { Fail "${FailPrefix}: unable to inspect submodules" 1 }
-    foreach ($entry in ($links.StdOut -split "\r?\n")) {
-        if ($entry -cnotmatch '^160000 [0-9a-f]{40} [0-3]\t(.+)$') { continue }
-        $rel = $Matches[1]
-        $sub = Join-Path $Root ($rel -replace '/', '\')
-        if (-not (Test-Path -LiteralPath (Join-Path $sub '.git'))) { continue }
-        $state = Invoke-GitCommand $sub @('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none')
-        if ($state.ExitCode -ne 0) { Fail "${FailPrefix}: unable to inspect submodule ($rel)" 1 }
-        if ($state.StdOut.Trim()) { Fail "${FailPrefix}: dirty submodule cannot be snapshotted ($rel)" 1 }
+    $stageRes = Invoke-GitCommand $Root @('ls-files', '--stage', '-z')
+    if ($stageRes.ExitCode -ne 0) { Fail "${FailPrefix}: unable to inspect submodules" 1 }
+    if ($stageRes.StdOut) {
+        $nul = [char]0
+        foreach ($entry in ($stageRes.StdOut.Split($nul))) {
+            if (-not $entry) { continue }
+            if ($entry -cnotmatch '^160000 [0-9a-f]{40} [0-3]\t(.+)$') { continue }
+            $rel = $Matches[1]
+            if (-not (Test-ValidLiteralGitPath $rel)) { Fail "${FailPrefix}: unsupported_literal_git_path" 1 }
+            $sub = Join-Path $Root ($rel -replace '/', '\')
+            if (-not (Test-Path -LiteralPath (Join-Path $sub '.git'))) { continue }
+            $subDirty = @(Invoke-GitPathsZ $sub @('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none', '-z') 'status-z' $FailPrefix)
+            if ($subDirty.Count -gt 0) { Fail "${FailPrefix}: dirty submodule cannot be snapshotted ($rel)" 1 }
+        }
     }
 }
 
@@ -643,38 +808,26 @@ function New-WorkingTreeOid([string]$Root, [string]$FailPrefix, [switch]$Exclude
     $untrackedToAdd = New-Object System.Collections.Generic.List[string]
     if ($ExcludeSensitive) {
         if ($hasHead) {
-            $ch = Invoke-GitCommand $Root @('diff', '--no-renames', '--diff-filter=d', '--name-only', 'HEAD', '--')
-            if ($ch.ExitCode -eq 0) {
-                foreach ($line in ($ch.StdOut -split "\r?\n")) {
-                    $sp = Normalize-PathValue ([string]$line)
-                    if ($sp -and (Test-SecretPath $sp)) {
-                        [void]$trackedSecrets.Add($sp)
-                    }
+            foreach ($sp in @(Invoke-GitPathsZ $Root @('diff', '--no-ext-diff', '--no-renames', '--diff-filter=d', '--name-only', '-z', 'HEAD', '--') 'names' $FailPrefix)) {
+                if ($sp -and (Test-SecretPath $sp)) {
+                    [void]$trackedSecrets.Add($sp)
                 }
             }
         } else {
-            $st = Invoke-GitCommand $Root @('ls-files', '--cached')
-            if ($st.ExitCode -eq 0) {
-                foreach ($line in ($st.StdOut -split "\r?\n")) {
-                    $sp = Normalize-PathValue ([string]$line)
-                    if ($sp -and (Test-SecretPath $sp)) {
-                        [void]$unbornStagedSecrets.Add($sp)
-                    }
+            foreach ($sp in @(Invoke-GitPathsZ $Root @('ls-files', '--cached', '-z') 'names' $FailPrefix)) {
+                if ($sp -and (Test-SecretPath $sp)) {
+                    [void]$unbornStagedSecrets.Add($sp)
                 }
             }
         }
     } else {
         Assert-SnapshotSafe $Root $FailPrefix
     }
-    $un = Invoke-GitCommand $Root @('ls-files', '--others', '--exclude-standard')
-    if ($un.ExitCode -eq 0) {
-        foreach ($line in ($un.StdOut -split "\r?\n")) {
-            $sp = Normalize-PathValue ([string]$line)
-            if (-not $sp) { continue }
-            if (Test-CheckpointPath $sp) { continue }
-            if ($ExcludeSensitive -and (Test-SecretPath $sp)) { continue }
-            [void]$untrackedToAdd.Add($sp)
-        }
+    foreach ($sp in @(Invoke-GitPathsZ $Root @('ls-files', '--others', '--exclude-standard', '-z') 'names' $FailPrefix)) {
+        if (-not $sp) { continue }
+        if (Test-CheckpointPath $sp) { continue }
+        if ($ExcludeSensitive -and (Test-SecretPath $sp)) { continue }
+        [void]$untrackedToAdd.Add($sp)
     }
     $idxRes = Invoke-GitCommand $Root @('rev-parse', '--git-path', 'index')
     if ($idxRes.ExitCode -ne 0) {
@@ -692,16 +845,11 @@ function New-WorkingTreeOid([string]$Root, [string]$FailPrefix, [switch]$Exclude
             Invoke-ChunkedGitWithIndex $Root $envMap $FailPrefix 'git rm cached secrets failed' @('rm', '-r', '--cached', '--ignore-unmatch', '-q', '--') $unbornStagedSecrets
         }
         if ($ExcludeSensitive -and $trackedSecrets.Count -gt 0) {
-            $wtDiffRes = Invoke-GitCommand $Root @('diff', '--no-renames', '--name-only', '--') -ExtraEnv $envMap
-            if ($wtDiffRes.ExitCode -ne 0) {
-                $detail = if ($wtDiffRes.StdErr.Trim()) { $wtDiffRes.StdErr.Trim() } else { $wtDiffRes.StdOut.Trim() }
-                Fail "${FailPrefix}: git diff tracked failed: $detail" 1
-            }
+            $wtDiffPaths = @(Invoke-GitPathsZ $Root @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', '--') 'names' $FailPrefix -ExtraEnv $envMap)
             $trackedSecretSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
             foreach ($ts in $trackedSecrets) { [void]$trackedSecretSet.Add($ts) }
             $nonSecretTracked = New-Object System.Collections.Generic.List[string]
-            foreach ($line in ($wtDiffRes.StdOut -split "\r?\n")) {
-                $sp = Normalize-PathValue ([string]$line)
+            foreach ($sp in $wtDiffPaths) {
                 if ($sp -and -not $trackedSecretSet.Contains($sp)) {
                     [void]$nonSecretTracked.Add($sp)
                 }
@@ -754,20 +902,17 @@ function Find-LeftoverTag([string]$Line) {
 }
 
 function Resolve-AutoBaseSha([string]$Root, [string[]]$IgnoredPaths) {
-    $diffRes = Invoke-GitCommand $Root @('diff', '--no-renames', '--name-only', 'HEAD')
-    $unRes = Invoke-GitCommand $Root @('ls-files', '--others', '--exclude-standard')
+    $headRes = Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', 'HEAD')
+    $hasHead = ($headRes.ExitCode -eq 0 -and $headRes.StdOut.Trim() -cmatch '^[0-9a-f]{40}$')
+    $headSha = if ($hasHead) { $headRes.StdOut.Trim() } else { '' }
     $candidates = New-Object System.Collections.Generic.List[string]
-    if ($diffRes.ExitCode -eq 0) {
-        foreach ($row in ($diffRes.StdOut -split "\r?\n")) {
-            $p = Normalize-PathValue ([string]$row)
+    if ($hasHead) {
+        foreach ($p in @(Invoke-GitPathsZ $Root @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', 'HEAD', '--') 'names' 'GIT_ERROR')) {
             if ($p) { $candidates.Add($p) }
         }
     }
-    if ($unRes.ExitCode -eq 0) {
-        foreach ($row in ($unRes.StdOut -split "\r?\n")) {
-            $p = Normalize-PathValue ([string]$row)
-            if ($p) { $candidates.Add($p) }
-        }
+    foreach ($p in @(Invoke-GitPathsZ $Root @('ls-files', '--others', '--exclude-standard', '-z') 'names' 'GIT_ERROR')) {
+        if ($p) { $candidates.Add($p) }
     }
     foreach ($p in $candidates) {
         if (Test-CheckpointPath $p) { continue }
@@ -775,9 +920,7 @@ function Resolve-AutoBaseSha([string]$Root, [string[]]$IgnoredPaths) {
         return 'HEAD'
     }
 
-    $headRes = Invoke-GitCommand $Root @('rev-parse', 'HEAD')
-    $headSha = $headRes.StdOut.Trim()
-    if ($headRes.ExitCode -eq 0 -and $headSha) {
+    if ($hasHead -and $headSha) {
         foreach ($ref in @('origin/HEAD', 'origin/main', 'origin/master', 'main', 'master')) {
             $refRes = Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', $ref)
             if ($refRes.ExitCode -eq 0) {
@@ -929,7 +1072,7 @@ function Test-SafeRepoPathSegments([string]$PathValue, [bool]$BlockGit = $true) 
     if ([string]::IsNullOrEmpty($PathValue)) { return $false }
     if ($PathValue -match '[\x00-\x1F\x7F]') { return $false }
     $s = $PathValue -replace '\\', '/'
-    if ($s.Contains(':') -or $s.StartsWith('/') -or $s.EndsWith('/') -or $s.StartsWith('~')) { return $false }
+    if ($s.Contains(':') -or $s.StartsWith('/') -or $s.EndsWith('/') -or $s.StartsWith('~') -or ($s -match '[\*\?]')) { return $false }
     foreach ($seg in ($s -split '/')) {
         if ([string]::IsNullOrEmpty($seg) -or $seg -ceq '.' -or $seg -ceq '..' -or ($seg -match '[\. ]$')) {
             return $false
@@ -1105,16 +1248,16 @@ function Get-SubmoduleEntryIdentity([string]$Root, [string]$RelPath, [string]$Fa
         $hasHead = ($shRes.ExitCode -eq 0 -and $shTrim -cmatch '^[0-9a-f]{40}$')
         $subHead = if ($hasHead) { $shTrim } elseif ($hasFallback) { $FallbackOid } else { 'UNBORN' }
 
-        $stRes = Invoke-GitCommand $subFull @('status', '--porcelain', '-uall', '--ignore-submodules=none')
+        $stRes = Invoke-GitCommand $subFull @('status', '--porcelain', '-uall', '--ignore-submodules=none', '-z')
         if ($stRes.ExitCode -ne 0) {
             $detail = if ($stRes.StdErr.Trim()) { $stRes.StdErr.Trim() } else { $stRes.StdOut.Trim() }
             Fail "GIT_ERROR: submodule status failed for ${RelPath}: $detail" 1
         }
         $stList = New-Object System.Collections.Generic.List[string]
-        foreach ($rawSt in ($stRes.StdOut -split "\r?\n")) {
-            $cleanSt = ([string]$rawSt).TrimEnd("`r")
-            if ($cleanSt -and $cleanSt.Trim()) {
-                $stList.Add($cleanSt)
+        if ($stRes.StdOut) {
+            $nulSub = [char]0
+            foreach ($rawSt in ($stRes.StdOut.Split($nulSub))) {
+                if (-not [string]::IsNullOrEmpty($rawSt)) { $stList.Add($rawSt) }
             }
         }
         if ($stList.Count -eq 0) {
@@ -1125,8 +1268,8 @@ function Get-SubmoduleEntryIdentity([string]$Root, [string]$RelPath, [string]$Fa
         foreach ($sl in @(Sort-Ordinal $stList.ToArray())) {
             [void]$sbDirty.Append("S $sl`n")
         }
-        $sWt = if ($hasHead) { @(Invoke-GitLines $subFull @('diff', '--no-renames', '--name-only', '--ignore-submodules=none', 'HEAD')) } else { @() }
-        $sCa = @(Invoke-GitLines $subFull @('diff', '--no-renames', '--cached', '--name-only'))
+        $sWt = if ($hasHead) { @(Invoke-GitLines $subFull @('diff', '--no-ext-diff', '--no-renames', '--name-only', '--ignore-submodules=none', 'HEAD', '--')) } else { @() }
+        $sCa = @(Invoke-GitLines $subFull @('diff', '--no-ext-diff', '--no-renames', '--cached', '--name-only', '--'))
         $sUn = @(Invoke-GitLines $subFull @('ls-files', '--others', '--exclude-standard'))
         $sCand = New-Object System.Collections.Generic.List[string]
         foreach ($sp in (@($sWt) + @($sCa) + @($sUn))) {
@@ -1244,23 +1387,24 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
             (-not $isWinOs)
         }
 
-        $scopeSuffix = if ($cleanRel.Count -gt 0) { @('--') + $cleanRel } else { @() }
-        $hdRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none', 'HEAD') + $scopeSuffix)
+        $scopeSuffix = if ($cleanRel.Count -gt 0) { @('--') + $cleanRel } else { @('--') }
+        $hdRes = Invoke-GitCommand $Root (@('diff', '--no-ext-diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none', 'HEAD') + $scopeSuffix)
         if ($hdRes.ExitCode -ne 0) {
             $detail = if ($hdRes.StdErr.Trim()) { $hdRes.StdErr.Trim() } else { $hdRes.StdOut.Trim() }
             Fail "GIT_ERROR: git diff --raw HEAD failed: $detail" 1
         }
-        $caRes = Invoke-GitCommand $Root (@('diff', '--cached', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
+        $caRes = Invoke-GitCommand $Root (@('diff', '--no-ext-diff', '--cached', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
         if ($caRes.ExitCode -ne 0) {
             $detail = if ($caRes.StdErr.Trim()) { $caRes.StdErr.Trim() } else { $caRes.StdOut.Trim() }
             Fail "GIT_ERROR: git diff --cached --raw failed: $detail" 1
         }
-        $iwRes = Invoke-GitCommand $Root (@('diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
+        $iwRes = Invoke-GitCommand $Root (@('diff', '--no-ext-diff', '--raw', '--no-renames', '--no-abbrev', '--ignore-submodules=none') + $scopeSuffix)
         if ($iwRes.ExitCode -ne 0) {
             $detail = if ($iwRes.StdErr.Trim()) { $iwRes.StdErr.Trim() } else { $iwRes.StdOut.Trim() }
             Fail "GIT_ERROR: git diff --raw index-wt failed: $detail" 1
         }
-        $untracked = @(Invoke-GitLines $Root (@('ls-files', '--others', '--exclude-standard') + $scopeSuffix))
+        $lsUnScope = if ($cleanRel.Count -gt 0) { @('--') + $cleanRel } else { @() }
+        $untracked = @(Invoke-GitPathsZ $Root (@('ls-files', '--others', '--exclude-standard', '-z') + $lsUnScope) 'names' 'GIT_ERROR')
 
         $headDiff = Parse-GitRawDiff $hdRes.StdOut $IgnPaths $cleanRel
         $cachedDiff = Parse-GitRawDiff $caRes.StdOut $IgnPaths $cleanRel
@@ -1433,6 +1577,11 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
     if ($kv['timestamp_utc'] -cnotmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$') {
         return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid timestamp_utc' }
     }
+    if ($kv.ContainsKey('duration_ms')) {
+        if ($kv['duration_ms'] -cnotmatch '^[0-9]+$') {
+            return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid duration_ms' }
+        }
+    }
     if ($kv['log_path'] -cne 'none') {
         $lpSlash = $kv['log_path'].Trim() -replace '\\', '/'
         if (-not $lpSlash -or $lpSlash -eq '.' -or $lpSlash.StartsWith('/') -or $lpSlash.StartsWith('~') -or ($lpSlash -match '^[A-Za-z]:') -or ($lpSlash -match '(^|/)\.\.(/|$)')) {
@@ -1453,8 +1602,15 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
 
     $relSpec = @()
     if ($kv['relevant_paths'] -cne 'ALL') {
+        $rawRelKv = $kv['relevant_paths'].Trim()
+        if ($rawRelKv.StartsWith('[') -and $rawRelKv.EndsWith(']')) {
+            $rawRelKv = $rawRelKv.Substring(1, $rawRelKv.Length - 2)
+        }
+        if ($rawRelKv -match '[\*\?]') {
+            return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid relevant_paths' }
+        }
         $relSpec = @(Split-CsvList $kv['relevant_paths'] -AsPaths)
-        $validRel = @($relSpec | Where-Object { $_ -and (-not (Test-CheckpointPath $_)) })
+        $validRel = @($relSpec | Where-Object { $_ -and (-not (Test-CheckpointPath $_)) -and (-not ($_.Contains(':') -or $_.StartsWith('/') -or ($_ -match '(^|/)\.\.(/|$)'))) })
         if ($validRel.Count -lt 1 -or $validRel.Count -ne $relSpec.Count) {
             return @{ Code = 1; Message = 'VERIFY_CORRUPT: invalid relevant_paths' }
         }
@@ -1468,9 +1624,16 @@ function Test-VerifyReceipt([string]$Root, [string]$ReceiptArg, [string[]]$IgnPa
     }
 
     if ($ReqRelPathsArg -and $ReqRelPathsArg.Trim()) {
+        $rawReqRel = $ReqRelPathsArg.Trim()
+        if ($rawReqRel.StartsWith('[') -and $rawReqRel.EndsWith(']')) {
+            $rawReqRel = $rawReqRel.Substring(1, $rawReqRel.Length - 2)
+        }
+        if ($rawReqRel -match '[\*\?]') {
+            return @{ Code = 1; Message = 'VERIFY_CHECK_FAIL: invalid relevant_paths' }
+        }
         $reqSpec = @(Split-CsvList $ReqRelPathsArg -AsPaths)
-        $validReq = @($reqSpec | Where-Object { $_ -and (-not (Test-CheckpointPath $_)) })
-        if ($validReq.Count -lt 1) {
+        $validReq = @($reqSpec | Where-Object { $_ -and (-not (Test-CheckpointPath $_)) -and (-not ($_.Contains(':') -or $_.StartsWith('/') -or ($_ -match '(^|/)\.\.(/|$)'))) })
+        if ($validReq.Count -lt 1 -or $validReq.Count -ne $reqSpec.Count) {
             return @{ Code = 1; Message = 'VERIFY_CHECK_FAIL: invalid relevant_paths' }
         }
         if ($kv['relevant_paths'] -cne 'ALL') {
@@ -1823,16 +1986,25 @@ function Scan-LineRiskSignals([System.Collections.Hashtable]$Map, [string]$PathV
     if ($LineLower -match '(^|[^a-z0-9_])(mutex|semaphore|concurrentdictionary|channel<|promise\.all|abortcontroller|imemorycache|distributedcache)') {
         Add-SignalTag $Map $PathVal 'concurrency_state_cache'
     }
-    if ($LineLower -match '(^|[^a-z0-9_])(useframe|requestanimationframe|instancedmesh|webglrenderer|asnotracking|json\.stringify|json\.parse)') {
+    if ($LineLower -match '(^|[^a-z0-9_])(useframe|requestanimationframe|instancedmesh|webglrenderer|asnotracking)') {
+        Add-SignalTag $Map $PathVal 'perf_hot_path'
+    }
+    if ($LineLower -match '(^|[^a-z0-9_])(json\.stringify|json\.parse)') {
+        Add-SignalTag $Map $PathVal '_json_serde'
+    }
+    if ($LineLower -match '(^|[^a-z0-9_])(for[ \t]*\(|while[ \t]*\(|foreach|readline|createreadstream|createwritestream|readable|writable|transform|stream|buffer|uint8array|arraybuffer|chunk|ndjson|jsonl|batch|bulk|maxbuffer)|\.map\(|\.flatmap\(|\.reduce\(|1024[ \t]*\*') {
+        Add-SignalTag $Map $PathVal '_serde_hot_ctx'
+    }
+    if ($Map.ContainsKey($PathVal) -and $Map[$PathVal].Contains('_json_serde') -and $Map[$PathVal].Contains('_serde_hot_ctx')) {
         Add-SignalTag $Map $PathVal 'perf_hot_path'
     }
 }
 
 function Invoke-CollectScopeData([string]$Root, [string]$ResolvedBase, [string]$TargetCommitSha, [string[]]$IgnPaths, [string]$FailPrefix) {
     $nsArgs = if ($TargetCommitSha) {
-        @('diff', '--no-renames', '--numstat', $ResolvedBase, $TargetCommitSha, '--')
+        @('diff', '--no-ext-diff', '--no-renames', '--numstat', $ResolvedBase, $TargetCommitSha, '--')
     } else {
-        @('diff', '--no-renames', '--numstat', $ResolvedBase, '--')
+        @('diff', '--no-ext-diff', '--no-renames', '--numstat', $ResolvedBase, '--')
     }
     $nsRes = Invoke-GitCommand $Root $nsArgs
     if ($nsRes.ExitCode -ne 0) {
@@ -1841,9 +2013,9 @@ function Invoke-CollectScopeData([string]$Root, [string]$ResolvedBase, [string]$
     }
 
     $stArgs = if ($TargetCommitSha) {
-        @('diff', '--no-renames', '--name-status', $ResolvedBase, $TargetCommitSha, '--')
+        @('diff', '--no-ext-diff', '--no-renames', '--name-status', $ResolvedBase, $TargetCommitSha, '--')
     } else {
-        @('diff', '--no-renames', '--name-status', $ResolvedBase, '--')
+        @('diff', '--no-ext-diff', '--no-renames', '--name-status', $ResolvedBase, '--')
     }
     $stRes = Invoke-GitCommand $Root $stArgs
     if ($stRes.ExitCode -ne 0) {
@@ -1928,12 +2100,16 @@ function Invoke-CollectScopeData([string]$Root, [string]$ResolvedBase, [string]$
 
     if ($scanContentSet.Count -gt 0) {
         $dArgs = if ($TargetCommitSha) {
-            @('diff', '--no-renames', '-U0', $ResolvedBase, $TargetCommitSha, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '-U0', $ResolvedBase, $TargetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '-U0', $ResolvedBase, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '-U0', $ResolvedBase, '--')
         }
         $dRes = Invoke-GitCommand $Root $dArgs
-        if ($dRes.ExitCode -eq 0 -and $dRes.StdOut) {
+        if ($dRes.ExitCode -ne 0) {
+            $detail = if ($dRes.StdErr.Trim()) { $dRes.StdErr.Trim() } else { $dRes.StdOut.Trim() }
+            Fail ("${FailPrefix}: git diff -U0 failed: $detail") 1
+        }
+        if ($dRes.StdOut) {
             $hdrOldPath = ''
             $curPath = ''
             $curScan = $false
@@ -2010,6 +2186,7 @@ function Eval-RiskForSubset([string[]]$PathsList, [System.Collections.Hashtable]
         if ($FileSignalsMap -and $FileSignalsMap.ContainsKey($p)) {
             foreach ($s in @($FileSignalsMap[$p])) {
                 if ($s -ceq '_db_destructive') { $hasDestructive = $true; continue }
+                if ($s.StartsWith('_', [System.StringComparison]::Ordinal)) { continue }
                 if (-not $sigs.Contains($s)) { [void]$sigs.Add($s) }
                 if ($s -ceq 'public_api_contract' -or $s -ceq 'db_migration_tx') { $hasContractSig = $true }
             }
@@ -2019,6 +2196,7 @@ function Eval-RiskForSubset([string[]]$PathsList, [System.Collections.Hashtable]
             if ($tmpMap.ContainsKey($p)) {
                 foreach ($s in @($tmpMap[$p])) {
                     if ($s -ceq '_db_destructive') { $hasDestructive = $true; continue }
+                    if ($s.StartsWith('_', [System.StringComparison]::Ordinal)) { continue }
                     if (-not $sigs.Contains($s)) { [void]$sigs.Add($s) }
                     if ($s -ceq 'public_api_contract' -or $s -ceq 'db_migration_tx') { $hasContractSig = $true }
                 }
@@ -2719,11 +2897,15 @@ function Get-ScopePathsTreeHash([string]$Root, [string]$TargetCommitSha, [string
     return (Invoke-GitTextHash $Root $manifest 'GIT_ERROR')
 }
 
-function Get-DefaultMaxPasses([string]$SizeClass) {
+function Get-DefaultMaxPasses([string]$SizeClass, [int]$UnitCount = 1) {
     switch (Normalize-SizeClass $SizeClass) {
         'L' { return 12 }
         'XL' { return 12 }
-        'XXL' { return 24 }
+        'XXL' {
+            $u = if ($UnitCount -gt 1) { $UnitCount } else { 1 }
+            $scaled = [int]([Math]::Floor((5.0 * $u + 1.0) / 2.0)) + 2
+            return [Math]::Max(24, $scaled)
+        }
         default { return 5 }
     }
 }
@@ -2768,21 +2950,114 @@ function Normalize-MergePolicyPath([string]$RawPath) {
     if ($s.EndsWith('/')) {
         $s = $s.Substring(0, $s.Length - 1)
     }
-    if (-not (Test-SafeRepoPathSegments $s $false)) { return $null }
+    if ($s.Contains(':') -or $s.StartsWith('/') -or $s.StartsWith('~') -or ($s -match '[\*\?]')) { return $null }
+    if (-not (Test-ValidLiteralGitPath $s)) { return $null }
     return $s
 }
 
-function Test-ProtectedPathMatchCI([string]$Candidate, [string[]]$Patterns) {
+function Test-ProtectedPathMatchCI([string]$Candidate, [string[]]$Patterns, [bool]$CaseInsensitive = $true) {
     if (-not $Candidate -or -not $Patterns -or $Patterns.Count -eq 0) { return $false }
-    $cLow = $Candidate.ToLowerInvariant()
+    $cmp = if ($CaseInsensitive) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
     foreach ($p in $Patterns) {
         if (-not $p) { continue }
-        $pLow = $p.ToLowerInvariant()
-        if ($pLow -ceq '.' -or $cLow -ceq '.' -or $cLow -ceq $pLow -or $cLow.StartsWith("$pLow/", [System.StringComparison]::Ordinal) -or $pLow.StartsWith("$cLow/", [System.StringComparison]::Ordinal)) {
+        if ($p -ceq '.' -or $Candidate -ceq '.' -or $Candidate.Equals($p, $cmp) -or $Candidate.StartsWith("$p/", $cmp) -or $p.StartsWith("$Candidate/", $cmp)) {
             return $true
         }
     }
     return $false
+}
+
+function Invoke-GitLsRemoteRef([string]$Root, [string]$FullRef) {
+    $envLs = @{
+        GIT_TERMINAL_PROMPT = '0'
+        GCM_INTERACTIVE     = 'never'
+        GIT_ASKPASS         = ''
+        SSH_ASKPASS         = ''
+    }
+    $lsRes = Invoke-GitCommand $Root @('-c', 'credential.helper=', 'ls-remote', '--exit-code', 'origin', $FullRef) -ExtraEnv $envLs -TimeoutMs 8000
+    if ($lsRes.ExitCode -eq 2) {
+        return @{ Status = 'MISSING'; Sha = '' }
+    }
+    if ($lsRes.ExitCode -eq 0 -and $lsRes.StdOut) {
+        foreach ($ln in ($lsRes.StdOut -split "\r?\n")) {
+            if ($ln -cmatch "^([0-9a-f]{40})\t") {
+                return @{ Status = 'OK'; Sha = $Matches[1] }
+            }
+        }
+    }
+    return @{ Status = 'UNREACHABLE'; Sha = '' }
+}
+
+function Assert-SingleVerifyReceiptMatchesTarget([string]$Root, [string]$RecPath, [string[]]$IgnPaths, [string]$HeadSha, [string[]]$RequiredPaths, [bool]$CaseInsensitive) {
+    if (-not $HeadSha -or $HeadSha -cnotmatch '^[0-9a-f]{40}$') {
+        Fail 'MERGE_BLOCKED: ci_evidence_invalid(invalid_head_sha)' 1
+    }
+    $vr = Test-VerifyReceipt $Root $RecPath $IgnPaths '' '' $HeadSha
+    if (-not $vr -or $vr.Code -ne 0) {
+        $msg = if ($vr -and $vr.Message) { $vr.Message } else { 'unknown' }
+        Fail "MERGE_BLOCKED: ci_evidence_invalid($msg)" 1
+    }
+    $relCsv = if ($vr.RelevantPathsCsv) { [string]$vr.RelevantPathsCsv } else { '' }
+    if ($relCsv -cne 'ALL') {
+        if (-not $RequiredPaths -or $RequiredPaths.Count -eq 0) {
+            Fail 'MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)' 1
+        }
+        $recList = @(Split-CsvList $relCsv -AsPaths)
+        foreach ($cp in $RequiredPaths) {
+            if (-not (Test-OwnershipPathMatch $cp $recList $CaseInsensitive)) {
+                Fail "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: $cp)" 1
+            }
+        }
+    }
+}
+
+function Assert-LocalCiEvidence([string]$Root, [string]$HeadSha, [string[]]$ChangedPaths, [string]$RecPath, [hashtable]$LedgerObj, [string[]]$IgnPaths, [string]$CallerCiStatus, [bool]$RequireCi, [bool]$CaseInsensitive) {
+    $hasExplicitReceipt = [bool]($RecPath -and $RecPath.Trim())
+    if ($hasExplicitReceipt) {
+        Assert-SingleVerifyReceiptMatchesTarget $Root $RecPath $IgnPaths $HeadSha $ChangedPaths $CaseInsensitive
+        return 'LOCAL_VERIFIED'
+    }
+    if (-not $RequireCi) {
+        return 'NOT_REQUIRED'
+    }
+    if ($null -ne $LedgerObj -and $LedgerObj.Units -and $LedgerObj.Units.Count -gt 0) {
+        $hasAllScope = $false
+        $coveredList = New-Object System.Collections.Generic.List[string]
+        foreach ($u in $LedgerObj.Units) {
+            $ur = if ($u.verify_receipt) { [string]$u.verify_receipt } else { 'none' }
+            if (-not $ur -or $ur -ceq 'none') {
+                Fail "MERGE_BLOCKED: ci_evidence_invalid(ledger_unit_missing_verify_receipt:$($u.unit_id))" 1
+            }
+            $vrU = Test-VerifyReceipt $Root $ur $IgnPaths '' '' $HeadSha
+            if (-not $vrU -or $vrU.Code -ne 0) {
+                $msgU = if ($vrU -and $vrU.Message) { $vrU.Message } else { 'unknown' }
+                Fail "MERGE_BLOCKED: ci_evidence_invalid($msgU)" 1
+            }
+            if ($vrU.RelevantPathsCsv -ceq 'ALL') {
+                $hasAllScope = $true
+            } else {
+                foreach ($rp in @(Split-CsvList $vrU.RelevantPathsCsv -AsPaths)) {
+                    if ($rp -and -not $coveredList.Contains($rp)) { $coveredList.Add($rp) }
+                }
+            }
+        }
+        if (-not $hasAllScope) {
+            if (-not $ChangedPaths -or $ChangedPaths.Count -eq 0) {
+                Fail 'MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)' 1
+            }
+            $covArr = @($coveredList)
+            foreach ($cp in $ChangedPaths) {
+                if (-not (Test-OwnershipPathMatch $cp $covArr $CaseInsensitive)) {
+                    Fail "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: $cp)" 1
+                }
+            }
+        }
+        return 'LOCAL_VERIFIED'
+    }
+    if ($CallerCiStatus -ceq 'PASS') {
+        Fail 'MERGE_BLOCKED: ci_evidence_unverified(caller_reported_ci_cannot_authorize)' 1
+    }
+    Fail 'MERGE_BLOCKED: ci_evidence_missing' 1
 }
 
 function Parse-MergePolicyJsonText([string]$RawJson) {
@@ -2878,43 +3153,7 @@ function Test-BranchPatternMatch([string]$BranchName, [string[]]$Patterns) {
     return $false
 }
 
-function Parse-GitHubRemoteSlug([string]$RemoteUrl) {
-    if (-not $RemoteUrl) { return '' }
-    $u = $RemoteUrl.Trim()
-    if ($u -match '^https://(?:[^/@\s]+@)?github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$') {
-        $slug = $Matches[1]
-        if (-not $slug.Contains('..')) { return $slug }
-    } elseif ($u -match '^(?:ssh://)?git@github\.com[:/]([A-Za-z0-9._-]+/[A-Za-z0-9._-]+?)(?:\.git)?/?$') {
-        $slug = $Matches[1]
-        if (-not $slug.Contains('..')) { return $slug }
-    }
-    return ''
-}
-
-function Resolve-GitHubRepoSlug([string]$Root, [string]$ExplicitRepo, [string]$ErrPrefix) {
-    $expTrim = if ($ExplicitRepo) { $ExplicitRepo.Trim() } else { '' }
-    if ($expTrim) {
-        if ($expTrim -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -or $expTrim.Contains('..')) {
-            Fail "${ErrPrefix}: invalid_repo" 1
-        }
-    }
-    $remRes = Invoke-GitCommand $Root @('remote', 'get-url', 'origin')
-    if ($remRes.ExitCode -ne 0) {
-        Fail "${ErrPrefix}: origin_remote_missing" 1
-    }
-    $originSlug = Parse-GitHubRemoteSlug $remRes.StdOut
-    if (-not $originSlug) {
-        Fail "${ErrPrefix}: origin_remote_not_github" 1
-    }
-    if ($expTrim) {
-        if (-not $expTrim.Equals($originSlug, [System.StringComparison]::OrdinalIgnoreCase)) {
-            Fail "${ErrPrefix}: repo_mismatch" 1
-        }
-    }
-    return $originSlug
-}
-
-function Invoke-B3GitHubVerify([string]$Mode, [string]$RepoSlug, [string]$PrNum, [string]$ErrPrefix) {
+function Invoke-B3GitHubVerify([string]$Mode, [string]$RootDir, [string]$ExplicitRepo, [string]$PrNum, [string]$ErrPrefix) {
     $adapterPath = Join-Path $PSScriptRoot 'b3-github-verify.ps1'
     if (-not (Test-Path -LiteralPath $adapterPath -PathType Leaf)) {
         Fail "${ErrPrefix}: github_adapter_missing" 1
@@ -2924,7 +3163,11 @@ function Invoke-B3GitHubVerify([string]$Mode, [string]$RepoSlug, [string]$PrNum,
     $rawOut = @()
     $rc = 1
     try {
-        $rawOut = @(& $adapterPath -Mode $Mode -Repo $RepoSlug -PrNumber $PrNum 2>&1)
+        if ($ExplicitRepo -and $ExplicitRepo.Trim()) {
+            $rawOut = @(& $adapterPath -Mode $Mode -RepoRoot $RootDir -Repo $ExplicitRepo.Trim() -PrNumber $PrNum 2>&1)
+        } else {
+            $rawOut = @(& $adapterPath -Mode $Mode -RepoRoot $RootDir -PrNumber $PrNum 2>&1)
+        }
         $rc = $LASTEXITCODE
     } catch {
         $rawOut = @("GH_VERIFY_ERROR: adapter_exception")
@@ -2935,8 +3178,14 @@ function Invoke-B3GitHubVerify([string]$Mode, [string]$RepoSlug, [string]$PrNum,
     $lines = @($rawOut | ForEach-Object { ([string]$_).TrimEnd("`r") })
     if ($rc -ne 0) {
         $first = if ($lines.Count -gt 0 -and $lines[0]) { $lines[0] } else { 'unknown' }
-        $detail = ($first -replace '^GH_VERIFY_ERROR:\s*', '').Trim()
+        $detail = ($first -replace '^(?:GH_VERIFY_UNAVAILABLE|GH_VERIFY_ERROR):\s*', '').Trim()
         if (-not $detail) { $detail = 'unknown' }
+        if ($rc -eq 2) {
+            Fail "PROVIDER_UNAVAILABLE: github_verification_failed($detail)" 2
+        }
+        if ($detail -cin @('origin_remote_missing', 'origin_remote_not_github', 'repo_mismatch', 'invalid_repo')) {
+            Fail "${ErrPrefix}: $detail" 1
+        }
         Fail "${ErrPrefix}: github_verification_failed($detail)" 1
     }
     $data = @{}
@@ -2954,7 +3203,7 @@ function Invoke-B3GitHubVerify([string]$Mode, [string]$RepoSlug, [string]$PrNum,
             $data[$k] = $v
         }
     }
-    if ($data['schema'] -cne 'b3-gh-verify-v1' -or $data['mode'] -cne $Mode) {
+    if (($data['schema'] -cnotin @('b3-gh-verify-v2', 'b3-gh-verify-v1')) -or $data['mode'] -cne $Mode) {
         Fail "${ErrPrefix}: github_verification_failed(invalid_adapter_schema)" 1
     }
     $data['PrChangedFiles'] = @($changedFiles)
@@ -3068,6 +3317,7 @@ function Parse-ReviewLedger([string]$FullPath) {
     }
     if ($meta['schema'] -cne 'b3-review-ledger-v1') { Fail "LEDGER_CORRUPT: unsupported schema '$($meta['schema'])'" 1 }
     if ($meta['base_sha'] -cnotmatch '^[0-9a-f]{40}$') { Fail 'LEDGER_CORRUPT: invalid base_sha' 1 }
+    if ($meta['head_sha'] -cnotmatch '^[0-9a-f]{40}$') { Fail 'LEDGER_CORRUPT: invalid head_sha' 1 }
     if (-not $meta.ContainsKey('target_sha') -or $meta['target_sha'] -eq '') {
         if ($meta['target_ref'] -ceq 'working_tree') {
             $meta['target_sha'] = 'none'
@@ -3149,6 +3399,18 @@ function Invoke-ReviewLedgerCheck([string]$Root, [string]$LedgerFull, [string]$L
         if ($trChkSha -cne $targetCommitSha) {
             Fail "LEDGER_STALE: target_ref '$targetRefVal' moved (${targetCommitSha}->${trChkSha})" 2
         }
+        if ($ledger['head_sha'] -cne $trChkSha) {
+            Fail "LEDGER_STALE: head_sha moved ($($ledger['head_sha'])->${trChkSha})" 2
+        }
+    } else {
+        $hdChkRes = Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
+        $hdChkSha = $hdChkRes.StdOut.Trim()
+        if ($hdChkRes.ExitCode -ne 0 -or $hdChkSha -cnotmatch '^[0-9a-f]{40}$') {
+            Fail 'LEDGER_STALE: HEAD cannot be resolved' 2
+        }
+        if ($hdChkSha -cne $ledger['head_sha']) {
+            Fail "LEDGER_STALE: head_sha moved ($($ledger['head_sha'])->${hdChkSha})" 2
+        }
     }
 
     $liveScope = Invoke-CollectScopeData $Root $ledger['base_sha'] $targetCommitSha $IgnPaths 'LEDGER_FAIL'
@@ -3186,7 +3448,7 @@ function Invoke-ReviewLedgerCheck([string]$Root, [string]$LedgerFull, [string]$L
         if ($u.status -ceq 'BLOCKED') { Fail "LEDGER_BLOCKED: unit $uid" 2 }
         if ($u.status -ceq 'STALE') { Fail "LEDGER_STALE: unit $uid" 2 }
         if ($u.status -cne 'REVIEWED') { Fail "LEDGER_INCOMPLETE: unit $uid status=$($u.status)" 2 }
-        if ($u.findings -cmatch '(^|[,:; ])(OPEN|FIXED)($|[,:; ])') {
+        if ($u.findings -cmatch '(^|[^A-Za-z0-9_])(OPEN|FIXED|CONFIRMED|NEW|INVESTIGATING)([^A-Za-z0-9_]|$)') {
             Fail "LEDGER_INCOMPLETE: unresolved findings in $uid ($($u.findings))" 2
         }
 
@@ -3392,20 +3654,14 @@ function Test-GraphIndexFresh([string]$Root, [string]$GraphSha, [string]$LiveHea
         return $false
     }
     if ($ProbePaths -and $ProbePaths.Count -gt 0) {
-        $wRes = Invoke-GitCommand $Root (@('diff', '--no-renames', '--name-only', '--ignore-submodules=none', $GraphSha, '--') + $ProbePaths)
-        if ($wRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git diff failed' 1 }
-        $cRes = Invoke-GitCommand $Root (@('diff', '--no-renames', '--cached', '--name-only', '--ignore-submodules=none', $GraphSha, '--') + $ProbePaths)
-        if ($cRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git diff --cached failed' 1 }
-        $uRes = Invoke-GitCommand $Root (@('ls-files', '--others', '--exclude-standard', '--') + $ProbePaths)
-        if ($uRes.ExitCode -ne 0) { Fail 'CONTEXT_ERROR: git ls-files failed' 1 }
-        foreach ($rawOut in @($wRes.StdOut, $cRes.StdOut, $uRes.StdOut)) {
-            foreach ($line in ($rawOut -split "\r?\n")) {
-                $p = Normalize-PathValue ([string]$line)
-                if (-not $p) { continue }
-                if (Test-CheckpointPath $p) { continue }
-                if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
-                return $false
-            }
+        $wList = @(Invoke-GitPathsZ $Root (@('diff', '--no-ext-diff', '--no-renames', '--name-only', '--ignore-submodules=none', '-z', $GraphSha, '--') + $ProbePaths) 'names' 'CONTEXT_ERROR')
+        $cList = @(Invoke-GitPathsZ $Root (@('diff', '--no-ext-diff', '--no-renames', '--cached', '--name-only', '--ignore-submodules=none', '-z', $GraphSha, '--') + $ProbePaths) 'names' 'CONTEXT_ERROR')
+        $uList = @(Invoke-GitPathsZ $Root (@('ls-files', '--others', '--exclude-standard', '-z', '--') + $ProbePaths) 'names' 'CONTEXT_ERROR')
+        foreach ($p in (@($wList) + @($cList) + @($uList))) {
+            if (-not $p) { continue }
+            if (Test-CheckpointPath $p) { continue }
+            if ($IgnPaths -and (Test-PathMatch $p $IgnPaths)) { continue }
+            return $false
         }
         return $true
     }
@@ -3438,6 +3694,67 @@ function Test-GraphIndexFresh([string]$Root, [string]$GraphSha, [string]$LiveHea
     return $true
 }
 
+function Get-EffectiveRepoPathState([string]$Root, [string]$RelPath, [string]$FailPrefix = 'MECHANICAL_FAIL') {
+    $full = Join-Path $Root ($RelPath -replace '/', '\')
+    $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+    if (-not (Test-WavePathContained $Root $RelPath)) {
+        if ($item -and (Test-IsReparseItem $item)) {
+            $isSymLeaf = (-not $item.PSObject.Properties['LinkType']) -or ($item.LinkType -ceq 'SymbolicLink')
+            if ($isSymLeaf) {
+                $parentRel = (Split-Path -Parent ($RelPath -replace '/', '\')) -replace '\\', '/'
+                if ((-not $parentRel) -or $parentRel -ceq '.' -or (Test-WavePathContained $Root $parentRel)) {
+                    $lSha = Get-SymlinkBlobOid $Root $RelPath
+                    if ($lSha) { return "120000:$lSha" }
+                }
+            }
+        }
+        return 'UNSAFE_REPARSE'
+    }
+    $hasHeadEff = (Invoke-GitCommand $Root @('rev-parse', '--verify', '--quiet', 'HEAD')).ExitCode -eq 0
+    if ($hasHeadEff) {
+        $caHeadRes = Invoke-GitCommand $Root @('diff', '--no-ext-diff', '--cached', '--no-renames', '--name-only', '-z', 'HEAD', '--', $RelPath)
+        if ($caHeadRes.ExitCode -ne 0) { Fail "${FailPrefix}: git diff --cached failed for ${RelPath}" 1 }
+        if ($caHeadRes.StdOut) {
+            $iwRes = Invoke-GitCommand $Root @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', '--', $RelPath)
+            if ($iwRes.ExitCode -ne 0) { Fail "${FailPrefix}: git diff failed for ${RelPath}" 1 }
+            $caDelRes = Invoke-GitCommand $Root @('diff', '--no-ext-diff', '--cached', '--no-renames', '--diff-filter=D', '--name-only', '-z', '--', $RelPath)
+            if ($caDelRes.ExitCode -ne 0) { Fail "${FailPrefix}: git diff --cached -D failed for ${RelPath}" 1 }
+            $existsNow = ($null -ne $item) -or (Test-Path -LiteralPath $full)
+            if ($iwRes.StdOut -or ($caDelRes.StdOut -and $existsNow)) {
+                return 'INDEX_WT_DIVERGED'
+            }
+        }
+    }
+    if ($null -eq $item -and (-not (Test-Path -LiteralPath $full))) {
+        return 'DELETED'
+    }
+    if ($item -and (Test-IsReparseItem $item)) {
+        $isSym = (-not $item.PSObject.Properties['LinkType']) -or ($item.LinkType -ceq 'SymbolicLink')
+        if ($isSym) {
+            $lSha = Get-SymlinkBlobOid $Root $RelPath
+            if ($lSha) { return "120000:$lSha" }
+        }
+        return 'UNSAFE_REPARSE'
+    }
+    if (Test-Path -LiteralPath $full -PathType Leaf) {
+        $hRes = Invoke-GitCommand $Root @('hash-object', '--', $RelPath)
+        $hSha = $hRes.StdOut.Trim()
+        if ($hRes.ExitCode -ne 0 -or $hSha -cnotmatch '^[0-9a-f]{40}$') {
+            $detail = if ($hRes.StdErr.Trim()) { $hRes.StdErr.Trim() } else { $hSha }
+            Fail "${FailPrefix}: git hash-object failed for ${RelPath}: $detail" 1
+        }
+        return "blob:$hSha"
+    }
+    if (Test-Path -LiteralPath $full -PathType Container) {
+        if (Test-Path -LiteralPath (Join-Path $full '.git')) {
+            $subId = Get-SubmoduleEntryIdentity $Root $RelPath ''
+            if ($subId) { return "sub:$subId" }
+        }
+        return 'DIR'
+    }
+    return 'DELETED'
+}
+
 switch ($Command) {
     'fingerprint' {
         $trimmedScope = $Scope.Trim()
@@ -3462,17 +3779,32 @@ switch ($Command) {
     'check-freshness' {
         if (-not $ApproachAtSha) { Fail 'FRESHNESS_FAIL: missing -ApproachAtSha' 1 }
         if (-not $TaskBaseSha) { Fail 'FRESHNESS_FAIL: missing -TaskBaseSha' 1 }
-        $watched = @(Split-CsvList $WatchedPaths -AsPaths)
+        $watched = @(Split-PathCsvChecked $WatchedPaths 'FRESHNESS_FAIL')
         if ($watched.Count -lt 1) { Fail 'FRESHNESS_FAIL: missing -WatchedPaths' 1 }
-        $owned = @(Split-CsvList $OwnedFiles -AsPaths)
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $owned = @(Split-PathCsvChecked $OwnedFiles 'FRESHNESS_FAIL')
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'FRESHNESS_FAIL' -RejectDot)
 
-        $mbRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $TaskBaseSha, 'HEAD')
-        if ($mbRes.ExitCode -ne 0) {
+        $resolvedApproachSha = Assert-ValidGitRev $RepoRoot ($ApproachAtSha.Trim()) 'commit' 'FRESHNESS_FAIL' '-ApproachAtSha'
+        $resolvedTaskBaseSha = Assert-ValidGitRev $RepoRoot ($TaskBaseSha.Trim()) 'commit' 'FRESHNESS_FAIL' '-TaskBaseSha'
+        $resolvedHeadSha = Assert-ValidGitRev $RepoRoot 'HEAD' 'commit' 'FRESHNESS_FAIL' 'HEAD'
+
+        $mbRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resolvedTaskBaseSha, $resolvedHeadSha)
+        if ($mbRes.ExitCode -eq 1) {
             Fail 'STALE: HEAD is not a descendant of task_base' 2
+        } elseif ($mbRes.ExitCode -ne 0) {
+            $detail = if ($mbRes.StdErr.Trim()) { $mbRes.StdErr.Trim() } else { $mbRes.StdOut.Trim() }
+            Fail "FRESHNESS_FAIL: git merge-base failed: $detail" 1
         }
 
-        $committed = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--name-only', $ApproachAtSha, 'HEAD'))
+        $mbAppRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resolvedApproachSha, $resolvedHeadSha)
+        if ($mbAppRes.ExitCode -eq 1) {
+            Fail 'STALE: HEAD is not a descendant of approach_at_sha' 2
+        } elseif ($mbAppRes.ExitCode -ne 0) {
+            $detail = if ($mbAppRes.StdErr.Trim()) { $mbAppRes.StdErr.Trim() } else { $mbAppRes.StdOut.Trim() }
+            Fail "FRESHNESS_FAIL: git merge-base failed: $detail" 1
+        }
+
+        $committed = @(Invoke-GitLines $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--name-only', $resolvedApproachSha, $resolvedHeadSha, '--'))
         $committedHits = @($committed | Where-Object {
             (-not (Test-CheckpointPath $_)) -and (Test-PathMatch $_ $watched)
         } | Sort-Object -Unique)
@@ -3482,8 +3814,8 @@ switch ($Command) {
 
         $readOnlyWatched = @($watched | Where-Object { -not (Test-PathMatch $_ $owned) })
         if ($readOnlyWatched.Count -gt 0) {
-            $wtDiff = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--name-only', $ApproachAtSha))
-            $cached = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--cached', '--name-only'))
+            $wtDiff = @(Invoke-GitLines $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--name-only', $resolvedApproachSha, '--'))
+            $cached = @(Invoke-GitLines $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--cached', '--name-only', '--'))
             $untracked = @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard'))
 
             $uncommitted = New-Object System.Collections.Generic.List[string]
@@ -3512,14 +3844,15 @@ switch ($Command) {
             Fail "PRECOMMIT_FAIL: git operation in progress ($midOp)" 1
         }
 
-        $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
-        $staged = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--cached', '--name-only'))
+        $allowed = @(Split-PathCsvChecked $AllowedPaths 'PRECOMMIT_FAIL')
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'PRECOMMIT_FAIL' -RejectDot)
+        $staged = @(Invoke-GitLines $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--cached', '--name-only', '--'))
         if ($staged.Count -lt 1) {
             Fail 'PRECOMMIT_FAIL: nothing staged' 1
         }
 
         $checkpointHits = @($staged | Where-Object {
-            (Test-CheckpointPath $_) -or (($_ -match '^\.b3(/|$)') -and -not (Test-PathMatch $_ $allowed))
+            (Test-CheckpointPath $_) -or (($_ -imatch '^\.b3(/|$)') -and -not (Test-PathMatch $_ $allowed))
         })
         if ($checkpointHits.Count -gt 0) {
             Fail ("PRECOMMIT_FAIL: checkpoint staged (" + ($checkpointHits -join ', ') + ")") 1
@@ -3550,9 +3883,9 @@ switch ($Command) {
 
         if ($RequireVerifyReceipt -and $RequireVerifyReceipt.Trim()) {
             $wtMismatch = New-Object System.Collections.Generic.List[string]
-            $idxVsWt = @(Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $staged))
+            $idxVsWt = @(Invoke-GitLines $RepoRoot (@('diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $staged))
             foreach ($p in $idxVsWt) { $wtMismatch.Add($p) }
-            $stagedDel = @(Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--cached', '--diff-filter=D', '--name-only'))
+            $stagedDel = @(Invoke-GitLines $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--cached', '--diff-filter=D', '--name-only', '--'))
             foreach ($d in $stagedDel) {
                 if ((Test-Path -LiteralPath (Join-Path $RepoRoot ($d -replace '/', '\'))) -and -not $wtMismatch.Contains($d)) {
                     $wtMismatch.Add($d)
@@ -3563,7 +3896,6 @@ switch ($Command) {
                 Fail "PRECOMMIT_FAIL: staged content differs from working tree ($sortedMm)" 1
             }
 
-            $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
             if ($ignored.Count -gt 0) {
                 $stagedIgnored = @($staged | Where-Object { Test-PathMatch $_ $ignored })
                 if ($stagedIgnored.Count -gt 0) {
@@ -3591,9 +3923,9 @@ switch ($Command) {
                 if ($recScopePaths -contains '.') { $scopeAll = $true }
             }
             $unstagedRaw = @(if ($scopeAll) {
-                Invoke-GitLines $RepoRoot @('diff', '--no-renames', '--ignore-submodules=none', '--name-only')
+                Invoke-GitLines $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--')
             } else {
-                Invoke-GitLines $RepoRoot (@('diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $recScopePaths)
+                Invoke-GitLines $RepoRoot (@('diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--name-only', '--') + $recScopePaths)
             })
             $untrackedScopeRaw = @(if ($scopeAll) {
                 Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')
@@ -3645,7 +3977,7 @@ switch ($Command) {
     }
 
     'diff-scope' {
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'DIFF_SCOPE_FAIL' -RejectDot)
         $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'DIFF_SCOPE_FAIL' 'object'
         $targetTrim = $scopeTarget.TargetRef
         $targetCommitSha = $scopeTarget.TargetCommitSha
@@ -3662,14 +3994,9 @@ switch ($Command) {
             $prevTrim = $PrevSha.Trim()
             [void](Assert-ValidGitRev $RepoRoot $prevTrim 'commit' 'DIFF_SCOPE_FAIL' '-PrevSha')
             $deltaEnd = if ($targetTrim) { $targetCommitSha } else { New-WorkingTreeOid $RepoRoot 'DIFF_SCOPE_FAIL' }
-            $deltaRes = Invoke-GitCommand $RepoRoot @('diff', '--no-renames', '--name-only', $prevTrim, $deltaEnd, '--')
-            if ($deltaRes.ExitCode -ne 0) {
-                $detail = if ($deltaRes.StdErr.Trim()) { $deltaRes.StdErr.Trim() } else { $deltaRes.StdOut.Trim() }
-                Fail ("DIFF_SCOPE_FAIL: git diff -PrevSha failed: $detail") 1
-            }
+            $deltaPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', $prevTrim, $deltaEnd, '--') 'names' 'DIFF_SCOPE_FAIL')
             $deltaFiles = New-Object System.Collections.Generic.List[string]
-            foreach ($row in ($deltaRes.StdOut -split "\r?\n")) {
-                $dp = Normalize-PathValue ([string]$row)
+            foreach ($dp in $deltaPaths) {
                 if (-not $dp -or (Test-CheckpointPath $dp) -or (Test-PathMatch $dp $ignored)) { continue }
                 if (Test-NoiseFile $dp) { continue }
                 if (-not $deltaFiles.Contains($dp)) { $deltaFiles.Add($dp) }
@@ -3715,70 +4042,269 @@ switch ($Command) {
     }
 
     'mechanical-check' {
+        $mcCaseInsensitive = Test-RepoCaseInsensitive $RepoRoot
+        $cmpExact = if ($mcCaseInsensitive) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+        $cmpSet = if ($mcCaseInsensitive) { [System.StringComparer]::OrdinalIgnoreCase } else { [System.StringComparer]::Ordinal }
+        $repoExistsMc = ($RepoRoot -and (Test-Path -LiteralPath $RepoRoot -PathType Container))
+
         $hasWaveSpecs = [bool]($WaveSpecs -and $WaveSpecs.Trim())
         $hasWorkerChanges = [bool]($WorkerChanges -and $WorkerChanges.Trim())
+        $hasWorkerRoots = [bool]($WorkerRoots -and $WorkerRoots.Trim())
+        $hasProtectedArg = [bool]($ProtectedPaths -and $ProtectedPaths.Trim())
+        $hasDirtyDigestsArg = $PSBoundParameters.ContainsKey('DirtyDigests')
+
+        if ($hasWorkerChanges -and $hasWorkerRoots) {
+            Fail 'MECHANICAL_FAIL: cannot specify both -WorkerChanges and -WorkerRoots' 1
+        }
         if ($hasWorkerChanges -and -not $hasWaveSpecs) {
             Fail 'MECHANICAL_FAIL: -WorkerChanges requires -WaveSpecs' 1
         }
-        $wsParsed = $null
-        $wcParsed = $null
-        if ($hasWaveSpecs) {
-            $wsParsed = ConvertTo-WaveTaskMap -Specs $WaveSpecs -Root $RepoRoot -ErrorPrefix 'MECHANICAL_FAIL' -SpecLabel 'WaveSpecs' -EmptyArgLabel '-WaveSpecs' -RejectProtected -RejectDot -AllowEmpty
-            if ($hasWorkerChanges) {
-                $wcParsed = ConvertTo-WaveTaskMap -Specs $WorkerChanges -Root $RepoRoot -ErrorPrefix 'MECHANICAL_FAIL' -SpecLabel 'WorkerChanges' -EmptyArgLabel '-WorkerChanges' -RejectDot -AllowEmpty -AllowedTaskIds $wsParsed.Map
+        if ($hasWorkerRoots -and -not $hasWaveSpecs) {
+            Fail 'MECHANICAL_FAIL: -WorkerRoots requires -WaveSpecs' 1
+        }
+        if ($hasWorkerRoots -and ($TargetRef -and $TargetRef.Trim())) {
+            Fail 'MECHANICAL_FAIL: -WorkerRoots cannot be combined with -TargetRef' 1
+        }
+
+        $protectedList = @()
+        if ($hasProtectedArg) {
+            $parsedProt = ConvertTo-WavePaths $ProtectedPaths -ErrorPrefix 'MECHANICAL_FAIL'
+            if ($parsedProt.Error) { Fail $parsedProt.Error 1 }
+            $protectedList = @($parsedProt.Paths)
+            foreach ($prot in $protectedList) {
+                if ($prot -ceq '.') {
+                    Fail "MECHANICAL_FAIL: invalid protected path '.'" 1
+                }
+                if ($repoExistsMc -and (-not (Test-WavePathContained $RepoRoot $prot))) {
+                    Fail "MECHANICAL_FAIL: unsafe symlink or junction alias in path '$prot'" 1
+                }
             }
         }
 
-        $allowed = @(Split-CsvList $AllowedPaths -AsPaths)
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $dirtyDigestMap = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        $dirtyDigestKeyMap = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        if ($hasDirtyDigestsArg) {
+            if ($DirtyDigests -match '[\x00-\x1F\x7F]') {
+                Fail 'MECHANICAL_FAIL: invalid -DirtyDigests' 1
+            }
+            $ddTrim = if ($null -ne $DirtyDigests) { $DirtyDigests.Trim() } else { '' }
+            if ($ddTrim -and $ddTrim -cne 'none' -and $ddTrim -cne '[]') {
+                foreach ($ddEntry in ($ddTrim -split ';')) {
+                    $ddPart = $ddEntry.Trim()
+                    if (-not $ddPart) { continue }
+                    $eqIdx = $ddPart.IndexOf('=')
+                    if ($eqIdx -lt 1) {
+                        Fail "MECHANICAL_FAIL: invalid DirtyDigests entry '$ddPart'" 1
+                    }
+                    $rawDp = $ddPart.Substring(0, $eqIdx).Trim()
+                    $rawDig = $ddPart.Substring($eqIdx + 1).Trim()
+                    if ($rawDp.Contains(',')) {
+                        Fail "MECHANICAL_FAIL: invalid DirtyDigests path '$rawDp'" 1
+                    }
+                    $parsedDp = ConvertTo-WavePaths $rawDp -RejectDot -ErrorPrefix 'MECHANICAL_FAIL'
+                    if ($parsedDp.Error -or $parsedDp.Paths.Count -ne 1) {
+                        Fail "MECHANICAL_FAIL: invalid DirtyDigests path '$rawDp'" 1
+                    }
+                    $dpNorm = $parsedDp.Paths[0]
+                    if (Test-CheckpointPath $dpNorm) {
+                        Fail "MECHANICAL_FAIL: invalid DirtyDigests path '$dpNorm'" 1
+                    }
+                    if ($repoExistsMc -and (-not (Test-WavePathContained $RepoRoot $dpNorm))) {
+                        Fail "MECHANICAL_FAIL: unsafe symlink or junction alias in path '$dpNorm'" 1
+                    }
+                    if ($rawDig -cne 'DELETED' -and $rawDig -notmatch '^[0-9a-fA-F]{64}$') {
+                        Fail "MECHANICAL_FAIL: invalid DirtyDigests digest for '$dpNorm'" 1
+                    }
+                    $normDig = if ($rawDig -ceq 'DELETED') { 'DELETED' } else { $rawDig.ToLowerInvariant() }
+                    $ddKey = if ($mcCaseInsensitive) { $dpNorm.ToLowerInvariant() } else { $dpNorm }
+                    if ($dirtyDigestKeyMap.ContainsKey($ddKey)) {
+                        Fail "MECHANICAL_FAIL: duplicate DirtyDigests path '$dpNorm'" 1
+                    }
+                    $dirtyDigestMap[$dpNorm] = $normDig
+                    $dirtyDigestKeyMap[$ddKey] = $dpNorm
+                }
+            }
+        }
+
+        $wsParsed = $null
+        $wcParsed = $null
+        $wrOrder = New-Object System.Collections.Generic.List[string]
+        $wrMap = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+        $isAttributing = ($hasWorkerChanges -or $hasWorkerRoots)
+        if ($hasWaveSpecs) {
+            $wsParsed = ConvertTo-WaveTaskMap -Specs $WaveSpecs -Root $RepoRoot -ErrorPrefix 'MECHANICAL_FAIL' -SpecLabel 'WaveSpecs' -EmptyArgLabel '-WaveSpecs' -RejectProtected -RejectDot -AllowEmpty
+            foreach ($ti in $wsParsed.Order) {
+                foreach ($pi in $wsParsed.Map[$ti]) {
+                    foreach ($prot in $protectedList) {
+                        $ovProt = Test-WavePathOverlap $pi $prot $mcCaseInsensitive
+                        if ($ovProt -eq 'equal' -or $ovProt -eq 'prefix') {
+                            Fail "MECHANICAL_FAIL: protected path '$pi' overlaps single-writer boundary '$prot'" 1
+                        }
+                    }
+                }
+            }
+            if ($isAttributing) {
+                $baseRawAttr = if ($BaseSha) { $BaseSha.Trim() } else { '' }
+                if ($baseRawAttr -cnotmatch '^[0-9a-fA-F]{40}$') {
+                    Fail 'MECHANICAL_FAIL: worker attribution requires explicit 40-hex -BaseSha' 1
+                }
+                $midOpMc = Test-GitMidOperation $RepoRoot
+                if ($midOpMc) {
+                    Fail "MECHANICAL_FAIL: git operation in progress ($midOpMc)" 1
+                }
+                for ($i = 0; $i -lt $wsParsed.Order.Count; $i++) {
+                    for ($j = $i + 1; $j -lt $wsParsed.Order.Count; $j++) {
+                        $ti = $wsParsed.Order[$i]
+                        $tj = $wsParsed.Order[$j]
+                        foreach ($pi in $wsParsed.Map[$ti]) {
+                            foreach ($pj in $wsParsed.Map[$tj]) {
+                                $ovW = Test-WavePathOverlap $pi $pj $mcCaseInsensitive
+                                if ($ovW -ne 'none') {
+                                    Fail "MECHANICAL_FAIL: overlapping WaveSpecs '$pi' and '$pj' ($ti,$tj)" 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if ($hasWorkerChanges) {
+                $wcParsed = ConvertTo-WaveTaskMap -Specs $WorkerChanges -Root $RepoRoot -ErrorPrefix 'MECHANICAL_FAIL' -SpecLabel 'WorkerChanges' -EmptyArgLabel '-WorkerChanges' -RejectDot -AllowEmpty -AllowedTaskIds $wsParsed.Map
+            }
+            if ($hasWorkerRoots) {
+                if ($WorkerRoots -match '[\x00-\x1F\x7F]') {
+                    Fail 'MECHANICAL_FAIL: invalid -WorkerRoots' 1
+                }
+                foreach ($wrEntry in ($WorkerRoots -split ';')) {
+                    $wrTrim = $wrEntry.Trim()
+                    if (-not $wrTrim) { continue }
+                    $eqIdx = $wrTrim.IndexOf('=')
+                    if ($eqIdx -lt 0) {
+                        Fail "MECHANICAL_FAIL: invalid WorkerRoots entry '$wrTrim' (expected TaskId=worktree_path)" 1
+                    }
+                    $tid = $wrTrim.Substring(0, $eqIdx).Trim()
+                    $wtVal = $wrTrim.Substring($eqIdx + 1).Trim()
+                    if (-not $tid -or $tid -cnotmatch '\A[A-Za-z0-9._-]+\z') {
+                        Fail "MECHANICAL_FAIL: invalid task id '$tid' in WorkerRoots" 1
+                    }
+                    if ($wrMap.ContainsKey($tid)) {
+                        Fail "MECHANICAL_FAIL: duplicate task id '$tid' in WorkerRoots" 1
+                    }
+                    if (-not $wsParsed.Map.ContainsKey($tid)) {
+                        Fail "MECHANICAL_FAIL: unknown task id '$tid' in WorkerRoots" 1
+                    }
+                    if (-not $wtVal) {
+                        Fail "MECHANICAL_FAIL: empty worktree root for task '$tid' in WorkerRoots" 1
+                    }
+                    $wrOrder.Add($tid)
+                    $wrMap[$tid] = if ($wtVal -ceq 'none' -or $wtVal -ceq '[]') { '' } else { $wtVal }
+                }
+                if ($wrOrder.Count -lt 1) {
+                    Fail 'MECHANICAL_FAIL: no tasks in -WorkerRoots' 1
+                }
+            }
+        }
+
+        $allowed = @(Split-PathCsvChecked $AllowedPaths 'MECHANICAL_FAIL')
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'MECHANICAL_FAIL' -RejectDot)
         $obsoletesList = @(Split-CsvList $Obsoletes)
-        $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'MECHANICAL_FAIL' 'object'
+        $baseKindMc = if ($isAttributing) { 'commit' } else { 'object' }
+        $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'MECHANICAL_FAIL' $baseKindMc
         $targetTrim = $scopeTarget.TargetRef
         $targetCommitSha = $scopeTarget.TargetCommitSha
         $resolvedBase = $scopeTarget.BaseSha
 
         $chArgs = if ($targetTrim) {
-            @('diff', '--no-renames', '--name-only', $resolvedBase, $targetCommitSha, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', $resolvedBase, $targetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '--name-only', $resolvedBase, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', $resolvedBase, '--')
         }
-        $chRes = Invoke-GitCommand $RepoRoot $chArgs
-        if ($chRes.ExitCode -ne 0) {
-            $detail = if ($chRes.StdErr.Trim()) { $chRes.StdErr.Trim() } else { $chRes.StdOut.Trim() }
-            Fail ("MECHANICAL_FAIL: git diff --name-only failed: $detail") 1
-        }
+        $chPaths = @(Invoke-GitPathsZ $RepoRoot $chArgs 'names' 'MECHANICAL_FAIL')
         $nonDelArgs = if ($targetTrim) {
-            @('diff', '--no-renames', '--diff-filter=d', '--name-only', $resolvedBase, $targetCommitSha, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '--diff-filter=d', '--name-only', '-z', $resolvedBase, $targetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '--diff-filter=d', '--name-only', $resolvedBase, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '--diff-filter=d', '--name-only', '-z', $resolvedBase, '--')
         }
-        $nonDelRes = Invoke-GitCommand $RepoRoot $nonDelArgs
-        if ($nonDelRes.ExitCode -ne 0) {
-            $detail = if ($nonDelRes.StdErr.Trim()) { $nonDelRes.StdErr.Trim() } else { $nonDelRes.StdOut.Trim() }
-            Fail ("MECHANICAL_FAIL: git diff --diff-filter=d failed: $detail") 1
+        $nonDelPaths = @(Invoke-GitPathsZ $RepoRoot $nonDelArgs 'names' 'MECHANICAL_FAIL')
+        $untracked = if ($targetTrim) { @() } else { @(Invoke-GitPathsZ $RepoRoot @('ls-files', '--others', '--exclude-standard', '-z') 'names' 'MECHANICAL_FAIL') }
+        $caBaseChPaths = @()
+        $caBaseNonDelPaths = @()
+        if (-not $targetTrim) {
+            $caBaseChPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--cached', '--no-renames', '--name-only', '-z', $resolvedBase, '--') 'names' 'MECHANICAL_FAIL')
+            if ($caBaseChPaths.Count -gt 0) {
+                $caBaseNonDelPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--cached', '--no-renames', '--diff-filter=d', '--name-only', '-z', $resolvedBase, '--') 'names' 'MECHANICAL_FAIL')
+            }
         }
-        $untracked = if ($targetTrim) { @() } else { @(Invoke-GitLines $RepoRoot @('ls-files', '--others', '--exclude-standard')) }
+
+        # Collect raw changed/dirty paths BEFORE $ignored stripping for ProtectedPaths and DirtyDigests tamper gates
+        $rawChangedBeforeIgn = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($rp in (@($chPaths) + @($caBaseChPaths) + @($untracked))) {
+            if ($rp -and (-not (Test-CheckpointPath $rp))) { [void]$rawChangedBeforeIgn.Add($rp) }
+        }
+        if ((-not $targetTrim) -and ($hasProtectedArg -or $hasDirtyDigestsArg)) {
+            $hdDirtyPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', 'HEAD', '--') 'names' 'MECHANICAL_FAIL')
+            $caDirtyPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--cached', '--name-only', '-z', '--') 'names' 'MECHANICAL_FAIL')
+            $wtDirtyPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', '--') 'names' 'MECHANICAL_FAIL')
+            foreach ($rp in (@($hdDirtyPaths) + @($caDirtyPaths) + @($wtDirtyPaths))) {
+                if ($rp -and (-not (Test-CheckpointPath $rp))) { [void]$rawChangedBeforeIgn.Add($rp) }
+            }
+        }
+
+        $protectedViolations = New-Object System.Collections.Generic.List[string]
+        if ($protectedList.Count -gt 0) {
+            foreach ($rp in @($rawChangedBeforeIgn)) {
+                if (Test-OwnershipPathMatch $rp $protectedList $mcCaseInsensitive) {
+                    $protectedViolations.Add($rp)
+                }
+            }
+        }
+
+        $dirtyTamperList = New-Object System.Collections.Generic.List[string]
+        if ($hasDirtyDigestsArg) {
+            foreach ($dp in @(Sort-Ordinal @($dirtyDigestMap.Keys))) {
+                $expDig = $dirtyDigestMap[$dp]
+                $fullDp = Join-Path $RepoRoot ($dp -replace '/', '\')
+                $dpItem = Get-Item -LiteralPath $fullDp -Force -ErrorAction SilentlyContinue
+                if ($expDig -ceq 'DELETED') {
+                    if ($null -ne $dpItem -or (Test-Path -LiteralPath $fullDp)) {
+                        $dirtyTamperList.Add($dp)
+                    }
+                } else {
+                    if ($null -eq $dpItem -or $dpItem.PSIsContainer -or (Test-IsReparseItem $dpItem) -or (-not (Test-Path -LiteralPath $fullDp -PathType Leaf))) {
+                        $dirtyTamperList.Add($dp)
+                    } else {
+                        $actDig = (Get-FileHash -LiteralPath $fullDp -Algorithm SHA256).Hash.ToLowerInvariant()
+                        if ($actDig -cne $expDig) {
+                            $dirtyTamperList.Add($dp)
+                        }
+                    }
+                }
+            }
+            if ($ignored.Count -gt 0) {
+                foreach ($rp in @($rawChangedBeforeIgn)) {
+                    if (Test-OwnershipPathMatch $rp $ignored $mcCaseInsensitive) {
+                        $rpKey = if ($mcCaseInsensitive) { $rp.ToLowerInvariant() } else { $rp }
+                        if (-not $dirtyDigestKeyMap.ContainsKey($rpKey)) {
+                            if (-not $dirtyTamperList.Contains($rp)) {
+                                $dirtyTamperList.Add($rp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         $allChanged = New-Object System.Collections.Generic.List[string]
-        foreach ($row in ($chRes.StdOut -split "\r?\n")) {
-            $p = Normalize-PathValue ([string]$row)
-            if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $ignored)) { continue }
-            if (-not $allChanged.Contains($p)) { $allChanged.Add($p) }
-        }
-        foreach ($u in $untracked) {
-            if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
-            if (-not $allChanged.Contains($u)) { $allChanged.Add($u) }
+        $allChangedSet = New-Object 'System.Collections.Generic.HashSet[string]' ($cmpSet)
+        foreach ($p in (@($chPaths) + @($untracked) + @($caBaseChPaths))) {
+            if (-not $p -or (Test-CheckpointPath $p) -or (Test-OwnershipPathMatch $p $ignored $mcCaseInsensitive)) { continue }
+            if ($allChangedSet.Add($p)) { $allChanged.Add($p) }
         }
 
         $nonDelChanged = New-Object System.Collections.Generic.List[string]
-        foreach ($row in ($nonDelRes.StdOut -split "\r?\n")) {
-            $p = Normalize-PathValue ([string]$row)
-            if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $ignored)) { continue }
-            if (-not $nonDelChanged.Contains($p)) { $nonDelChanged.Add($p) }
-        }
-        foreach ($u in $untracked) {
-            if (-not $u -or (Test-CheckpointPath $u) -or (Test-PathMatch $u $ignored)) { continue }
-            if (-not $nonDelChanged.Contains($u)) { $nonDelChanged.Add($u) }
+        $nonDelSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($p in (@($nonDelPaths) + @($untracked) + @($caBaseNonDelPaths))) {
+            if (-not $p -or (Test-CheckpointPath $p) -or (Test-OwnershipPathMatch $p $ignored $mcCaseInsensitive)) { continue }
+            if ($nonDelSet.Add($p)) { $nonDelChanged.Add($p) }
         }
 
         $scopeCreep = New-Object System.Collections.Generic.List[string]
@@ -3798,57 +4324,75 @@ switch ($Command) {
         $sqlHitCount = 0
 
         $dlArgs = if ($targetTrim) {
-            @('diff', '--no-renames', '-U0', $resolvedBase, $targetCommitSha, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '-U0', $resolvedBase, $targetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '-U0', $resolvedBase, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '-U0', $resolvedBase, '--')
         }
         $dlRes = Invoke-GitCommand $RepoRoot $dlArgs
         if ($dlRes.ExitCode -ne 0) {
             $detail = if ($dlRes.StdErr.Trim()) { $dlRes.StdErr.Trim() } else { $dlRes.StdOut.Trim() }
             Fail ("MECHANICAL_FAIL: git diff -U0 failed: $detail") 1
         }
-
-        $curFile = ''
-        $curLine = 0
-        $skipFile = $true
-        $inHunk = $false
-        foreach ($rawLine in ($dlRes.StdOut -split "\r?\n")) {
-            $ln = [string]$rawLine
-            if ($ln.StartsWith('diff --git ')) {
-                $curFile = ''
-                $skipFile = $true
-                $inHunk = $false
-                continue
+        $diffTextsToScan = New-Object System.Collections.Generic.List[string]
+        if ($dlRes.StdOut) { [void]$diffTextsToScan.Add($dlRes.StdOut) }
+        if ((-not $targetTrim) -and $caBaseChPaths.Count -gt 0) {
+            $dlCaRes = Invoke-GitCommand $RepoRoot @('diff', '--no-ext-diff', '--cached', '--no-renames', '-U0', $resolvedBase, '--')
+            if ($dlCaRes.ExitCode -ne 0) {
+                $detail = if ($dlCaRes.StdErr.Trim()) { $dlCaRes.StdErr.Trim() } else { $dlCaRes.StdOut.Trim() }
+                Fail ("MECHANICAL_FAIL: git diff --cached -U0 failed: $detail") 1
             }
-            if (-not $inHunk -and $ln.StartsWith('+++ ')) {
-                if ($ln -eq '+++ /dev/null') {
+            if ($dlCaRes.StdOut) { [void]$diffTextsToScan.Add($dlCaRes.StdOut) }
+        }
+
+        foreach ($diffTxt in $diffTextsToScan) {
+            $curFile = ''
+            $curLine = 0
+            $skipFile = $true
+            $inHunk = $false
+            foreach ($rawLine in ($diffTxt -split "\r?\n")) {
+                $ln = [string]$rawLine
+                if ($ln.StartsWith('diff --git ')) {
                     $curFile = ''
                     $skipFile = $true
-                } else {
-                    $cand = $ln.Substring(4)
-                    if ($cand.StartsWith('b/')) { $cand = $cand.Substring(2) }
-                    $curFile = Normalize-PathValue $cand
-                    $skipFile = (-not $curFile) -or (Test-CheckpointPath $curFile) -or (Test-PathMatch $curFile $ignored) -or (Test-NoiseFile $curFile) -or ($curFile -match '\.md$')
+                    $inHunk = $false
+                    continue
                 }
-                continue
-            }
-            if ($ln -match '^@@ -[0-9,]+ \+([0-9]+)(,[0-9]+)? @@') {
-                $curLine = [int]$Matches[1]
-                $inHunk = $true
-                continue
-            }
-            if (-not $inHunk -or $skipFile) { continue }
-            if ($ln.StartsWith('+')) {
-                $body = $ln.Substring(1)
-                $tag = Find-LeftoverTag $body
-                if ($tag -and $leftoverHits.Count -lt 10) {
-                    $leftoverHits.Add("${curFile}:${curLine}:${tag}")
+                if (-not $inHunk -and $ln.StartsWith('+++ ')) {
+                    if ($ln -eq '+++ /dev/null') {
+                        $curFile = ''
+                        $skipFile = $true
+                    } else {
+                        $cand = $ln.Substring(4)
+                        if ($cand.StartsWith('b/')) { $cand = $cand.Substring(2) }
+                        $curFile = Normalize-PathValue $cand
+                        $skipFile = (-not $curFile) -or (Test-CheckpointPath $curFile) -or (Test-PathMatch $curFile $ignored) -or (Test-NoiseFile $curFile) -or ($curFile -match '\.md$')
+                    }
+                    continue
                 }
-                if (-not (Test-TestPath $curFile) -and (Find-DestructiveSql $body) -and $sqlHitCount -lt 10) {
-                    $safetyHits.Add("destructive_sql:${curFile}:${curLine}")
-                    $sqlHitCount++
+                if ($ln -match '^@@ -[0-9,]+ \+([0-9]+)(,[0-9]+)? @@') {
+                    $curLine = [int]$Matches[1]
+                    $inHunk = $true
+                    continue
                 }
-                $curLine++
+                if (-not $inHunk -or $skipFile) { continue }
+                if ($ln.StartsWith('+')) {
+                    $body = $ln.Substring(1)
+                    $tag = Find-LeftoverTag $body
+                    if ($tag -and $leftoverHits.Count -lt 10) {
+                        $lhEntry = "${curFile}:${curLine}:${tag}"
+                        if (-not $leftoverHits.Contains($lhEntry)) {
+                            $leftoverHits.Add($lhEntry)
+                        }
+                    }
+                    if (-not (Test-TestPath $curFile) -and (Find-DestructiveSql $body) -and $sqlHitCount -lt 10) {
+                        $shEntry = "destructive_sql:${curFile}:${curLine}"
+                        if (-not $safetyHits.Contains($shEntry)) {
+                            $safetyHits.Add($shEntry)
+                            $sqlHitCount++
+                        }
+                    }
+                    $curLine++
+                }
             }
         }
 
@@ -3873,81 +4417,150 @@ switch ($Command) {
             }
         }
 
-        $delTarget = if ($targetTrim) { $targetCommitSha } else { New-WorkingTreeOid $RepoRoot 'MECHANICAL_FAIL' -ExcludeSensitive }
-        $delArgs = @('diff', '-M', '--diff-filter=D', '--name-only', $resolvedBase, $delTarget, '--')
-        $delRes = Invoke-GitCommand $RepoRoot $delArgs
-        if ($delRes.ExitCode -ne 0) {
-            $detail = if ($delRes.StdErr.Trim()) { $delRes.StdErr.Trim() } else { $delRes.StdOut.Trim() }
-            Fail ("MECHANICAL_FAIL: git diff --diff-filter=D failed: $detail") 1
+        $candidateDelSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+        foreach ($dp in $chPaths) {
+            if (-not $dp -or (Test-CheckpointPath $dp) -or (Test-OwnershipPathMatch $dp $ignored $mcCaseInsensitive) -or (Test-NoiseFile $dp)) { continue }
+            if (-not $nonDelSet.Contains($dp)) {
+                [void]$candidateDelSet.Add($dp)
+            }
         }
-        $deletedList = New-Object System.Collections.Generic.List[string]
-        foreach ($row in ($delRes.StdOut -split "\r?\n")) {
-            $dp = Normalize-PathValue ([string]$row)
-            if (-not $dp -or (Test-CheckpointPath $dp) -or (Test-PathMatch $dp $ignored) -or (Test-NoiseFile $dp)) { continue }
-            if (-not $deletedList.Contains($dp)) { $deletedList.Add($dp) }
-        }
-        if ($deletedList.Count -ge 10 -and -not $AllowMassDelete) {
-            $safetyHits.Add("mass_delete:$($deletedList.Count)f")
+        if ((-not $AllowMassDelete) -and ($candidateDelSet.Count -ge 10)) {
+            $delTarget = if ($targetTrim) { $targetCommitSha } else { New-WorkingTreeOid $RepoRoot 'MECHANICAL_FAIL' -ExcludeSensitive }
+            $delArgs = @('diff', '--no-ext-diff', '-M', '--diff-filter=D', '--name-only', '-z', $resolvedBase, $delTarget, '--')
+            $delPaths = @(Invoke-GitPathsZ $RepoRoot $delArgs 'names' 'MECHANICAL_FAIL')
+            $deletedList = New-Object System.Collections.Generic.List[string]
+            foreach ($dp in $delPaths) {
+                if (-not $dp -or (Test-CheckpointPath $dp) -or (Test-OwnershipPathMatch $dp $ignored $mcCaseInsensitive) -or (Test-NoiseFile $dp)) { continue }
+                if (-not $deletedList.Contains($dp)) { $deletedList.Add($dp) }
+            }
+            if ($deletedList.Count -ge 10) {
+                $safetyHits.Add("mass_delete:$($deletedList.Count)f")
+            }
         }
 
         $obsoleteHits = New-Object System.Collections.Generic.List[string]
-        foreach ($tok in $obsoletesList) {
-            $normTok = Normalize-PathValue $tok
-            $existsPath = $false
-            if ($normTok) {
-                if ($targetTrim) {
-                    $ceRes = Invoke-GitCommand $RepoRoot @('cat-file', '-e', "${targetCommitSha}:${normTok}")
-                    $existsPath = ($ceRes.ExitCode -eq 0)
-                } else {
-                    $existsPath = Test-Path -LiteralPath (Join-Path $RepoRoot ($normTok -replace '/', '\'))
+        if ($obsoletesList.Count -gt 0) {
+            $targetExistingPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+            if ($targetTrim) {
+                $lsPathArgs = New-Object System.Collections.Generic.List[string]
+                foreach ($tok in $obsoletesList) {
+                    $nt = Normalize-PathValue $tok
+                    if ($nt -and (-not $nt.StartsWith('-')) -and (-not $nt.Contains(':')) -and ($nt -notmatch '(^|/)\.\.(/|$)')) {
+                        if (-not $lsPathArgs.Contains($nt)) { $lsPathArgs.Add($nt) }
+                    }
+                }
+                if ($lsPathArgs.Count -gt 0) {
+                    $lsObsPaths = @(Invoke-GitPathsZ $RepoRoot (@('ls-tree', '--name-only', '-z', $targetCommitSha, '--') + $lsPathArgs.ToArray()) 'ls-tree-z' 'MECHANICAL_FAIL')
+                    foreach ($lp in $lsObsPaths) {
+                        if ($lp) { [void]$targetExistingPaths.Add($lp) }
+                    }
                 }
             }
-            $grepArgs = if ($targetTrim) {
-                @('grep', '-l', '-F', '-e', $tok, $targetCommitSha, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship', ':(exclude).b3/autodev')
-            } else {
-                @('grep', '--untracked', '-l', '-F', '-e', $tok, '--', '.', ':(exclude).b3/ship', ':(exclude).b3/research-ship', ':(exclude).b3/autodev')
+
+            $batchGrepArgs = New-Object System.Collections.Generic.List[string]
+            [void]$batchGrepArgs.Add('grep')
+            if (-not $targetTrim) { [void]$batchGrepArgs.Add('--untracked') }
+            [void]$batchGrepArgs.Add('-l')
+            [void]$batchGrepArgs.Add('-F')
+            foreach ($tok in $obsoletesList) {
+                [void]$batchGrepArgs.Add('-e')
+                [void]$batchGrepArgs.Add($tok)
             }
-            $grepRes = Invoke-GitCommand $RepoRoot $grepArgs
-            if ($grepRes.ExitCode -gt 1) {
-                Fail "MECHANICAL_FAIL: git grep failed for obsolete '$tok'" 1
+            if ($targetTrim) { [void]$batchGrepArgs.Add($targetCommitSha) }
+            [void]$batchGrepArgs.Add('--')
+            [void]$batchGrepArgs.Add('.')
+            [void]$batchGrepArgs.Add(':(exclude).b3/ship')
+            [void]$batchGrepArgs.Add(':(exclude).b3/research-ship')
+            [void]$batchGrepArgs.Add(':(exclude).b3/autodev')
+
+            $batchRes = Invoke-GitCommand $RepoRoot $batchGrepArgs.ToArray()
+            if ($batchRes.ExitCode -gt 1) {
+                Fail 'MECHANICAL_FAIL: git grep failed for obsoletes' 1
             }
-            $grepCount = 0
-            if ($grepRes.ExitCode -eq 0) {
+            $batchHitFiles = New-Object System.Collections.Generic.List[string]
+            if ($batchRes.ExitCode -eq 0 -and $batchRes.StdOut) {
                 $obsPrefix = "${targetCommitSha}:"
-                foreach ($row in ($grepRes.StdOut -split "\r?\n")) {
+                foreach ($row in ($batchRes.StdOut -split "\r?\n")) {
                     $gp = ([string]$row).Trim()
                     if (-not $gp) { continue }
                     if ($targetTrim -and $gp.StartsWith($obsPrefix)) { $gp = $gp.Substring($obsPrefix.Length) }
                     $gp = Normalize-PathValue $gp
                     if (-not $gp -or (Test-CheckpointPath $gp) -or ($ignored -and (Test-PathMatch $gp $ignored))) { continue }
-                    $grepCount++
+                    if (-not $batchHitFiles.Contains($gp)) { $batchHitFiles.Add($gp) }
                 }
             }
-            if ($existsPath -and $grepCount -gt 0) {
-                $obsoleteHits.Add("${tok}(exists+${grepCount}f)")
-            } elseif ($existsPath) {
-                $obsoleteHits.Add("${tok}(exists)")
-            } elseif ($grepCount -gt 0) {
-                $obsoleteHits.Add("${tok}(${grepCount}f)")
+
+            foreach ($tok in $obsoletesList) {
+                $normTok = Normalize-PathValue $tok
+                $existsPath = $false
+                if ($normTok) {
+                    if ($targetTrim) {
+                        if ($normTok.StartsWith('-') -or $normTok.Contains(':') -or ($normTok -match '(^|/)\.\.(/|$)')) {
+                            $ceRes = Invoke-GitCommand $RepoRoot @('cat-file', '-e', "${targetCommitSha}:${normTok}")
+                            $existsPath = ($ceRes.ExitCode -eq 0)
+                        } else {
+                            $existsPath = $targetExistingPaths.Contains($normTok)
+                        }
+                    } else {
+                        $existsPath = Test-Path -LiteralPath (Join-Path $RepoRoot ($normTok -replace '/', '\'))
+                    }
+                }
+                $grepCount = 0
+                if ($batchHitFiles.Count -gt 0) {
+                    if ($obsoletesList.Count -eq 1) {
+                        $grepCount = $batchHitFiles.Count
+                    } else {
+                        $singleArgs = New-Object System.Collections.Generic.List[string]
+                        [void]$singleArgs.Add('grep')
+                        if (-not $targetTrim) { [void]$singleArgs.Add('--untracked') }
+                        [void]$singleArgs.Add('-l')
+                        [void]$singleArgs.Add('-F')
+                        [void]$singleArgs.Add('-e')
+                        [void]$singleArgs.Add($tok)
+                        if ($targetTrim) { [void]$singleArgs.Add($targetCommitSha) }
+                        [void]$singleArgs.Add('--')
+                        foreach ($hf in $batchHitFiles) { [void]$singleArgs.Add($hf) }
+                        $singleRes = Invoke-GitCommand $RepoRoot $singleArgs.ToArray()
+                        if ($singleRes.ExitCode -gt 1) {
+                            Fail "MECHANICAL_FAIL: git grep failed for obsolete '$tok'" 1
+                        }
+                        if ($singleRes.ExitCode -eq 0 -and $singleRes.StdOut) {
+                            $obsPrefix = "${targetCommitSha}:"
+                            foreach ($row in ($singleRes.StdOut -split "\r?\n")) {
+                                $gp = ([string]$row).Trim()
+                                if (-not $gp) { continue }
+                                if ($targetTrim -and $gp.StartsWith($obsPrefix)) { $gp = $gp.Substring($obsPrefix.Length) }
+                                $gp = Normalize-PathValue $gp
+                                if (-not $gp -or (Test-CheckpointPath $gp) -or ($ignored -and (Test-PathMatch $gp $ignored))) { continue }
+                                $grepCount++
+                            }
+                        }
+                    }
+                }
+                if ($existsPath -and $grepCount -gt 0) {
+                    $obsoleteHits.Add("${tok}(exists+${grepCount}f)")
+                } elseif ($existsPath) {
+                    $obsoleteHits.Add("${tok}(exists)")
+                } elseif ($grepCount -gt 0) {
+                    $obsoleteHits.Add("${tok}(${grepCount}f)")
+                }
             }
         }
 
         $ovStatus = ''
         $ovViolationsOut = ''
         if ($hasWaveSpecs) {
-            if (-not $hasWorkerChanges) {
+            if (-not $isAttributing) {
                 $ovStatus = 'UNVERIFIED_COMBINED_ONLY'
                 $ovViolationsOut = 'unverified'
-            } else {
-                $mcCaseInsensitive = ($env:OS -eq 'Windows_NT') -or ($IsMacOS -eq $true)
-                $cmpExact = if ($mcCaseInsensitive) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+            } elseif ($hasWorkerChanges) {
                 $ovViolations = New-Object System.Collections.Generic.List[string]
                 $attributedPaths = New-Object System.Collections.Generic.List[string]
                 foreach ($tid in $wcParsed.Order) {
                     $tidOwned = @($wsParsed.Map[$tid])
                     foreach ($wp in @($wcParsed.Map[$tid])) {
                         $attributedPaths.Add($wp)
-                        if (($wp -imatch '^\.b3(/|$)') -or ($wp -imatch '(^|/)\.git(/|$)') -or ($wp -imatch '(^|/)\.gitmodules$')) {
+                        if (($wp -imatch '^\.b3(/|$)') -or ($wp -imatch '(^|/)\.git(/|$)') -or ($wp -imatch '(^|/)\.gitmodules$') -or (Test-OwnershipPathMatch $wp $protectedList $mcCaseInsensitive)) {
                             $ovViolations.Add("${wp}(${tid}->protected)")
                             continue
                         }
@@ -3956,6 +4569,9 @@ switch ($Command) {
                             continue
                         }
                         if (Test-OwnershipPathMatch $wp $tidOwned $mcCaseInsensitive) {
+                            if (-not $allChangedSet.Contains($wp)) {
+                                $ovViolations.Add("${wp}(${tid}->phantom)")
+                            }
                             continue
                         }
                         $otherOwners = New-Object System.Collections.Generic.List[string]
@@ -3985,9 +4601,146 @@ switch ($Command) {
                         $ovViolations.Add("${gp}(unattributed)")
                     }
                 }
+                foreach ($pv in $protectedViolations) {
+                    $ovViolations.Add("${pv}(protected)")
+                }
+                foreach ($dt in $dirtyTamperList) {
+                    $ovViolations.Add("${dt}(dirty_tamper)")
+                }
+                $missingWorkers = New-Object System.Collections.Generic.List[string]
+                foreach ($tid in $wsParsed.Order) {
+                    if (-not $wcParsed.Map.ContainsKey($tid)) {
+                        $missingWorkers.Add("${tid}(missing_worker)")
+                    }
+                }
                 if ($ovViolations.Count -gt 0) {
                     $ovStatus = 'VIOLATION'
                     $ovViolationsOut = (Sort-Ordinal $ovViolations.ToArray()) -join ','
+                } elseif ($missingWorkers.Count -gt 0) {
+                    $ovStatus = 'PARTIAL_ATTRIBUTION'
+                    $ovViolationsOut = (Sort-Ordinal $missingWorkers.ToArray()) -join ','
+                } else {
+                    $ovStatus = 'CALLER_ATTRIBUTED'
+                    $ovViolationsOut = 'none'
+                }
+            } else {
+                # -WorkerRoots verified per-worker attribution
+                $parentWtId = Resolve-SafeWorktreeIdentity $RepoRoot 'missing_repo_root' 'not_a_git_repo' -RequireHead
+                $parentTopNorm = $parentWtId.TopNorm
+                $parentCommon = $parentWtId.CommonDir
+
+                $seenWtTops = New-Object System.Collections.Generic.List[string]
+                $seenWtTops.Add($parentTopNorm)
+                $ovViolations = New-Object System.Collections.Generic.List[string]
+                $attributedPaths = New-Object System.Collections.Generic.List[string]
+
+                foreach ($tid in $wrOrder) {
+                    $wtRawPath = $wrMap[$tid]
+                    if (-not $wtRawPath) { continue }
+                    $wId = Resolve-SafeWorktreeIdentity $wtRawPath 'missing_worker_root' 'worker_not_git' -RequireHead
+                    $wMid = Test-GitMidOperation $wId.Logical
+                    if ($wMid) {
+                        Fail "WORKTREE_UNSAFE: git_op_in_progress($wMid)" 2
+                    }
+                    $commonSame = if ($mcCaseInsensitive) { $wId.CommonDir -ieq $parentCommon } else { $wId.CommonDir -ceq $parentCommon }
+                    if (-not $commonSame) {
+                        Fail "WORKTREE_UNSAFE: peer_repo_mismatch(expected=$parentCommon,actual=$($wId.CommonDir))" 2
+                    }
+                    $wtSameGit = if ($mcCaseInsensitive) { $wId.GitDir -ieq $wId.CommonDir } else { $wId.GitDir -ceq $wId.CommonDir }
+                    if ($wtSameGit -or (Test-WorktreeRootOverlap $wId.TopNorm $parentTopNorm $mcCaseInsensitive)) {
+                        Fail "WORKTREE_UNSAFE: not_isolated_linked_worktree(parent=$parentTopNorm,worker=$($wId.TopNorm))" 2
+                    }
+                    foreach ($prevTop in $seenWtTops) {
+                        if (Test-WorktreeRootOverlap $wId.TopNorm $prevTop $mcCaseInsensitive) {
+                            Fail "WORKTREE_UNSAFE: duplicate_or_nested_worktree($($wId.TopNorm))" 2
+                        }
+                    }
+                    $seenWtTops.Add($wId.TopNorm)
+
+                    $ancWtRes = Invoke-GitCommand $wId.TopFull @('merge-base', '--is-ancestor', $resolvedBase, $wId.Head)
+                    if ($ancWtRes.ExitCode -ne 0) {
+                        Fail "WORKTREE_UNSAFE: base_not_ancestor_of_worker(task=$tid,base=$resolvedBase,head=$($wId.Head))" 2
+                    }
+
+                    $wDiffPaths = @(Invoke-GitPathsZ $wId.TopFull @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', $resolvedBase, '--') 'names' 'MECHANICAL_FAIL')
+                    $wCaDiffPaths = @(Invoke-GitPathsZ $wId.TopFull @('diff', '--no-ext-diff', '--cached', '--no-renames', '--name-only', '-z', $resolvedBase, '--') 'names' 'MECHANICAL_FAIL')
+                    $wUntracked = @(Invoke-GitPathsZ $wId.TopFull @('ls-files', '--others', '--exclude-standard', '-z') 'names' 'MECHANICAL_FAIL')
+                    $wChanged = New-Object System.Collections.Generic.List[string]
+                    $wSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+                    foreach ($wp in (@($wDiffPaths) + @($wCaDiffPaths) + @($wUntracked))) {
+                        if (-not $wp -or (Test-CheckpointPath $wp)) { continue }
+                        if ($wSeen.Add($wp)) { $wChanged.Add($wp) }
+                    }
+
+                    $tidOwned = @($wsParsed.Map[$tid])
+                    foreach ($wp in $wChanged) {
+                        $attributedPaths.Add($wp)
+                        if (($wp -imatch '^\.b3(/|$)') -or ($wp -imatch '(^|/)\.git(/|$)') -or ($wp -imatch '(^|/)\.gitmodules$') -or (Test-OwnershipPathMatch $wp $protectedList $mcCaseInsensitive)) {
+                            $ovViolations.Add("${wp}(${tid}->protected)")
+                            continue
+                        }
+                        if (Test-OwnershipPathMatch $wp $ignored $mcCaseInsensitive) {
+                            $ovViolations.Add("${wp}(${tid}->user_dirty)")
+                            continue
+                        }
+                        if (-not (Test-OwnershipPathMatch $wp $tidOwned $mcCaseInsensitive)) {
+                            $otherOwners = New-Object System.Collections.Generic.List[string]
+                            foreach ($otherTid in $wsParsed.Order) {
+                                if ($otherTid -ceq $tid) { continue }
+                                if (Test-OwnershipPathMatch $wp @($wsParsed.Map[$otherTid]) $mcCaseInsensitive) {
+                                    $otherOwners.Add($otherTid)
+                                }
+                            }
+                            if ($otherOwners.Count -gt 0) {
+                                $sortedOther = @(Sort-Ordinal $otherOwners.ToArray())
+                                $ovViolations.Add("${wp}(${tid}->$($sortedOther[0]))")
+                            } else {
+                                $ovViolations.Add("${wp}(${tid}->unowned)")
+                            }
+                            continue
+                        }
+                        if (-not $allChangedSet.Contains($wp)) {
+                            $ovViolations.Add("${wp}(${tid}->content_mismatch)")
+                            continue
+                        }
+                        $wtState = Get-EffectiveRepoPathState $wId.TopFull $wp 'MECHANICAL_FAIL'
+                        $rootState = Get-EffectiveRepoPathState $RepoRoot $wp 'MECHANICAL_FAIL'
+                        if ($wtState -ceq 'UNSAFE_REPARSE' -or $rootState -ceq 'UNSAFE_REPARSE' -or $wtState -ceq 'INDEX_WT_DIVERGED' -or $rootState -ceq 'INDEX_WT_DIVERGED' -or ($wtState -cne $rootState)) {
+                            $ovViolations.Add("${wp}(${tid}->content_mismatch)")
+                        }
+                    }
+                }
+
+                foreach ($gp in $allChanged) {
+                    $isAttrib = $false
+                    foreach ($ap in $attributedPaths) {
+                        if ($gp.Equals($ap, $cmpExact)) {
+                            $isAttrib = $true
+                            break
+                        }
+                    }
+                    if (-not $isAttrib) {
+                        $ovViolations.Add("${gp}(unattributed)")
+                    }
+                }
+                foreach ($pv in $protectedViolations) {
+                    $ovViolations.Add("${pv}(protected)")
+                }
+                foreach ($dt in $dirtyTamperList) {
+                    $ovViolations.Add("${dt}(dirty_tamper)")
+                }
+                $missingWorkers = New-Object System.Collections.Generic.List[string]
+                foreach ($tid in $wsParsed.Order) {
+                    if (-not $wrMap.ContainsKey($tid)) {
+                        $missingWorkers.Add("${tid}(missing_worker)")
+                    }
+                }
+                if ($ovViolations.Count -gt 0) {
+                    $ovStatus = 'VIOLATION'
+                    $ovViolationsOut = (Sort-Ordinal $ovViolations.ToArray()) -join ','
+                } elseif ($missingWorkers.Count -gt 0) {
+                    $ovStatus = 'PARTIAL_ATTRIBUTION'
+                    $ovViolationsOut = (Sort-Ordinal $missingWorkers.ToArray()) -join ','
                 } else {
                     $ovStatus = 'VERIFIED_PER_WORKER'
                     $ovViolationsOut = 'none'
@@ -3999,16 +4752,25 @@ switch ($Command) {
         $loOut = if ($leftoverHits.Count -gt 0) { $leftoverHits -join ',' } else { 'none' }
         $obOut = if ($obsoleteHits.Count -gt 0) { (Sort-Ordinal $obsoleteHits.ToArray()) -join ',' } else { 'none' }
         $sfOut = if ($safetyHits.Count -gt 0) { (Sort-Ordinal $safetyHits.ToArray()) -join ',' } else { 'none' }
+        $pvOut = if ($protectedViolations.Count -gt 0) { (Sort-Ordinal $protectedViolations.ToArray()) -join ',' } else { 'none' }
+        $dtOut = if ($dirtyTamperList.Count -gt 0) { (Sort-Ordinal $dirtyTamperList.ToArray()) -join ',' } else { 'none' }
 
         Write-Output "scope_creep=$scOut"
         Write-Output "leftovers=$loOut"
         Write-Output "obsolete_hits=$obOut"
         Write-Output "safety_hits=$sfOut"
+        if ($hasProtectedArg) {
+            Write-Output "protected_violations=$pvOut"
+        }
+        if ($hasDirtyDigestsArg) {
+            Write-Output "dirty_tamper=$dtOut"
+        }
         if ($hasWaveSpecs) {
             Write-Output "ownership_verification=$ovStatus"
             Write-Output "ownership_violations=$ovViolationsOut"
         }
-        if ($scOut -eq 'none' -and $loOut -eq 'none' -and $obOut -eq 'none' -and $sfOut -eq 'none' -and (-not $hasWaveSpecs -or $ovStatus -cne 'VIOLATION')) {
+        $ovOk = (-not $hasWaveSpecs) -or ($ovStatus -cin @('UNVERIFIED_COMBINED_ONLY', 'CALLER_ATTRIBUTED', 'VERIFIED_PER_WORKER'))
+        if ($scOut -eq 'none' -and $loOut -eq 'none' -and $obOut -eq 'none' -and $sfOut -eq 'none' -and $pvOut -eq 'none' -and $dtOut -eq 'none' -and $ovOk) {
             Write-Output 'MECHANICAL_OK'
             exit 0
         }
@@ -4076,7 +4838,7 @@ switch ($Command) {
             }
         }
 
-        $waveCaseInsensitive = ($env:OS -eq 'Windows_NT') -or ($IsMacOS -eq $true)
+        $waveCaseInsensitive = Test-RepoCaseInsensitive $RepoRoot
         $protectedList = @()
         if ($ProtectedPaths -and $ProtectedPaths.Trim()) {
             $parsedProt = ConvertTo-WavePaths $ProtectedPaths
@@ -4184,25 +4946,26 @@ switch ($Command) {
                 Fail "WAVE_BASE_MISMATCH: git_op_in_progress($midOpDirty)" 2
             }
 
-            $diffHeadRes = Invoke-GitCommand $RepoRoot @('diff', '--no-renames', '--name-only', 'HEAD', '--')
+            $diffHeadRes = Invoke-GitCommand $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', 'HEAD', '--')
             if ($diffHeadRes.ExitCode -ne 0) {
                 Fail 'WAVE_BASE_MISMATCH: git diff HEAD failed' 2
             }
-            $diffCachedRes = Invoke-GitCommand $RepoRoot @('diff', '--no-renames', '--cached', '--name-only', '--')
+            $diffCachedRes = Invoke-GitCommand $RepoRoot @('diff', '--no-ext-diff', '--no-renames', '--cached', '--name-only', '-z', '--')
             if ($diffCachedRes.ExitCode -ne 0) {
                 Fail 'WAVE_BASE_MISMATCH: git diff HEAD failed' 2
             }
-            $lsUntrackedRes = Invoke-GitCommand $RepoRoot @('ls-files', '--others', '--exclude-standard')
+            $lsUntrackedRes = Invoke-GitCommand $RepoRoot @('ls-files', '--others', '--exclude-standard', '-z')
             if ($lsUntrackedRes.ExitCode -ne 0) {
                 Fail 'WAVE_BASE_MISMATCH: git diff HEAD failed' 2
             }
 
             $dirtySeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+            $nulWave = [char]0
             foreach ($chunk in @($diffHeadRes.StdOut, $diffCachedRes.StdOut, $lsUntrackedRes.StdOut)) {
                 if (-not $chunk) { continue }
-                foreach ($rawLine in ($chunk -split "\r?\n")) {
-                    $dp = Normalize-PathValue $rawLine
+                foreach ($dp in ($chunk.Split($nulWave))) {
                     if (-not $dp) { continue }
+                    if (-not (Test-ValidLiteralGitPath $dp)) { Fail 'WAVE_FAIL: unsupported_literal_git_path' 1 }
                     if (Test-CheckpointPath $dp) { continue }
                     [void]$dirtySeen.Add($dp)
                 }
@@ -4634,8 +5397,8 @@ switch ($Command) {
 
         $effTaskId = if ($TaskId -and $TaskId.Trim()) { ($TaskId.Trim() -replace '[\r\n]+', ' ') } else { 'unknown' }
         $effScope = if ($Scope -and $Scope.Trim()) { ($Scope.Trim() -replace '[\r\n]+', ' ') } else { 'scoped' }
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
-        $relArr = @(Split-CsvList $RelevantPaths -AsPaths)
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'VERIFY_RUN_FAIL' -RejectDot)
+        $relArr = @(Split-PathCsvChecked $RelevantPaths 'VERIFY_RUN_FAIL')
 
         $fullReceipt = $receiptInfo.FullPath
         $receiptRel = $receiptInfo.RelPath
@@ -4652,6 +5415,7 @@ switch ($Command) {
         $encCmd = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wrapper))
 
         $outLines = New-Object System.Collections.Generic.List[string]
+        $swVerify = [System.Diagnostics.Stopwatch]::StartNew()
         Push-Location $RepoRoot
         $prevEap = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
@@ -4659,9 +5423,11 @@ switch ($Command) {
             $rawOut = & $psExe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encCmd 2>&1
             $cmdExit = $LASTEXITCODE
         } finally {
+            $swVerify.Stop()
             $ErrorActionPreference = $prevEap
             Pop-Location
         }
+        $durationMs = [Math]::Max(0L, [long]$swVerify.ElapsedMilliseconds)
         foreach ($item in @($rawOut)) {
             if ($null -eq $item) { continue }
             $s = if ($item -is [System.Management.Automation.ErrorRecord]) { $item.ToString() } else { [string]$item }
@@ -4692,6 +5458,7 @@ switch ($Command) {
             "relevant_paths=$($fp.PathsCsv)",
             "exit_code=$cmdExit",
             "status=$statusVal",
+            "duration_ms=$durationMs",
             "command=$singleCmd",
             "log_path=$logDisp",
             "timestamp_utc=$tsUtc"
@@ -4700,10 +5467,10 @@ switch ($Command) {
 
         $shortTree = $fp.TreeHash.Substring(0, 12)
         if ($cmdExit -eq 0) {
-            Write-Output "VERIFY_PASS: exit=0 tree=$shortTree receipt=$receiptRel"
+            Write-Output "VERIFY_PASS: exit=0 tree=$shortTree receipt=$receiptRel duration_ms=$durationMs"
             exit 0
         }
-        Write-Output "VERIFY_FAIL: exit=$cmdExit tree=$shortTree receipt=$receiptRel log=$logDisp"
+        Write-Output "VERIFY_FAIL: exit=$cmdExit tree=$shortTree receipt=$receiptRel log=$logDisp duration_ms=$durationMs"
         $cap = [Math]::Min(35, $outLines.Count)
         for ($i = 0; $i -lt $cap; $i++) {
             Write-Output $outLines[$i]
@@ -4712,23 +5479,23 @@ switch ($Command) {
     }
 
     'verify-check' {
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'VERIFY_CHECK_FAIL' -RejectDot)
         $res = Test-VerifyReceipt $RepoRoot $ReceiptPath $ignored $ExpectedCmd $RelevantPaths
         Write-Output $res.Message
         exit $res.Code
     }
 
     'symbol-check' {
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'SYMBOL_FAIL' -RejectDot)
         $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'SYMBOL_FAIL' 'object'
         $targetTrim = $scopeTarget.TargetRef
         $targetCommitSha = $scopeTarget.TargetCommitSha
         $resolvedBase = $scopeTarget.BaseSha
 
         $dlArgs = if ($targetTrim) {
-            @('diff', '--no-renames', '-U0', $resolvedBase, $targetCommitSha, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '-U0', $resolvedBase, $targetCommitSha, '--')
         } else {
-            @('diff', '--no-renames', '-U0', $resolvedBase, '--')
+            @('diff', '--no-ext-diff', '--no-renames', '-U0', $resolvedBase, '--')
         }
         $dlRes = Invoke-GitCommand $RepoRoot $dlArgs
         if ($dlRes.ExitCode -ne 0) {
@@ -5032,7 +5799,7 @@ switch ($Command) {
     }
 
     'review-inventory' {
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'INVENTORY_FAIL' -RejectDot)
         $scopeTarget = Resolve-ScopeTargetAndBase $RepoRoot $TargetRef $BaseSha $ignored 'INVENTORY_FAIL' 'object'
         $targetTrim = $scopeTarget.TargetRef
         $targetCommitSha = $scopeTarget.TargetCommitSha
@@ -5087,7 +5854,7 @@ switch ($Command) {
         if (-not $safeInfo) { Fail 'LEDGER_FAIL: invalid -LedgerPath' 1 }
         $ledgerFull = $safeInfo.FullPath
         $ledgerRel = $safeInfo.RelPath
-        $ignored = @(Split-CsvList $IgnoreDirtyPaths -AsPaths)
+        $ignored = @(Split-PathCsvChecked $IgnoreDirtyPaths 'LEDGER_FAIL' -RejectDot)
 
         if ($act -eq 'normalize') {
             if (-not (Test-Path -LiteralPath $ledgerFull -PathType Leaf)) {
@@ -5130,10 +5897,33 @@ switch ($Command) {
             $resolvedBase = $scopeTarget.BaseSha
             $headSha = if ($targetCommitSha) { $targetCommitSha } else { Assert-ValidGitRev $RepoRoot 'HEAD' 'commit' 'LEDGER_FAIL' 'HEAD' }
 
+            if ((-not $Force) -and (Test-Path -LiteralPath $ledgerFull -PathType Leaf)) {
+                $prevCapInit = $script:CaptureFailMode
+                $script:CaptureFailMode = $true
+                $existingLed = $null
+                $existingCorrupt = $false
+                try {
+                    $existingLed = Parse-ReviewLedger $ledgerFull
+                    Verify-LedgerPassChain $RepoRoot $existingLed
+                } catch {
+                    $existingCorrupt = $true
+                } finally {
+                    $script:CaptureFailMode = $prevCapInit
+                }
+                if ($existingCorrupt -or $null -eq $existingLed) {
+                    Fail "LEDGER_CORRUPT: cannot overwrite corrupt ledger '$ledgerRel' without --force" 1
+                }
+                if ($existingLed['base_sha'] -ceq $resolvedBase) {
+                    if ([int]$existingLed['passes_used'] -gt 0 -or $existingLed['budget_status'] -ceq 'EXHAUSTED' -or $existingLed['review_independence'] -ceq 'SINGLE_AGENT_LIMIT') {
+                        Fail "LEDGER_FAIL: cannot reset active ledger '$ledgerRel' on same base_sha without --force" 1
+                    }
+                }
+            }
+
             $inv = Invoke-BuildInventory $RepoRoot $resolvedBase $targetCommitSha $ignored $MaxConcurrency 'LEDGER_FAIL'
             if ($inv.IsEmpty) { Fail 'LEDGER_FAIL: EMPTY_DIFF' 2 }
             if ($inv.PartitionError) { Fail $inv.PartitionError 2 }
-            $effectiveMaxPasses = if ($maxPassesExplicit) { $MaxPasses } else { Get-DefaultMaxPasses $inv.SizeClass }
+            $effectiveMaxPasses = if ($maxPassesExplicit) { $MaxPasses } else { Get-DefaultMaxPasses $inv.SizeClass $inv.Units.Count }
 
             if ($targetCommitSha) {
                 $snapSha = $targetCommitSha
@@ -5420,7 +6210,7 @@ switch ($Command) {
         if (-not $mSpec) {
             Fail 'EVIDENCE_MISSING: invalid manifest path' 1
         }
-        $srcList = @(Split-CsvList $SourcePaths -AsPaths)
+        $srcList = @(Split-PathCsvChecked $SourcePaths 'EVIDENCE_MISSING' -RejectDot -DotMessage 'EVIDENCE_MISSING: invalid path .')
 
         if ($WriteManifest) {
             if ($srcList.Count -lt 1) {
@@ -5533,6 +6323,9 @@ switch ($Command) {
     }
 
     'merge-policy-check' {
+        $mpErrPrefix = if ($PostMerge) { 'POST_MERGE_FAILED' } else { 'MERGE_BLOCKED' }
+        [void](Split-PathCsvChecked $IgnoreDirtyPaths $mpErrPrefix -RejectDot)
+
         $prStateExplicit = $PSBoundParameters.ContainsKey('PrState')
         $ciStatusExplicit = $PSBoundParameters.ContainsKey('CiStatus')
         $revStatusExplicit = $PSBoundParameters.ContainsKey('ReviewStatus')
@@ -5551,13 +6344,20 @@ switch ($Command) {
         $prNumTrim = if ($PrNumber) { $PrNumber.Trim() } else { '' }
         $targetBrTrim = if ($TargetBranch) { $TargetBranch.Trim() } else { '' }
         if ($targetBrTrim -and ($targetBrTrim.StartsWith('-') -or ($targetBrTrim -match '[\s\x00-\x1F\x7F]') -or $targetBrTrim.Contains('..'))) {
-            if ($PostMerge) { Fail 'POST_MERGE_FAILED: invalid_target_branch' 1 }
-            Fail 'MERGE_BLOCKED: invalid_target_branch' 1
+            Fail "${mpErrPrefix}: invalid_target_branch" 1
         }
+        $tRefArgTrim = if ($TargetRef) { $TargetRef.Trim() } else { '' }
+        $mRefArgTrim = if ($MainRef) { $MainRef.Trim() } else { '' }
+        if ($tRefArgTrim -and $mRefArgTrim -and ($tRefArgTrim -cne $mRefArgTrim)) {
+            Fail "${mpErrPrefix}: conflicting_target_ref" 1
+        }
+        $effTargetRefArg = if ($tRefArgTrim) { $tRefArgTrim } else { $mRefArgTrim }
+        $authRefArgTrim = if ($AuthorityRef) { $AuthorityRef.Trim() } else { '' }
+        $headShaArgTrim = if ($HeadSha) { $HeadSha.Trim() } else { '' }
 
         if ($PostMerge) {
             if ($prStateExplicit -and $prSt -cne 'MERGED') { Fail "POST_MERGE_FAILED: pr_state=$prSt" 1 }
-            $mRef = if ($MainRef) { $MainRef.Trim() } else { '' }
+            $mRef = $effTargetRefArg
             if (-not $mRef) {
                 Fail 'POST_MERGE_FAILED: missing_main_ref' 1
             }
@@ -5581,112 +6381,532 @@ switch ($Command) {
             if ($targetBrTrim -and $targetBrTrim -cne $localTargetBranch) {
                 Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$targetBrTrim,got=$localTargetBranch)" 1
             }
-            if (-not $prNumTrim) {
-                Fail 'POST_MERGE_FAILED: missing_pr_number' 1
-            }
-            if ($prNumTrim -cnotmatch '^[1-9][0-9]*$') {
-                Fail 'POST_MERGE_FAILED: invalid_pr_number' 1
-            }
             $mSha = if ($MergedSha) { $MergedSha.Trim() } else { '' }
             if ($mSha -and $mSha.StartsWith('-')) {
                 Fail 'POST_MERGE_FAILED: invalid_ref' 1
             }
+            if ($headShaArgTrim -and $headShaArgTrim.StartsWith('-')) {
+                Fail 'POST_MERGE_FAILED: invalid_ref' 1
+            }
 
-            $repoSlug = Resolve-GitHubRepoSlug $RepoRoot $Repo 'POST_MERGE_FAILED'
-            $ghPost = Invoke-B3GitHubVerify 'post-merge' $repoSlug $prNumTrim 'POST_MERGE_FAILED'
+            if ($prNumTrim) {
+                if ($prNumTrim -cnotmatch '^[1-9][0-9]*$') {
+                    Fail 'POST_MERGE_FAILED: invalid_pr_number' 1
+                }
+                $ghPost = Invoke-B3GitHubVerify 'post-merge' $RepoRoot $Repo $prNumTrim 'POST_MERGE_FAILED'
+                if ($ghPost['pr_number'] -cne $prNumTrim) {
+                    Fail 'POST_MERGE_FAILED: pr_identity_mismatch' 1
+                }
+                if ($Repo -and $Repo.Trim() -and (-not $ghPost['base_repo'].Equals($Repo.Trim(), [System.StringComparison]::OrdinalIgnoreCase))) {
+                    Fail 'POST_MERGE_FAILED: pr_identity_mismatch' 1
+                }
+                if ($ghPost['pr_merged'] -cne 'true' -or $ghPost['pr_state'] -cne 'CLOSED') {
+                    Fail "POST_MERGE_FAILED: pr_not_merged(state=$($ghPost['pr_state']),merged=$($ghPost['pr_merged']))" 1
+                }
+                $ghMergeSha = $ghPost['merge_commit_sha']
+                $ghBaseRef = $ghPost['base_ref']
+                $ghHeadSha = $ghPost['head_sha']
+                if ($ghMergeSha -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'POST_MERGE_FAILED: missing_merge_commit_sha' 1
+                }
+                if ($localTargetBranch -cne $ghBaseRef) {
+                    Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$ghBaseRef,got=$localTargetBranch)" 1
+                }
+                if ($targetBrTrim -and $targetBrTrim -cne $ghBaseRef) {
+                    Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$ghBaseRef,got=$targetBrTrim)" 1
+                }
+                if ($mSha) {
+                    $callerMRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mSha}^{commit}")
+                    $callerMSha = $callerMRes.StdOut.Trim()
+                    if ($callerMRes.ExitCode -ne 0 -or $callerMSha -cnotmatch '^[0-9a-f]{40}$') {
+                        Fail 'POST_MERGE_FAILED: unresolvable_commit' 1
+                    }
+                    if ($callerMSha -cne $ghMergeSha) {
+                        Fail "POST_MERGE_FAILED: merge_commit_sha_mismatch(expected=$ghMergeSha,got=$callerMSha)" 1
+                    }
+                }
+                if ($headShaArgTrim) {
+                    $callerHRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${headShaArgTrim}^{commit}")
+                    $callerHSha = $callerHRes.StdOut.Trim()
+                    if ($callerHRes.ExitCode -ne 0 -or $callerHSha -cnotmatch '^[0-9a-f]{40}$') {
+                        Fail 'POST_MERGE_FAILED: invalid_head_sha' 1
+                    }
+                    if ($callerHSha -cne $ghHeadSha) {
+                        Fail "POST_MERGE_FAILED: head_sha_mismatch(expected=$ghHeadSha,got=$callerHSha)" 1
+                    }
+                }
+                if ($ghPost['compare_status'] -cnotin @('identical', 'ahead') -or $ghPost['compare_behind_by'] -cne '0') {
+                    Fail "POST_MERGE_FAILED: merge_commit_not_in_remote_target(status=$($ghPost['compare_status']),target_ref=$ghBaseRef)" 1
+                }
 
-            if ($ghPost['pr_number'] -cne $prNumTrim -or -not ($ghPost['base_repo'].Equals($repoSlug, [System.StringComparison]::OrdinalIgnoreCase))) {
-                Fail 'POST_MERGE_FAILED: pr_identity_mismatch' 1
-            }
-            if ($ghPost['pr_merged'] -cne 'true' -or $ghPost['pr_state'] -cne 'CLOSED') {
-                Fail "POST_MERGE_FAILED: pr_not_merged(state=$($ghPost['pr_state']),merged=$($ghPost['pr_merged']))" 1
-            }
-            $ghMergeSha = $ghPost['merge_commit_sha']
-            $ghBaseRef = $ghPost['base_ref']
-            $ghHeadSha = $ghPost['head_sha']
-            if ($ghMergeSha -cnotmatch '^[0-9a-f]{40}$') {
-                Fail 'POST_MERGE_FAILED: missing_merge_commit_sha' 1
-            }
-            if ($localTargetBranch -cne $ghBaseRef) {
-                Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$ghBaseRef,got=$localTargetBranch)" 1
-            }
-            if ($targetBrTrim -and $targetBrTrim -cne $ghBaseRef) {
-                Fail "POST_MERGE_FAILED: target_branch_mismatch(expected=$ghBaseRef,got=$targetBrTrim)" 1
-            }
-            if ($mSha) {
-                $callerMRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mSha}^{commit}")
-                $callerMSha = $callerMRes.StdOut.Trim()
-                if ($callerMRes.ExitCode -ne 0 -or $callerMSha -cnotmatch '^[0-9a-f]{40}$') {
+                $mergedRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ghMergeSha}^{commit}")
+                $resMerged = $mergedRes.StdOut.Trim()
+                $mainRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mRef}^{commit}")
+                $resMain = $mainRes.StdOut.Trim()
+                if ($mergedRes.ExitCode -ne 0 -or $resMerged -cnotmatch '^[0-9a-f]{40}$' -or $mainRes.ExitCode -ne 0 -or $resMain -cnotmatch '^[0-9a-f]{40}$') {
                     Fail 'POST_MERGE_FAILED: unresolvable_commit' 1
                 }
-                if ($callerMSha -cne $ghMergeSha) {
-                    Fail "POST_MERGE_FAILED: merge_commit_sha_mismatch(expected=$ghMergeSha,got=$callerMSha)" 1
+                $ancRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resMerged, $resMain)
+                if ($ancRes.ExitCode -ne 0) {
+                    Fail "POST_MERGE_FAILED: sha_not_in_target(sha=$resMerged,target_ref=$ghBaseRef,main_ref=$mRef)" 1
                 }
-            }
-            if ($ghPost['compare_status'] -cnotin @('identical', 'ahead') -or $ghPost['compare_behind_by'] -cne '0') {
-                Fail "POST_MERGE_FAILED: merge_commit_not_in_remote_target(status=$($ghPost['compare_status']),target_ref=$ghBaseRef)" 1
+
+                # Enforce allowed_target_branches strictly from remote policy_authority_sha on default_branch
+                $ghPmAuthRef = $ghPost['policy_authority_ref']
+                $ghPmAuthSha = $ghPost['policy_authority_sha']
+                if (-not $ghPmAuthRef -or $ghPmAuthSha -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'POST_MERGE_FAILED: incomplete_pr_metadata' 1
+                }
+                $pmAuthLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ghPmAuthSha}^{commit}")
+                if ($pmAuthLocRes.ExitCode -ne 0 -or $pmAuthLocRes.StdOut.Trim() -cne $ghPmAuthSha) {
+                    Fail 'POST_MERGE_FAILED: policy_authority_not_fetched' 1
+                }
+                $ghPmPolLs = Invoke-GitCommand $RepoRoot @('ls-tree', $ghPmAuthSha, '--', '.b3/research-policy.json')
+                if ($ghPmPolLs.ExitCode -ne 0) {
+                    Fail 'POST_MERGE_FAILED: policy_authority_not_fetched' 1
+                }
+                $ghPmPolLn = $ghPmPolLs.StdOut.Trim()
+                if ($ghPmPolLn) {
+                    if ($ghPmPolLn -cnotmatch "^(100644|100755) blob ([0-9a-f]{40})`t\.b3/research-policy\.json$") {
+                        Fail 'POST_MERGE_FAILED: invalid_policy_path' 1
+                    }
+                    $ghPmPolShow = Invoke-GitCommand $RepoRoot @('show', "${ghPmAuthSha}:.b3/research-policy.json")
+                    if ($ghPmPolShow.ExitCode -ne 0) {
+                        Fail 'POST_MERGE_FAILED: policy_not_in_authority' 1
+                    }
+                    $prevCapGhPm = $script:CaptureFailMode
+                    $script:CaptureFailMode = $true
+                    $ghPmAllowed = @()
+                    try {
+                        $ghPmPolObj = Parse-MergePolicyJsonText $ghPmPolShow.StdOut
+                        $ghPmAllowed = @($ghPmPolObj.AllowedTargetBranches)
+                    } catch {
+                        $script:CaptureFailMode = $prevCapGhPm
+                        $exMsg = $_.Exception.Message
+                        if ($exMsg -match '^B3_GUARD_FAIL\|\d+\|MERGE_BLOCKED: (.+)$') {
+                            Fail "POST_MERGE_FAILED: $($Matches[1])" 1
+                        }
+                        Fail 'POST_MERGE_FAILED: invalid_policy_json' 1
+                    } finally {
+                        $script:CaptureFailMode = $prevCapGhPm
+                    }
+                    if ($ghPmAllowed.Count -gt 0 -and (-not (Test-BranchPatternMatch $ghBaseRef $ghPmAllowed))) {
+                        Fail "POST_MERGE_FAILED: target_branch_not_allowed($ghBaseRef)" 1
+                    }
+                }
+
+                $parRes = Invoke-GitCommand $RepoRoot @('rev-list', '--parents', '-n', '1', $resMerged)
+                if ($parRes.ExitCode -ne 0) { Fail 'POST_MERGE_FAILED: unresolvable_commit' 1 }
+                $parToks = @($parRes.StdOut.Trim() -split '\s+' | Where-Object { $_ })
+                $parCnt = $parToks.Count - 1
+                $mergeKind = 'squash_or_rebase'
+                if ($parCnt -ge 2) {
+                    $mergeKind = 'merge_commit'
+                    $headAncRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $ghHeadSha, $resMerged)
+                    if ($headAncRes.ExitCode -ne 0) {
+                        Fail 'POST_MERGE_FAILED: merge_commit_head_mismatch' 1
+                    }
+                } elseif ($resMerged -ceq $ghHeadSha) {
+                    $mergeKind = 'fast_forward'
+                }
+
+                Write-Output "POST_MERGE_VERIFIED: mode=github pr=$($ghPost['base_repo'])#$prNumTrim pr_status=PR_MERGED sha=$resMerged target_ref=$ghBaseRef main_ref=$mRef merge_kind=$mergeKind runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED"
+                exit 0
             }
 
-            $mergedRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ghMergeSha}^{commit}")
+            # Provider-neutral local post-merge verification (no -PrNumber)
+            if (-not $mSha) { Fail 'POST_MERGE_FAILED: missing_merged_sha' 1 }
+            if ($mSha -notmatch '^[0-9a-fA-F]{40}$') { Fail 'POST_MERGE_FAILED: invalid_merged_sha' 1 }
+            if (-not $headShaArgTrim) { Fail 'POST_MERGE_FAILED: missing_head_sha' 1 }
+            if ($headShaArgTrim -notmatch '^[0-9a-fA-F]{40}$') { Fail 'POST_MERGE_FAILED: invalid_head_sha' 1 }
+
+            $mergedRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mSha}^{commit}")
             $resMerged = $mergedRes.StdOut.Trim()
+            $headPmRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${headShaArgTrim}^{commit}")
+            $resHeadPm = $headPmRes.StdOut.Trim()
             $mainRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${mRef}^{commit}")
             $resMain = $mainRes.StdOut.Trim()
-            if ($mergedRes.ExitCode -ne 0 -or $resMerged -cnotmatch '^[0-9a-f]{40}$' -or $mainRes.ExitCode -ne 0 -or $resMain -cnotmatch '^[0-9a-f]{40}$') {
+            if ($mergedRes.ExitCode -ne 0 -or $resMerged -cnotmatch '^[0-9a-f]{40}$' -or
+                $headPmRes.ExitCode -ne 0 -or $resHeadPm -cnotmatch '^[0-9a-f]{40}$' -or
+                $mainRes.ExitCode -ne 0 -or $resMain -cnotmatch '^[0-9a-f]{40}$') {
                 Fail 'POST_MERGE_FAILED: unresolvable_commit' 1
             }
+
+            $resBasePm = ''
+            $basePmTrim = if ($BaseSha) { $BaseSha.Trim() } else { '' }
+            if ($basePmTrim) {
+                if ($basePmTrim.StartsWith('-') -or $basePmTrim -notmatch '^[0-9a-fA-F]{40}$') {
+                    Fail 'POST_MERGE_FAILED: invalid_base_sha' 1
+                }
+                $basePmRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${basePmTrim}^{commit}")
+                $resBasePm = $basePmRes.StdOut.Trim()
+                if ($basePmRes.ExitCode -ne 0 -or $resBasePm -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'POST_MERGE_FAILED: invalid_base_sha' 1
+                }
+                if ($resBasePm -ceq $resMerged) { Fail 'POST_MERGE_FAILED: base_sha_equals_merged_sha' 1 }
+                if ($resBasePm -ceq $resHeadPm) { Fail 'POST_MERGE_FAILED: base_sha_equals_head' 1 }
+                $ancBm = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resBasePm, $resMerged)
+                if ($ancBm.ExitCode -ne 0) { Fail 'POST_MERGE_FAILED: base_not_ancestor_of_merged' 1 }
+                $ancBh = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resBasePm, $resHeadPm)
+                if ($ancBh.ExitCode -ne 0) { Fail 'POST_MERGE_FAILED: base_not_ancestor_of_head' 1 }
+            }
+
+            $remListPm = Invoke-GitCommand $RepoRoot @('remote')
+            $remotesPm = @()
+            if ($remListPm.ExitCode -eq 0 -and $remListPm.StdOut) {
+                $remotesPm = @($remListPm.StdOut -split "\r?\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            }
+            $hasOriginPm = ($remotesPm -ccontains 'origin')
+            if ((-not $LocalOnly) -and ($remotesPm.Count -gt 0) -and (-not $hasOriginPm)) {
+                Fail 'POST_MERGE_FAILED: origin_remote_missing' 1
+            }
+
+            # Resolve canonical trunk branch & policy to prevent unmerged feature self-targeting
+            $pmTrunkSha = ''
+            $pmTrunkBranch = ''
+            if ($hasOriginPm) {
+                $ohSym = Invoke-GitCommand $RepoRoot @('symbolic-ref', '-q', 'refs/remotes/origin/HEAD')
+                if ($ohSym.ExitCode -eq 0 -and $ohSym.StdOut.Trim().StartsWith('refs/remotes/origin/', [System.StringComparison]::Ordinal)) {
+                    $ohFull = $ohSym.StdOut.Trim()
+                    $ohChk = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ohFull}^{commit}")
+                    if ($ohChk.ExitCode -eq 0 -and $ohChk.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                        $pmTrunkSha = $ohChk.StdOut.Trim()
+                        $pmTrunkBranch = $ohFull.Substring('refs/remotes/origin/'.Length)
+                    }
+                }
+                if (-not $pmTrunkSha) {
+                    foreach ($candBr in @('main', 'master')) {
+                        $cChk = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/${candBr}^{commit}")
+                        if ($cChk.ExitCode -eq 0 -and $cChk.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                            $pmTrunkSha = $cChk.StdOut.Trim()
+                            $pmTrunkBranch = $candBr
+                            break
+                        }
+                    }
+                }
+            }
+            if (-not $pmTrunkSha) {
+                foreach ($candBr in @('main', 'master')) {
+                    $cChk = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "refs/heads/${candBr}^{commit}")
+                    if ($cChk.ExitCode -eq 0 -and $cChk.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                        $pmTrunkSha = $cChk.StdOut.Trim()
+                        $pmTrunkBranch = $candBr
+                        break
+                    }
+                }
+            }
+            $pmAllowedBranches = @()
+            if ($pmTrunkSha) {
+                $pmPolLs = Invoke-GitCommand $RepoRoot @('ls-tree', $pmTrunkSha, '--', '.b3/research-policy.json')
+                $pmPolLine = $pmPolLs.StdOut.Trim()
+                if ($pmPolLs.ExitCode -eq 0 -and $pmPolLine -cmatch "^(100644|100755) blob ([0-9a-f]{40})`t\.b3/research-policy\.json$") {
+                    $pmPolShow = Invoke-GitCommand $RepoRoot @('show', "${pmTrunkSha}:.b3/research-policy.json")
+                    if ($pmPolShow.ExitCode -eq 0) {
+                        $prevCapPm = $script:CaptureFailMode
+                        $script:CaptureFailMode = $true
+                        try {
+                            $pmPolObj = Parse-MergePolicyJsonText $pmPolShow.StdOut
+                            $pmAllowedBranches = @($pmPolObj.AllowedTargetBranches)
+                        } catch {
+                            $script:CaptureFailMode = $prevCapPm
+                            $exMsg = $_.Exception.Message
+                            if ($exMsg -match '^B3_GUARD_FAIL\|\d+\|MERGE_BLOCKED: (.+)$') {
+                                Fail "POST_MERGE_FAILED: $($Matches[1])" 1
+                            }
+                            Fail 'POST_MERGE_FAILED: invalid_policy_json' 1
+                        } finally {
+                            $script:CaptureFailMode = $prevCapPm
+                        }
+                    }
+                }
+            }
+            if ($pmAllowedBranches.Count -gt 0) {
+                if (-not (Test-BranchPatternMatch $localTargetBranch $pmAllowedBranches)) {
+                    Fail "POST_MERGE_FAILED: target_branch_not_allowed($localTargetBranch)" 1
+                }
+            } elseif ($pmTrunkBranch) {
+                if ($localTargetBranch -cne $pmTrunkBranch) {
+                    Fail "POST_MERGE_FAILED: target_branch_not_allowed($localTargetBranch)" 1
+                }
+            } else {
+                Fail 'POST_MERGE_FAILED: canonical_trunk_missing' 1
+            }
+
             $ancRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resMerged, $resMain)
             if ($ancRes.ExitCode -ne 0) {
-                Fail "POST_MERGE_FAILED: sha_not_in_target(sha=$resMerged,target_ref=$ghBaseRef,main_ref=$mRef)" 1
+                Fail "POST_MERGE_FAILED: sha_not_in_target(sha=$resMerged,target_ref=$localTargetBranch,main_ref=$mRef)" 1
+            }
+            if ($hasOriginPm -and (-not $LocalOnly)) {
+                $remTargetRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/${localTargetBranch}^{commit}")
+                $remTargetSha = $remTargetRes.StdOut.Trim()
+                if ($remTargetRes.ExitCode -ne 0 -or $remTargetSha -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'POST_MERGE_FAILED: remote_target_not_fetched' 1
+                }
+                $pmRemoteChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/${localTargetBranch}"
+                if ($pmRemoteChk.Status -ceq 'MISSING') {
+                    Fail 'POST_MERGE_FAILED: remote_target_ref_missing' 1
+                }
+                if ($pmRemoteChk.Status -ceq 'UNREACHABLE') {
+                    Fail 'PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable' 2
+                }
+                if ($pmRemoteChk.Sha -cne $remTargetSha) {
+                    Fail "POST_MERGE_FAILED: stale_remote_target_ref(local=$remTargetSha remote=$($pmRemoteChk.Sha))" 1
+                }
+                if ($pmTrunkBranch) {
+                    if ($pmTrunkBranch -cne $localTargetBranch) {
+                        $pmAuthChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/${pmTrunkBranch}"
+                        if ($pmAuthChk.Status -ceq 'MISSING') {
+                            Fail 'POST_MERGE_FAILED: remote_authority_ref_missing' 1
+                        }
+                        if ($pmAuthChk.Status -ceq 'UNREACHABLE') {
+                            Fail 'PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable' 2
+                        }
+                        if ($pmAuthChk.Sha -cne $pmTrunkSha) {
+                            Fail "POST_MERGE_FAILED: stale_remote_authority_ref(local=$pmTrunkSha remote=$($pmAuthChk.Sha))" 1
+                        }
+                    } elseif ($pmRemoteChk.Sha -cne $pmTrunkSha) {
+                        Fail "POST_MERGE_FAILED: stale_remote_authority_ref(local=$pmTrunkSha remote=$($pmRemoteChk.Sha))" 1
+                    }
+                }
+                $ancRemRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resMerged, $remTargetSha)
+                if ($ancRemRes.ExitCode -ne 0) {
+                    Fail "POST_MERGE_FAILED: merge_commit_not_in_remote_target(target_ref=$localTargetBranch)" 1
+                }
             }
 
             $parRes = Invoke-GitCommand $RepoRoot @('rev-list', '--parents', '-n', '1', $resMerged)
             if ($parRes.ExitCode -ne 0) { Fail 'POST_MERGE_FAILED: unresolvable_commit' 1 }
             $parToks = @($parRes.StdOut.Trim() -split '\s+' | Where-Object { $_ })
             $parCnt = $parToks.Count - 1
-            $mergeKind = 'squash_or_rebase'
-            if ($parCnt -ge 2) {
-                $mergeKind = 'merge_commit'
-                $headAncRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $ghHeadSha, $resMerged)
-                if ($headAncRes.ExitCode -ne 0) {
+            $mergeKind = ''
+            if ($resMerged -ceq $resHeadPm) {
+                $mergeKind = 'fast_forward'
+            } elseif ($parCnt -ge 2) {
+                $inFirstPar = (Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resHeadPm, $parToks[1])).ExitCode -eq 0
+                $inMergedPar = $false
+                for ($pIdx = 2; $pIdx -lt $parToks.Count; $pIdx++) {
+                    if ((Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resHeadPm, $parToks[$pIdx])).ExitCode -eq 0) {
+                        $inMergedPar = $true
+                        break
+                    }
+                }
+                if (-not $inMergedPar -or $inFirstPar) {
                     Fail 'POST_MERGE_FAILED: merge_commit_head_mismatch' 1
                 }
-            } elseif ($resMerged -ceq $ghHeadSha) {
-                $mergeKind = 'fast_forward'
+                $mergeKind = 'merge_commit'
+            } elseif ($parCnt -eq 1) {
+                if (-not $resBasePm) {
+                    Fail 'POST_MERGE_FAILED: squash_or_rebase_requires_base_sha' 1
+                }
+                $p1Sha = $parToks[1]
+                if ((Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resBasePm, $p1Sha)).ExitCode -ne 0) {
+                    Fail 'POST_MERGE_FAILED: base_not_ancestor_of_merged_parent' 1
+                }
+                $mTreeRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${resMerged}^{tree}")
+                $hTreeRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${resHeadPm}^{tree}")
+                $mTree = $mTreeRes.StdOut.Trim()
+                $hTree = $hTreeRes.StdOut.Trim()
+                $treeOk = ($mTree -cmatch '^[0-9a-f]{40}$') -and (($p1Sha -ceq $resBasePm -and $mTree -ceq $hTree))
+                if (-not $treeOk -and ($mTree -cmatch '^[0-9a-f]{40}$')) {
+                    $mtRes = Invoke-GitCommand $RepoRoot @('merge-tree', '--write-tree', $p1Sha, $resHeadPm)
+                    if ($mtRes.ExitCode -eq 0) {
+                        $mtLine = (@($mtRes.StdOut -split "\r?\n")[0]).Trim()
+                        if ($mtLine -ceq $mTree) { $treeOk = $true }
+                    }
+                }
+                if (-not $treeOk) {
+                    Fail 'POST_MERGE_FAILED: squash_tree_mismatch' 1
+                }
+                $mergeKind = 'squash_or_rebase'
+            } else {
+                Fail 'POST_MERGE_FAILED: merge_commit_head_mismatch' 1
             }
 
-            Write-Output "POST_MERGE_VERIFIED: pr=$($ghPost['base_repo'])#$prNumTrim pr_status=PR_MERGED sha=$resMerged target_ref=$ghBaseRef main_ref=$mRef merge_kind=$mergeKind runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED"
+            Write-Output "POST_MERGE_VERIFIED: mode=local sha=$resMerged target_ref=$localTargetBranch main_ref=$mRef merge_kind=$mergeKind runtime_served=NOT_VERIFIED deployed=NOT_VERIFIED"
             exit 0
         }
 
-        $autoMerge = 'disabled'
-        $polProtectedPaths = @()
-        $allowProtected = $false
-        $requireCi = $true
-        $requireReview = $true
-        $allowedTargetBranches = @()
+        # --- Unified Provider-Neutral Pre-Merge Pipeline ---
+        $mpCaseInsensitive = Test-RepoCaseInsensitive $RepoRoot
+        $dotB3Raw = Join-Path $RepoRoot '.b3'
+        if (Test-IsReparsePath $dotB3Raw) {
+            Fail 'MERGE_BLOCKED: invalid_policy_path' 1
+        }
+        $defPolRaw = Join-Path $RepoRoot '.b3\research-policy.json'
+        $defPolItem = Get-Item -LiteralPath $defPolRaw -Force -ErrorAction SilentlyContinue
+        $defPolFileFull = $null
+        if ($null -ne $defPolItem -or (Test-Path -LiteralPath $defPolRaw)) {
+            $defSpec = Test-ContainedRepoPath $RepoRoot '.b3/research-policy.json'
+            if (-not $defSpec -or (-not (Test-Path -LiteralPath $defSpec.Full -PathType Leaf)) -or (Test-IsReparsePath $defSpec.Full)) {
+                Fail 'MERGE_BLOCKED: invalid_policy_path' 1
+            }
+            $defPolFileFull = $defSpec.Full
+        }
 
+        $polExplicit = [bool]($PolicyPath -and $PolicyPath.Trim())
         $polFileFull = $null
         $polRel = ''
-        $polExplicit = [bool]($PolicyPath -and $PolicyPath.Trim())
         if ($polExplicit) {
             $pSpec = Test-ContainedRepoPath $RepoRoot $PolicyPath
             if (-not $pSpec) { Fail 'MERGE_BLOCKED: invalid_policy_path' 1 }
             if (-not (Test-Path -LiteralPath $pSpec.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_policy' 1 }
             $polFileFull = $pSpec.Full
             $polRel = $pSpec.Rel
-        } else {
-            $defPolRaw = Join-Path $RepoRoot '.b3\research-policy.json'
-            $defPolItem = Get-Item -LiteralPath $defPolRaw -Force -ErrorAction SilentlyContinue
-            if ($defPolItem) {
-                $defSpec = Test-ContainedRepoPath $RepoRoot '.b3/research-policy.json'
-                if (-not $defSpec) { Fail 'MERGE_BLOCKED: invalid_policy_path' 1 }
-                if (-not (Test-Path -LiteralPath $defSpec.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: invalid_policy_path' 1 }
-                $polFileFull = $defSpec.Full
-                $polRel = $defSpec.Rel
+        }
+
+        $changedList = New-Object System.Collections.Generic.List[string]
+        if ($ChangedPaths -and $ChangedPaths.Trim()) {
+            $rawCp = $ChangedPaths
+            $trimCp = $ChangedPaths.Trim()
+            if ($trimCp -cne '[]' -and $trimCp -cne 'none') {
+                if ($trimCp.StartsWith('[') -and $trimCp.EndsWith(']')) {
+                    $rawCp = $trimCp.Substring(1, $trimCp.Length - 2)
+                }
+                foreach ($part in ($rawCp -split ',')) {
+                    if ([string]::IsNullOrEmpty($part)) { Fail 'MERGE_BLOCKED: invalid_changed_path' 1 }
+                    $tok = $part -replace '\\', '/'
+                    if ($tok -ceq './') { $tok = '.' }
+                    if ($tok -cne '.' -and -not (Test-ValidLiteralGitPath $tok)) {
+                        $trimmedTok = $tok.TrimStart(' ')
+                        if (Test-ValidLiteralGitPath $trimmedTok) { $tok = $trimmedTok }
+                        else { Fail 'MERGE_BLOCKED: invalid_changed_path' 1 }
+                    }
+                    if (-not $changedList.Contains($tok)) { $changedList.Add($tok) }
+                }
+            }
+        }
+        $changedArr = @($changedList)
+
+        if ($effTargetRefArg) {
+            if ($effTargetRefArg.StartsWith('-') -or ($effTargetRefArg -match '[\s\x00-\x1F\x7F]') -or ($effTargetRefArg -imatch '^(HEAD([~^].*)?|@([~^{].*)?)$')) {
+                Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+            }
+        }
+        if ($authRefArgTrim) {
+            if ($authRefArgTrim.StartsWith('-') -or ($authRefArgTrim -match '[\s\x00-\x1F\x7F]') -or ($authRefArgTrim -imatch '^(HEAD([~^].*)?|@([~^{].*)?)$')) {
+                Fail 'MERGE_BLOCKED: invalid_authority_ref' 1
             }
         }
 
-        if ($polFileFull) {
+        $headPreRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
+        $liveHeadSha = if ($headPreRes.ExitCode -eq 0 -and $headPreRes.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') { $headPreRes.StdOut.Trim() } else { '' }
+        if ($headShaArgTrim) {
+            if ($headShaArgTrim.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_head' 1 }
+            $callerHeadRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${headShaArgTrim}^{commit}")
+            $callerHeadSha = $callerHeadRes.StdOut.Trim()
+            if ($callerHeadRes.ExitCode -ne 0 -or $callerHeadSha -cnotmatch '^[0-9a-f]{40}$' -or -not $liveHeadSha) {
+                Fail 'MERGE_BLOCKED: invalid_head' 1
+            }
+            if ($callerHeadSha -cne $liveHeadSha) {
+                Fail 'MERGE_BLOCKED: head_sha_mismatch' 1
+            }
+        }
+
+        $remListRes = Invoke-GitCommand $RepoRoot @('remote')
+        $remotesList = @()
+        if ($remListRes.ExitCode -eq 0 -and $remListRes.StdOut) {
+            $remotesList = @($remListRes.StdOut -split "\r?\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
+        $hasAnyRemote = ($remotesList.Count -gt 0)
+        $hasOrigin = ($remotesList -ccontains 'origin')
+
+        $curSymRes = Invoke-GitCommand $RepoRoot @('symbolic-ref', '-q', 'HEAD')
+        $curSymFull = if ($curSymRes.ExitCode -eq 0) { $curSymRes.StdOut.Trim() } else { '' }
+
+        $canonAuthFull = ''
+        $canonAuthBranch = ''
+        $canonAuthSha = ''
+        if ($hasOrigin) {
+            $ohRes = Invoke-GitCommand $RepoRoot @('symbolic-ref', '-q', 'refs/remotes/origin/HEAD')
+            if ($ohRes.ExitCode -eq 0 -and $ohRes.StdOut.Trim().StartsWith('refs/remotes/origin/', [System.StringComparison]::Ordinal)) {
+                $ohFull = $ohRes.StdOut.Trim()
+                $ohShaRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ohFull}^{commit}")
+                if ($ohShaRes.ExitCode -eq 0 -and $ohShaRes.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                    $canonAuthFull = $ohFull
+                    $canonAuthBranch = $ohFull.Substring('refs/remotes/origin/'.Length)
+                    $canonAuthSha = $ohShaRes.StdOut.Trim()
+                }
+            }
+            if (-not $canonAuthSha) {
+                foreach ($candBr in @('main', 'master')) {
+                    $cFull = "refs/remotes/origin/$candBr"
+                    $cShaRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${cFull}^{commit}")
+                    if ($cShaRes.ExitCode -eq 0 -and $cShaRes.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                        $canonAuthFull = $cFull
+                        $canonAuthBranch = $candBr
+                        $canonAuthSha = $cShaRes.StdOut.Trim()
+                        break
+                    }
+                }
+            }
+        } elseif (-not $hasAnyRemote) {
+            foreach ($candBr in @('main', 'master')) {
+                $cFull = "refs/heads/$candBr"
+                $cShaRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${cFull}^{commit}")
+                if ($cShaRes.ExitCode -eq 0 -and $cShaRes.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                    $canonAuthFull = $cFull
+                    $canonAuthBranch = $candBr
+                    $canonAuthSha = $cShaRes.StdOut.Trim()
+                    break
+                }
+            }
+        }
+
+        $callerAuthSymFull = ''
+        $callerAuthBranch = ''
+        if ($authRefArgTrim) {
+            $aSymRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--symbolic-full-name', $authRefArgTrim)
+            $callerAuthSymFull = $aSymRes.StdOut.Trim()
+            if ($aSymRes.ExitCode -ne 0 -or (-not ($callerAuthSymFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal) -or $callerAuthSymFull.StartsWith('refs/remotes/', [System.StringComparison]::Ordinal)))) {
+                Fail 'MERGE_BLOCKED: invalid_authority_ref' 1
+            }
+            if ($curSymFull -and ($callerAuthSymFull -ceq $curSymFull)) {
+                Fail 'MERGE_BLOCKED: invalid_authority_ref' 1
+            }
+            if ($callerAuthSymFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal)) {
+                $callerAuthBranch = $callerAuthSymFull.Substring('refs/heads/'.Length)
+            } elseif ($callerAuthSymFull -cmatch '^refs/remotes/[^/]+/(.+)$') {
+                $callerAuthBranch = $Matches[1]
+            }
+            if ($canonAuthFull -and ($callerAuthSymFull -cne $canonAuthFull)) {
+                Fail 'MERGE_BLOCKED: authority_ref_mismatch' 1
+            }
+        }
+
+        $effectivePolRel = if ($polRel) { $polRel } else { '.b3/research-policy.json' }
+        $polIsDefaultPath = (-not $polExplicit) -or $effectivePolRel.Equals('.b3/research-policy.json', [System.StringComparison]::OrdinalIgnoreCase)
+        $policyProtected = New-Object System.Collections.Generic.List[string]
+        $policyProtected.Add('.b3/research-policy.json')
+        if (-not $polIsDefaultPath) {
+            $policyProtected.Add($effectivePolRel)
+        }
+        $policyProtectedArr = @($policyProtected)
+
+        # Default policy if absent from authority
+        $autoMerge = 'disabled'
+        $polProtectedPaths = @()
+        $allowProtected = $false
+        $requireCi = $false
+        $requireReview = $true
+        $allowedTargetBranches = @()
+
+        $fallbackLocalTrunkSha = ''
+        if (-not $canonAuthSha -and -not $hasAnyRemote) {
+            foreach ($candBr in @('main', 'master')) {
+                $fbRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "refs/heads/${candBr}^{commit}")
+                if ($fbRes.ExitCode -eq 0 -and $fbRes.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                    $fallbackLocalTrunkSha = $fbRes.StdOut.Trim()
+                    break
+                }
+            }
+        }
+        $inspectAuthSha = if ($canonAuthSha) { $canonAuthSha } else { $fallbackLocalTrunkSha }
+        $isGithubPrMode = ([bool]$prNumTrim -and (-not $LocalOnly))
+        if ((-not $isGithubPrMode) -and (-not $LocalOnly) -and $hasAnyRemote -and (-not $hasOrigin)) {
+            Fail 'MERGE_BLOCKED: origin_remote_missing' 1
+        }
+
+        if (-not $polIsDefaultPath) {
             $polParsed = Parse-MergePolicyJsonText ([IO.File]::ReadAllText($polFileFull))
             $autoMerge = $polParsed.AutoMerge
             $allowProtected = $polParsed.AllowProtected
@@ -5694,40 +6914,118 @@ switch ($Command) {
             $requireReview = $polParsed.RequireReview
             $polProtectedPaths = $polParsed.ProtectedPaths
             $allowedTargetBranches = $polParsed.AllowedTargetBranches
+            if ((-not $isGithubPrMode) -and $inspectAuthSha) {
+                $tLs = Invoke-GitCommand $RepoRoot @('ls-tree', $inspectAuthSha, '--', '.b3/research-policy.json')
+                if ($tLs.ExitCode -eq 0 -and $tLs.StdOut.Trim() -cmatch "^(100644|100755) blob ([0-9a-f]{40})`t\.b3/research-policy\.json$") {
+                    $tShow = Invoke-GitCommand $RepoRoot @('show', "${inspectAuthSha}:.b3/research-policy.json")
+                    if ($tShow.ExitCode -eq 0) {
+                        $trunkPol = Parse-MergePolicyJsonText $tShow.StdOut
+                        $requireCi = ($requireCi -or $trunkPol.RequireCi)
+                        $requireReview = ($requireReview -or $trunkPol.RequireReview)
+                        if ($trunkPol.ProtectedPaths.Count -gt 0) {
+                            $mergedPp = New-Object System.Collections.Generic.List[string]
+                            foreach ($pp in @($polProtectedPaths)) { if (-not $mergedPp.Contains($pp)) { $mergedPp.Add($pp) } }
+                            foreach ($pp in @($trunkPol.ProtectedPaths)) { if (-not $mergedPp.Contains($pp)) { $mergedPp.Add($pp) } }
+                            $polProtectedPaths = @($mergedPp)
+                            if (-not $trunkPol.AllowProtected) { $allowProtected = $false }
+                        }
+                    }
+                }
+            }
+        } elseif (-not $isGithubPrMode) {
+            $authHasCommittedPol = $false
+            if ($inspectAuthSha) {
+                $aLs = Invoke-GitCommand $RepoRoot @('ls-tree', $inspectAuthSha, '--', '.b3/research-policy.json')
+                $aLsLine = $aLs.StdOut.Trim()
+                if ($aLs.ExitCode -eq 0 -and $aLsLine -cmatch "^(100644|100755) blob ([0-9a-f]{40})`t\.b3/research-policy\.json$") {
+                    $authHasCommittedPol = $true
+                    $aShow = Invoke-GitCommand $RepoRoot @('show', "${inspectAuthSha}:.b3/research-policy.json")
+                    if ($aShow.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: policy_not_in_authority' 1 }
+                    $polParsed = Parse-MergePolicyJsonText $aShow.StdOut
+                    $autoMerge = $polParsed.AutoMerge
+                    $allowProtected = $polParsed.AllowProtected
+                    $requireCi = $polParsed.RequireCi
+                    $requireReview = $polParsed.RequireReview
+                    $polProtectedPaths = $polParsed.ProtectedPaths
+                    $allowedTargetBranches = $polParsed.AllowedTargetBranches
+                }
+            }
+            if ($authHasCommittedPol) {
+                if ($inspectAuthSha -and $liveHeadSha -and ($inspectAuthSha -cne $liveHeadSha)) {
+                    $mbInsp = Invoke-GitCommand $RepoRoot @('merge-base', $inspectAuthSha, $liveHeadSha)
+                    if ($mbInsp.ExitCode -eq 0 -and $mbInsp.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                        $crPolPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--name-status', '-z', "$($mbInsp.StdOut.Trim())..${liveHeadSha}", '--', '.b3/research-policy.json') 'name-status-z' 'MERGE_BLOCKED')
+                        if ($crPolPaths.Count -gt 0) {
+                            Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
+                        }
+                    } elseif ($mbInsp.ExitCode -gt 1) {
+                        Fail 'MERGE_BLOCKED: git_diff_failed' 1
+                    }
+                }
+                foreach ($dArgsPol in @(
+                    @('diff', '--no-ext-diff', '--cached', '--name-status', '-z', '--', '.b3/research-policy.json'),
+                    @('diff', '--no-ext-diff', '--name-status', '-z', '--', '.b3/research-policy.json'),
+                    @('diff', '--no-ext-diff', '--name-status', '-z', 'HEAD', '--', '.b3/research-policy.json')
+                )) {
+                    $dPolPaths = @(Invoke-GitPathsZ $RepoRoot $dArgsPol 'name-status-z' 'MERGE_BLOCKED')
+                    if ($dPolPaths.Count -gt 0) {
+                        Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
+                    }
+                }
+            } else {
+                if ($inspectAuthSha -and $liveHeadSha -and ($inspectAuthSha -cne $liveHeadSha)) {
+                    $mbInsp = Invoke-GitCommand $RepoRoot @('merge-base', $inspectAuthSha, $liveHeadSha)
+                    if ($mbInsp.ExitCode -eq 0 -and $mbInsp.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                        $crPolPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--name-status', '-z', "$($mbInsp.StdOut.Trim())..${liveHeadSha}", '--', '.b3/research-policy.json') 'name-status-z' 'MERGE_BLOCKED')
+                        if ($crPolPaths.Count -gt 0) {
+                            Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+                        }
+                    } elseif ($mbInsp.ExitCode -gt 1) {
+                        Fail 'MERGE_BLOCKED: git_diff_failed' 1
+                    }
+                    if ($defPolFileFull) {
+                        Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+                    }
+                } elseif ($defPolFileFull) {
+                    $wtPol = Parse-MergePolicyJsonText ([IO.File]::ReadAllText($defPolFileFull))
+                    if ($wtPol.AutoMerge -ceq 'authorized') {
+                        Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+                    }
+                    $autoMerge = 'disabled'
+                    $allowProtected = [bool]$wtPol.AllowProtected
+                    $requireCi = [bool]$wtPol.RequireCi
+                    $requireReview = $true
+                    $polProtectedPaths = $wtPol.ProtectedPaths
+                    $allowedTargetBranches = $wtPol.AllowedTargetBranches
+                }
+            }
         }
 
         if ($govSt -cne 'CLEAR') { Fail "MERGE_BLOCKED: governance=$govSt" 1 }
 
-        $changedList = New-Object System.Collections.Generic.List[string]
-        if ($ChangedPaths -and $ChangedPaths.Trim()) {
-            $rawCp = $ChangedPaths.TrimStart(' ')
-            $trimCp = $ChangedPaths.Trim()
-            if ($trimCp -cne '[]' -and $trimCp -cne 'none') {
-                if ($rawCp.StartsWith('[') -and $rawCp.EndsWith(']')) {
-                    $rawCp = $rawCp.Substring(1, $rawCp.Length - 2)
+        $localPreChanged = New-Object System.Collections.Generic.List[string]
+        foreach ($cp in $changedArr) {
+            if (-not $localPreChanged.Contains($cp)) { $localPreChanged.Add($cp) }
+        }
+        if ((-not $isGithubPrMode) -and $inspectAuthSha -and $liveHeadSha -and ($inspectAuthSha -cne $liveHeadSha)) {
+            $mbChg = Invoke-GitCommand $RepoRoot @('merge-base', $inspectAuthSha, $liveHeadSha)
+            if ($mbChg.ExitCode -eq 0 -and $mbChg.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                $locDiffPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--name-status', '-z', "$($mbChg.StdOut.Trim())..${liveHeadSha}", '--') 'name-status-z' 'MERGE_BLOCKED')
+                foreach ($lp in $locDiffPaths) {
+                    if ($lp -and (-not (Test-CheckpointPath $lp)) -and (-not $localPreChanged.Contains($lp))) {
+                        $localPreChanged.Add($lp)
+                    }
                 }
-                foreach ($part in ($rawCp -split ',')) {
-                    $tok = $part.TrimStart(' ')
-                    $np = Normalize-MergePolicyPath $tok
-                    if (-not $np) { Fail 'MERGE_BLOCKED: invalid_changed_path' 1 }
-                    if (-not $changedList.Contains($np)) { $changedList.Add($np) }
-                }
+            } elseif ($mbChg.ExitCode -gt 1) {
+                Fail 'MERGE_BLOCKED: git_diff_failed' 1
             }
         }
-        $changedArr = @($changedList)
+        $localPreChangedArr = @($localPreChanged)
 
-        $effectivePolRel = if ($polRel) { $polRel } else { '.b3/research-policy.json' }
-        $policyProtected = New-Object System.Collections.Generic.List[string]
-        $policyProtected.Add('.b3/research-policy.json')
-        if ($effectivePolRel -and -not $effectivePolRel.Equals('.b3/research-policy.json', [System.StringComparison]::OrdinalIgnoreCase)) {
-            $policyProtected.Add($effectivePolRel)
-        }
-        $policyProtectedArr = @($policyProtected)
-
-        if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -gt 0) {
+        if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $localPreChangedArr.Count -gt 0) {
             $protHits = New-Object System.Collections.Generic.List[string]
-            foreach ($cp in $changedArr) {
-                if (Test-ProtectedPathMatchCI $cp $polProtectedPaths) {
+            foreach ($cp in $localPreChangedArr) {
+                if (Test-ProtectedPathMatchCI $cp $polProtectedPaths $mpCaseInsensitive) {
                     if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
                 }
             }
@@ -5737,7 +7035,7 @@ switch ($Command) {
         }
         if ($changedArr.Count -gt 0) {
             foreach ($cp in $changedArr) {
-                if (Test-ProtectedPathMatchCI $cp $policyProtectedArr) {
+                if (Test-ProtectedPathMatchCI $cp $policyProtectedArr $mpCaseInsensitive) {
                     Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
                 }
             }
@@ -5750,358 +7048,626 @@ switch ($Command) {
         if ($revStatusExplicit -and $revSt -cin @('BLOCKED', 'PENDING')) { Fail "MERGE_BLOCKED: review_status=$revSt" 1 }
         if ($prStateExplicit -and $prSt -cin @('CLOSED', 'MERGED')) { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
 
-        # Offline / deterministic local mode (when -PrNumber is omitted or -LocalOnly is set)
-        if (-not $prNumTrim -or $LocalOnly) {
-            if ($requireCi -and $ciSt -cne 'PASS') { Fail "MERGE_BLOCKED: ci_status=$ciSt" 1 }
-            if ($requireReview -and $revSt -cne 'PASS') { Fail "MERGE_BLOCKED: review_status=$revSt" 1 }
-            if ($prSt -cne 'OPEN') { Fail "MERGE_BLOCKED: pr_state=$prSt" 1 }
+        if (-not $polIsDefaultPath) {
+            if ($isGithubPrMode -or $autoMerge -ceq 'authorized' -or ($inspectAuthSha -and $liveHeadSha -and ($inspectAuthSha -cne $liveHeadSha))) {
+                Fail 'MERGE_BLOCKED: policy_path_override_not_allowed' 1
+            }
+        }
 
-            if ($autoMerge -cne 'authorized') {
-                if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $changedArr.Count -eq 0) {
-                    Fail 'MERGE_BLOCKED: missing_changed_paths' 1
-                }
-                if ($BaseSha -and $BaseSha.Trim()) {
-                    $bt = $BaseSha.Trim()
-                    if ($bt.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
-                    $bChk = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${bt}^{commit}")
-                    if ($bChk.ExitCode -ne 0 -or $bChk.StdOut.Trim() -cnotmatch '^[0-9a-f]{40}$') {
-                        Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+        # --- GitHub PR Authorization Path (when -PrNumber is supplied and !-LocalOnly) ---
+        if ($isGithubPrMode) {
+            if ($prNumTrim -cnotmatch '^[1-9][0-9]*$') {
+                Fail 'MERGE_BLOCKED: invalid_pr_number' 1
+            }
+            $gh = Invoke-B3GitHubVerify 'pre-merge' $RepoRoot $Repo $prNumTrim 'MERGE_BLOCKED'
+
+            if ($gh['pr_number'] -cne $prNumTrim) { Fail 'MERGE_BLOCKED: pr_identity_mismatch' 1 }
+            if ($Repo -and $Repo.Trim() -and (-not $gh['base_repo'].Equals($Repo.Trim(), [System.StringComparison]::OrdinalIgnoreCase))) {
+                Fail 'MERGE_BLOCKED: cross_repo_mismatch' 1
+            }
+            if ($gh['same_repo'] -cne 'true') { Fail 'MERGE_BLOCKED: cross_repo_head_pr' 1 }
+            if ($gh['pr_state'] -cne 'OPEN' -or $gh['pr_merged'] -ceq 'true') { Fail "MERGE_BLOCKED: pr_state=$($gh['pr_state'])" 1 }
+            if ($gh['pr_draft'] -ceq 'true') { Fail 'MERGE_BLOCKED: pr_is_draft' 1 }
+
+            $ghBaseRef = $gh['base_ref']
+            $ghPrBaseSha = $gh['pr_base_sha']
+            $ghLiveTargetSha = $gh['live_target_sha']
+            $ghHeadSha = $gh['head_sha']
+            $ghAuthRef = $gh['policy_authority_ref']
+            $ghAuthSha = $gh['policy_authority_sha']
+            if (-not $ghBaseRef -or -not $ghAuthRef -or
+                $ghPrBaseSha -cnotmatch '^[0-9a-f]{40}$' -or
+                $ghLiveTargetSha -cnotmatch '^[0-9a-f]{40}$' -or
+                $ghHeadSha -cnotmatch '^[0-9a-f]{40}$' -or
+                $ghAuthSha -cnotmatch '^[0-9a-f]{40}$') {
+                Fail 'MERGE_BLOCKED: incomplete_pr_metadata' 1
+            }
+
+            if ($ghLiveTargetSha -cne $ghPrBaseSha) {
+                Fail 'MERGE_BLOCKED: target_branch_moved' 1
+            }
+            if ($targetBrTrim -and $targetBrTrim -cne $ghBaseRef) {
+                Fail 'MERGE_BLOCKED: target_ref_mismatch' 1
+            }
+            if ($effTargetRefArg) {
+                $tSymGhRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--symbolic-full-name', $effTargetRefArg)
+                $tSymGh = $tSymGhRes.StdOut.Trim()
+                $tBrGh = ''
+                if ($tSymGhRes.ExitCode -eq 0) {
+                    if ($tSymGh.StartsWith('refs/heads/', [System.StringComparison]::Ordinal)) {
+                        $tBrGh = $tSymGh.Substring('refs/heads/'.Length)
+                    } elseif ($tSymGh -cmatch '^refs/remotes/origin/(.+)$') {
+                        $tBrGh = $Matches[1]
                     }
                 }
+                if (-not $tBrGh -or $tBrGh -cne $ghBaseRef) {
+                    Fail 'MERGE_BLOCKED: target_ref_mismatch' 1
+                }
+            }
+            if ($callerAuthBranch -and $callerAuthBranch -cne $ghAuthRef) {
+                Fail 'MERGE_BLOCKED: authority_ref_mismatch' 1
+            }
+
+            $baseTrim = if ($BaseSha) { $BaseSha.Trim() } else { '' }
+            if ($baseTrim) {
+                if ($baseTrim.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
+                $baseRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${baseTrim}^{commit}")
+                $callerBaseSha = $baseRes.StdOut.Trim()
+                if ($baseRes.ExitCode -ne 0 -or $callerBaseSha -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+                }
+                if ($callerBaseSha -cne $ghLiveTargetSha) {
+                    if ($liveHeadSha -and $callerBaseSha -ceq $liveHeadSha) {
+                        Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
+                    }
+                    Fail 'MERGE_BLOCKED: base_sha_mismatch' 1
+                }
+            }
+            $resolvedBaseSha = $ghLiveTargetSha
+
+            if (-not $liveHeadSha) {
+                Fail 'MERGE_BLOCKED: invalid_head' 1
+            }
+            if ($liveHeadSha -cne $ghHeadSha) {
+                Fail 'MERGE_BLOCKED: head_sha_mismatch' 1
+            }
+            if ($resolvedBaseSha -ceq $liveHeadSha) {
+                Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
+            }
+
+            $tLocalRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${resolvedBaseSha}^{commit}")
+            if ($tLocalRes.ExitCode -ne 0 -or $tLocalRes.StdOut.Trim() -cne $resolvedBaseSha) {
+                Fail 'MERGE_BLOCKED: target_sha_not_fetched' 1
+            }
+            $aLocalRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ghAuthSha}^{commit}")
+            if ($aLocalRes.ExitCode -ne 0 -or $aLocalRes.StdOut.Trim() -cne $ghAuthSha) {
+                Fail 'MERGE_BLOCKED: policy_authority_not_fetched' 1
+            }
+
+            $remTrackRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/${ghBaseRef}^{commit}")
+            if ($remTrackRes.ExitCode -eq 0) {
+                $remTrackSha = $remTrackRes.StdOut.Trim()
+                if ($remTrackSha -cmatch '^[0-9a-f]{40}$' -and $remTrackSha -cne $resolvedBaseSha) {
+                    Fail 'MERGE_BLOCKED: target_branch_moved' 1
+                }
+            }
+            $ancTargetRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resolvedBaseSha, $liveHeadSha)
+            if ($ancTargetRes.ExitCode -ne 0) {
+                Fail 'MERGE_BLOCKED: target_branch_moved' 1
+            }
+
+            $authLs = Invoke-GitCommand $RepoRoot @('ls-tree', $ghAuthSha, '--', '.b3/research-policy.json')
+            $authLsLine = $authLs.StdOut.Trim()
+            $authHasPolicy = ($authLs.ExitCode -eq 0 -and $authLsLine -cmatch "^(100644|100755) blob ([0-9a-f]{40})`t\.b3/research-policy\.json$")
+            $authPol = $null
+            if ($authHasPolicy) {
+                $authShow = Invoke-GitCommand $RepoRoot @('show', "${ghAuthSha}:.b3/research-policy.json")
+                if ($authShow.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: policy_not_in_authority' 1 }
+                $authPol = Parse-MergePolicyJsonText $authShow.StdOut
+            } else {
+                if ($polExplicit -or $defPolFileFull) {
+                    Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+                }
+                $authPol = @{
+                    AutoMerge = 'disabled'
+                    AllowProtected = $false
+                    RequireCi = $false
+                    RequireReview = $true
+                    ProtectedPaths = @()
+                    AllowedTargetBranches = @()
+                }
+            }
+            $ghPolViolationReason = if ($authHasPolicy) { 'policy_modified_in_pr' } else { 'policy_not_in_authority' }
+
+            if ($ghBaseRef -cne $ghAuthRef) {
+                $mbAuthRes = Invoke-GitCommand $RepoRoot @('merge-base', $ghAuthSha, $resolvedBaseSha)
+                $mbAuthSha = $mbAuthRes.StdOut.Trim()
+                if ($mbAuthRes.ExitCode -ne 0 -or $mbAuthSha -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'MERGE_BLOCKED: target_branch_unrelated_to_authority' 1
+                }
+                $tPolPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--name-status', '-z', "${mbAuthSha}..${resolvedBaseSha}", '--') 'name-status-z' 'MERGE_BLOCKED')
+                foreach ($tp in $tPolPaths) {
+                    if (-not $tp) { continue }
+                    if (Test-ProtectedPathMatchCI $tp $policyProtectedArr $mpCaseInsensitive) {
+                        Fail 'MERGE_BLOCKED: target_branch_modified_policy' 1
+                    }
+                }
+            }
+
+            $dirtyWtCmds = @(
+                @{ Args = @('diff', '--no-ext-diff', '--cached', '--name-status', '-z', '--'); Mode = 'name-status-z' },
+                @{ Args = @('diff', '--no-ext-diff', '--name-status', '-z', '--'); Mode = 'name-status-z' },
+                @{ Args = @('ls-files', '--others', '--exclude-standard', '-z'); Mode = 'names' }
+            )
+            $hasDirtyWt = $false
+            foreach ($dSpec in $dirtyWtCmds) {
+                $dPaths = @(Invoke-GitPathsZ $RepoRoot $dSpec.Args $dSpec.Mode 'MERGE_BLOCKED')
+                foreach ($dp in $dPaths) {
+                    if (-not $dp) { continue }
+                    if (Test-CheckpointPath $dp) { continue }
+                    if (Test-ProtectedPathMatchCI $dp $policyProtectedArr $mpCaseInsensitive) {
+                        Fail "MERGE_BLOCKED: $ghPolViolationReason" 1
+                    }
+                    $hasDirtyWt = $true
+                }
+            }
+            if ($hasDirtyWt) {
+                Fail 'MERGE_BLOCKED: dirty_worktree' 1
+            }
+
+            $allChanged = New-Object System.Collections.Generic.List[string]
+            foreach ($cp in $changedArr) {
+                if (-not $allChanged.Contains($cp)) { $allChanged.Add($cp) }
+            }
+            foreach ($ghf in @($gh['PrChangedFiles'])) {
+                if (-not (Test-ValidLiteralGitPath $ghf)) { Fail 'MERGE_BLOCKED: invalid_pr_changed_path' 1 }
+                if (-not $allChanged.Contains($ghf)) { $allChanged.Add($ghf) }
+            }
+            $cDiffPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--name-status', '-z', "${resolvedBaseSha}..${liveHeadSha}", '--') 'name-status-z' 'MERGE_BLOCKED')
+            foreach ($gp in $cDiffPaths) {
+                if (-not $gp) { continue }
+                if (Test-CheckpointPath $gp) { continue }
+                if (-not $allChanged.Contains($gp)) { $allChanged.Add($gp) }
+            }
+            $allChangedArr = @($allChanged)
+
+            foreach ($cp in $allChangedArr) {
+                if (Test-ProtectedPathMatchCI $cp $policyProtectedArr $mpCaseInsensitive) {
+                    Fail "MERGE_BLOCKED: $ghPolViolationReason" 1
+                }
+            }
+            if ($authPol.ProtectedPaths.Count -gt 0 -and -not $authPol.AllowProtected) {
+                if ($allChangedArr.Count -eq 0) { Fail 'MERGE_BLOCKED: missing_changed_paths' 1 }
+                $protHits = New-Object System.Collections.Generic.List[string]
+                foreach ($cp in $allChangedArr) {
+                    if (Test-ProtectedPathMatchCI $cp $authPol.ProtectedPaths $mpCaseInsensitive) {
+                        if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
+                    }
+                }
+                if ($protHits.Count -gt 0) {
+                    Fail ("MERGE_BLOCKED: protected_paths=" + ((Sort-Ordinal $protHits.ToArray()) -join ',')) 1
+                }
+            }
+
+            if ($authPol.AllowedTargetBranches.Count -gt 0) {
+                if (-not (Test-BranchPatternMatch $ghBaseRef $authPol.AllowedTargetBranches)) {
+                    Fail "MERGE_BLOCKED: target_branch_not_allowed($ghBaseRef)" 1
+                }
+            }
+
+            $mState = $gh['mergeable_state']
+            if ($gh['mergeable'] -ceq 'false') {
+                Fail "MERGE_BLOCKED: pr_not_mergeable(mergeable=$($gh['mergeable']),state=$mState)" 1
+            }
+            if ($mState -ceq 'dirty') {
+                Fail "MERGE_BLOCKED: mergeable_state=$mState" 1
+            }
+
+            $effReqCi = ($authPol.RequireCi -or $RequireRemoteCi)
+            $ghCi = $gh['gh_ci_status']
+            if ($effReqCi) {
+                if ($ghCi -cne 'PASS') {
+                    Fail "MERGE_BLOCKED: ci_status=$ghCi" 1
+                }
+            } elseif ($ghCi -ceq 'FAIL' -or $ghCi -ceq 'PENDING') {
+                Fail "MERGE_BLOCKED: ci_status=$ghCi" 1
+            }
+
+            if ($authPol.AutoMerge -cne 'authorized') {
                 if ($LedgerPath -and $LedgerPath.Trim()) {
-                    $lOptSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
-                    if (-not $lOptSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+                    $lOptGh = Test-ContainedRepoPath $RepoRoot $LedgerPath
+                    if (-not $lOptGh) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
                 }
                 Fail 'PR_READY: auto_merge=disabled' 2
             }
 
-            if (-not $LocalOnly) {
-                Fail 'MERGE_BLOCKED: missing_pr_number' 1
-            }
-
-            # Explicit -LocalOnly deterministic check (NEVER returns MERGE_AUTHORIZED / exit 0)
-            $baseTrimLoc = if ($BaseSha) { $BaseSha.Trim() } else { '' }
-            if (-not $baseTrimLoc) { Fail 'MERGE_BLOCKED: missing_base_sha' 1 }
-            if ($baseTrimLoc.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
-            $bLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${baseTrimLoc}^{commit}")
-            $resBaseLoc = $bLocRes.StdOut.Trim()
-            if ($bLocRes.ExitCode -ne 0 -or $resBaseLoc -cnotmatch '^[0-9a-f]{40}$') { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
-            $hLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
-            $liveHeadLoc = $hLocRes.StdOut.Trim()
-            if ($hLocRes.ExitCode -ne 0 -or $liveHeadLoc -cnotmatch '^[0-9a-f]{40}$') { Fail 'MERGE_BLOCKED: invalid_head' 1 }
-            if ($resBaseLoc -ceq $liveHeadLoc) { Fail 'MERGE_BLOCKED: base_sha_equals_head' 1 }
             if (-not $LedgerPath -or -not $LedgerPath.Trim()) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
-            $ledSpecLoc = Test-ContainedRepoPath $RepoRoot $LedgerPath
-            if (-not $ledSpecLoc) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
-            if (-not (Test-Path -LiteralPath $ledSpecLoc.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
-            $prevCapLoc = $script:CaptureFailMode
+            $ledSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
+            if (-not $ledSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+            if (-not (Test-Path -LiteralPath $ledSpec.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
+            $prevCap = $script:CaptureFailMode
             $script:CaptureFailMode = $true
-            $ledChkLoc = $null
+            $ledChkRes = $null
             try {
-                $ledChkLoc = Invoke-ReviewLedgerCheck $RepoRoot $ledSpecLoc.Full $ledSpecLoc.Rel @()
+                $ledChkRes = Invoke-ReviewLedgerCheck $RepoRoot $ledSpec.Full $ledSpec.Rel @()
             } catch {
                 $exMsg = $_.Exception.Message
                 if ($exMsg -match '^B3_GUARD_FAIL\|(\d+)\|(.*)$') {
-                    $ledChkLoc = @{ Code = [int]$Matches[1]; Message = $Matches[2]; Ledger = $null }
+                    $ledChkRes = @{ Code = [int]$Matches[1]; Message = $Matches[2]; Ledger = $null }
                 } else {
-                    $ledChkLoc = @{ Code = 1; Message = $exMsg; Ledger = $null }
+                    $ledChkRes = @{ Code = 1; Message = $exMsg; Ledger = $null }
                 }
             } finally {
-                $script:CaptureFailMode = $prevCapLoc
+                $script:CaptureFailMode = $prevCap
             }
-            if (-not $ledChkLoc -or $ledChkLoc.Code -ne 0 -or -not $ledChkLoc.Ledger) {
-                $detailMsg = if ($ledChkLoc -and $ledChkLoc.Message) { $ledChkLoc.Message } else { 'unknown' }
+            if (-not $ledChkRes -or $ledChkRes.Code -ne 0 -or -not $ledChkRes.Ledger) {
+                $detailMsg = if ($ledChkRes -and $ledChkRes.Message) { $ledChkRes.Message } else { 'unknown' }
                 Fail "MERGE_BLOCKED: ledger_check_failed ($detailMsg)" 1
             }
-            if ($ledChkLoc.Ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT') { Fail 'MERGE_BLOCKED: single_agent_limit' 1 }
-            if ($ledChkLoc.Ledger['review_independence'] -cne 'INDEPENDENT') { Fail 'MERGE_BLOCKED: review_independence_unknown' 1 }
-            Fail 'LOCAL_ELIGIBLE_ONLY: remote_provider_required' 2
+            if ($ledChkRes.Ledger['base_sha'] -cne $resolvedBaseSha) {
+                Fail 'MERGE_BLOCKED: ledger_target_mismatch' 1
+            }
+            if ($ledChkRes.Ledger['head_sha'] -cne $liveHeadSha -or ($ledChkRes.Ledger['target_ref'] -cne 'working_tree' -and $ledChkRes.Ledger['target_sha'] -cne $liveHeadSha)) {
+                Fail 'MERGE_BLOCKED: ledger_head_mismatch' 1
+            }
+            if ($ledChkRes.Ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT') {
+                Fail 'MERGE_BLOCKED: single_agent_limit' 1
+            }
+            if ($ledChkRes.Ledger['review_independence'] -cne 'INDEPENDENT') {
+                Fail 'MERGE_BLOCKED: review_independence_unknown' 1
+            }
+
+            Write-Output "MERGE_AUTHORIZED: mode=github pr=$($gh['base_repo'])#$prNumTrim target_ref=$ghBaseRef target_sha=$resolvedBaseSha head_sha=$liveHeadSha policy_authority=${ghAuthRef}@${ghAuthSha} auto_merge=authorized ci=$ghCi governance=CLEAR"
+            exit 0
         }
 
-        # --- Trusted Remote Authorization Path (R001 + R002) ---
-        if ($effectivePolRel -cne '.b3/research-policy.json') {
+        # --- Provider-Neutral Local / -LocalOnly / auto_merge=disabled Path ---
+        if ($RequireRemoteCi) {
+            Fail 'PROVIDER_UNAVAILABLE: remote_ci_requires_provider_verification' 2
+        }
+        if ($autoMerge -cne 'authorized') {
+            $optLedObj = $null
+            if ($LedgerPath -and $LedgerPath.Trim()) {
+                $lOptSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
+                if (-not $lOptSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+                if ((Test-Path -LiteralPath $lOptSpec.Full -PathType Leaf) -and $requireCi -and (-not ($ReceiptPath -and $ReceiptPath.Trim()))) {
+                    $prevCapDis = $script:CaptureFailMode
+                    $script:CaptureFailMode = $true
+                    try {
+                        $ledDisRes = Invoke-ReviewLedgerCheck $RepoRoot $lOptSpec.Full $lOptSpec.Rel @()
+                        if ($ledDisRes -and $ledDisRes.Code -eq 0 -and $ledDisRes.Ledger) { $optLedObj = $ledDisRes.Ledger }
+                    } catch {
+                        $optLedObj = $null
+                    } finally {
+                        $script:CaptureFailMode = $prevCapDis
+                    }
+                }
+            }
+            if ($polProtectedPaths.Count -gt 0 -and -not $allowProtected -and $localPreChangedArr.Count -eq 0) {
+                Fail 'MERGE_BLOCKED: missing_changed_paths' 1
+            }
+            if ($requireCi -or ($ReceiptPath -and $ReceiptPath.Trim())) {
+                [void](Assert-LocalCiEvidence $RepoRoot $liveHeadSha $localPreChangedArr $ReceiptPath $optLedObj $ignored $ciSt $requireCi $mpCaseInsensitive)
+            }
+            if ($requireReview -and $revSt -cne 'PASS' -and (-not ($LedgerPath -and $LedgerPath.Trim()))) {
+                Fail "MERGE_BLOCKED: review_status=$revSt" 1
+            }
+            if ($BaseSha -and $BaseSha.Trim()) {
+                $bt = $BaseSha.Trim()
+                if ($bt.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
+                $bChk = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${bt}^{commit}")
+                if ($bChk.ExitCode -ne 0 -or $bChk.StdOut.Trim() -cnotmatch '^[0-9a-f]{40}$') {
+                    Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+                }
+            }
+            Fail 'PR_READY: auto_merge=disabled' 2
+        }
+
+        # auto_merge == 'authorized' without -PrNumber (or with -LocalOnly)
+        if ($polExplicit -and $effectivePolRel -cne '.b3/research-policy.json') {
             Fail 'MERGE_BLOCKED: policy_path_override_not_allowed' 1
         }
-        if ($prNumTrim -cnotmatch '^[1-9][0-9]*$') {
-            Fail 'MERGE_BLOCKED: invalid_pr_number' 1
-        }
-        $repoSlug = Resolve-GitHubRepoSlug $RepoRoot $Repo 'MERGE_BLOCKED'
-        $gh = Invoke-B3GitHubVerify 'pre-merge' $repoSlug $prNumTrim 'MERGE_BLOCKED'
-
-        if ($gh['pr_number'] -cne $prNumTrim) { Fail 'MERGE_BLOCKED: pr_identity_mismatch' 1 }
-        if (-not ($gh['base_repo'].Equals($repoSlug, [System.StringComparison]::OrdinalIgnoreCase))) { Fail 'MERGE_BLOCKED: cross_repo_mismatch' 1 }
-        if ($gh['same_repo'] -cne 'true') { Fail 'MERGE_BLOCKED: cross_repo_head_pr' 1 }
-        if ($gh['pr_state'] -cne 'OPEN' -or $gh['pr_merged'] -ceq 'true') { Fail "MERGE_BLOCKED: pr_state=$($gh['pr_state'])" 1 }
-        if ($gh['pr_draft'] -ceq 'true') { Fail 'MERGE_BLOCKED: pr_is_draft' 1 }
-
-        $ghBaseRef = $gh['base_ref']
-        $ghPrBaseSha = $gh['pr_base_sha']
-        $ghLiveTargetSha = $gh['live_target_sha']
-        $ghHeadSha = $gh['head_sha']
-        $ghAuthRef = $gh['policy_authority_ref']
-        $ghAuthSha = $gh['policy_authority_sha']
-        if (-not $ghBaseRef -or -not $ghAuthRef -or
-            $ghPrBaseSha -cnotmatch '^[0-9a-f]{40}$' -or
-            $ghLiveTargetSha -cnotmatch '^[0-9a-f]{40}$' -or
-            $ghHeadSha -cnotmatch '^[0-9a-f]{40}$' -or
-            $ghAuthSha -cnotmatch '^[0-9a-f]{40}$') {
-            Fail 'MERGE_BLOCKED: incomplete_pr_metadata' 1
-        }
-
-        # Detect remote target branch movement between PR snapshot and live branch ref
-        if ($ghLiveTargetSha -cne $ghPrBaseSha) {
-            Fail 'MERGE_BLOCKED: target_branch_moved' 1
-        }
-        if ($targetBrTrim -and $targetBrTrim -cne $ghBaseRef) {
-            Fail 'MERGE_BLOCKED: target_ref_mismatch' 1
-        }
-
-        # Never trust caller-supplied BaseSha; if provided, it MUST match trusted live target SHA
-        $baseTrim = if ($BaseSha) { $BaseSha.Trim() } else { '' }
-        if ($baseTrim) {
-            if ($baseTrim.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
-            $baseRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${baseTrim}^{commit}")
-            $callerBaseSha = $baseRes.StdOut.Trim()
-            if ($baseRes.ExitCode -ne 0 -or $callerBaseSha -cnotmatch '^[0-9a-f]{40}$') {
-                Fail 'MERGE_BLOCKED: invalid_base_sha' 1
-            }
-            if ($callerBaseSha -cne $ghLiveTargetSha) {
-                $headTmpRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
-                if ($headTmpRes.ExitCode -eq 0 -and $callerBaseSha -ceq $headTmpRes.StdOut.Trim()) {
-                    Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
-                }
-                Fail 'MERGE_BLOCKED: base_sha_mismatch' 1
-            }
-        }
-        $resolvedBaseSha = $ghLiveTargetSha
-
-        # Bind local Git HEAD, target SHA, and policy authority SHA
-        $headRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', 'HEAD^{commit}')
-        $liveHeadSha = $headRes.StdOut.Trim()
-        if ($headRes.ExitCode -ne 0 -or $liveHeadSha -cnotmatch '^[0-9a-f]{40}$') {
+        if (-not $liveHeadSha) {
             Fail 'MERGE_BLOCKED: invalid_head' 1
         }
-        if ($liveHeadSha -cne $ghHeadSha) {
-            Fail 'MERGE_BLOCKED: head_sha_mismatch' 1
+
+        # Require clean working tree & index outside checkpoint dirs
+        $dirtyLocCmds = @(
+            @{ Args = @('diff', '--no-ext-diff', '--cached', '--name-status', '-z', '--'); Mode = 'name-status-z' },
+            @{ Args = @('diff', '--no-ext-diff', '--name-status', '-z', '--'); Mode = 'name-status-z' },
+            @{ Args = @('ls-files', '--others', '--exclude-standard', '-z'); Mode = 'names' }
+        )
+        $hasDirtyLoc = $false
+        foreach ($dSpec in $dirtyLocCmds) {
+            $dPaths = @(Invoke-GitPathsZ $RepoRoot $dSpec.Args $dSpec.Mode 'MERGE_BLOCKED')
+            foreach ($dp in $dPaths) {
+                if (-not $dp) { continue }
+                if (Test-CheckpointPath $dp) { continue }
+                if (Test-ProtectedPathMatchCI $dp $policyProtectedArr $mpCaseInsensitive) {
+                    Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
+                }
+                $hasDirtyLoc = $true
+            }
+        }
+        if ($hasDirtyLoc) {
+            Fail 'MERGE_BLOCKED: dirty_worktree' 1
+        }
+
+        if (-not $LocalOnly) {
+            if ($RequireRemoteCi) {
+                Fail 'MERGE_BLOCKED: missing_pr_number' 1
+            }
+            if ($hasAnyRemote -and (-not $hasOrigin)) {
+                Fail 'MERGE_BLOCKED: origin_remote_missing' 1
+            }
+            if ($hasOrigin -and (-not $canonAuthSha)) {
+                Fail 'MERGE_BLOCKED: missing_pr_number' 1
+            }
+        }
+
+        $effAuthSymFull = if ($canonAuthFull) { $canonAuthFull } else { '' }
+        $effAuthBranch = if ($canonAuthBranch) { $canonAuthBranch } else { '' }
+        $effAuthSha = if ($canonAuthSha) { $canonAuthSha } else { $fallbackLocalTrunkSha }
+        if (-not $effAuthSha) {
+            Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+        }
+
+        # Re-verify policy strictly from canonical authority commit
+        $authLocLs = Invoke-GitCommand $RepoRoot @('ls-tree', $effAuthSha, '--', '.b3/research-policy.json')
+        $authLocLine = $authLocLs.StdOut.Trim()
+        if ($authLocLs.ExitCode -ne 0 -or $authLocLine -cnotmatch "^(100644|100755) blob ([0-9a-f]{40})`t\.b3/research-policy\.json$") {
+            Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+        }
+        $authLocShow = Invoke-GitCommand $RepoRoot @('show', "${effAuthSha}:.b3/research-policy.json")
+        if ($authLocShow.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: policy_not_in_authority' 1 }
+        $authLocPol = Parse-MergePolicyJsonText $authLocShow.StdOut
+        if ($authLocPol.AutoMerge -cne 'authorized') {
+            Fail 'PR_READY: auto_merge=disabled' 2
+        }
+
+        # Resolve symbolic <target_ref>
+        $targetSymFull = ''
+        $targetBranchName = ''
+        $resolvedBaseSha = ''
+        if ($effTargetRefArg) {
+            $tSymLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--symbolic-full-name', $effTargetRefArg)
+            $targetSymFull = $tSymLocRes.StdOut.Trim()
+            if ($tSymLocRes.ExitCode -ne 0 -or (-not ($targetSymFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal) -or $targetSymFull.StartsWith('refs/remotes/', [System.StringComparison]::Ordinal)))) {
+                Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+            }
+            if ($curSymFull -and ($targetSymFull -ceq $curSymFull)) {
+                Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+            }
+            if ((-not $LocalOnly) -and $hasOrigin -and (-not $targetSymFull.StartsWith('refs/remotes/origin/', [System.StringComparison]::Ordinal))) {
+                Fail 'MERGE_BLOCKED: remote_tracking_target_required' 1
+            }
+            if ((-not $LocalOnly) -and (-not $hasAnyRemote) -and (-not $targetSymFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal))) {
+                Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+            }
+            if ($targetSymFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal)) {
+                $targetBranchName = $targetSymFull.Substring('refs/heads/'.Length)
+            } elseif ($targetSymFull -cmatch '^refs/remotes/[^/]+/(.+)$') {
+                $targetBranchName = $Matches[1]
+            }
+            if ($targetBrTrim -and ($targetBrTrim -cne $targetBranchName)) {
+                Fail 'MERGE_BLOCKED: target_ref_mismatch' 1
+            }
+            $tShaLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${targetSymFull}^{commit}")
+            $resolvedBaseSha = $tShaLocRes.StdOut.Trim()
+            if ($tShaLocRes.ExitCode -ne 0 -or $resolvedBaseSha -cnotmatch '^[0-9a-f]{40}$') {
+                Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+            }
+        } elseif ($targetBrTrim) {
+            $candRefs = if ($hasOrigin) {
+                if ($LocalOnly) { @("refs/remotes/origin/$targetBrTrim", "refs/heads/$targetBrTrim") } else { @("refs/remotes/origin/$targetBrTrim") }
+            } else {
+                @("refs/heads/$targetBrTrim")
+            }
+            foreach ($cr in $candRefs) {
+                $cRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${cr}^{commit}")
+                if ($cRes.ExitCode -eq 0 -and $cRes.StdOut.Trim() -cmatch '^[0-9a-f]{40}$') {
+                    $targetSymFull = $cr
+                    $targetBranchName = $targetBrTrim
+                    $resolvedBaseSha = $cRes.StdOut.Trim()
+                    break
+                }
+            }
+            if (-not $resolvedBaseSha) {
+                Fail 'MERGE_BLOCKED: target_sha_not_fetched' 1
+            }
+            if ($curSymFull -and ($targetSymFull -ceq $curSymFull)) {
+                Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+            }
+        } elseif ($effAuthSymFull) {
+            if ($curSymFull -and ($effAuthSymFull -ceq $curSymFull)) {
+                if (-not $LocalOnly) {
+                    Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
+                }
+            } else {
+                $targetSymFull = $effAuthSymFull
+                $targetBranchName = $effAuthBranch
+                $resolvedBaseSha = $effAuthSha
+            }
+        }
+
+        $baseTrimLoc = if ($BaseSha) { $BaseSha.Trim() } else { '' }
+        if ($baseTrimLoc) {
+            if ($baseTrimLoc.StartsWith('-')) { Fail 'MERGE_BLOCKED: invalid_base_sha' 1 }
+            $bLocRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${baseTrimLoc}^{commit}")
+            $callerBaseLoc = $bLocRes.StdOut.Trim()
+            if ($bLocRes.ExitCode -ne 0 -or $callerBaseLoc -cnotmatch '^[0-9a-f]{40}$') {
+                Fail 'MERGE_BLOCKED: invalid_base_sha' 1
+            }
+            if ($callerBaseLoc -ceq $liveHeadSha) {
+                Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
+            }
+            if ($resolvedBaseSha) {
+                if ($callerBaseLoc -cne $resolvedBaseSha) {
+                    if ($LocalOnly -and (-not $effTargetRefArg) -and (-not $targetBrTrim)) {
+                        $resolvedBaseSha = $callerBaseLoc
+                    } else {
+                        Fail 'MERGE_BLOCKED: base_sha_mismatch' 1
+                    }
+                }
+            } elseif ($LocalOnly) {
+                $resolvedBaseSha = $callerBaseLoc
+            }
+        }
+
+        if (-not $resolvedBaseSha) {
+            if ($LocalOnly) { Fail 'MERGE_BLOCKED: missing_base_sha' 1 }
+            Fail 'MERGE_BLOCKED: invalid_target_ref' 1
         }
         if ($resolvedBaseSha -ceq $liveHeadSha) {
             Fail 'MERGE_BLOCKED: base_sha_equals_head' 1
         }
-
-        $tLocalRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${resolvedBaseSha}^{commit}")
-        if ($tLocalRes.ExitCode -ne 0 -or $tLocalRes.StdOut.Trim() -cne $resolvedBaseSha) {
-            Fail 'MERGE_BLOCKED: target_sha_not_fetched' 1
-        }
-        $aLocalRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "${ghAuthSha}^{commit}")
-        if ($aLocalRes.ExitCode -ne 0 -or $aLocalRes.StdOut.Trim() -cne $ghAuthSha) {
-            Fail 'MERGE_BLOCKED: policy_authority_not_fetched' 1
-        }
-
-        # Check local remote-tracking ref staleness if present
-        $remTrackRes = Invoke-GitCommand $RepoRoot @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/${ghBaseRef}^{commit}")
-        if ($remTrackRes.ExitCode -eq 0) {
-            $remTrackSha = $remTrackRes.StdOut.Trim()
-            if ($remTrackSha -cmatch '^[0-9a-f]{40}$' -and $remTrackSha -cne $resolvedBaseSha) {
-                Fail 'MERGE_BLOCKED: target_branch_moved' 1
-            }
-        }
-        # PR head must incorporate the current live target commit (catches target movement even before GitHub updates)
-        $ancTargetRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resolvedBaseSha, $liveHeadSha)
-        if ($ancTargetRes.ExitCode -ne 0) {
+        if ((Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resolvedBaseSha, $liveHeadSha)).ExitCode -ne 0) {
             Fail 'MERGE_BLOCKED: target_branch_moved' 1
         }
 
-        # Load merge policy STRICTLY from trusted policy authority (default_branch), NEVER from feature branch/PR
-        $authLs = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'ls-tree', $ghAuthSha, '--', $effectivePolRel)
-        $authLsLine = $authLs.StdOut.Trim()
-        $authHasPolicy = ($authLs.ExitCode -eq 0 -and $authLsLine -cmatch "^(100644|100755) blob ([0-9a-f]{40})`t(.+)$" -and $Matches[3] -ceq $effectivePolRel)
-        if (-not $authHasPolicy) {
-            if ($polExplicit -or $polFileFull) {
-                Fail 'MERGE_BLOCKED: policy_not_in_authority' 1
+        if ($targetBranchName -and $authLocPol.AllowedTargetBranches.Count -gt 0) {
+            if (-not (Test-BranchPatternMatch $targetBranchName $authLocPol.AllowedTargetBranches)) {
+                Fail "MERGE_BLOCKED: target_branch_not_allowed($targetBranchName)" 1
             }
-            Fail 'PR_READY: auto_merge=disabled' 2
         }
-        $authShow = Invoke-GitCommand $RepoRoot @('show', "${ghAuthSha}:${effectivePolRel}")
-        if ($authShow.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: policy_not_in_authority' 1 }
-        $authPol = Parse-MergePolicyJsonText $authShow.StdOut
 
-        # Prevent non-default target branches (e.g. stacked parent feature branch) from modifying policy relative to authority
-        if ($ghBaseRef -cne $ghAuthRef) {
-            $mbAuthRes = Invoke-GitCommand $RepoRoot @('merge-base', $ghAuthSha, $resolvedBaseSha)
-            $mbAuthSha = $mbAuthRes.StdOut.Trim()
-            if ($mbAuthRes.ExitCode -ne 0 -or $mbAuthSha -cnotmatch '^[0-9a-f]{40}$') {
+        if ($resolvedBaseSha -cne $effAuthSha) {
+            $mbAuthLoc = Invoke-GitCommand $RepoRoot @('merge-base', $effAuthSha, $resolvedBaseSha)
+            $mbAuthLocSha = $mbAuthLoc.StdOut.Trim()
+            if ($mbAuthLoc.ExitCode -ne 0 -or $mbAuthLocSha -cnotmatch '^[0-9a-f]{40}$') {
                 Fail 'MERGE_BLOCKED: target_branch_unrelated_to_authority' 1
             }
-            $tPolDiff = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'diff', '--no-renames', '--name-only', "${mbAuthSha}..${resolvedBaseSha}", '--')
-            if ($tPolDiff.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: git_diff_failed' 1 }
-            foreach ($rawLn in ($tPolDiff.StdOut -split "\r?\n")) {
-                $tp = ($rawLn.TrimEnd("`r") -replace '\\', '/').Trim()
-                if (-not $tp) { continue }
-                if (Test-ProtectedPathMatchCI $tp $policyProtectedArr) {
+            $tPolLocPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--name-status', '-z', "${mbAuthLocSha}..${resolvedBaseSha}", '--') 'name-status-z' 'MERGE_BLOCKED')
+            foreach ($tp in $tPolLocPaths) {
+                if ($tp -and (Test-ProtectedPathMatchCI $tp $policyProtectedArr $mpCaseInsensitive)) {
                     Fail 'MERGE_BLOCKED: target_branch_modified_policy' 1
                 }
             }
         }
 
-        # Require clean working tree & index outside checkpoint dirs (.b3/ship, .b3/research-ship)
-        $dirtyWtCmds = @(
-            @('-c', 'core.quotepath=false', 'diff', '--cached', '--no-renames', '--name-only', '--'),
-            @('-c', 'core.quotepath=false', 'diff', '--no-renames', '--name-only', '--'),
-            @('-c', 'core.quotepath=false', 'ls-files', '--others', '--exclude-standard')
-        )
-        $hasDirtyWt = $false
-        foreach ($dCmd in $dirtyWtCmds) {
-            $dRes = Invoke-GitCommand $RepoRoot $dCmd
-            if ($dRes.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: git_diff_failed' 1 }
-            foreach ($rawLn in ($dRes.StdOut -split "\r?\n")) {
-                $dp = ($rawLn.TrimEnd("`r") -replace '\\', '/').Trim()
-                if (-not $dp) { continue }
-                if (Test-CheckpointPath $dp) { continue }
-                if (Test-ProtectedPathMatchCI $dp $policyProtectedArr) {
-                    Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
-                }
-                $hasDirtyWt = $true
-            }
-        }
-        if ($hasDirtyWt) {
-            Fail 'MERGE_BLOCKED: dirty_worktree' 1
-        }
-
-        # Compute authoritative changed paths: local Git diff (target..HEAD) U GitHub PR files U validated caller -ChangedPaths
-        $allChanged = New-Object System.Collections.Generic.List[string]
+        $allChangedLoc = New-Object System.Collections.Generic.List[string]
         foreach ($cp in $changedArr) {
-            if (-not $allChanged.Contains($cp)) { $allChanged.Add($cp) }
+            if (-not $allChangedLoc.Contains($cp)) { $allChangedLoc.Add($cp) }
         }
-        foreach ($ghf in @($gh['PrChangedFiles'])) {
-            $npGh = Normalize-MergePolicyPath $ghf
-            if (-not $npGh) { Fail 'MERGE_BLOCKED: invalid_pr_changed_path' 1 }
-            if (-not $allChanged.Contains($npGh)) { $allChanged.Add($npGh) }
-        }
-        $cDiffRes = Invoke-GitCommand $RepoRoot @('-c', 'core.quotepath=false', 'diff', '--no-renames', '--name-only', "${resolvedBaseSha}..${liveHeadSha}", '--')
-        if ($cDiffRes.ExitCode -ne 0) { Fail 'MERGE_BLOCKED: git_diff_failed' 1 }
-        foreach ($rawLn in ($cDiffRes.StdOut -split "\r?\n")) {
-            $gp = ($rawLn.TrimEnd("`r") -replace '\\', '/').Trim()
+        $cDiffLocPaths = @(Invoke-GitPathsZ $RepoRoot @('diff', '--no-ext-diff', '--name-status', '-z', "${resolvedBaseSha}..${liveHeadSha}", '--') 'name-status-z' 'MERGE_BLOCKED')
+        foreach ($gp in $cDiffLocPaths) {
             if (-not $gp) { continue }
             if (Test-CheckpointPath $gp) { continue }
-            if (-not $allChanged.Contains($gp)) { $allChanged.Add($gp) }
+            if (-not $allChangedLoc.Contains($gp)) { $allChangedLoc.Add($gp) }
         }
-        $allChangedArr = @($allChanged)
+        $allChangedLocArr = @($allChangedLoc)
 
-        foreach ($cp in $allChangedArr) {
-            if (Test-ProtectedPathMatchCI $cp $policyProtectedArr) {
+        foreach ($cp in $allChangedLocArr) {
+            if (Test-ProtectedPathMatchCI $cp $policyProtectedArr $mpCaseInsensitive) {
                 Fail 'MERGE_BLOCKED: policy_modified_in_pr' 1
             }
         }
-        if ($authPol.ProtectedPaths.Count -gt 0 -and -not $authPol.AllowProtected) {
-            if ($allChangedArr.Count -eq 0) { Fail 'MERGE_BLOCKED: missing_changed_paths' 1 }
-            $protHits = New-Object System.Collections.Generic.List[string]
-            foreach ($cp in $allChangedArr) {
-                if (Test-ProtectedPathMatchCI $cp $authPol.ProtectedPaths) {
-                    if (-not $protHits.Contains($cp)) { $protHits.Add($cp) }
+        if ($authLocPol.ProtectedPaths.Count -gt 0 -and -not $authLocPol.AllowProtected) {
+            if ($allChangedLocArr.Count -eq 0) { Fail 'MERGE_BLOCKED: missing_changed_paths' 1 }
+            $protHitsLoc = New-Object System.Collections.Generic.List[string]
+            foreach ($cp in $allChangedLocArr) {
+                if (Test-ProtectedPathMatchCI $cp $authLocPol.ProtectedPaths $mpCaseInsensitive) {
+                    if (-not $protHitsLoc.Contains($cp)) { $protHitsLoc.Add($cp) }
                 }
             }
-            if ($protHits.Count -gt 0) {
-                Fail ("MERGE_BLOCKED: protected_paths=" + ((Sort-Ordinal $protHits.ToArray()) -join ',')) 1
+            if ($protHitsLoc.Count -gt 0) {
+                Fail ("MERGE_BLOCKED: protected_paths=" + ((Sort-Ordinal $protHitsLoc.ToArray()) -join ',')) 1
             }
         }
 
-        if ($authPol.AutoMerge -cne 'authorized') { Fail 'PR_READY: auto_merge=disabled' 2 }
-
-        if ($authPol.AllowedTargetBranches.Count -gt 0) {
-            if (-not (Test-BranchPatternMatch $ghBaseRef $authPol.AllowedTargetBranches)) {
-                Fail "MERGE_BLOCKED: target_branch_not_allowed($ghBaseRef)" 1
-            }
-        }
-
-        # Validate GitHub mergeability & branch protection state
-        $mState = $gh['mergeable_state']
-        if ($gh['mergeable'] -cne 'true') {
-            Fail "MERGE_BLOCKED: pr_not_mergeable(mergeable=$($gh['mergeable']),state=$mState)" 1
-        }
-        if ($mState -cnotin @('clean', 'has_hooks')) {
-            Fail "MERGE_BLOCKED: mergeable_state=$mState" 1
-        }
-
-        # Verify CI status strictly from trusted GitHub provider on exact PR head_sha
-        $hasReqChecks = ($gh['required_checks'] -and $gh['required_checks'] -cne 'none')
-        $effReqCi = ($authPol.RequireCi -or $hasReqChecks)
-        $ghCi = $gh['gh_ci_status']
-        if ($effReqCi) {
-            if ($ghCi -ceq 'MISSING_REQUIRED') {
-                Fail "MERGE_BLOCKED: missing_required_checks=$($gh['missing_required_checks'])" 1
-            }
-            if ($ghCi -cne 'PASS') {
-                Fail "MERGE_BLOCKED: ci_status=$ghCi" 1
-            }
-        } elseif ($ghCi -ceq 'FAIL' -or $ghCi -ceq 'PENDING') {
-            Fail "MERGE_BLOCKED: ci_status=$ghCi" 1
-        }
-
-        # Verify independent non-author review status strictly from trusted GitHub provider on exact PR head_sha
-        $ghChangesReq = [int]$gh['changes_requested_count']
-        $ghIndepCnt = [int]$gh['independent_approved_count']
-        $ghStaleCnt = [int]$gh['stale_independent_approved_count']
-        $ghSelfCnt = [int]$gh['self_approved_count']
-        $ghUnauthCnt = if ($gh.ContainsKey('unauthorized_approved_count')) { [int]$gh['unauthorized_approved_count'] } else { 0 }
-        $ghReqRevCnt = [int]$gh['required_approving_reviews']
-        if ($ghChangesReq -gt 0) {
-            Fail 'MERGE_BLOCKED: changes_requested' 1
-        }
-        $minReqReviews = $ghReqRevCnt
-        if ($authPol.RequireReview -and $minReqReviews -lt 1) { $minReqReviews = 1 }
-        if ($gh['require_codeowners'] -ceq 'true' -and $minReqReviews -lt 1) { $minReqReviews = 1 }
-        if ($gh['branch_protected'] -ceq 'true' -and $gh['branch_protection_readable'] -cne 'true' -and $minReqReviews -lt 1) { $minReqReviews = 1 }
-        if ($minReqReviews -gt 0 -and $ghIndepCnt -lt $minReqReviews) {
-            if ($ghIndepCnt -eq 0 -and $ghSelfCnt -gt 0) {
-                Fail 'MERGE_BLOCKED: self_review_not_independent' 1
-            }
-            if ($ghIndepCnt -eq 0 -and $ghUnauthCnt -gt 0) {
-                Fail 'MERGE_BLOCKED: unauthorized_reviewer_not_independent' 1
-            }
-            if ($ghIndepCnt -eq 0 -and $ghStaleCnt -gt 0) {
-                Fail 'MERGE_BLOCKED: stale_independent_review' 1
-            }
-            Fail "MERGE_BLOCKED: insufficient_independent_reviews(have=$ghIndepCnt,need=$minReqReviews)" 1
-        }
-
-        # Require and verify local review ledger + exact target/head binding + review_independence (empty ignore list!)
         if (-not $LedgerPath -or -not $LedgerPath.Trim()) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
-        $ledSpec = Test-ContainedRepoPath $RepoRoot $LedgerPath
-        if (-not $ledSpec) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
-        if (-not (Test-Path -LiteralPath $ledSpec.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
-        $prevCap = $script:CaptureFailMode
+        $ledSpecLoc = Test-ContainedRepoPath $RepoRoot $LedgerPath
+        if (-not $ledSpecLoc) { Fail 'MERGE_BLOCKED: invalid_ledger_path' 1 }
+        if (-not (Test-Path -LiteralPath $ledSpecLoc.Full -PathType Leaf)) { Fail 'MERGE_BLOCKED: missing_ledger_path' 1 }
+        $prevCapLoc = $script:CaptureFailMode
         $script:CaptureFailMode = $true
-        $ledChkRes = $null
+        $ledChkLoc = $null
         try {
-            $ledChkRes = Invoke-ReviewLedgerCheck $RepoRoot $ledSpec.Full $ledSpec.Rel @()
+            $ledChkLoc = Invoke-ReviewLedgerCheck $RepoRoot $ledSpecLoc.Full $ledSpecLoc.Rel @()
         } catch {
             $exMsg = $_.Exception.Message
             if ($exMsg -match '^B3_GUARD_FAIL\|(\d+)\|(.*)$') {
-                $ledChkRes = @{ Code = [int]$Matches[1]; Message = $Matches[2]; Ledger = $null }
+                $ledChkLoc = @{ Code = [int]$Matches[1]; Message = $Matches[2]; Ledger = $null }
             } else {
-                $ledChkRes = @{ Code = 1; Message = $exMsg; Ledger = $null }
+                $ledChkLoc = @{ Code = 1; Message = $exMsg; Ledger = $null }
             }
         } finally {
-            $script:CaptureFailMode = $prevCap
+            $script:CaptureFailMode = $prevCapLoc
         }
-        if (-not $ledChkRes -or $ledChkRes.Code -ne 0 -or -not $ledChkRes.Ledger) {
-            $detailMsg = if ($ledChkRes -and $ledChkRes.Message) { $ledChkRes.Message } else { 'unknown' }
+        if (-not $ledChkLoc -or $ledChkLoc.Code -ne 0 -or -not $ledChkLoc.Ledger) {
+            $detailMsg = if ($ledChkLoc -and $ledChkLoc.Message) { $ledChkLoc.Message } else { 'unknown' }
             Fail "MERGE_BLOCKED: ledger_check_failed ($detailMsg)" 1
         }
-        if ($ledChkRes.Ledger['base_sha'] -cne $resolvedBaseSha) {
+        if ($ledChkLoc.Ledger['base_sha'] -cne $resolvedBaseSha) {
             Fail 'MERGE_BLOCKED: ledger_target_mismatch' 1
         }
-        if ($ledChkRes.Ledger['head_sha'] -cne $liveHeadSha -or ($ledChkRes.Ledger['target_ref'] -cne 'working_tree' -and $ledChkRes.Ledger['target_sha'] -cne $liveHeadSha)) {
+        if ($ledChkLoc.Ledger['head_sha'] -cne $liveHeadSha -or ($ledChkLoc.Ledger['target_ref'] -cne 'working_tree' -and $ledChkLoc.Ledger['target_sha'] -cne $liveHeadSha)) {
             Fail 'MERGE_BLOCKED: ledger_head_mismatch' 1
         }
-        if ($ledChkRes.Ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT') {
+        if ($ledChkLoc.Ledger['review_independence'] -ceq 'SINGLE_AGENT_LIMIT') {
             Fail 'MERGE_BLOCKED: single_agent_limit' 1
         }
-        if ($ledChkRes.Ledger['review_independence'] -cne 'INDEPENDENT') {
+        if ($ledChkLoc.Ledger['review_independence'] -cne 'INDEPENDENT') {
             Fail 'MERGE_BLOCKED: review_independence_unknown' 1
         }
 
-        Write-Output "MERGE_AUTHORIZED: pr=$($gh['base_repo'])#$prNumTrim target_ref=$ghBaseRef target_sha=$resolvedBaseSha head_sha=$liveHeadSha policy_authority=${ghAuthRef}@${ghAuthSha} auto_merge=authorized ci=$ghCi review=$($gh['gh_review_status']) independent_reviews=$ghIndepCnt governance=CLEAR"
+        [void](Assert-LocalCiEvidence $RepoRoot $liveHeadSha $allChangedLocArr $ReceiptPath $ledChkLoc.Ledger $ignored $ciSt ([bool]$authLocPol.RequireCi) $mpCaseInsensitive)
+
+        if (-not $targetSymFull -or -not $effAuthSymFull) {
+            Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+        }
+        if ($hasOrigin -and (-not $LocalOnly) -and (-not $targetSymFull.StartsWith('refs/remotes/origin/', [System.StringComparison]::Ordinal))) {
+            Fail 'MERGE_BLOCKED: remote_tracking_target_required' 1
+        }
+        if ((-not $hasAnyRemote) -and ((-not $targetSymFull.StartsWith('refs/heads/', [System.StringComparison]::Ordinal)) -or ($curSymFull -and ($targetSymFull -ceq $curSymFull)))) {
+            Fail 'MERGE_BLOCKED: invalid_target_ref' 1
+        }
+
+        if ($hasAnyRemote) {
+            $remoteAuthState = 'no_provider_verification'
+            if ($hasOrigin) {
+                $rAuthChk = $null
+                if ($effAuthBranch) {
+                    $rAuthChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/$effAuthBranch"
+                    if ($rAuthChk.Status -ceq 'MISSING') {
+                        Fail 'MERGE_BLOCKED: remote_authority_ref_missing' 1
+                    }
+                    if ($rAuthChk.Status -ceq 'OK' -and $rAuthChk.Sha -cne $effAuthSha) {
+                        Fail "MERGE_BLOCKED: stale_remote_ref(authority local=$effAuthSha remote=$($rAuthChk.Sha))" 1
+                    }
+                    if ($rAuthChk.Status -ceq 'UNREACHABLE') {
+                        $remoteAuthState = 'remote_ref_unverifiable'
+                    }
+                }
+                if ($targetBranchName) {
+                    if ($effAuthBranch -and $targetBranchName -ceq $effAuthBranch -and $rAuthChk) {
+                        if ($rAuthChk.Status -ceq 'OK' -and $rAuthChk.Sha -cne $resolvedBaseSha) {
+                            Fail "MERGE_BLOCKED: stale_remote_ref(target local=$resolvedBaseSha remote=$($rAuthChk.Sha))" 1
+                        }
+                    } else {
+                        $rTgtChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/$targetBranchName"
+                        if ($rTgtChk.Status -ceq 'MISSING') {
+                            Fail 'MERGE_BLOCKED: remote_target_ref_missing' 1
+                        }
+                        if ($rTgtChk.Status -ceq 'OK' -and $rTgtChk.Sha -cne $resolvedBaseSha) {
+                            Fail "MERGE_BLOCKED: stale_remote_ref(target local=$resolvedBaseSha remote=$($rTgtChk.Sha))" 1
+                        }
+                        if ($rTgtChk.Status -ceq 'UNREACHABLE') {
+                            $remoteAuthState = 'remote_ref_unverifiable'
+                        }
+                    }
+                }
+            } else {
+                $remoteAuthState = 'no_origin_remote'
+            }
+            Fail "LOCAL_ELIGIBLE_ONLY: engineering_ready=true remote_authorization=UNVERIFIED($remoteAuthState) auto_merge=authorized target_ref=$targetSymFull target_sha=$resolvedBaseSha head_sha=$liveHeadSha policy_authority=${effAuthSymFull}@${effAuthSha} governance=CLEAR" 2
+        }
+
+        if ($LocalOnly) {
+            Fail 'LOCAL_ELIGIBLE_ONLY: engineering_ready=true auto_merge=authorized' 2
+        }
+
+        Write-Output "MERGE_AUTHORIZED: mode=local target_ref=$targetSymFull target_sha=$resolvedBaseSha head_sha=$liveHeadSha policy_authority=${effAuthSymFull}@${effAuthSha} auto_merge=authorized governance=CLEAR"
         exit 0
     }
 

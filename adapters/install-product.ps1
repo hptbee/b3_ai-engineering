@@ -2,19 +2,15 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ProductRoot,
     [string]$B3Home,
-    [ValidateSet('cursor', 'codex', 'claude', 'antigravity')]
+    [ValidateSet('cursor', 'codex', 'claude', 'antigravity', 'all')]
     [string]$HostName = 'cursor',
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'lib\global-common.ps1')
-
-function Test-SameFile([string]$Left, [string]$Right) {
-    if (-not (Test-Path -LiteralPath $Left) -or -not (Test-Path -LiteralPath $Right)) { return $false }
-    return (Get-FileHash -LiteralPath $Left -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $Right -Algorithm SHA256).Hash
-}
 
 $scriptRoot = $PSScriptRoot
 if (-not $B3Home) { $B3Home = Split-Path -Parent $scriptRoot }
@@ -33,13 +29,24 @@ if (@(Get-ChildItem -LiteralPath $skills -Recurse -Filter 'SKILL.md' -File -Erro
     Fail "B3_HOME has no SKILL.md under skills: $skills"
 }
 
+$useCursor = ($HostName -in @('cursor', 'all'))
+$useFlatAgentsSkills = ($HostName -in @('codex', 'antigravity', 'all'))
+$useClaude = ($HostName -in @('claude', 'all'))
+
 $productSkills = Join-Path $ProductRoot '.cursor\skills'
-$commandDest = Join-Path $ProductRoot '.cursor\commands\b3-ship.md'
+$cursorDir = Join-Path $ProductRoot '.cursor'
+$cursorCommandsDir = Join-Path $ProductRoot '.cursor\commands'
+$commandDest = Join-Path $cursorCommandsDir 'b3-ship.md'
 $homeDest = Join-Path $ProductRoot '.b3\home'
 $agentsDest = Join-Path $ProductRoot '.agents\skills'
 $claudeSkillsDest = Join-Path $ProductRoot '.claude\skills'
 $claudeAgentsDest = Join-Path $ProductRoot '.claude\agents'
 $claudeMdDest = Join-Path $ProductRoot 'CLAUDE.md'
+$cursorReadmeTemplate = Join-Path $scriptRoot 'product-cursor-readme.md'
+$agentsMdTemplate = Join-Path $scriptRoot 'product-agents.md'
+$claudeMdTemplate = Join-Path $scriptRoot 'product-claude.md'
+$cursorReadmeDest = Join-Path $ProductRoot '.cursor\README.md'
+$agentsMdDest = Join-Path $ProductRoot 'AGENTS.md'
 
 if (Test-Path -LiteralPath $productSkills) {
     $productSkillCount = @(Get-ChildItem -LiteralPath $productSkills -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count
@@ -48,91 +55,125 @@ if (Test-Path -LiteralPath $productSkills) {
     }
 }
 
-if ($HostName -eq 'cursor') {
-    if (Test-Path -LiteralPath $agentsDest) {
-        Fail "product has .agents/skills; Cursor would duplicate discovery. Remove it or install with -HostName codex only in a Codex-only checkout"
+if ($HostName -eq 'cursor' -and -not $Force) {
+    if ((Test-Path -LiteralPath $agentsDest) -or (Test-IsReparseLink $agentsDest)) {
+        Fail "product has .agents/skills; Cursor would duplicate discovery. Remove it, use -Force, or install with -HostName codex only in a Codex-only checkout"
     }
-    if (Test-Path -LiteralPath $claudeSkillsDest) {
-        Fail "product has .claude/skills; Cursor would duplicate discovery. Remove it before a Cursor install"
-    }
-}
-
-if (Test-Path -LiteralPath $commandDest) {
-    if (-not (Test-SameFile $commandDest $template)) {
-        Fail "refusing to overwrite existing $commandDest (differs from template). Move it aside and re-run"
+    if ((Test-Path -LiteralPath $claudeSkillsDest) -or (Test-IsReparseLink $claudeSkillsDest)) {
+        Fail "product has .claude/skills; Cursor would duplicate discovery. Remove it or pass -Force before a Cursor install"
     }
 }
 
-if (Test-Path -LiteralPath $homeDest) {
-    $existingHome = (Get-Content -LiteralPath $homeDest -Raw).Trim()
-    if ($existingHome -ne $B3Home) {
-        Fail "refusing to overwrite $homeDest (points to $existingHome, requested $B3Home)"
-    }
-}
-
-function Remove-JunctionOrSymlink([string]$Path) {
-    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-    if (-not $item) { return }
-    $isLink = ($item.LinkType -in @('Junction', 'SymbolicLink')) -or (($item.Attributes.ToString()) -match 'ReparsePoint')
-    if (-not $isLink) {
-        Fail "refusing to replace existing $Path"
-    }
-    try {
-        if ($item.PSIsContainer -and ($env:OS -eq 'Windows_NT')) {
-            [System.IO.Directory]::Delete($Path, $false)
-        } else {
-            Remove-Item -LiteralPath $Path -Force
+Assert-RegularDirOrMissing (Join-Path $ProductRoot '.b3') '.b3'
+Assert-RegularFileOrMissing $homeDest '.b3/home'
+$rewriteHome = (-not (Test-Path -LiteralPath $homeDest -PathType Leaf)) -or $Force
+if (Test-Path -LiteralPath $homeDest -PathType Leaf) {
+    $rawHome = Get-Content -LiteralPath $homeDest -Raw -ErrorAction SilentlyContinue
+    $existingHome = if ($null -ne $rawHome) { ([string]$rawHome).Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($existingHome)) {
+        if (-not $Force) {
+            Fail "refusing to overwrite empty or invalid $homeDest. Pass -Force to update"
         }
-    } catch {
-        Fail "could not remove junction $Path : $($_.Exception.Message)"
-    }
-    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
-        Fail "could not remove junction $Path"
-    }
-}
-
-function Get-SkillNameFromFile([string]$Path) {
-    $text = Get-Content -LiteralPath $Path -Raw
-    if ($text -match '(?m)^name:\s*([a-z0-9-]+)\s*$') { return $Matches[1] }
-    return (Split-Path -Leaf (Split-Path -Parent $Path))
-}
-
-function Test-LinkTarget([string]$LinkPath, [string]$Expected) {
-    try {
-        $item = Get-Item -LiteralPath $LinkPath -Force
-        $expectedFull = [IO.Path]::GetFullPath($Expected).TrimEnd('\')
-        $candidate = $null
-        if ($item.Target) {
-            $raw = [string](@($item.Target)[0])
-            if (-not [IO.Path]::IsPathRooted($raw)) {
-                $raw = Join-Path (Split-Path -Parent $LinkPath) $raw
+        $rewriteHome = $true
+    } else {
+        $sameHome = $false
+        if ($existingHome -match '^(/|[A-Za-z]:[\\/]|\\\\)') {
+            try {
+                $cmpMode = if ($env:OS -eq 'Windows_NT') { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+                $normExisting = Normalize-Path $existingHome
+                $normRequested = Normalize-Path $B3Home
+                $sameHome = (-not [string]::IsNullOrEmpty($normExisting)) -and $normExisting.Equals($normRequested, $cmpMode)
+            } catch {
+                $sameHome = ($existingHome -eq $B3Home)
             }
-            $candidate = [IO.Path]::GetFullPath($raw).TrimEnd('\')
         }
-        if (-not $candidate) {
-            $candidate = (Resolve-Path -LiteralPath $LinkPath).Path.TrimEnd('\')
+        if (-not $sameHome -and -not $Force) {
+            Fail "refusing to overwrite $homeDest (points to $existingHome, requested $B3Home). Pass -Force to update"
         }
-        return $candidate -eq $expectedFull
-    } catch {
-        return $false
+        if (-not $sameHome) { $rewriteHome = $true }
+    }
+}
+
+function Get-CanonicalCommandPayload([string]$SrcPath) {
+    $raw = [IO.File]::ReadAllText($SrcPath, [System.Text.Encoding]::UTF8)
+    $bodyLf = $raw.Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n") + "`n"
+    $bodySha = Get-TextSha256 $bodyLf
+    $rendered = "${bodyLf}<!-- b3-managed-command: sha256=${bodySha} -->`n"
+    return [PSCustomObject]@{
+        BodyLf   = $bodyLf
+        BodySha  = $bodySha
+        Rendered = $rendered
+    }
+}
+
+function Get-ManagedCommandState([string]$DestPath, [PSCustomObject]$Payload) {
+    if (-not (Test-Path -LiteralPath $DestPath -PathType Leaf)) {
+        return 'missing'
+    }
+    $destRaw = [IO.File]::ReadAllText($DestPath, [System.Text.Encoding]::UTF8)
+    $destLf = $destRaw.Replace("`r`n", "`n").Replace("`r", "`n")
+    if ($destLf -ceq $Payload.Rendered) {
+        return 'current'
+    }
+    if ($destLf -match '(?s)\A(.*\n)<!-- b3-managed-command: sha256=([0-9a-f]{64}) -->\n?\z') {
+        $prefixLf = $Matches[1]
+        $recordedSha = $Matches[2]
+        if ((Get-TextSha256 $prefixLf) -ceq $recordedSha) {
+            return 'managed-stale'
+        }
+        return 'user-modified'
+    }
+    $destNorm = $destLf.TrimEnd("`n") + "`n"
+    if ($destNorm -ceq $Payload.BodyLf) {
+        return 'legacy-unmodified'
+    }
+    return 'user-modified'
+}
+
+$commandEntries = New-Object System.Collections.Generic.List[object]
+if ($useCursor) {
+    Assert-RegularDirOrMissing $cursorDir '.cursor'
+    Assert-RegularDirOrMissing $cursorCommandsDir '.cursor/commands'
+    Assert-RegularFileOrMissing $cursorReadmeDest '.cursor/README.md'
+    $cmdFiles = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File | Where-Object { $_.Name -ne 'README.md' })
+    foreach ($src in $cmdFiles) {
+        $dest = Join-Path $cursorCommandsDir $src.Name
+        Assert-RegularFileOrMissing $dest $src.Name
+        $payload = Get-CanonicalCommandPayload $src.FullName
+        $state = Get-ManagedCommandState $dest $payload
+        if ($state -eq 'user-modified' -and -not $Force) {
+            Fail "refusing to overwrite modified command pointer $dest. Re-run with -Force to overwrite"
+        }
+        $commandEntries.Add([PSCustomObject]@{
+            Name    = $src.Name
+            Src     = $src.FullName
+            Dest    = $dest
+            Payload = $payload
+            State   = $state
+        })
     }
 }
 
 function Install-SkillJunction([string]$Dest, [string]$Target) {
-    if (Test-Path -LiteralPath $Dest) {
-        $item = Get-Item -LiteralPath $Dest -Force
-        if ($item.LinkType -in @('Junction', 'SymbolicLink') -and (Test-LinkTarget $Dest $Target)) { return }
-        Fail "refusing to replace existing $Dest"
+    if ((Test-Path -LiteralPath $Dest) -or (Test-IsReparseLink $Dest)) {
+        if (Test-IsReparseLink $Dest) {
+            if (Test-LinkTarget $Dest $Target) { return }
+            if (-not $Force) {
+                Fail "refusing to replace existing link $Dest (pass -Force to update)"
+            }
+            Remove-LinkOnly $Dest
+        } else {
+            Fail "refusing to replace existing non-link $Dest"
+        }
     }
-    New-Item -ItemType Junction -Path $Dest -Target $Target | Out-Null
+    Create-DirLink $Dest $Target
 }
 
 function Install-FlatSkillIndex([string]$DestRoot, [string]$SkillsSrc, [string]$CmdSkillsSrc) {
-    if (Test-Path -LiteralPath $DestRoot) {
-        $item = Get-Item -LiteralPath $DestRoot -Force
-        if ($item.LinkType -in @('Junction', 'SymbolicLink')) {
-            Remove-JunctionOrSymlink $DestRoot
-        } elseif (-not $item.PSIsContainer) {
+    if ((Test-Path -LiteralPath $DestRoot) -or (Test-IsReparseLink $DestRoot)) {
+        if (Test-IsReparseLink $DestRoot) {
+            Remove-LinkOnly $DestRoot
+        } elseif (-not (Test-Path -LiteralPath $DestRoot -PathType Container)) {
             Fail "refusing to replace existing $DestRoot"
         }
     }
@@ -191,10 +232,10 @@ function Update-B3Gitignore([string]$Root) {
     return 'appended'
 }
 
-function Update-HostSkillGitignore([string]$Root, [string]$HostName) {
+function Update-HostSkillGitignore([string]$Root, [string]$TargetHost) {
     $lines = @()
-    if ($HostName -in @('codex', 'antigravity')) { $lines = @('.agents/skills') }
-    if ($HostName -eq 'claude') { $lines = @('.claude/skills', '.claude/agents') }
+    if ($TargetHost -in @('codex', 'antigravity', 'all')) { $lines += '.agents/skills' }
+    if ($TargetHost -in @('claude', 'all')) { $lines += @('.claude/skills', '.claude/agents') }
     if ($lines.Count -eq 0) { return 'n/a' }
 
     $gi = Join-Path $Root '.gitignore'
@@ -213,49 +254,35 @@ function Update-HostSkillGitignore([string]$Root, [string]$HostName) {
     return 'appended'
 }
 
-$cursorReadmeTemplate = Join-Path $scriptRoot 'product-cursor-readme.md'
-$agentsMdTemplate = Join-Path $scriptRoot 'product-agents.md'
-$claudeMdTemplate = Join-Path $scriptRoot 'product-claude.md'
-$cursorReadmeDest = Join-Path $ProductRoot '.cursor\README.md'
-$agentsMdDest = Join-Path $ProductRoot 'AGENTS.md'
-
-$ignorePlan = 'dry-run'
-$skillIgnorePlan = 'dry-run'
-if (-not $DryRun) {
-    $ignorePlan = Update-B3Gitignore $ProductRoot
-    $skillIgnorePlan = Update-HostSkillGitignore $ProductRoot $HostName
-}
-
 if ($DryRun) {
     Write-Output "dry-run: write $homeDest = $B3Home"
-    if (Test-Path -LiteralPath $commandDest) { Write-Output "dry-run: keep existing $commandDest (matches template)" }
-    else { Write-Output "dry-run: write $commandDest from $template" }
+    if ($useCursor) {
+        foreach ($entry in $commandEntries) {
+            if ($entry.State -eq 'current') { Write-Output "dry-run: keep existing $($entry.Dest) (up to date)" }
+            elseif ($entry.State -eq 'missing') { Write-Output "dry-run: write $($entry.Dest) from $($entry.Src)" }
+            else { Write-Output "dry-run: refresh $($entry.Dest) from $($entry.Src) ($($entry.State))" }
+        }
+        if (Test-Path -LiteralPath $cursorReadmeTemplate) {
+            Write-Output "dry-run: write $cursorReadmeDest"
+        }
+    }
     if (Test-Path -LiteralPath $agentsMdDest) { Write-Output "dry-run: keep existing $agentsMdDest" }
     elseif (Test-Path -LiteralPath $agentsMdTemplate) { Write-Output "dry-run: write $agentsMdDest from $agentsMdTemplate" }
-    if ($HostName -eq 'claude') {
+    if ($useClaude) {
         if (Test-Path -LiteralPath $claudeMdDest) { Write-Output "dry-run: keep existing $claudeMdDest" }
         elseif (Test-Path -LiteralPath $claudeMdTemplate) { Write-Output "dry-run: write $claudeMdDest from $claudeMdTemplate" }
     }
-    Write-Output "dry-run: gitignore .b3/ship/, .b3/research-ship/, and .b3/models.md (see Update-B3Gitignore)"
-    if ($HostName -in @('codex', 'antigravity')) { Write-Output "dry-run: gitignore .agents/skills" }
-    if ($HostName -eq 'claude') { Write-Output "dry-run: gitignore .claude/skills and .claude/agents" }
-    if (Test-Path -LiteralPath $b3Commands) {
-        Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File | ForEach-Object {
-            if ($_.Name -in @('README.md', 'b3-ship.md')) { return }
-            $dest = Join-Path (Join-Path $ProductRoot '.cursor\commands') $_.Name
-            if (-not (Test-Path -LiteralPath $dest)) { Write-Output "dry-run: copy command $($_.Name)" }
-        }
+    Write-Output "dry-run: gitignore .b3/ship/, .b3/research-ship/, .b3/pr-feedback/, and .b3/models.md (see Update-B3Gitignore)"
+    if ($useFlatAgentsSkills) {
+        Write-Output "dry-run: gitignore .agents/skills"
+        Write-Output "dry-run: flatten $agentsDest (one junction per skill + command-skills linked)"
     }
-    if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $cursorReadmeTemplate)) {
-        Write-Output "dry-run: write $cursorReadmeDest"
-    }
-    if ($HostName -in @('codex', 'antigravity')) {
-        Write-Output "dry-run: flatten $agentsDest (one junction per skill + command skills)"
-    } elseif ($HostName -eq 'claude') {
-        Write-Output "dry-run: flatten $claudeSkillsDest (one junction per skill + command skills)"
+    if ($useClaude) {
+        Write-Output "dry-run: gitignore .claude/skills and .claude/agents"
+        Write-Output "dry-run: flatten $claudeSkillsDest (one junction per skill + command-skills linked)"
         Write-Output "dry-run: junction $claudeAgentsDest -> $b3Agents"
     }
-    $modelDryStatus = Initialize-PersonalModelsFile -B3Home $B3Home -DryRun
+    $modelDryStatus = Initialize-PersonalModelsFile -B3Home $B3Home -DryRun -NonFatal
     if ($modelDryStatus -like 'kept:*') {
         Write-Output "dry-run: keep existing personal model preferences $($modelDryStatus.Substring(5))"
     } elseif ($modelDryStatus -like 'dry-run:*') {
@@ -264,38 +291,36 @@ if ($DryRun) {
     exit 0
 }
 
+$ignorePlan = Update-B3Gitignore $ProductRoot
+$skillIgnorePlan = Update-HostSkillGitignore $ProductRoot $HostName
+
 New-Item -ItemType Directory -Path (Join-Path $ProductRoot '.b3') -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $ProductRoot '.cursor\commands') -Force | Out-Null
-if (-not (Test-Path -LiteralPath $homeDest)) {
-    Set-Content -LiteralPath $homeDest -Value $B3Home -NoNewline
-}
-if (-not (Test-Path -LiteralPath $commandDest)) {
-    Copy-Item -LiteralPath $template -Destination $commandDest
+if ($rewriteHome) {
+    [IO.File]::WriteAllText($homeDest, $B3Home, $script:B3Utf8NoBom)
 }
 if ((-not (Test-Path -LiteralPath $agentsMdDest)) -and (Test-Path -LiteralPath $agentsMdTemplate)) {
     Copy-Item -LiteralPath $agentsMdTemplate -Destination $agentsMdDest
 }
-if ($HostName -eq 'claude' -and (-not (Test-Path -LiteralPath $claudeMdDest)) -and (Test-Path -LiteralPath $claudeMdTemplate)) {
+if ($useClaude -and (-not (Test-Path -LiteralPath $claudeMdDest)) -and (Test-Path -LiteralPath $claudeMdTemplate)) {
     Copy-Item -LiteralPath $claudeMdTemplate -Destination $claudeMdDest
 }
 
-if (Test-Path -LiteralPath $b3Commands) {
-    $cmdDir = Join-Path $ProductRoot '.cursor\commands'
-    foreach ($src in Get-ChildItem -LiteralPath $b3Commands -Filter '*.md' -File) {
-        if ($src.Name -in @('README.md', 'b3-ship.md')) { continue }
-        $dest = Join-Path $cmdDir $src.Name
-        if (-not (Test-Path -LiteralPath $dest)) {
-            Copy-Item -LiteralPath $src.FullName -Destination $dest
+if ($useCursor) {
+    New-Item -ItemType Directory -Path $cursorCommandsDir -Force | Out-Null
+    foreach ($entry in $commandEntries) {
+        if ($entry.State -ne 'current') {
+            Write-Utf8NoBom $entry.Dest $entry.Payload.Rendered
         }
     }
-    if ($HostName -eq 'cursor' -and (Test-Path -LiteralPath $cursorReadmeTemplate)) {
+    if (Test-Path -LiteralPath $cursorReadmeTemplate) {
         Copy-Item -LiteralPath $cursorReadmeTemplate -Destination $cursorReadmeDest -Force
     }
 }
 
-if ($HostName -in @('codex', 'antigravity')) {
+if ($useFlatAgentsSkills) {
     Install-FlatSkillIndex $agentsDest $skills $commandSkillsSrc
-} elseif ($HostName -eq 'claude') {
+}
+if ($useClaude) {
     Install-FlatSkillIndex $claudeSkillsDest $skills $commandSkillsSrc
     if (Test-Path -LiteralPath $b3Agents -PathType Container) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $claudeAgentsDest) -Force | Out-Null
@@ -303,24 +328,32 @@ if ($HostName -in @('codex', 'antigravity')) {
     }
 }
 
-$modelPrefStatus = Initialize-PersonalModelsFile -B3Home $B3Home
+$modelPrefStatus = Initialize-PersonalModelsFile -B3Home $B3Home -NonFatal
 
 Write-Output "installed B3 pointer in $ProductRoot"
 Write-Output "B3_HOME=$B3Home"
-Write-Output "command=$commandDest"
+if ($useCursor) {
+    Write-Output "command=$commandDest"
+} elseif ($HostName -in @('codex', 'antigravity')) {
+    Write-Output "command=command-skills ($agentsDest)"
+} else {
+    Write-Output "command=command-skills ($claudeSkillsDest)"
+}
 Write-Output "agents.md=$agentsMdDest"
-if ($HostName -eq 'claude') { Write-Output "claude.md=$claudeMdDest" }
+if ($useClaude) { Write-Output "claude.md=$claudeMdDest" }
 Write-Output "gitignore.b3=$ignorePlan"
 Write-Output "gitignore.skills=$skillIgnorePlan"
 Write-Output "model_preferences=$modelPrefStatus"
 Write-Output "host=$HostName"
 if ($HostName -eq 'codex') {
-    Write-Output "skills=$agentsDest (flattened junctions + `$b3-ship; gitignored, not copied)"
+    Write-Output "skills=$agentsDest (flattened junctions + command-skills linked incl. `$b3-ship; gitignored, not copied)"
 } elseif ($HostName -eq 'antigravity') {
-    Write-Output "skills=$agentsDest (flattened junctions + command skills; gitignored, not copied; use adapters/antigravity/install-plugin.ps1 if Cursor also opens this repo)"
+    Write-Output "skills=$agentsDest (flattened junctions + command-skills linked; gitignored, not copied; use adapters/install-global.ps1 -HostName antigravity if Cursor also opens this repo)"
 } elseif ($HostName -eq 'claude') {
-    Write-Output "skills=$claudeSkillsDest (flattened junctions + command skills) + $claudeAgentsDest -> $b3Agents (gitignored, not copied)"
+    Write-Output "skills=$claudeSkillsDest (flattened junctions + command-skills linked) + $claudeAgentsDest -> $b3Agents (gitignored, not copied)"
+} elseif ($HostName -eq 'all') {
+    Write-Output "skills=$agentsDest + $claudeSkillsDest (flattened junctions + command-skills linked incl. `$b3-ship) + .cursor/commands"
 } else {
-    Write-Output "skills=user-level ~/.cursor/skills/<name> via adapters/cursor/install-global.ps1 (not copied into product)"
+    Write-Output "skills=user-level ~/.cursor/skills/<name> via adapters/install-global.ps1 -HostName cursor (not copied into product)"
 }
 Write-Output "note: this proves files were written, not host slash-command or skill discovery"

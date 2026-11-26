@@ -1,9 +1,6 @@
 ---
 name: verification
-description: >
-  Use when claiming work passes, finishing fixes/review loops, or
-  confirming tests, builds, or behavior with executed evidence. Not for
-  design-only discussion or writing tests without running them.
+description: Use when claiming work passes, finishing fixes/review loops, or confirming tests, builds, or behavior with executed evidence. Not for design-only discussion or writing tests without running them.
 ---
 
 # Verification
