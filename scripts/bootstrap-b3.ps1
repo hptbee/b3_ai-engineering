@@ -341,7 +341,18 @@ try {
         throw "BOOTSTRAP_FAIL: no checksum entry for $artifactName in SHA256SUMS.txt"
     }
 
-    $actualSha = (Get-FileHash -LiteralPath $stagedBin -Algorithm SHA256).Hash.ToLowerInvariant()
+    $shaProv = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $fsHash = [IO.File]::OpenRead($stagedBin)
+        try {
+            $hashBytes = $shaProv.ComputeHash($fsHash)
+            $actualSha = ([BitConverter]::ToString($hashBytes)).Replace('-', '').ToLowerInvariant()
+        } finally {
+            $fsHash.Dispose()
+        }
+    } finally {
+        $shaProv.Dispose()
+    }
     if ($actualSha -ne $expectedSha) {
         throw "BOOTSTRAP_FAIL: sha256 mismatch for $artifactName (expected=$expectedSha actual=$actualSha)"
     }

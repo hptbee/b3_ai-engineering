@@ -56,7 +56,7 @@ jobs:
 
       - name: Run Windows PowerShell behavioral suites
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           powershell -NoProfile -ExecutionPolicy Bypass -File scripts/measure-context.ps1 -Strict
