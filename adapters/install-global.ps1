@@ -34,13 +34,7 @@ $AntigravityPluginRoot = Trim-ChildPathArg $AntigravityPluginRoot
 $UserHome = Trim-ChildPathArg $UserHome
 
 $scriptRoot = $PSScriptRoot
-if (-not $B3Home) {
-    $B3Home = Split-Path -Parent $scriptRoot
-}
-if (-not (Test-Path -LiteralPath $B3Home -PathType Container)) {
-    Fail "B3Home directory not found: $B3Home"
-}
-$B3Home = Trim-ChildPathArg ((Resolve-Path -LiteralPath $B3Home).Path)
+$B3Home = Resolve-B3Home $B3Home (Split-Path -Parent $scriptRoot)
 
 $cursorScript = Join-Path $scriptRoot 'cursor\install-global.ps1'
 $antigravityScript = Join-Path $scriptRoot 'antigravity\install-plugin.ps1'
@@ -130,13 +124,7 @@ if ($overallExit -ne 0) {
 # Optional advisory preferences; do not manage this personal file in the global manifest.
 if ($Action -in @('install', 'update')) {
     $modelPrefStatus = Initialize-PersonalModelsFile -B3Home $B3Home -UserHome $UserHome -DryRun:$DryRun -NonFatal
-    if ($modelPrefStatus -like 'kept:*') {
-        Write-Output "model_preferences=$($modelPrefStatus.Substring(5)) (kept existing)"
-    } elseif ($modelPrefStatus -like 'dry-run:*') {
-        Write-Output "dry-run: initialize model_preferences=$($modelPrefStatus.Substring(8)) from $(Join-Path $B3Home 'config\models.example.md')"
-    } elseif ($modelPrefStatus -like 'created:*') {
-        Write-Output "model_preferences=$($modelPrefStatus.Substring(8)) (created from example)"
-    }
+    Write-PersonalModelsStatus $B3Home $modelPrefStatus
 }
 Write-Output "GLOBAL_OK: host=$HostName action=$Action"
 exit 0

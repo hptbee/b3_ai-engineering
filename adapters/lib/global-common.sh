@@ -617,3 +617,118 @@ init_personal_models_file() {
   echo "error: could not initialize personal model preferences at $dest" >&2
   return 1
 }
+
+resolve_user_home() {
+  local h="${1:-}"
+  if [[ -z "$h" ]]; then h="$HOME"; fi
+  canon_path_allow_missing "$h"
+}
+
+resolve_b3_home() {
+  local b3="${1:-}" def="${2:-}"
+  if [[ -z "$b3" ]]; then b3="$def"; fi
+  [[ -d "$b3" ]] || { echo "error: B3Home directory not found: $b3" >&2; exit 1; }
+  canon_existing_dir "$b3"
+}
+
+list_canonical_md_names() {
+  local dir="$1" f base
+  [[ -d "$dir" ]] || return 0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    base="${f##*/}"
+    [[ "$base" == "README.md" ]] && continue
+    printf '%s\n' "$base"
+  done < <(find "$dir" -maxdepth 1 -name '*.md' -type f | LC_ALL=C sort)
+}
+
+strip_yaml_frontmatter() {
+  awk '
+    { sub(/\r$/, "") }
+    NR == 1 && $0 == "---" { in_fm = 1; next }
+    in_fm && $0 == "---" { in_fm = 0; started = 0; next }
+    in_fm { next }
+    !started && $0 == "" { next }
+    { started = 1; lines[++n] = $0 }
+    END {
+      while (n > 0 && lines[n] == "") n--
+      for (i = 1; i <= n; i++) print lines[i]
+    }
+  ' "$1"
+}
+
+manifest_write() {
+  local mpath="$1" schema="$2" b3_home="$3" plugin_root="${4:-}" entries="${5:-}" body
+  body="schema=${schema}"$'\n'"b3_home=${b3_home}"$'\n'
+  if [[ -n "$plugin_root" ]]; then
+    body="${body}plugin_root=${plugin_root}"$'\n'
+  fi
+  body="${body}${entries}"
+  write_lf_file "$mpath" "$body"
+}
+
+uninstall_managed_link() {
+  local root_dir="$1" root_label="$2" p="$3" exp_target="${4:-}" verify_expected="${5:-true}" force="${6:-false}" dry_run="${7:-false}" unmanaged_label="${8:-unmanaged non-link entry}"
+  path_within_root "$root_dir" "$p" || { echo "error: refusing to uninstall path outside ${root_label}: $p" >&2; exit 1; }
+  if is_link_entry "$p"; then
+    if [[ "$verify_expected" == "true" && "$force" != "true" ]]; then
+      if [[ -z "$exp_target" ]] || ! link_matches_expected_or_dangling "$p" "$exp_target"; then
+        echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
+        SKIPPED=$((SKIPPED + 1))
+        return 0
+      fi
+    fi
+    if [[ "$dry_run" == "true" ]]; then echo "dry-run: remove skill link $p"; else remove_link_only "$p"; fi
+    REMOVED=$((REMOVED + 1))
+  elif [[ -e "$p" ]]; then
+    echo "warning: skipping ${unmanaged_label}: $p" >&2
+  fi
+}
+
+_B3_WARNED_CONTAINERS=""
+uninstall_managed_file() {
+  local root_dir="$1" root_label="$2" p="$3" exp_sha="${4:-}" verify_sha="${5:-true}" marker_re="${6:-}" label="${7:-file}" sha_label="${8:-modified managed file}" check_parent="${9:-false}" force="${10:-false}" dry_run="${11:-false}"
+  path_within_root "$root_dir" "$p" || { echo "error: refusing to uninstall path outside ${root_label}: $p" >&2; exit 1; }
+  if [[ "$check_parent" == "true" ]]; then
+    local p_parent="${p%/*}"
+    if [[ "$(norm_cmp_path "$p_parent")" != "$(norm_cmp_path "$root_dir")" ]] && is_link_entry "$p_parent"; then
+      case "$'\n'${_B3_WARNED_CONTAINERS}$'\n'" in
+        *$'\n'"$p_parent"$'\n'*) ;;
+        *)
+          echo "warning: skipping symlinked container directory: $p_parent" >&2
+          _B3_WARNED_CONTAINERS="${_B3_WARNED_CONTAINERS}"$'\n'"${p_parent}"
+          ;;
+      esac
+      SKIPPED=$((SKIPPED + 1))
+      return 0
+    fi
+  fi
+  if is_link_entry "$p"; then
+    echo "warning: skipping symlinked ${label}: $p" >&2
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+  [[ -f "$p" ]] || return 0
+  if [[ -n "$marker_re" ]] && ! grep -q "$marker_re" "$p"; then
+    echo "warning: skipping unmanaged ${label}: $p" >&2
+    return 0
+  fi
+  if [[ "$verify_sha" == "true" && "$force" != "true" ]] && { [[ -z "$exp_sha" ]] || [[ "$(sha256_file "$p")" != "$exp_sha" ]]; }; then
+    echo "warning: skipping ${sha_label}: $p (re-run with --force to remove)" >&2
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+  if [[ "$dry_run" == "true" ]]; then echo "dry-run: remove $p"; else rm -f "$p"; fi
+  REMOVED=$((REMOVED + 1))
+}
+
+print_personal_models_status() {
+  local b3_home="$1" status="$2" emit_error="${3:-false}"
+  case "$status" in
+    kept:*) echo "model_preferences=${status#kept:} (kept existing)" ;;
+    dry-run:*) echo "dry-run: initialize model_preferences=${status#dry-run:} from ${b3_home}/config/models.example.md" ;;
+    created:*) echo "model_preferences=${status#created:} (created from example)" ;;
+    error:*) [[ "$emit_error" == "true" ]] && echo "model_preferences=${status}" || true ;;
+  esac
+}
+

@@ -227,10 +227,7 @@ function Check-AntigravityCoexistence([string]$UserHomeDir, [string]$PluginRootP
 }
 
 $scriptRoot = $PSScriptRoot
-if (-not $UserHome) {
-    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-}
-$UserHome = Normalize-Path $UserHome
+$UserHome = Resolve-UserHome $UserHome
 if (-not $PluginRoot) {
     $PluginRoot = Join-Path $UserHome '.gemini\config\plugins\b3-ai-engineering'
 }
@@ -295,54 +292,19 @@ if ($Action -eq 'uninstall') {
         $skipped++
     } else {
         foreach ($lk in $trackedLinks) {
-            $p = Join-Path $PluginRoot ($lk -replace '/', '\')
-            if (-not (Test-PathWithinRoot $PluginRoot $p)) { Fail "refusing to uninstall path outside PluginRoot: $p" }
-            if (Test-IsReparseLink $p) {
-                if ($manifest.Exists -and -not $Force) {
-                    $expTarget = if ($manifest.Sections.link.ContainsKey($lk)) { $manifest.Sections.link[$lk] } else { '' }
-                    if (-not $expTarget -or -not (Test-LinkTarget $p $expTarget)) {
-                        Write-Warning "skipping retargeted skill link: $p (expected $expTarget; re-run with -Force to remove)"
-                        $skipped++
-                        continue
-                    }
-                }
-                if ($DryRun) { Write-Output "dry-run: remove skill link $p" } else { Remove-LinkOnly $p }
-                $removed++
-            } elseif (Test-Path -LiteralPath $p) {
-                Write-Warning "skipping unmanaged non-link entry: $p"
-            }
+            $expTarget = if ($manifest.Sections.link.ContainsKey($lk)) { $manifest.Sections.link[$lk] } else { '' }
+            Uninstall-ManagedLink -RootDir $PluginRoot -RootLabel 'PluginRoot' -Path (Join-Path $PluginRoot ($lk -replace '/', '\')) `
+                -ExpectedTarget $expTarget -VerifyExpected ([bool]$manifest.Exists) -Force $Force -DryRun $DryRun `
+                -UnmanagedLabel 'unmanaged non-link entry' -Removed ([ref]$removed) -Skipped ([ref]$skipped)
         }
     }
     $warnedContainers = @{}
     foreach ($fk in $trackedFiles) {
-        $p = Join-Path $PluginRoot ($fk -replace '/', '\')
-        if (-not (Test-PathWithinRoot $PluginRoot $p)) { Fail "refusing to uninstall path outside PluginRoot: $p" }
-        $parentDir = Split-Path -Parent $p
-        if ((Normalize-Path $parentDir) -ne $PluginRoot -and (Test-IsReparseLink $parentDir)) {
-            if (-not $warnedContainers.ContainsKey($parentDir)) {
-                Write-Warning "skipping symlinked container directory: $parentDir"
-                $warnedContainers[$parentDir] = $true
-            }
-            $skipped++
-            continue
-        }
-        if (Test-IsReparseLink $p) {
-            Write-Warning "skipping symlinked file path: $p"
-            $skipped++
-            continue
-        }
-        if (Test-Path -LiteralPath $p -PathType Leaf) {
-            if ($manifest.Exists -and -not $Force) {
-                $expSha = if ($manifest.Sections.file.ContainsKey($fk)) { $manifest.Sections.file[$fk] } else { '' }
-                if (-not $expSha -or ((Get-FileSha256 $p) -ne $expSha)) {
-                    Write-Warning "skipping modified managed file: $p (re-run with -Force to remove)"
-                    $skipped++
-                    continue
-                }
-            }
-            if ($DryRun) { Write-Output "dry-run: remove file $p" } else { Remove-Item -LiteralPath $p -Force }
-            $removed++
-        }
+        $expSha = if ($manifest.Sections.file.ContainsKey($fk)) { $manifest.Sections.file[$fk] } else { '' }
+        Uninstall-ManagedFile -RootDir $PluginRoot -RootLabel 'PluginRoot' -Path (Join-Path $PluginRoot ($fk -replace '/', '\')) `
+            -ExpectedSha $expSha -VerifySha ([bool]$manifest.Exists) -MarkerRegex '' `
+            -Label 'file path' -ShaMismatchLabel 'modified managed file' -WarnedContainers $warnedContainers `
+            -Force $Force -DryRun $DryRun -Removed ([ref]$removed) -Skipped ([ref]$skipped)
     }
     if (-not $DryRun) {
         foreach ($subDir in @('skills', 'rules', 'agents')) { Remove-EmptyRegularDir (Join-Path $PluginRoot $subDir) }
@@ -399,9 +361,7 @@ if ($Action -eq 'uninstall') {
 }
 
 # --- Resolve and validate B3Home (install / update / verify) ---
-if (-not $B3Home) { $B3Home = Split-Path -Parent (Split-Path -Parent $scriptRoot) }
-if (-not (Test-Path -LiteralPath $B3Home -PathType Container)) { Fail "B3Home not found: $B3Home" }
-$B3Home = Normalize-Path (Resolve-Path -LiteralPath $B3Home).Path
+$B3Home = Resolve-B3Home $B3Home (Split-Path -Parent (Split-Path -Parent $scriptRoot))
 $b3HomeForward = To-Forward $B3Home
 
 $workflowPath = Join-Path $B3Home 'workflows\ship.md'
@@ -445,10 +405,10 @@ $rulesContent = (($rulesParts -join "`n`n---`n`n").TrimEnd() + "`n")
 $rulesBytes = $script:B3Utf8NoBom.GetByteCount($rulesContent)
 if ($rulesBytes -ge 24000) { Fail "generated rules/AGENTS.md is $rulesBytes bytes (must stay under 24000 bytes)" }
 
-$agentFiles = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $agentsDir -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'README.md' })
-if ($agentFiles.Count -lt 1) { Fail "B3_HOME has no agent definitions under $agentsDir" }
+$agentNames = Get-CanonicalMarkdownNames $agentsDir
+if ($agentNames.Count -lt 1) { Fail "B3_HOME has no agent definitions under $agentsDir" }
 $renderedAgents = New-Object System.Collections.Generic.List[object]
-foreach ($af in $agentFiles) { $renderedAgents.Add((Parse-CanonicalAgent $af.FullName $b3HomeForward)) }
+foreach ($an in $agentNames) { $renderedAgents.Add((Parse-CanonicalAgent (Join-Path $agentsDir $an) $b3HomeForward)) }
 
 $pluginJson = (@'
 {
@@ -535,7 +495,8 @@ if ($Action -eq 'verify') {
                 }
             }
         }
-        foreach ($coreCmd in @('b3-plan', 'b3-implement', 'b3-debug', 'b3-review', 'b3-verify', 'b3-review-loop', 'b3-ship', 'b3-research-ship', 'b3-pr-resolve', 'b3-pr-reply', 'b3-pr-comment')) {
+        foreach ($cmdMd in (Get-CanonicalMarkdownNames (Join-Path $B3Home 'commands'))) {
+            $coreCmd = [IO.Path]::GetFileNameWithoutExtension($cmdMd)
             if (-not $cmdSkillMap.ContainsKey($coreCmd)) {
                 $commandsOk = $false; $errors.Add("missing expected command skill in B3_HOME: $coreCmd")
             }
@@ -707,9 +668,6 @@ if ((Test-Path -LiteralPath $PluginRoot) -or (Test-IsReparseLink $PluginRoot)) {
 }
 
 $manifestLines = New-Object System.Collections.Generic.List[string]
-$manifestLines.Add('schema=b3-antigravity-plugin-v1')
-$manifestLines.Add("b3_home=$b3HomeForward")
-$manifestLines.Add("plugin_root=$pluginRootForward")
 
 if ($DryRun) {
     Write-Output "dry-run: action=$Action plugin_root=$PluginRoot"
@@ -772,7 +730,7 @@ foreach ($ag in $renderedAgents) {
     $manifestLines.Add("file|agents/$($ag.FileName)|$(Get-TextSha256 $ag.Content)")
 }
 
-Write-Utf8NoBom $manifestFile (($manifestLines -join "`n") + "`n")
+Write-B3Manifest -ManifestPath $manifestFile -Schema 'b3-antigravity-plugin-v1' -B3HomeForward $b3HomeForward -PluginRootForward $pluginRootForward -EntryLines $manifestLines.ToArray()
 
 $replacePrefixes = New-Object System.Collections.Generic.List[string]
 $replacePrefixes.Add($b3HomeForward)

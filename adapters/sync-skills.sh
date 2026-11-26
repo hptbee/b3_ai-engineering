@@ -34,10 +34,8 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-if [[ -f "${SCRIPT_DIR}/lib/global-common.sh" ]]; then
-  # shellcheck source=lib/global-common.sh
-  source "${SCRIPT_DIR}/lib/global-common.sh"
-fi
+# shellcheck source=lib/global-common.sh
+source "${SCRIPT_DIR}/lib/global-common.sh"
 SKILLS_SRC="${ROOT}/skills"
 COMMANDS_SRC="${ROOT}/commands"
 AGENTS_SRC="${ROOT}/agents"
@@ -50,7 +48,7 @@ has_skill_md() {
 
 has_active_path() {
   local p="$1"
-  if [[ -L "$p" ]]; then return 0; fi
+  if is_link_entry "$p"; then return 0; fi
   if [[ -d "$p" ]]; then
     [[ -n "$(ls -A "$p" 2>/dev/null || true)" ]]
     return $?
@@ -58,33 +56,12 @@ has_active_path() {
   [[ -e "$p" ]]
 }
 
-skill_name_from_file() {
-  local f="$1"
-  local name
-  name="$(awk 'BEGIN{FS=": "} /^name:/{gsub(/[\r[:space:]]/,"",$2); print $2; exit}' "$f")"
-  if [[ -n "$name" ]]; then
-    echo "$name"
-  else
-    basename "$(dirname "$f")"
-  fi
-}
-
-link_target_ok() {
-  local dest="$1"
-  local expected="$2"
-  [[ -L "$dest" ]] || return 1
-  local resolved_dest resolved_expected
-  resolved_dest="$(cd -P "$dest" 2>/dev/null && pwd || true)"
-  resolved_expected="$(cd -P "$expected" 2>/dev/null && pwd || true)"
-  [[ -n "$resolved_dest" && "$resolved_dest" == "$resolved_expected" ]]
-}
-
 sync_dir_link() {
   local dest="$1"
   local src="$2"
   local label="$3"
 
-  if [[ -L "$dest" ]]; then
+  if is_link_entry "$dest"; then
     if link_target_ok "$dest" "$src"; then
       echo "ok: $dest already links to $src ($label)"
       return 0
@@ -96,7 +73,7 @@ sync_dir_link() {
   if [[ -e "$dest" ]]; then
     if [[ -d "$dest" ]] && [[ -z "$(ls -A "$dest" 2>/dev/null || true)" ]]; then
       if $DRY_RUN; then
-        echo "dry-run: rmdir $dest && ln -s $src $dest"
+        echo "dry-run: rmdir $dest && link $src -> $dest"
         return 0
       fi
       rmdir "$dest"
@@ -107,12 +84,11 @@ sync_dir_link() {
   fi
 
   if $DRY_RUN; then
-    echo "dry-run: ln -s $src $dest"
+    echo "dry-run: link $dest -> $src"
     return 0
   fi
 
-  mkdir -p "$(dirname "$dest")"
-  ln -s "$src" "$dest"
+  create_dir_link "$dest" "$src"
   link_target_ok "$dest" "$src" || { echo "error: link verification failed: $dest -> $src" >&2; exit 1; }
   echo "linked: $dest -> $src ($label)"
 }
@@ -120,20 +96,17 @@ sync_dir_link() {
 collect_flat_skills() {
   local tmp_list="$1"
   : > "$tmp_list"
-  while IFS= read -r sf; do
-    [[ -n "$sf" ]] || continue
-    local name dir
-    name="$(skill_name_from_file "$sf")"
-    dir="$(dirname "$sf")"
+  while IFS=$'\t' read -r name dir; do
+    [[ -n "$name" ]] || continue
     if grep -q "^${name}|" "$tmp_list"; then
       echo "error: duplicate skill name '$name'" >&2
       exit 1
     fi
     printf '%s|%s\n' "$name" "$dir" >> "$tmp_list"
   done < <(
-    find "$SKILLS_SRC" -name 'SKILL.md' -type f | sort
+    discover_skills_tsv "$SKILLS_SRC"
     if [[ -d "$CMD_SKILLS_SRC" ]]; then
-      find "$CMD_SKILLS_SRC" -name 'SKILL.md' -type f | sort
+      discover_skills_tsv "$CMD_SKILLS_SRC"
     fi
   )
 }
@@ -141,7 +114,7 @@ collect_flat_skills() {
 verify_flat_index() {
   local dest_root="$1"
   local list_file="$2"
-  [[ -d "$dest_root" && ! -L "$dest_root" ]] || return 1
+  [[ -d "$dest_root" ]] && ! is_link_entry "$dest_root" || return 1
   while IFS='|' read -r name src_dir; do
     [[ -n "$name" ]] || continue
     link_target_ok "${dest_root}/${name}" "$src_dir" || return 1
@@ -157,12 +130,12 @@ sync_flat_index() {
   local count
   count="$(wc -l < "$list_file" | tr -d ' ')"
 
-  if [[ -L "$dest_root" ]]; then
+  if is_link_entry "$dest_root"; then
     if $DRY_RUN; then
       echo "dry-run: replace legacy nested link $dest_root with flattened ${count}-skill index ($label)"
       return 0
     fi
-    rm "$dest_root"
+    remove_link_only "$dest_root"
   elif [[ -e "$dest_root" ]]; then
     if [[ ! -d "$dest_root" ]]; then
       echo "error: existing non-directory path; refusing to replace: $dest_root" >&2
@@ -171,7 +144,7 @@ sync_flat_index() {
     local child
     for child in "$dest_root"/* "$dest_root"/.[!.]* "$dest_root"/..?*; do
       [[ -e "$child" || -L "$child" ]] || continue
-      if [[ ! -L "$child" ]]; then
+      if ! is_link_entry "$child"; then
         echo "error: existing non-link content in $dest_root; refusing to replace: $child" >&2
         exit 1
       fi
@@ -179,7 +152,7 @@ sync_flat_index() {
   fi
 
   if $DRY_RUN; then
-    echo "dry-run: flatten $dest_root with $count skill symlinks ($label)"
+    echo "dry-run: flatten $dest_root with $count skill links ($label)"
     return 0
   fi
 
@@ -187,19 +160,19 @@ sync_flat_index() {
   while IFS='|' read -r name src_dir; do
     [[ -n "$name" ]] || continue
     local entry="${dest_root}/${name}"
-    if [[ -L "$entry" ]]; then
+    if is_link_entry "$entry"; then
       if link_target_ok "$entry" "$src_dir"; then continue; fi
-      rm "$entry"
+      remove_link_only "$entry"
     fi
-    ln -s "$src_dir" "$entry"
+    create_dir_link "$entry" "$src_dir"
   done < "$list_file"
 
   local child base
   for child in "$dest_root"/*; do
-    [[ -L "$child" ]] || continue
+    is_link_entry "$child" || continue
     base="$(basename "$child")"
     if ! grep -q "^${base}|" "$list_file"; then
-      rm "$child"
+      remove_link_only "$child"
     fi
   done
 
@@ -263,7 +236,8 @@ verify_antigravity_manifest() {
       sf="${skill_dir}SKILL.md"
       [[ -f "$sf" ]] || continue
       folder_name="$(basename "${skill_dir%/}")"
-      fm_name="$(skill_name_from_file "$sf")"
+      fm_name="$(awk 'BEGIN{FS=": "} /^name:/{gsub(/[\r[:space:]]/,"",$2); print $2; exit}' "$sf")"
+      [[ -n "$fm_name" ]] || fm_name="$folder_name"
       [[ "$fm_name" == "$folder_name" ]] || { echo "error: skill folder '$folder_name' != frontmatter name '$fm_name'" >&2; return 1; }
       if grep -qx "$fm_name" "$seen_file"; then
         echo "error: duplicate skill name '$fm_name'" >&2
@@ -404,25 +378,6 @@ case "$TARGET" in
 esac
 
 if ! $DRY_RUN && ! $VERIFY_ONLY && [[ "${B3_SKIP_MODEL_INIT:-}" != "1" ]]; then
-  if declare -F init_personal_models_file >/dev/null 2>&1; then
-    MODEL_PREF_STATUS="$(init_personal_models_file "$ROOT" "" "false" "true")"
-    case "$MODEL_PREF_STATUS" in
-      kept:*) echo "model_preferences=${MODEL_PREF_STATUS#kept:} (kept existing)" ;;
-      created:*) echo "model_preferences=${MODEL_PREF_STATUS#created:} (created from example)" ;;
-      error:*) echo "model_preferences=${MODEL_PREF_STATUS}" ;;
-    esac
-  elif [[ -f "${ROOT}/config/models.example.md" ]]; then
-    TRIM_PERS="${B3_MODELS_PERSONAL:-}"
-    TRIM_PERS="${TRIM_PERS#"${TRIM_PERS%%[![:space:]]*}"}"
-    TRIM_PERS="${TRIM_PERS%"${TRIM_PERS##*[![:space:]]}"}"
-    DEST_PREFS="${TRIM_PERS:-${HOME}/.b3/models.md}"
-    if [[ -e "$DEST_PREFS" || -L "$DEST_PREFS" ]]; then
-      echo "model_preferences=${DEST_PREFS} (kept existing)"
-    elif (mkdir -p "$(dirname "$DEST_PREFS")" && cp "${ROOT}/config/models.example.md" "$DEST_PREFS") 2>/dev/null; then
-      echo "model_preferences=${DEST_PREFS} (created from example)"
-    else
-      echo "MODEL_PREFERENCES_WARNING: optional initialization failed at $DEST_PREFS" >&2
-      echo "model_preferences=error:${DEST_PREFS}"
-    fi
-  fi
+  MODEL_PREF_STATUS="$(init_personal_models_file "$ROOT" "" "false" "true")"
+  print_personal_models_status "$ROOT" "$MODEL_PREF_STATUS" "true"
 fi

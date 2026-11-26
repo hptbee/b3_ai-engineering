@@ -47,21 +47,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/global-common.sh
 source "${SCRIPT_DIR}/../lib/global-common.sh"
 
-strip_frontmatter() {
-  awk '
-    { sub(/\r$/, "") }
-    NR == 1 && $0 == "---" { in_fm = 1; next }
-    in_fm && $0 == "---" { in_fm = 0; started = 0; next }
-    in_fm { next }
-    !started && $0 == "" { next }
-    { started = 1; lines[++n] = $0 }
-    END {
-      while (n > 0 && lines[n] == "") n--
-      for (i = 1; i <= n; i++) print lines[i]
-    }
-  ' "$1"
-}
-
 render_agent() {
   local file="$1" b3_home="$2" base="${1##*/}"
   awk -v file_path="$file" -v b3_home="$b3_home" -v base="$base" '
@@ -602,8 +587,7 @@ JSEOF
   return 1
 }
 
-if [[ -z "$USER_HOME" ]]; then USER_HOME="$HOME"; fi
-USER_HOME="$(canon_path_allow_missing "$USER_HOME")"
+USER_HOME="$(resolve_user_home "$USER_HOME")"
 if [[ -z "$PLUGIN_ROOT" ]]; then PLUGIN_ROOT="${USER_HOME}/.gemini/config/plugins/b3-ai-engineering"; fi
 PLUGIN_ROOT="$(canon_path_allow_missing "$PLUGIN_ROOT")"
 MANIFEST_FILE="${PLUGIN_ROOT}/.b3-plugin-manifest"
@@ -665,64 +649,28 @@ if [[ "$ACTION" == "uninstall" ]]; then
     fi
   fi
 
-  removed=0
-  skipped=0
+  REMOVED=0
+  SKIPPED=0
   if is_link_entry "${PLUGIN_ROOT}/skills"; then
     echo "warning: skipping symlinked skills directory: ${PLUGIN_ROOT}/skills" >&2
-    skipped=$((skipped + 1))
+    SKIPPED=$((SKIPPED + 1))
   elif [[ ${#TRACKED_LINKS[@]} -gt 0 ]]; then
     for lk in "${TRACKED_LINKS[@]}"; do
-      p="${PLUGIN_ROOT}/${lk}"
-      path_within_root "$PLUGIN_ROOT" "$p" || { echo "error: refusing to uninstall path outside PluginRoot: $p" >&2; exit 1; }
-      if is_link_entry "$p"; then
-        if $M_EXISTS && ! $FORCE; then
-          exp_target="$(manifest_get "link" "$lk" 2>/dev/null || true)"
-          if [[ -z "$exp_target" ]] || ! link_matches_expected_or_dangling "$p" "$exp_target"; then
-            echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
-            skipped=$((skipped + 1))
-            continue
-          fi
-        fi
-        if $DRY_RUN; then echo "dry-run: remove skill link $p"; else remove_link_only "$p"; fi
-        removed=$((removed + 1))
-      elif [[ -e "$p" ]]; then
-        echo "warning: skipping unmanaged non-link entry: $p" >&2
-      fi
+      exp_target=""
+      if $M_EXISTS; then exp_target="$(manifest_get "link" "$lk" 2>/dev/null || true)"; fi
+      uninstall_managed_link "$PLUGIN_ROOT" "PluginRoot" "${PLUGIN_ROOT}/${lk}" "$exp_target" "$M_EXISTS" "$FORCE" "$DRY_RUN" "unmanaged non-link entry"
     done
   fi
-  WARNED_CONTAINERS=()
+  _B3_WARNED_CONTAINERS=""
   if [[ ${#TRACKED_FILES[@]} -gt 0 ]]; then
     for fk in "${TRACKED_FILES[@]}"; do
-      p="${PLUGIN_ROOT}/${fk}"
-      path_within_root "$PLUGIN_ROOT" "$p" || { echo "error: refusing to uninstall path outside PluginRoot: $p" >&2; exit 1; }
-      p_parent="${p%/*}"
-      if [[ "$(norm_cmp_path "$p_parent")" != "$(norm_cmp_path "$PLUGIN_ROOT")" ]] && is_link_entry "$p_parent"; then
-        if [[ ${#WARNED_CONTAINERS[@]} -eq 0 ]] || ! array_contains "$p_parent" "${WARNED_CONTAINERS[@]}"; then
-          echo "warning: skipping symlinked container directory: $p_parent" >&2
-          WARNED_CONTAINERS+=("$p_parent")
-        fi
-        skipped=$((skipped + 1))
-        continue
-      fi
-      if is_link_entry "$p"; then
-        echo "warning: skipping symlinked file path: $p" >&2
-        skipped=$((skipped + 1))
-        continue
-      fi
-      if [[ -f "$p" ]]; then
-        if $M_EXISTS && ! $FORCE; then
-          exp_sha="$(manifest_get "file" "$fk" 2>/dev/null || true)"
-          if [[ -z "$exp_sha" ]] || [[ "$(sha256_file "$p")" != "$exp_sha" ]]; then
-            echo "warning: skipping modified managed file: $p (re-run with --force to remove)" >&2
-            skipped=$((skipped + 1))
-            continue
-          fi
-        fi
-        if $DRY_RUN; then echo "dry-run: remove file $p"; else rm -f "$p"; fi
-        removed=$((removed + 1))
-      fi
+      exp_sha=""
+      if $M_EXISTS; then exp_sha="$(manifest_get "file" "$fk" 2>/dev/null || true)"; fi
+      uninstall_managed_file "$PLUGIN_ROOT" "PluginRoot" "${PLUGIN_ROOT}/${fk}" "$exp_sha" "$M_EXISTS" "" "file path" "modified managed file" "true" "$FORCE" "$DRY_RUN"
     done
   fi
+  removed=$REMOVED
+  skipped=$SKIPPED
   if ! $DRY_RUN; then
     for sd in "${PLUGIN_ROOT}/skills" "${PLUGIN_ROOT}/rules" "${PLUGIN_ROOT}/agents"; do
       if [[ -d "$sd" && ! -L "$sd" ]]; then rmdir "$sd" 2>/dev/null || true; fi
@@ -772,12 +720,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
 fi
 
 # --- Resolve and validate B3Home ---
-if [[ -z "$B3_HOME" ]]; then
-  B3_HOME="$(canon_existing_dir "${SCRIPT_DIR}/../..")"
-else
-  [[ -d "$B3_HOME" ]] || { echo "error: B3Home not found: $B3_HOME" >&2; exit 1; }
-  B3_HOME="$(canon_existing_dir "$B3_HOME")"
-fi
+B3_HOME="$(resolve_b3_home "$B3_HOME" "${SCRIPT_DIR}/../..")"
 
 WORKFLOW="${B3_HOME}/workflows/ship.md"
 SKILLS_SRC="${B3_HOME}/skills"
@@ -835,7 +778,7 @@ Project-level AGENTS.md, GEMINI.md, .agents/rules/, and .agents/skills/ override
 B3 commands (\`/b3-plan\`, \`/b3-implement\`, \`/b3-debug\`, \`/b3-review\`, \`/b3-verify\`, \`/b3-review-loop\`, \`/b3-ship\`, \`/b3-research-ship\`, \`/b3-pr-resolve\`, \`/b3-pr-reply\`, \`/b3-pr-comment\`) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above."
 
 for rf in "${RULE_FILES[@]}"; do
-  stripped="$(strip_frontmatter "$rf")"
+  stripped="$(strip_yaml_frontmatter "$rf")"
   if [[ -n "$stripped" ]]; then
     RULES_CONTENT="${RULES_CONTENT}
 
@@ -853,10 +796,8 @@ fi
 
 AGENT_FILES=()
 while IFS= read -r af; do
-  [[ -n "$af" ]] || continue
-  [[ "${af##*/}" == "README.md" ]] && continue
-  AGENT_FILES+=("$af")
-done < <(find "$AGENTS_DIR" -maxdepth 1 -name '*.md' -type f | LC_ALL=C sort)
+  [[ -n "$af" ]] && AGENT_FILES+=("${AGENTS_DIR}/${af}")
+done < <(list_canonical_md_names "$AGENTS_DIR")
 [[ ${#AGENT_FILES[@]} -ge 1 ]] || { echo "error: B3_HOME has no agent definitions under $AGENTS_DIR" >&2; exit 1; }
 
 AGENT_BASES=()
@@ -958,11 +899,13 @@ if [[ "$ACTION" == "verify" ]]; then
         fi
       done
     fi
-    for core_cmd in b3-plan b3-implement b3-debug b3-review b3-verify b3-review-loop b3-ship b3-research-ship b3-pr-resolve b3-pr-reply b3-pr-comment; do
+    while IFS= read -r cmd_md; do
+      [[ -n "$cmd_md" ]] || continue
+      core_cmd="${cmd_md%.md}"
       if ! array_contains "$core_cmd" "${CMD_SKILL_NAMES[@]}"; then
         COMMANDS_OK=false; ERRORS+=("missing expected command skill in B3_HOME: $core_cmd")
       fi
-    done
+    done < <(list_canonical_md_names "${B3_HOME}/commands")
 
     AGENTS_OUT="${PLUGIN_ROOT}/agents"
     if is_link_entry "$AGENTS_OUT"; then
@@ -1114,10 +1057,7 @@ fi
 
 mkdir -p "$PLUGIN_ROOT" "${PLUGIN_ROOT}/rules" "${PLUGIN_ROOT}/skills" "${PLUGIN_ROOT}/agents"
 
-MANIFEST_LINES="schema=b3-antigravity-plugin-v1
-b3_home=${B3_HOME}
-plugin_root=${PLUGIN_ROOT}
-"
+MANIFEST_LINES=""
 
 write_lf_file "${PLUGIN_ROOT}/plugin.json" "$PLUGIN_JSON"
 MANIFEST_LINES="${MANIFEST_LINES}file|plugin.json|$(sha256_text "$PLUGIN_JSON")
@@ -1177,7 +1117,7 @@ for i in "${!AGENT_BASES[@]}"; do
 "
 done
 
-write_lf_file "$MANIFEST_FILE" "$MANIFEST_LINES"
+manifest_write "$MANIFEST_FILE" "b3-antigravity-plugin-v1" "$B3_HOME" "$PLUGIN_ROOT" "$MANIFEST_LINES"
 
 MERGE_PREFIXES_NL="$B3_HOME"
 if $M_EXISTS && [[ -n "${M_B3_HOME:-}" ]]; then

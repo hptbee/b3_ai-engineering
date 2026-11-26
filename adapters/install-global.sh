@@ -62,12 +62,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/global-common.sh
 source "${SCRIPT_DIR}/lib/global-common.sh"
-if [[ -z "$B3_HOME" ]]; then
-  B3_HOME="$(cd "${SCRIPT_DIR}/.." && pwd)"
-else
-  [[ -d "$B3_HOME" ]] || { echo "error: B3Home directory not found: $B3_HOME" >&2; exit 1; }
-  B3_HOME="$(cd "$B3_HOME" && pwd)"
-fi
+B3_HOME="$(resolve_b3_home "$B3_HOME" "$(cd "${SCRIPT_DIR}/.." && pwd)")"
 
 CURSOR_SCRIPT="${SCRIPT_DIR}/cursor/install-global.sh"
 ANTIGRAVITY_SCRIPT="${SCRIPT_DIR}/antigravity/install-plugin.sh"
@@ -136,11 +131,7 @@ fi
 # Optional advisory preferences; do not manage this personal file in the global manifest.
 if [[ "$ACTION" == "install" || "$ACTION" == "update" ]]; then
   MODEL_PREF_STATUS="$(init_personal_models_file "$B3_HOME" "$USER_HOME" "$DRY_RUN" "true")"
-  case "$MODEL_PREF_STATUS" in
-    kept:*) echo "model_preferences=${MODEL_PREF_STATUS#kept:} (kept existing)" ;;
-    dry-run:*) echo "dry-run: initialize model_preferences=${MODEL_PREF_STATUS#dry-run:} from ${B3_HOME}/config/models.example.md" ;;
-    created:*) echo "model_preferences=${MODEL_PREF_STATUS#created:} (created from example)" ;;
-  esac
+  print_personal_models_status "$B3_HOME" "$MODEL_PREF_STATUS"
 fi
 echo "GLOBAL_OK: host=${HOST_NAME} action=${ACTION}"
 exit 0

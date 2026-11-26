@@ -25,32 +25,6 @@ function Check-CrossHostCoexistence([string]$UserHomeDir, [string[]]$SkillNames)
     }
 }
 
-function Uninstall-ManagedFile([string]$Path, [string]$ExpectedSha, [bool]$RequireMarker, [string]$Label, [ref]$Removed, [ref]$Skipped) {
-    if (-not (Test-PathWithinRoot $CursorHome $Path)) {
-        Fail "refusing to uninstall path outside CursorHome: $Path"
-    }
-    if (Test-IsReparseLink $Path) {
-        Write-Warning "skipping symlinked ${Label}: $Path"
-        $Skipped.Value++
-        return
-    }
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
-    if ($RequireMarker) {
-        $txt = [IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
-        if ($txt -notmatch 'b3-global-cursor-managed:') {
-            Write-Warning "skipping unmanaged ${Label}: $Path"
-            return
-        }
-    }
-    if (-not $Force -and (-not $ExpectedSha -or ((Get-FileSha256 $Path) -ne $ExpectedSha))) {
-        Write-Warning "skipping modified or unverified ${Label}: $Path (re-run with -Force to remove)"
-        $Skipped.Value++
-        return
-    }
-    if ($DryRun) { Write-Output "dry-run: remove $Path" } else { Remove-Item -LiteralPath $Path -Force }
-    $Removed.Value++
-}
-
 function Assert-ManagedDocPreflight([string]$Path, [string]$Label) {
     Assert-RegularFileOrMissing $Path $Label
     if ((Test-Path -LiteralPath $Path -PathType Leaf) -and -not $Force) {
@@ -62,10 +36,7 @@ function Assert-ManagedDocPreflight([string]$Path, [string]$Label) {
 }
 
 $scriptRoot = $PSScriptRoot
-if (-not $UserHome) {
-    $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-}
-$UserHome = Normalize-Path $UserHome
+$UserHome = Resolve-UserHome $UserHome
 if (-not $CursorHome) {
     $CursorHome = Join-Path $UserHome '.cursor'
 }
@@ -77,9 +48,6 @@ $agentsDest = Join-Path $CursorHome 'agents'
 $b3HomeFile = Join-Path $CursorHome 'b3-home'
 $userRulesFile = Join-Path $CursorHome 'b3-user-rules.txt'
 $manifestFile = Join-Path $CursorHome '.b3-global-manifest'
-
-$expectedCommands = @('b3-plan.md', 'b3-implement.md', 'b3-debug.md', 'b3-review.md', 'b3-verify.md', 'b3-review-loop.md', 'b3-ship.md', 'b3-research-ship.md', 'b3-pr-resolve.md', 'b3-pr-reply.md', 'b3-pr-comment.md')
-$expectedAgents = @('b3-reviewer.md', 'b3-fixer.md', 'b3-security-reviewer.md', 'b3-architecture-reviewer.md', 'b3-performance-reviewer.md')
 
 # --- Uninstall ---
 if ($Action -eq 'uninstall') {
@@ -100,22 +68,9 @@ if ($Action -eq 'uninstall') {
         $skipped++
     } else {
         foreach ($sk in (Sort-OrdinalStrings @($manifest.Sections.skill.Keys))) {
-            $p = Join-Path $skillsDest $sk
-            if (-not (Test-PathWithinRoot $CursorHome $p)) {
-                Fail "refusing to uninstall path outside CursorHome: $p"
-            }
-            if (Test-IsReparseLink $p) {
-                $expTarget = $manifest.Sections.skill[$sk]
-                if (-not $Force -and (-not $expTarget -or -not (Test-LinkTarget $p $expTarget))) {
-                    Write-Warning "skipping retargeted skill link: $p (expected $expTarget; re-run with -Force to remove)"
-                    $skipped++
-                    continue
-                }
-                if ($DryRun) { Write-Output "dry-run: remove skill link $p" } else { Remove-LinkOnly $p }
-                $removed++
-            } elseif (Test-Path -LiteralPath $p) {
-                Write-Warning "skipping unmanaged non-link skill directory: $p"
-            }
+            Uninstall-ManagedLink -RootDir $CursorHome -RootLabel 'CursorHome' -Path (Join-Path $skillsDest $sk) `
+                -ExpectedTarget $manifest.Sections.skill[$sk] -VerifyExpected $true -Force $Force -DryRun $DryRun `
+                -UnmanagedLabel 'unmanaged non-link skill directory' -Removed ([ref]$removed) -Skipped ([ref]$skipped)
         }
     }
     if (Test-IsReparseLink $commandsDest) {
@@ -123,7 +78,10 @@ if ($Action -eq 'uninstall') {
         $skipped++
     } else {
         foreach ($cmd in (Sort-OrdinalStrings @($manifest.Sections.command.Keys))) {
-            Uninstall-ManagedFile (Join-Path $commandsDest $cmd) $manifest.Sections.command[$cmd] $true 'command file' ([ref]$removed) ([ref]$skipped)
+            Uninstall-ManagedFile -RootDir $CursorHome -RootLabel 'CursorHome' -Path (Join-Path $commandsDest $cmd) `
+                -ExpectedSha $manifest.Sections.command[$cmd] -VerifySha $true -MarkerRegex 'b3-global-cursor-managed:' `
+                -Label 'command file' -ShaMismatchLabel 'modified or unverified command file' `
+                -Force $Force -DryRun $DryRun -Removed ([ref]$removed) -Skipped ([ref]$skipped)
         }
     }
     if (Test-IsReparseLink $agentsDest) {
@@ -131,14 +89,23 @@ if ($Action -eq 'uninstall') {
         $skipped++
     } else {
         foreach ($ag in (Sort-OrdinalStrings @($manifest.Sections.agent.Keys))) {
-            Uninstall-ManagedFile (Join-Path $agentsDest $ag) $manifest.Sections.agent[$ag] $true 'agent file' ([ref]$removed) ([ref]$skipped)
+            Uninstall-ManagedFile -RootDir $CursorHome -RootLabel 'CursorHome' -Path (Join-Path $agentsDest $ag) `
+                -ExpectedSha $manifest.Sections.agent[$ag] -VerifySha $true -MarkerRegex 'b3-global-cursor-managed:' `
+                -Label 'agent file' -ShaMismatchLabel 'modified or unverified agent file' `
+                -Force $Force -DryRun $DryRun -Removed ([ref]$removed) -Skipped ([ref]$skipped)
         }
     }
     if ($manifest.Sections.file.ContainsKey('b3-user-rules.txt')) {
-        Uninstall-ManagedFile $userRulesFile $manifest.Sections.file['b3-user-rules.txt'] $true 'file' ([ref]$removed) ([ref]$skipped)
+        Uninstall-ManagedFile -RootDir $CursorHome -RootLabel 'CursorHome' -Path $userRulesFile `
+            -ExpectedSha $manifest.Sections.file['b3-user-rules.txt'] -VerifySha $true -MarkerRegex 'b3-global-cursor-managed:' `
+            -Label 'file' -ShaMismatchLabel 'modified or unverified file' `
+            -Force $Force -DryRun $DryRun -Removed ([ref]$removed) -Skipped ([ref]$skipped)
     }
     if ($manifest.Sections.file.ContainsKey('b3-home')) {
-        Uninstall-ManagedFile $b3HomeFile $manifest.Sections.file['b3-home'] $false 'b3-home' ([ref]$removed) ([ref]$skipped)
+        Uninstall-ManagedFile -RootDir $CursorHome -RootLabel 'CursorHome' -Path $b3HomeFile `
+            -ExpectedSha $manifest.Sections.file['b3-home'] -VerifySha $true -MarkerRegex '' `
+            -Label 'b3-home' -ShaMismatchLabel 'modified or unverified b3-home' `
+            -Force $Force -DryRun $DryRun -Removed ([ref]$removed) -Skipped ([ref]$skipped)
     }
     if (-not $DryRun) {
         foreach ($subDir in @($skillsDest, $commandsDest, $agentsDest)) { Remove-EmptyRegularDir $subDir }
@@ -158,9 +125,7 @@ if ($Action -eq 'uninstall') {
 }
 
 # --- Validate canonical B3_HOME (install / update / verify) ---
-if (-not $B3Home) { $B3Home = Split-Path -Parent (Split-Path -Parent $scriptRoot) }
-if (-not (Test-Path -LiteralPath $B3Home -PathType Container)) { Fail "B3Home directory not found: $B3Home" }
-$B3Home = Normalize-Path (Resolve-Path -LiteralPath $B3Home).Path
+$B3Home = Resolve-B3Home $B3Home (Split-Path -Parent (Split-Path -Parent $scriptRoot))
 $b3HomeForward = To-Forward $B3Home
 
 $workflowPath = Join-Path $B3Home 'workflows\ship.md'
@@ -176,12 +141,10 @@ if (-not (Test-Path -LiteralPath $agentsSrc -PathType Container)) { Fail "B3_HOM
 if (@(Get-ChildItem -LiteralPath $rulesSrc -Filter '*.md' -File -ErrorAction SilentlyContinue).Count -lt 1) {
     Fail "B3_HOME missing rules/*.md under: $rulesSrc"
 }
-foreach ($c in $expectedCommands) {
-    if (-not (Test-Path -LiteralPath (Join-Path $commandsSrc $c) -PathType Leaf)) { Fail "B3_HOME missing canonical command: $c" }
-}
-foreach ($a in $expectedAgents) {
-    if (-not (Test-Path -LiteralPath (Join-Path $agentsSrc $a) -PathType Leaf)) { Fail "B3_HOME missing canonical agent: $a" }
-}
+$expectedCommands = Get-CanonicalMarkdownNames $commandsSrc
+if ($expectedCommands.Count -lt 1) { Fail "B3_HOME has no canonical commands under: $commandsSrc" }
+$expectedAgents = Get-CanonicalMarkdownNames $agentsSrc
+if ($expectedAgents.Count -lt 1) { Fail "B3_HOME has no canonical agents under: $agentsSrc" }
 
 $skillTargets = @{}
 if ((Add-CanonicalSkills $skillsSrc $skillTargets $null) -lt 1) {
@@ -388,8 +351,6 @@ if ($removeLegacyLink) {
 }
 
 $manifestLines = New-Object System.Collections.Generic.List[string]
-$manifestLines.Add('schema=b3-cursor-global-v1')
-$manifestLines.Add("b3_home=$b3HomeForward")
 
 foreach ($sn in $sortedSkillNames) {
     $dest = Join-Path $skillsDest $sn
@@ -442,7 +403,7 @@ $manifestLines.Add("file|b3-home|$(Get-TextSha256 $renderedB3Home)")
 Write-Utf8NoBom $userRulesFile $renderedUserRules
 $manifestLines.Add("file|b3-user-rules.txt|$(Get-TextSha256 $renderedUserRules)")
 
-Write-Utf8NoBom $manifestFile (($manifestLines -join "`n") + "`n")
+Write-B3Manifest -ManifestPath $manifestFile -Schema 'b3-cursor-global-v1' -B3HomeForward $b3HomeForward -EntryLines $manifestLines.ToArray()
 
 Check-CrossHostCoexistence $UserHome $sortedSkillNames
 Write-Output ("{0}_OK: skills={1} commands={2} agents={3} cursor_home={4} b3_home={5}" -f $Action.ToUpperInvariant(), $sortedSkillNames.Count, $expectedCommands.Count, $expectedAgents.Count, $CursorHome, $b3HomeForward)

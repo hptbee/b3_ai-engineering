@@ -35,11 +35,7 @@ esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/global-common.sh
 source "${SCRIPT_DIR}/lib/global-common.sh"
-if [[ -z "$B3_HOME" ]]; then
-  B3_HOME="$(canon_existing_dir "${SCRIPT_DIR}/..")"
-else
-  B3_HOME="$(canon_existing_dir "$B3_HOME")"
-fi
+B3_HOME="$(resolve_b3_home "$B3_HOME" "${SCRIPT_DIR}/..")"
 PRODUCT_ROOT="$(canon_existing_dir "$PRODUCT_ROOT")"
 
 WORKFLOW="${B3_HOME}/workflows/ship.md"
@@ -224,13 +220,6 @@ if $USE_CURSOR; then
   fi
 fi
 
-skill_name_from_file() {
-  local f="$1"
-  local name
-  name="$(awk 'BEGIN{FS=": "} /^name:/{gsub(/[\r[:space:]]/,"",$2); print $2; exit}' "$f")"
-  if [[ -n "$name" ]]; then echo "$name"; else basename "$(dirname "$f")"; fi
-}
-
 install_skill_link() {
   local dest="$1" target="$2"
   if is_link_entry "$dest"; then
@@ -256,16 +245,13 @@ install_flat_skills() {
     exit 1
   fi
   mkdir -p "$dest_root"
-  while IFS= read -r sf; do
-    [[ -n "$sf" ]] || continue
-    local name dir
-    name="$(skill_name_from_file "$sf")"
-    dir="$(dirname "$sf")"
+  while IFS=$'\t' read -r name dir; do
+    [[ -n "$name" ]] || continue
     install_skill_link "${dest_root}/${name}" "$dir"
   done < <(
-    find "$SKILLS_SRC" -name 'SKILL.md' -type f | LC_ALL=C sort
+    discover_skills_tsv "$SKILLS_SRC"
     if [[ -d "$CMD_SKILLS_SRC" ]]; then
-      find "$CMD_SKILLS_SRC" -name 'SKILL.md' -type f | LC_ALL=C sort
+      discover_skills_tsv "$CMD_SKILLS_SRC"
     fi
   )
 }

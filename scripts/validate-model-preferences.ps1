@@ -76,9 +76,11 @@ try {
     $ipPreserved = ((Get-Content -LiteralPath $persPs -Raw) -match 'custom-reasoner')
 
     $syncFx = Join-Path $sandbox 'sync-fx'
-    New-Item -ItemType Directory -Path (Join-Path $syncFx 'adapters'), (Join-Path $syncFx 'config'), (Join-Path $syncFx 'skills\eng\demo'), (Join-Path $syncFx 'commands'), (Join-Path $syncFx 'agents') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $syncFx 'adapters\lib'), (Join-Path $syncFx 'config'), (Join-Path $syncFx 'skills\eng\demo'), (Join-Path $syncFx 'commands'), (Join-Path $syncFx 'agents') | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'adapters\sync-skills.ps1') -Destination (Join-Path $syncFx 'adapters\sync-skills.ps1')
     Copy-Item -LiteralPath (Join-Path $root 'adapters\sync-skills.sh') -Destination (Join-Path $syncFx 'adapters\sync-skills.sh')
+    Copy-Item -LiteralPath (Join-Path $root 'adapters\lib\global-common.ps1') -Destination (Join-Path $syncFx 'adapters\lib\global-common.ps1')
+    Copy-Item -LiteralPath (Join-Path $root 'adapters\lib\global-common.sh') -Destination (Join-Path $syncFx 'adapters\lib\global-common.sh')
     Copy-Item -LiteralPath $exPath -Destination (Join-Path $syncFx 'config\models.example.md')
     Set-Content -LiteralPath (Join-Path $syncFx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: d`n---`n# d`n"
     Set-Content -LiteralPath (Join-Path $syncFx 'commands\b3-plan.md') "# p`n"

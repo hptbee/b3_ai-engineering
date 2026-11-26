@@ -13,62 +13,18 @@ $commandsSource = Join-Path $root 'commands'
 $agentsSource = Join-Path $root 'agents'
 $commandSkillsSource = Join-Path $root 'adapters\command-skills'
 
-$commonLib = Join-Path $PSScriptRoot 'lib\global-common.ps1'
-if (Test-Path -LiteralPath $commonLib -PathType Leaf) {
-    . $commonLib
-}
+. (Join-Path $PSScriptRoot 'lib\global-common.ps1')
 
-function Fail([string]$Message) {
-    Write-Error $Message
-    exit 1
-}
-
-function Initialize-PersonalModelPreferences([string]$HomeDir) {
+function Sync-PersonalModelPreferences([string]$HomeDir) {
     if ($DryRun -or $VerifyOnly -or $env:B3_SKIP_MODEL_INIT -eq '1') { return }
-    if (Get-Command Initialize-PersonalModelsFile -ErrorAction SilentlyContinue) {
-        $status = Initialize-PersonalModelsFile -B3Home $HomeDir -NonFatal
-        if ($status -like 'kept:*') {
-            Write-Output "model_preferences=$($status.Substring(5)) (kept existing)"
-        } elseif ($status -like 'created:*') {
-            Write-Output "model_preferences=$($status.Substring(8)) (created from example)"
-        } elseif ($status -like 'error:*') {
-            Write-Output "model_preferences=$status"
-        }
-        return
-    }
-    $templateMd = Join-Path $HomeDir 'config\models.example.md'
-    if (-not (Test-Path -LiteralPath $templateMd -PathType Leaf)) { return }
-    $dest = if ($env:B3_MODELS_PERSONAL -and $env:B3_MODELS_PERSONAL.Trim()) {
-        $env:B3_MODELS_PERSONAL.Trim()
-    } else {
-        $uHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-        Join-Path $uHome '.b3\models.md'
-    }
-    if (Test-Path -LiteralPath $dest) {
-        Write-Output "model_preferences=$dest (kept existing)"
-        return
-    }
-    try {
-        $parent = Split-Path -Parent $dest
-        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-            New-Item -ItemType Directory -Path $parent -Force | Out-Null
-        }
-        Copy-Item -LiteralPath $templateMd -Destination $dest
-        Write-Output "model_preferences=$dest (created from example)"
-    } catch {
-        Write-Warning "optional model preferences could not be initialized at $dest : $($_.Exception.Message)"
-        Write-Output "model_preferences=error:$dest"
-    }
-}
-
-function Test-IsLink([System.IO.FileSystemInfo]$Item) {
-    return ($Item.LinkType -in @('Junction', 'SymbolicLink')) -or (($Item.Attributes.ToString()) -match 'ReparsePoint')
+    $status = Initialize-PersonalModelsFile -B3Home $HomeDir -NonFatal
+    Write-PersonalModelsStatus $HomeDir $status -EmitError
 }
 
 function Test-HasActivePath([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     $item = Get-Item -LiteralPath $Path -Force
-    if (Test-IsLink $item) { return $true }
+    if (Test-IsReparseLink $Path) { return $true }
     if ($item.PSIsContainer) {
         return @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue).Count -gt 0
     }
@@ -80,72 +36,22 @@ function Test-SkillSource([string]$Path) {
     return @(Get-ChildItem -LiteralPath $Path -Recurse -Filter 'SKILL.md' -File -ErrorAction SilentlyContinue).Count -gt 0
 }
 
-function Get-SkillNameFromFile([string]$Path) {
-    $text = Get-Content -LiteralPath $Path -Raw
-    if ($text -match '(?m)^name:\s*([a-z0-9-]+)\s*$') { return $Matches[1] }
-    return (Split-Path -Leaf (Split-Path -Parent $Path))
-}
-
 function Get-ExpectedFlatSkills() {
     $map = @{}
-    $list = @()
-    $files = @(Get-ChildItem -LiteralPath $skillsSource -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
+    [void](Add-CanonicalSkills $skillsSource $map $null)
     if (Test-Path -LiteralPath $commandSkillsSource -PathType Container) {
-        $files += @(Get-ChildItem -LiteralPath $commandSkillsSource -Recurse -Filter 'SKILL.md' -File | Sort-Object FullName)
+        [void](Add-CanonicalSkills $commandSkillsSource $map $null)
     }
-    foreach ($f in $files) {
-        $name = Get-SkillNameFromFile $f.FullName
-        $srcDir = Split-Path -Parent $f.FullName
-        if ($map.ContainsKey($name)) {
-            Fail "duplicate skill name '$name': $($map[$name]) and $srcDir"
-        }
-        $map[$name] = $srcDir
-        $list += [PSCustomObject]@{ Name = $name; Source = $srcDir }
+    $list = @()
+    foreach ($name in (Sort-OrdinalStrings @($map.Keys))) {
+        $list += [PSCustomObject]@{ Name = $name; Source = $map[$name] }
     }
     return $list
 }
 
-function Test-LinkTarget([string]$Dest, [string]$Src) {
-    if (-not (Test-Path -LiteralPath $Dest)) { return $false }
-    $item = Get-Item -LiteralPath $Dest -Force
-    if (-not (Test-IsLink $item)) { return $false }
-    $resolvedSrc = [IO.Path]::GetFullPath($Src).TrimEnd('\')
-    $candidate = $null
-    if ($item.Target) {
-        $raw = [string](@($item.Target)[0])
-        if (-not [IO.Path]::IsPathRooted($raw)) {
-            $raw = Join-Path (Split-Path -Parent $Dest) $raw
-        }
-        $candidate = [IO.Path]::GetFullPath($raw).TrimEnd('\')
-    }
-    if (-not $candidate) {
-        try { $candidate = (Resolve-Path -LiteralPath $Dest).Path.TrimEnd('\') } catch { $candidate = $null }
-    }
-    return $candidate -eq $resolvedSrc
-}
-
-function Remove-LinkPath([string]$Path) {
-    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-    if (-not $item) { return }
-    if (-not (Test-IsLink $item)) { Fail "refusing to remove non-link path: $Path" }
-    try {
-        if ($item.PSIsContainer -and ($env:OS -eq 'Windows_NT')) {
-            [System.IO.Directory]::Delete($Path, $false)
-        } else {
-            Remove-Item -LiteralPath $Path -Force
-        }
-    } catch {
-        Fail "could not remove link $Path : $($_.Exception.Message)"
-    }
-    if ($null -ne (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
-        Fail "could not remove link $Path"
-    }
-}
-
 function Sync-DirectoryLink([string]$Dest, [string]$Src, [string]$Label) {
     if (Test-Path -LiteralPath $Dest) {
-        $item = Get-Item -LiteralPath $Dest -Force
-        if (Test-IsLink $item) {
+        if (Test-IsReparseLink $Dest) {
             if (Test-LinkTarget $Dest $Src) {
                 Write-Output "ok: $Dest already links to $Src ($Label)"
                 return
@@ -173,9 +79,8 @@ function Sync-DirectoryLink([string]$Dest, [string]$Src, [string]$Label) {
         return
     }
 
-    New-Item -ItemType Directory -Path (Split-Path -Parent $Dest) -Force | Out-Null
     try {
-        New-Item -ItemType Junction -Path $Dest -Target $Src | Out-Null
+        Create-DirLink $Dest $Src
     } catch {
         Fail "failed to create junction $Dest -> $Src : $($_.Exception.Message)"
     }
@@ -187,8 +92,7 @@ function Sync-DirectoryLink([string]$Dest, [string]$Src, [string]$Label) {
 
 function Test-FlatSkillIndex([string]$DestRoot, [object[]]$ExpectedSkills) {
     if (-not (Test-Path -LiteralPath $DestRoot -PathType Container)) { return $false }
-    $rootItem = Get-Item -LiteralPath $DestRoot -Force
-    if (Test-IsLink $rootItem) { return $false }
+    if (Test-IsReparseLink $DestRoot) { return $false }
     foreach ($sk in $ExpectedSkills) {
         $entryDest = Join-Path $DestRoot $sk.Name
         if (-not (Test-LinkTarget $entryDest $sk.Source)) { return $false }
@@ -199,18 +103,17 @@ function Test-FlatSkillIndex([string]$DestRoot, [object[]]$ExpectedSkills) {
 
 function Sync-FlatSkillIndex([string]$DestRoot, [object[]]$ExpectedSkills, [string]$Label) {
     if (Test-Path -LiteralPath $DestRoot) {
-        $item = Get-Item -LiteralPath $DestRoot -Force
-        if (Test-IsLink $item) {
+        if (Test-IsReparseLink $DestRoot) {
             if ($DryRun) {
                 Write-Output "dry-run: replace legacy nested link $DestRoot with flattened $($ExpectedSkills.Count)-skill index ($Label)"
                 return
             }
-            Remove-LinkPath $DestRoot
-        } elseif (-not $item.PSIsContainer) {
+            Remove-LinkOnly $DestRoot
+        } elseif (-not (Test-Path -LiteralPath $DestRoot -PathType Container)) {
             Fail "existing non-directory path; refusing to replace: $DestRoot"
         } else {
             foreach ($child in @(Get-ChildItem -LiteralPath $DestRoot -Force -ErrorAction SilentlyContinue)) {
-                if (-not (Test-IsLink $child)) {
+                if (-not (Test-IsReparseLink $child.FullName)) {
                     Fail "existing non-link content in $DestRoot; refusing to replace: $($child.FullName)"
                 }
             }
@@ -229,17 +132,17 @@ function Sync-FlatSkillIndex([string]$DestRoot, [object[]]$ExpectedSkills, [stri
         $entryDest = Join-Path $DestRoot $sk.Name
         if (Test-Path -LiteralPath $entryDest) {
             if (Test-LinkTarget $entryDest $sk.Source) { continue }
-            Remove-LinkPath $entryDest
+            Remove-LinkOnly $entryDest
         }
         try {
-            New-Item -ItemType Junction -Path $entryDest -Target $sk.Source | Out-Null
+            Create-DirLink $entryDest $sk.Source
         } catch {
             Fail "failed to create junction $entryDest -> $($sk.Source) : $($_.Exception.Message)"
         }
     }
     foreach ($child in @(Get-ChildItem -LiteralPath $DestRoot -Force -ErrorAction SilentlyContinue)) {
         if (-not $expectedNames.ContainsKey($child.Name)) {
-            Remove-LinkPath $child.FullName
+            Remove-LinkOnly $child.FullName
         }
     }
     if (-not (Test-FlatSkillIndex $DestRoot $ExpectedSkills)) {
@@ -385,7 +288,7 @@ if ($HostName -eq 'antigravity') {
 
     $check = Test-AntigravityManifest $root $antigravityManifest
     if (-not $check.Ok) { Fail "manifest written but verification failed: $($check.Reason)" }
-    Initialize-PersonalModelPreferences $root
+    Sync-PersonalModelPreferences $root
     Write-Output "synced: $antigravityManifest (antigravity); $($check.Count) SKILL.md entries visible"
     Write-Output "note: this proves .agents/skills.json resolves to 1-level SKILL.md entries, not Antigravity runtime discovery"
     exit 0
@@ -419,7 +322,7 @@ if ($HostName -eq 'cursor') {
     Sync-DirectoryLink $cursorSkillsDest $skillsSource 'cursor skills'
     Sync-DirectoryLink $cursorCommandsDest $commandsSource 'cursor commands'
     Sync-DirectoryLink $cursorAgentsDest $agentsSource 'cursor agents'
-    Initialize-PersonalModelPreferences $root
+    Sync-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Cursor runtime skill discovery"
     exit 0
 }
@@ -443,7 +346,7 @@ if ($HostName -eq 'codex') {
     }
 
     Sync-FlatSkillIndex $codexSkillsDest $expectedFlatSkills 'codex'
-    Initialize-PersonalModelPreferences $root
+    Sync-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Codex runtime skill discovery"
     exit 0
 }
@@ -467,7 +370,7 @@ if ($HostName -eq 'claude') {
 
     Sync-FlatSkillIndex $claudeSkillsDest $expectedFlatSkills 'claude'
     Sync-DirectoryLink $claudeAgentsDest $agentsSource 'claude agents'
-    Initialize-PersonalModelPreferences $root
+    Sync-PersonalModelPreferences $root
     Write-Output "note: this proves filesystem links, not Claude Code runtime skill discovery"
     exit 0
 }

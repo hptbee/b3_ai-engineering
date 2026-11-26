@@ -18,6 +18,14 @@ while [[ $# -gt 0 ]]; do
     install|update|verify|uninstall)
       if $ACTION_SET; then echo "error: duplicate action '$1'" >&2; exit 1; fi
       ACTION="$1"; ACTION_SET=true; shift ;;
+    --action)
+      [[ $# -ge 2 && -n "${2:-}" ]] || { echo "error: option $1 requires a value" >&2; exit 1; }
+      if $ACTION_SET; then echo "error: duplicate action '$2'" >&2; exit 1; fi
+      case "$2" in
+        install|update|verify|uninstall) ACTION="$2"; ACTION_SET=true ;;
+        *) echo "error: invalid action '$2'" >&2; exit 1 ;;
+      esac
+      shift 2 ;;
     --cursor-home)
       [[ $# -ge 2 && -n "${2:-}" ]] || { echo "error: option $1 requires a value" >&2; exit 1; }
       CURSOR_HOME="$2"; shift 2 ;;
@@ -91,28 +99,6 @@ check_coexistence() {
   done
 }
 
-uninstall_managed_file() {
-  local path="$1" exp_sha="$2" require_marker="$3" label="$4"
-  path_within_root "$CURSOR_HOME" "$path" || { echo "error: refusing to uninstall path outside CursorHome: $path" >&2; exit 1; }
-  if is_link_entry "$path"; then
-    echo "warning: skipping symlinked ${label}: $path" >&2
-    SKIPPED=$((SKIPPED + 1))
-    return 0
-  fi
-  [[ -f "$path" ]] || return 0
-  if [[ "$require_marker" == "true" ]] && ! grep -q 'b3-global-cursor-managed:' "$path"; then
-    echo "warning: skipping unmanaged ${label}: $path" >&2
-    return 0
-  fi
-  if ! $FORCE && { [[ -z "$exp_sha" ]] || [[ "$(sha256_file "$path")" != "$exp_sha" ]]; }; then
-    echo "warning: skipping modified or unverified ${label}: $path (re-run with --force to remove)" >&2
-    SKIPPED=$((SKIPPED + 1))
-    return 0
-  fi
-  if $DRY_RUN; then echo "dry-run: remove $path"; else rm -f "$path"; fi
-  REMOVED=$((REMOVED + 1))
-}
-
 assert_managed_doc_preflight() {
   local path="$1" label="$2"
   assert_regular_file_or_missing "$path" "$label"
@@ -122,8 +108,7 @@ assert_managed_doc_preflight() {
   fi
 }
 
-if [[ -z "$USER_HOME" ]]; then USER_HOME="$HOME"; fi
-USER_HOME="$(canon_path_allow_missing "$USER_HOME")"
+USER_HOME="$(resolve_user_home "$USER_HOME")"
 if [[ -z "$CURSOR_HOME" ]]; then CURSOR_HOME="${USER_HOME}/.cursor"; fi
 CURSOR_HOME="$(canon_path_allow_missing "$CURSOR_HOME")"
 
@@ -133,9 +118,6 @@ AGENTS_DEST="${CURSOR_HOME}/agents"
 B3_HOME_FILE="${CURSOR_HOME}/b3-home"
 USER_RULES_FILE="${CURSOR_HOME}/b3-user-rules.txt"
 MANIFEST_FILE="${CURSOR_HOME}/.b3-global-manifest"
-
-EXPECTED_COMMANDS=("b3-plan.md" "b3-implement.md" "b3-debug.md" "b3-review.md" "b3-verify.md" "b3-review-loop.md" "b3-ship.md" "b3-research-ship.md" "b3-pr-resolve.md" "b3-pr-reply.md" "b3-pr-comment.md")
-EXPECTED_AGENTS=("b3-reviewer.md" "b3-fixer.md" "b3-security-reviewer.md" "b3-architecture-reviewer.md" "b3-performance-reviewer.md")
 
 # --- Uninstall ---
 if [[ "$ACTION" == "uninstall" ]]; then
@@ -163,21 +145,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   elif [[ ${#M_KINDS[@]} -gt 0 ]]; then
     for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
       [[ "${M_KINDS[$i]}" == "skill" ]] || continue
-      sk="${M_KEYS[$i]}"
-      exp_target="${M_VALS[$i]}"
-      p="${SKILLS_DEST}/${sk}"
-      path_within_root "$CURSOR_HOME" "$p" || { echo "error: refusing to uninstall path outside CursorHome: $p" >&2; exit 1; }
-      if is_link_entry "$p"; then
-        if ! $FORCE && { [[ -z "$exp_target" ]] || ! link_matches_expected_or_dangling "$p" "$exp_target"; }; then
-          echo "warning: skipping retargeted skill link: $p (expected $exp_target; re-run with --force to remove)" >&2
-          SKIPPED=$((SKIPPED + 1))
-          continue
-        fi
-        if $DRY_RUN; then echo "dry-run: remove skill link $p"; else remove_link_only "$p"; fi
-        REMOVED=$((REMOVED + 1))
-      elif [[ -e "$p" ]]; then
-        echo "warning: skipping unmanaged non-link skill directory: $p" >&2
-      fi
+      uninstall_managed_link "$CURSOR_HOME" "CursorHome" "${SKILLS_DEST}/${M_KEYS[$i]}" "${M_VALS[$i]}" "true" "$FORCE" "$DRY_RUN" "unmanaged non-link skill directory"
     done
   fi
 
@@ -187,7 +155,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   elif [[ ${#M_KINDS[@]} -gt 0 ]]; then
     for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
       [[ "${M_KINDS[$i]}" == "command" ]] || continue
-      uninstall_managed_file "${COMMANDS_DEST}/${M_KEYS[$i]}" "${M_VALS[$i]}" "true" "command file"
+      uninstall_managed_file "$CURSOR_HOME" "CursorHome" "${COMMANDS_DEST}/${M_KEYS[$i]}" "${M_VALS[$i]}" "true" "b3-global-cursor-managed:" "command file" "modified or unverified command file" "false" "$FORCE" "$DRY_RUN"
     done
   fi
 
@@ -197,15 +165,15 @@ if [[ "$ACTION" == "uninstall" ]]; then
   elif [[ ${#M_KINDS[@]} -gt 0 ]]; then
     for ((i = 0; i < ${#M_KINDS[@]}; i++)); do
       [[ "${M_KINDS[$i]}" == "agent" ]] || continue
-      uninstall_managed_file "${AGENTS_DEST}/${M_KEYS[$i]}" "${M_VALS[$i]}" "true" "agent file"
+      uninstall_managed_file "$CURSOR_HOME" "CursorHome" "${AGENTS_DEST}/${M_KEYS[$i]}" "${M_VALS[$i]}" "true" "b3-global-cursor-managed:" "agent file" "modified or unverified agent file" "false" "$FORCE" "$DRY_RUN"
     done
   fi
 
   if exp_rules_sha="$(manifest_get "file" "b3-user-rules.txt" 2>/dev/null)"; then
-    uninstall_managed_file "$USER_RULES_FILE" "$exp_rules_sha" "true" "file"
+    uninstall_managed_file "$CURSOR_HOME" "CursorHome" "$USER_RULES_FILE" "$exp_rules_sha" "true" "b3-global-cursor-managed:" "file" "modified or unverified file" "false" "$FORCE" "$DRY_RUN"
   fi
   if exp_home_sha="$(manifest_get "file" "b3-home" 2>/dev/null)"; then
-    uninstall_managed_file "$B3_HOME_FILE" "$exp_home_sha" "false" "b3-home"
+    uninstall_managed_file "$CURSOR_HOME" "CursorHome" "$B3_HOME_FILE" "$exp_home_sha" "true" "" "b3-home" "modified or unverified b3-home" "false" "$FORCE" "$DRY_RUN"
   fi
 
   if ! $DRY_RUN; then
@@ -230,12 +198,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
 fi
 
 # --- Validate canonical B3_HOME (install / update / verify) ---
-if [[ -z "$B3_HOME" ]]; then
-  B3_HOME="$(canon_existing_dir "${SCRIPT_DIR}/../..")"
-else
-  [[ -d "$B3_HOME" ]] || { echo "error: B3Home directory not found: $B3_HOME" >&2; exit 1; }
-  B3_HOME="$(canon_existing_dir "$B3_HOME")"
-fi
+B3_HOME="$(resolve_b3_home "$B3_HOME" "${SCRIPT_DIR}/../..")"
 
 WORKFLOW="${B3_HOME}/workflows/ship.md"
 SKILLS_SRC="${B3_HOME}/skills"
@@ -250,12 +213,16 @@ RULES_SRC="${B3_HOME}/rules"
 [[ -n "$({ find "$RULES_SRC" -maxdepth 1 -name '*.md' -type f -print 2>/dev/null || true; } | head -n 1)" ]] || {
   echo "error: B3_HOME missing rules/*.md under: $RULES_SRC" >&2; exit 1
 }
-for c in "${EXPECTED_COMMANDS[@]}"; do
-  [[ -f "${COMMANDS_SRC}/${c}" ]] || { echo "error: B3_HOME missing canonical command: $c" >&2; exit 1; }
-done
-for a in "${EXPECTED_AGENTS[@]}"; do
-  [[ -f "${AGENTS_SRC}/${a}" ]] || { echo "error: B3_HOME missing canonical agent: $a" >&2; exit 1; }
-done
+EXPECTED_COMMANDS=()
+while IFS= read -r _mc; do
+  [[ -n "$_mc" ]] && EXPECTED_COMMANDS+=("$_mc")
+done < <(list_canonical_md_names "$COMMANDS_SRC")
+[[ ${#EXPECTED_COMMANDS[@]} -ge 1 ]] || { echo "error: B3_HOME has no canonical commands under: $COMMANDS_SRC" >&2; exit 1; }
+EXPECTED_AGENTS=()
+while IFS= read -r _ma; do
+  [[ -n "$_ma" ]] && EXPECTED_AGENTS+=("$_ma")
+done < <(list_canonical_md_names "$AGENTS_SRC")
+[[ ${#EXPECTED_AGENTS[@]} -ge 1 ]] || { echo "error: B3_HOME has no canonical agents under: $AGENTS_SRC" >&2; exit 1; }
 
 SKILL_NAMES=()
 SKILL_TARGETS=()
@@ -472,9 +439,7 @@ if $REMOVE_LEGACY; then
   echo "migrated: removed legacy link $LEGACY_LINK"
 fi
 
-MANIFEST_BODY="schema=b3-cursor-global-v1
-b3_home=${B3_HOME}
-"
+MANIFEST_BODY=""
 
 for idx in "${SORTED_IDX[@]}"; do
   sn="${SKILL_NAMES[$idx]}"
@@ -535,7 +500,7 @@ MANIFEST_BODY="${MANIFEST_BODY}file|b3-home|$(sha256_file "${RENDER_DIR}/b3-home
 install_file_atomic "${RENDER_DIR}/b3-user-rules.txt" "$USER_RULES_FILE"
 MANIFEST_BODY="${MANIFEST_BODY}file|b3-user-rules.txt|$(sha256_file "${RENDER_DIR}/b3-user-rules.txt")
 "
-write_lf_file "$MANIFEST_FILE" "$MANIFEST_BODY"
+manifest_write "$MANIFEST_FILE" "b3-cursor-global-v1" "$B3_HOME" "" "$MANIFEST_BODY"
 
 check_coexistence "$USER_HOME" "${SKILL_NAMES[@]}"
 ACTION_UPPER="$(to_upper "$ACTION")"

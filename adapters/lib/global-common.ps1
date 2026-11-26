@@ -450,3 +450,139 @@ function Initialize-PersonalModelsFile {
         throw
     }
 }
+
+function Resolve-UserHome([string]$UserHome = '') {
+    $h = if ($UserHome) { $UserHome } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    return (Normalize-Path $h)
+}
+
+function Resolve-B3Home([string]$B3Home = '', [string]$DefaultRoot) {
+    $resolved = if ($B3Home) { $B3Home } else { $DefaultRoot }
+    if (-not (Test-Path -LiteralPath $resolved -PathType Container)) {
+        Fail "B3Home directory not found: $resolved"
+    }
+    return (Normalize-Path (Resolve-Path -LiteralPath $resolved).Path)
+}
+
+function Get-CanonicalMarkdownNames([string]$DirPath) {
+    if (-not (Test-Path -LiteralPath $DirPath -PathType Container)) { return @() }
+    $files = Sort-FilesOrdinalByFullName @(Get-ChildItem -LiteralPath $DirPath -Filter '*.md' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'README.md' })
+    return @($files | ForEach-Object { $_.Name })
+}
+
+function Write-B3Manifest {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ManifestPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Schema,
+        [Parameter(Mandatory = $true)]
+        [string]$B3HomeForward,
+        [string]$PluginRootForward = '',
+        [string[]]$EntryLines = @()
+    )
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("schema=$Schema")
+    $lines.Add("b3_home=$B3HomeForward")
+    if ($PluginRootForward) { $lines.Add("plugin_root=$PluginRootForward") }
+    foreach ($ln in $EntryLines) {
+        if ($ln) { $lines.Add($ln) }
+    }
+    Write-Utf8NoBom $ManifestPath (($lines -join "`n") + "`n")
+}
+
+function Uninstall-ManagedLink {
+    param(
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$RootLabel,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$ExpectedTarget = '',
+        [bool]$VerifyExpected = $true,
+        [bool]$Force = $false,
+        [bool]$DryRun = $false,
+        [string]$UnmanagedLabel = 'unmanaged non-link entry',
+        [ref]$Removed,
+        [ref]$Skipped
+    )
+    if (-not (Test-PathWithinRoot $RootDir $Path)) {
+        Fail "refusing to uninstall path outside ${RootLabel}: $Path"
+    }
+    if (Test-IsReparseLink $Path) {
+        if ($VerifyExpected -and -not $Force) {
+            if (-not $ExpectedTarget -or -not (Test-LinkTarget $Path $ExpectedTarget)) {
+                Write-Warning "skipping retargeted skill link: $Path (expected $ExpectedTarget; re-run with -Force to remove)"
+                $Skipped.Value++
+                return
+            }
+        }
+        if ($DryRun) { Write-Output "dry-run: remove skill link $Path" } else { Remove-LinkOnly $Path }
+        $Removed.Value++
+    } elseif (Test-Path -LiteralPath $Path) {
+        Write-Warning "skipping ${UnmanagedLabel}: $Path"
+    }
+}
+
+function Uninstall-ManagedFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$RootDir,
+        [Parameter(Mandatory = $true)][string]$RootLabel,
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$ExpectedSha = '',
+        [bool]$VerifySha = $true,
+        [string]$MarkerRegex = '',
+        [string]$Label = 'file',
+        [string]$ShaMismatchLabel = 'modified managed file',
+        [hashtable]$WarnedContainers = $null,
+        [bool]$Force = $false,
+        [bool]$DryRun = $false,
+        [ref]$Removed,
+        [ref]$Skipped
+    )
+    if (-not (Test-PathWithinRoot $RootDir $Path)) {
+        Fail "refusing to uninstall path outside ${RootLabel}: $Path"
+    }
+    if ($null -ne $WarnedContainers) {
+        $parentDir = Split-Path -Parent $Path
+        if ((Normalize-Path $parentDir) -ne (Normalize-Path $RootDir) -and (Test-IsReparseLink $parentDir)) {
+            if (-not $WarnedContainers.ContainsKey($parentDir)) {
+                Write-Warning "skipping symlinked container directory: $parentDir"
+                $WarnedContainers[$parentDir] = $true
+            }
+            $Skipped.Value++
+            return
+        }
+    }
+    if (Test-IsReparseLink $Path) {
+        Write-Warning "skipping symlinked ${Label}: $Path"
+        $Skipped.Value++
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    if ($MarkerRegex) {
+        $txt = [IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+        if ($txt -notmatch $MarkerRegex) {
+            Write-Warning "skipping unmanaged ${Label}: $Path"
+            return
+        }
+    }
+    if ($VerifySha -and -not $Force -and (-not $ExpectedSha -or ((Get-FileSha256 $Path) -ne $ExpectedSha))) {
+        Write-Warning "skipping ${ShaMismatchLabel}: $Path (re-run with -Force to remove)"
+        $Skipped.Value++
+        return
+    }
+    if ($DryRun) { Write-Output "dry-run: remove $Path" } else { Remove-Item -LiteralPath $Path -Force }
+    $Removed.Value++
+}
+
+function Write-PersonalModelsStatus([string]$B3Home, [string]$Status, [switch]$EmitError) {
+    if ($Status -like 'kept:*') {
+        Write-Output "model_preferences=$($Status.Substring(5)) (kept existing)"
+    } elseif ($Status -like 'dry-run:*') {
+        Write-Output "dry-run: initialize model_preferences=$($Status.Substring(8)) from $(Join-Path $B3Home 'config\models.example.md')"
+    } elseif ($Status -like 'created:*') {
+        Write-Output "model_preferences=$($Status.Substring(8)) (created from example)"
+    } elseif ($EmitError -and ($Status -like 'error:*')) {
+        Write-Output "model_preferences=$Status"
+    }
+}
+

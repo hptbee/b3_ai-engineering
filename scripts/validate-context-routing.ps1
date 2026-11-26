@@ -651,8 +651,9 @@ try {
 
     foreach ($hName in @('cursor', 'codex', 'claude')) {
         $fxDir = Join-Path $sandbox "sync-fx-$hName"
-        New-Item -ItemType Directory -Path (Join-Path $fxDir 'adapters\command-skills\b3-ship'), (Join-Path $fxDir 'skills\engineering\demo'), (Join-Path $fxDir 'commands'), (Join-Path $fxDir 'agents') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $fxDir 'adapters\command-skills\b3-ship'), (Join-Path $fxDir 'adapters\lib'), (Join-Path $fxDir 'skills\engineering\demo'), (Join-Path $fxDir 'commands'), (Join-Path $fxDir 'agents') -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $root 'adapters\sync-skills.ps1') -Destination (Join-Path $fxDir 'adapters\sync-skills.ps1') -Force
+        Copy-Item -LiteralPath (Join-Path $root 'adapters\lib\global-common.ps1') -Destination (Join-Path $fxDir 'adapters\lib\global-common.ps1') -Force
         Write-LfFile (Join-Path $fxDir 'skills\engineering\demo\SKILL.md') "---`nname: demo`ndescription: demo skill`n---`n# Demo`n"
         Write-LfFile (Join-Path $fxDir 'adapters\command-skills\b3-ship\SKILL.md') "---`nname: b3-ship`ndescription: ship cmd`n---`n# Ship`n"
         Write-LfFile (Join-Path $fxDir 'commands\b3-ship.md') "# Ship`n"

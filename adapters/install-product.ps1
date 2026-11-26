@@ -13,8 +13,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\global-common.ps1')
 
 $scriptRoot = $PSScriptRoot
-if (-not $B3Home) { $B3Home = Split-Path -Parent $scriptRoot }
-$B3Home = (Resolve-Path -LiteralPath $B3Home).Path
+$B3Home = Resolve-B3Home $B3Home (Split-Path -Parent $scriptRoot)
 $ProductRoot = (Resolve-Path -LiteralPath $ProductRoot).Path
 $workflow = Join-Path $B3Home 'workflows\ship.md'
 $b3Commands = Join-Path $B3Home 'commands'

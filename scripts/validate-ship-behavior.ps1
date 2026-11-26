@@ -24,7 +24,7 @@ Push-Location $sandbox
 try {
     # --- F4: empty invalid dest is replaced; nonempty dest fails; cursor sync & coexistence guard ---
     $fx = Join-Path $sandbox 'sync-fx'
-    New-Item -ItemType Directory -Path (Join-Path $fx 'adapters') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fx 'adapters\lib') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fx 'skills\eng\demo') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fx 'commands') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fx 'agents') | Out-Null
@@ -32,6 +32,7 @@ try {
     Set-Content (Join-Path $fx 'commands\b3-plan.md') '# b3-plan'
     Set-Content (Join-Path $fx 'agents\b3-reviewer.md') '# b3-reviewer'
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fx 'adapters\sync-skills.ps1')
+    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fx 'adapters\lib\global-common.ps1')
 
     $empty = Join-Path $fx '.agents\skills'
     New-Item -ItemType Directory -Path $empty | Out-Null
@@ -59,7 +60,7 @@ try {
 
     # Cursor sync on clean fixture
     $fxCur = Join-Path $sandbox 'sync-fx-cursor'
-    New-Item -ItemType Directory -Path (Join-Path $fxCur 'adapters') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fxCur 'adapters\lib') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fxCur 'skills\eng\demo') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fxCur 'commands') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fxCur 'agents') | Out-Null
@@ -67,6 +68,7 @@ try {
     Set-Content (Join-Path $fxCur 'commands\b3-plan.md') '# b3-plan'
     Set-Content (Join-Path $fxCur 'agents\b3-reviewer.md') '# b3-reviewer'
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCur 'adapters\sync-skills.ps1')
+    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fxCur 'adapters\lib\global-common.ps1')
     & powershell -NoProfile -File (Join-Path $fxCur 'adapters\sync-skills.ps1') -HostName cursor | Out-Null
     $curSyncExit = $LASTEXITCODE
     & powershell -NoProfile -File (Join-Path $fxCur 'adapters\sync-skills.ps1') -HostName cursor -VerifyOnly | Out-Null
@@ -76,12 +78,13 @@ try {
 
     # Claude sync on clean fixture
     $fxCl = Join-Path $sandbox 'sync-fx-claude'
-    New-Item -ItemType Directory -Path (Join-Path $fxCl 'adapters') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fxCl 'adapters\lib') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fxCl 'skills\eng\demo') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fxCl 'agents') | Out-Null
     Set-Content (Join-Path $fxCl 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
     Set-Content (Join-Path $fxCl 'agents\b3-reviewer.md') '# b3-reviewer'
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fxCl 'adapters\sync-skills.ps1')
+    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fxCl 'adapters\lib\global-common.ps1')
     & powershell -NoProfile -File (Join-Path $fxCl 'adapters\sync-skills.ps1') -HostName claude | Out-Null
     $clSyncExit = $LASTEXITCODE
     & powershell -NoProfile -File (Join-Path $fxCl 'adapters\sync-skills.ps1') -HostName claude -VerifyOnly | Out-Null
@@ -90,10 +93,11 @@ try {
     else { FailCheck 'sync-claude' "sync=$clSyncExit verify=$clVerifyExit" }
 
     $fx2 = Join-Path $sandbox 'sync-fx-nonempty'
-    New-Item -ItemType Directory -Path (Join-Path $fx2 'adapters') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $fx2 'adapters\lib') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $fx2 'skills\eng\demo') | Out-Null
     Set-Content (Join-Path $fx2 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $fx2 'adapters\sync-skills.ps1')
+    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $fx2 'adapters\lib\global-common.ps1')
     New-Item -ItemType Directory -Path (Join-Path $fx2 '.agents\skills') | Out-Null
     Set-Content (Join-Path $fx2 '.agents\skills\stale.txt') 'not a link'
     $err = $null
@@ -288,10 +292,11 @@ try {
     else { FailCheck 'sync-antigravity-verify' "exit=$LASTEXITCODE out=$agVerifyOut" }
 
     $agSyncFx = Join-Path $sandbox 'ag-sync-fx'
-    New-Item -ItemType Directory -Path (Join-Path $agSyncFx 'adapters') | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $agSyncFx 'adapters\lib') | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $agSyncFx 'skills\eng\demo') | Out-Null
     Set-Content (Join-Path $agSyncFx 'skills\eng\demo\SKILL.md') "---`nname: demo`ndescription: demo`n---`n# demo`n"
     Copy-Item (Join-Path $root 'adapters\sync-skills.ps1') (Join-Path $agSyncFx 'adapters\sync-skills.ps1')
+    Copy-Item (Join-Path $root 'adapters\lib\global-common.ps1') (Join-Path $agSyncFx 'adapters\lib\global-common.ps1')
     & powershell -NoProfile -File (Join-Path $agSyncFx 'adapters\sync-skills.ps1') -HostName antigravity | Out-Null
     if ($LASTEXITCODE -ne 0) {
         FailCheck 'sync-antigravity-generate' "exit $LASTEXITCODE"
@@ -3163,7 +3168,7 @@ try {
     if ($shipTplText -notmatch '(?m)^- last_wave:') {
         $crErrs.Add('ship-templates.md missing "- last_wave:" field')
     }
-    if ($shipTplText -notmatch '(?m)^\|\s*id\s*\|\s*status\s*\|\s*mode\s*\|\s*worker_root\s*\|\s*task_base\s*\|\s*scope\s*\|\s*commit\s*\|\s*verification\s*\|\s*review\s*\|\s*integration\s*\|\s*impl_agent\s*\|$') {
+    if ($shipTplText -notmatch '(?m)^\|\s*id\s*\|\s*status\s*\|\s*mode\s*\|\s*worker_root\s*\|\s*task_base\s*\|\s*scope\s*\|\s*commit\s*\|\s*verification\s*\|\s*review\s*\|\s*integration\s*\|\s*impl_agent\s*\|\r?$') {
         $crErrs.Add('ship-templates.md missing extended Tasks columns (mode, worker_root, scope, integration)')
     }
     foreach ($tok in @('partial waves', 'never `git reset`', 'reconcile `last_wave:`', 'check-wave -Partition', 'impl_agent', 'never duplicate active work', '`mode`', '`worker_root`', '`scope`', 'integration')) {
