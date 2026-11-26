@@ -511,7 +511,17 @@ function Invoke-GitCommand([string]$Root, [string[]]$GitArgs, [string]$StdInText
     $utf8 = New-Object System.Text.UTF8Encoding($false)
     $psi.StandardOutputEncoding = $utf8
     $psi.StandardErrorEncoding = $utf8
-    $allArgs = @('-C', $Root, '-c', 'core.quotepath=false', '-c', 'diff.noprefix=false', '-c', 'diff.mnemonicPrefix=false', '-c', 'diff.srcPrefix=a/', '-c', 'diff.dstPrefix=b/') + @($GitArgs)
+    $useLitPs = $true
+    foreach ($ga in $GitArgs) {
+        if ([string]$ga -ceq '--') { break }
+        if ([string]$ga -ceq 'grep') { $useLitPs = $false; break }
+    }
+    $allArgs = New-Object System.Collections.Generic.List[string]
+    if ($useLitPs) { [void]$allArgs.Add('--literal-pathspecs') }
+    foreach ($baseGArg in @('-C', $Root, '-c', 'core.quotepath=false', '-c', 'diff.noprefix=false', '-c', 'diff.mnemonicPrefix=false', '-c', 'diff.srcPrefix=a/', '-c', 'diff.dstPrefix=b/')) {
+        [void]$allArgs.Add($baseGArg)
+    }
+    foreach ($ga in @($GitArgs)) { [void]$allArgs.Add([string]$ga) }
     if ($psi.PSObject.Properties['ArgumentList']) {
         foreach ($a in $allArgs) { [void]$psi.ArgumentList.Add($a) }
     } else {
@@ -1394,7 +1404,7 @@ function Get-TreeFingerprint([string]$Root, [string[]]$RelPaths, [string[]]$IgnP
             Fail "GIT_ERROR: git diff --raw index-wt failed: $detail" 1
         }
         $lsUnScope = if ($cleanRel.Count -gt 0) { @('--') + $cleanRel } else { @() }
-        $untracked = @(Invoke-GitLines $Root (@('ls-files', '--others', '--exclude-standard') + $lsUnScope))
+        $untracked = @(Invoke-GitPathsZ $Root (@('ls-files', '--others', '--exclude-standard', '-z') + $lsUnScope) 'names' 'GIT_ERROR')
 
         $headDiff = Parse-GitRawDiff $hdRes.StdOut $IgnPaths $cleanRel
         $cachedDiff = Parse-GitRawDiff $caRes.StdOut $IgnPaths $cleanRel
@@ -2095,7 +2105,11 @@ function Invoke-CollectScopeData([string]$Root, [string]$ResolvedBase, [string]$
             @('diff', '--no-ext-diff', '--no-renames', '-U0', $ResolvedBase, '--')
         }
         $dRes = Invoke-GitCommand $Root $dArgs
-        if ($dRes.ExitCode -eq 0 -and $dRes.StdOut) {
+        if ($dRes.ExitCode -ne 0) {
+            $detail = if ($dRes.StdErr.Trim()) { $dRes.StdErr.Trim() } else { $dRes.StdOut.Trim() }
+            Fail ("${FailPrefix}: git diff -U0 failed: $detail") 1
+        }
+        if ($dRes.StdOut) {
             $hdrOldPath = ''
             $curPath = ''
             $curScan = $false
@@ -4292,13 +4306,6 @@ switch ($Command) {
             if (-not $p -or (Test-CheckpointPath $p) -or (Test-OwnershipPathMatch $p $ignored $mcCaseInsensitive)) { continue }
             if ($nonDelSet.Add($p)) { $nonDelChanged.Add($p) }
         }
-        if ($caBaseNonDelStdOut) {
-            foreach ($row in ($caBaseNonDelStdOut -split "\r?\n")) {
-                $p = Normalize-PathValue ([string]$row)
-                if (-not $p -or (Test-CheckpointPath $p) -or (Test-PathMatch $p $ignored)) { continue }
-                if ($nonDelSet.Add($p)) { $nonDelChanged.Add($p) }
-            }
-        }
 
         $scopeCreep = New-Object System.Collections.Generic.List[string]
         if ($allowed.Count -gt 0) {
@@ -4328,7 +4335,7 @@ switch ($Command) {
         }
         $diffTextsToScan = New-Object System.Collections.Generic.List[string]
         if ($dlRes.StdOut) { [void]$diffTextsToScan.Add($dlRes.StdOut) }
-        if ((-not $targetTrim) -and $caBaseChStdOut -and $caBaseChStdOut.Trim()) {
+        if ((-not $targetTrim) -and $caBaseChPaths.Count -gt 0) {
             $dlCaRes = Invoke-GitCommand $RepoRoot @('diff', '--no-ext-diff', '--cached', '--no-renames', '-U0', $resolvedBase, '--')
             if ($dlCaRes.ExitCode -ne 0) {
                 $detail = if ($dlCaRes.StdErr.Trim()) { $dlCaRes.StdErr.Trim() } else { $dlCaRes.StdOut.Trim() }
@@ -4668,7 +4675,7 @@ switch ($Command) {
                     $tidOwned = @($wsParsed.Map[$tid])
                     foreach ($wp in $wChanged) {
                         $attributedPaths.Add($wp)
-                        if (($wp -imatch '^\.b3(/|$)') -or ($wp -imatch '(^|/)\.git(/|$)') -or ($wp -imatch '(^|/)\.gitmodules$') -or (Test-OwnershipPathMatch $wp $protectedList $true)) {
+                        if (($wp -imatch '^\.b3(/|$)') -or ($wp -imatch '(^|/)\.git(/|$)') -or ($wp -imatch '(^|/)\.gitmodules$') -or (Test-OwnershipPathMatch $wp $protectedList $mcCaseInsensitive)) {
                             $ovViolations.Add("${wp}(${tid}->protected)")
                             continue
                         }
@@ -6644,6 +6651,22 @@ switch ($Command) {
                 }
                 if ($pmRemoteChk.Sha -cne $remTargetSha) {
                     Fail "POST_MERGE_FAILED: stale_remote_target_ref(local=$remTargetSha remote=$($pmRemoteChk.Sha))" 1
+                }
+                if ($pmTrunkBranch) {
+                    if ($pmTrunkBranch -cne $localTargetBranch) {
+                        $pmAuthChk = Invoke-GitLsRemoteRef $RepoRoot "refs/heads/${pmTrunkBranch}"
+                        if ($pmAuthChk.Status -ceq 'MISSING') {
+                            Fail 'POST_MERGE_FAILED: remote_authority_ref_missing' 1
+                        }
+                        if ($pmAuthChk.Status -ceq 'UNREACHABLE') {
+                            Fail 'PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable' 2
+                        }
+                        if ($pmAuthChk.Sha -cne $pmTrunkSha) {
+                            Fail "POST_MERGE_FAILED: stale_remote_authority_ref(local=$pmTrunkSha remote=$($pmAuthChk.Sha))" 1
+                        }
+                    } elseif ($pmRemoteChk.Sha -cne $pmTrunkSha) {
+                        Fail "POST_MERGE_FAILED: stale_remote_authority_ref(local=$pmTrunkSha remote=$($pmRemoteChk.Sha))" 1
+                    }
                 }
                 $ancRemRes = Invoke-GitCommand $RepoRoot @('merge-base', '--is-ancestor', $resMerged, $remTargetSha)
                 if ($ancRemRes.ExitCode -ne 0) {

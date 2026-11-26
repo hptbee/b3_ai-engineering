@@ -38,19 +38,25 @@ _run_git_cmd_core() {
   local rc=0
   _GIT_STDOUT=""
   _GIT_STDERR=""
+  local -a _lit_args=(--literal-pathspecs)
+  local _ga=""
+  for _ga in "$@"; do
+    [[ "$_ga" == "--" ]] && break
+    if [[ "$_ga" == "grep" ]]; then _lit_args=(); break; fi
+  done
   if [[ "$stdin_mode" == "quiet" ]]; then
     if [[ -n "$idx_file" ]]; then
-      if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>/dev/null)"; then rc=0; else rc=$?; fi
+      if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" ${_lit_args[@]+"${_lit_args[@]}"} -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>/dev/null)"; then rc=0; else rc=$?; fi
     else
-      if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>/dev/null)"; then rc=0; else rc=$?; fi
+      if _GIT_STDOUT="$(git -C "$root" ${_lit_args[@]+"${_lit_args[@]}"} -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>/dev/null)"; then rc=0; else rc=$?; fi
     fi
     return $rc
   elif [[ "$stdin_mode" == "file" ]]; then
-    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" < "$stdin_val" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
+    if _GIT_STDOUT="$(git -C "$root" ${_lit_args[@]+"${_lit_args[@]}"} -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" < "$stdin_val" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
   elif [[ -n "$idx_file" ]]; then
-    if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
+    if _GIT_STDOUT="$(GIT_INDEX_FILE="$idx_file" git -C "$root" ${_lit_args[@]+"${_lit_args[@]}"} -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
   else
-    if _GIT_STDOUT="$(git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
+    if _GIT_STDOUT="$(git -C "$root" ${_lit_args[@]+"${_lit_args[@]}"} -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" 2>"$_B3_GIT_ERR_FILE")"; then rc=0; else rc=$?; fi
   fi
   if [[ $rc -ne 0 && -f "$_B3_GIT_ERR_FILE" ]]; then
     _GIT_STDERR="$(< "$_B3_GIT_ERR_FILE")"
@@ -119,9 +125,9 @@ run_git_paths_z() {
   local z_tmp rc=0
   make_temp_file "b3-gpz" z_tmp
   if [[ -n "$idx_file" ]]; then
-    if GIT_INDEX_FILE="$idx_file" git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" >"$z_tmp" 2>"$_B3_GIT_ERR_FILE"; then rc=0; else rc=$?; fi
+    if GIT_INDEX_FILE="$idx_file" git -C "$root" --literal-pathspecs -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" >"$z_tmp" 2>"$_B3_GIT_ERR_FILE"; then rc=0; else rc=$?; fi
   else
-    if git -C "$root" -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" >"$z_tmp" 2>"$_B3_GIT_ERR_FILE"; then rc=0; else rc=$?; fi
+    if git -C "$root" --literal-pathspecs -c core.quotepath=false -c diff.noprefix=false -c diff.mnemonicPrefix=false -c diff.srcPrefix=a/ -c diff.dstPrefix=b/ "$@" >"$z_tmp" 2>"$_B3_GIT_ERR_FILE"; then rc=0; else rc=$?; fi
   fi
   if [[ $rc -ne 0 ]]; then
     _GIT_STDERR=""
@@ -2452,8 +2458,7 @@ compute_tree_fingerprint() {
       diff_cached_raw="$_GIT_STDOUT"
       run_git_cmd "$root" diff --no-ext-diff --raw --no-renames --no-abbrev --ignore-submodules=none -- "${clean_rel[@]}" || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
       diff_idx_wt_raw="$_GIT_STDOUT"
-      run_git_cmd "$root" ls-files --others --exclude-standard -- "${clean_rel[@]}" || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
-      untracked="$_GIT_STDOUT"
+      run_git_paths_z "$root" "names" "GIT_ERROR" "" ls-files --others --exclude-standard -z -- "${clean_rel[@]}" || return 1
     else
       run_git_cmd "$root" diff --no-ext-diff --raw --no-renames --no-abbrev --ignore-submodules=none HEAD -- || { echo "GIT_ERROR: git diff --raw HEAD failed: $(git_err_detail)"; return 1; }
       diff_head_raw="$_GIT_STDOUT"
@@ -2461,8 +2466,11 @@ compute_tree_fingerprint() {
       diff_cached_raw="$_GIT_STDOUT"
       run_git_cmd "$root" diff --no-ext-diff --raw --no-renames --no-abbrev --ignore-submodules=none -- || { echo "GIT_ERROR: git diff --raw index-wt failed: $(git_err_detail)"; return 1; }
       diff_idx_wt_raw="$_GIT_STDOUT"
-      run_git_cmd "$root" ls-files --others --exclude-standard || { echo "GIT_ERROR: git ls-files failed: $(git_err_detail)"; return 1; }
-      untracked="$_GIT_STDOUT"
+      run_git_paths_z "$root" "names" "GIT_ERROR" "" ls-files --others --exclude-standard -z || return 1
+    fi
+    untracked=""
+    if [[ ${#_GIT_PATHS_Z[@]} -gt 0 ]]; then
+      untracked="$(printf '%s\n' "${_GIT_PATHS_Z[@]}")"
     fi
 
     local tasks_raw
@@ -9986,6 +9994,26 @@ ${el}"
         if [[ "$_LS_REMOTE_SHA" != "$REM_TARGET_SHA" ]]; then
           printf 'POST_MERGE_FAILED: stale_remote_target_ref(local=%s remote=%s)\n' "$REM_TARGET_SHA" "$_LS_REMOTE_SHA"
           exit 1
+        fi
+        if [[ -n "$PM_TRUNK_BRANCH" ]]; then
+          if [[ "$PM_TRUNK_BRANCH" != "$LOCAL_TARGET_BRANCH" ]]; then
+            git_ls_remote_ref "$REPO_ROOT" "refs/heads/${PM_TRUNK_BRANCH}"
+            if [[ "$_LS_REMOTE_STATUS" == "MISSING" ]]; then
+              echo "POST_MERGE_FAILED: remote_authority_ref_missing"
+              exit 1
+            fi
+            if [[ "$_LS_REMOTE_STATUS" == "UNREACHABLE" ]]; then
+              echo "PROVIDER_UNAVAILABLE: post_merge_remote_unverifiable"
+              exit 2
+            fi
+            if [[ "$_LS_REMOTE_SHA" != "$PM_TRUNK_SHA" ]]; then
+              printf 'POST_MERGE_FAILED: stale_remote_authority_ref(local=%s remote=%s)\n' "$PM_TRUNK_SHA" "$_LS_REMOTE_SHA"
+              exit 1
+            fi
+          elif [[ "$_LS_REMOTE_SHA" != "$PM_TRUNK_SHA" ]]; then
+            printf 'POST_MERGE_FAILED: stale_remote_authority_ref(local=%s remote=%s)\n' "$PM_TRUNK_SHA" "$_LS_REMOTE_SHA"
+            exit 1
+          fi
         fi
         if ! run_git_cmd_quiet "$REPO_ROOT" merge-base --is-ancestor "$RES_MERGED" "$REM_TARGET_SHA"; then
           echo "POST_MERGE_FAILED: merge_commit_not_in_remote_target(target_ref=${LOCAL_TARGET_BRANCH})"

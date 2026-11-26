@@ -1468,6 +1468,34 @@ run_dual "" "mock" "merge-policy-check" \
   -RepoRoot "$R14" -PostMerge -TargetRef main -HeadSha "$R14_HEAD" -MergedSha "$R14_MERGE"
 assert_dual "14d2-post-merge-fresh-bare-remote-passes" 0 "^POST_MERGE_VERIFIED: mode=local sha=${R14_MERGE} " || t14_ok=false
 
+# SEC-02: -PostMerge against allowed release/* branch blocks if canonical trunk authority ref (main) is stale remotely
+printf '{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true,"allowed_target_branches":["main","release/*"]}\n' > "${R14}/.b3/research-policy.json"
+git -C "$R14" checkout -q main
+git -C "$R14" add .b3/research-policy.json && git -C "$R14" commit -qm "allow release/*"
+git -C "$R14" push -q origin main
+git -C "$R14" fetch -q origin
+R14_REL_BASE="$(git -C "$R14" rev-parse HEAD)"
+git -C "$R14" checkout -qb "release/v1" "$R14_REL_BASE"
+git -C "$R14" checkout -qb "feat/r14-rel" "$R14_REL_BASE"
+printf 'rel feat\n' > "${R14}/docs/rel-feat.md"
+git -C "$R14" add docs/rel-feat.md && git -C "$R14" commit -qm "rel feat"
+R14_REL_HEAD="$(git -C "$R14" rev-parse HEAD)"
+git -C "$R14" checkout -q "release/v1"
+git -C "$R14" merge --no-ff -qm "merge into release/v1" "$R14_REL_HEAD"
+R14_REL_MERGE="$(git -C "$R14" rev-parse HEAD)"
+git -C "$R14" push -q origin "release/v1"
+git -C "$R14" fetch -q origin "release/v1"
+# Now advance main on R14_CLONE and push WITHOUT fetching in R14 -> release/v1 is fresh, origin/main authority is stale!
+git -C "$R14_CLONE" pull -q origin main
+printf 'advance main behind back\n' > "${R14_CLONE}/docs/main-advance-sec02.md"
+git -C "$R14_CLONE" add docs/main-advance-sec02.md && git -C "$R14_CLONE" commit -qm "advance trunk authority"
+git -C "$R14_CLONE" push -q origin main
+run_dual "" "mock" "merge-policy-check" \
+  --repo-root "$R14" --post-merge --target-ref "release/v1" --head-sha "$R14_REL_HEAD" --merged-sha "$R14_REL_MERGE" \
+  -- \
+  -RepoRoot "$R14" -PostMerge -TargetRef "release/v1" -HeadSha "$R14_REL_HEAD" -MergedSha "$R14_REL_MERGE"
+assert_dual "14d3-post-merge-stale-trunk-authority-blocked" 1 "^POST_MERGE_FAILED: stale_remote_authority_ref\(" || t14_ok=false
+
 $t14_ok && pass "14-r001-ci-receipts-and-r003-bare-remote-freshness"
 
 # ============================================================================

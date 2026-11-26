@@ -3353,6 +3353,45 @@ try {
         if ($LASTEXITCODE -eq 0) { $advErrs.Add("SH verify-check did not fail closed on broken git binary: $($badShOut -join ' ')") }
     }
 
+    # SEC-01: Bracketed dynamic route path (src/[id]/page.tsx) must use --literal-pathspecs (tamper invalidates receipt!)
+    & git -C $rAdv reset -q | Out-Null
+    & git -C $rAdv checkout -- 'docs/tài liệu [1] spaced.md' 'docs/ lead.md' | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $rAdv 'src\[id]') -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $rAdv 'src\[id]\page.tsx'), "export const Page = () => 1;`n", $utf8NoBomAdv)
+    [IO.File]::WriteAllText((Join-Path $rAdv 'src\db.ts'), "export const q = 'SELECT 1';`n", $utf8NoBomAdv)
+    & git -C $rAdv add 'src/[id]/page.tsx' 'src/db.ts' | Out-Null
+    & git -C $rAdv commit -qm 'add bracketed route and db' | Out-Null
+    $secRec = '.b3/ship/runs/r-adv/evidence/sec01.verify'
+    $secVr = Invoke-PsGuard @('verify-run', '-RepoRoot', $rAdv, '-VerifyCmd', 'echo sec01-ok', '-ReceiptPath', $secRec, '-TaskId', 'SEC01', '-RelevantPaths', 'src/[id]/page.tsx')
+    $secVcOkPs = Invoke-PsGuard @('verify-check', '-RepoRoot', $rAdv, '-ReceiptPath', $secRec)
+    [IO.File]::WriteAllText((Join-Path $rAdv 'src\[id]\page.tsx'), "export const Page = () => 999;`n", $utf8NoBomAdv)
+    $secVcStPs = Invoke-PsGuard @('verify-check', '-RepoRoot', $rAdv, '-ReceiptPath', $secRec)
+    if ($secVr.Code -ne 0 -or $secVcOkPs.Code -ne 0 -or $secVcStPs.Code -ne 2 -or $secVcStPs.Text -notmatch '^VERIFY_STALE:') {
+        $advErrs.Add("SEC-01 PS bracketed path literal verification failed: vr=$($secVr.Code) ok=$($secVcOkPs.Code) st=$($secVcStPs.Code)/$($secVcStPs.Text)")
+    }
+    if ($script:HasBash) {
+        $secVcStSh = Invoke-ShGuard @('verify-check', '--repo-root', $rAdvPosix, '--receipt-path', $secRec)
+        if ($secVcStSh.Code -ne 2 -or $secVcStSh.Text -notmatch '^VERIFY_STALE:') {
+            $advErrs.Add("SEC-01 SH bracketed path literal verification failed: $($secVcStSh.Code)/$($secVcStSh.Text)")
+        }
+    }
+    & git -C $rAdv checkout -- 'src/[id]/page.tsx' | Out-Null
+
+    # SEC-03: mechanical-check must scan staged-vs-base (--cached -U0) even when working tree reverted to base
+    [IO.File]::WriteAllText((Join-Path $rAdv 'src\db.ts'), "export const q = 'DROP TABLE users;';`n", $utf8NoBomAdv)
+    & git -C $rAdv add 'src/db.ts' | Out-Null
+    [IO.File]::WriteAllText((Join-Path $rAdv 'src\db.ts'), "export const q = 'SELECT 1';`n", $utf8NoBomAdv)
+    $secMcPs = Invoke-PsGuard @('mechanical-check', '-RepoRoot', $rAdv, '-BaseSha', 'HEAD', '-AllowedPaths', 'src/db.ts')
+    if ($secMcPs.Code -ne 1 -or $secMcPs.Text -notmatch 'destructive_sql') {
+        $advErrs.Add("SEC-03 PS staged-only destructive_sql missed: $($secMcPs.Code)/$($secMcPs.Text)")
+    }
+    if ($script:HasBash) {
+        $secMcSh = Invoke-ShGuard @('mechanical-check', '--repo-root', $rAdvPosix, '--base-sha', 'HEAD', '--allowed-paths', 'src/db.ts')
+        if ($secMcSh.Code -ne 1 -or $secMcSh.Text -notmatch 'destructive_sql') {
+            $advErrs.Add("SEC-03 SH staged-only destructive_sql missed: $($secMcSh.Code)/$($secMcSh.Text)")
+        }
+    }
+
     if ($advErrs.Count -eq 0) {
         Pass 'r002-low2-git-fail-worker-attribution'
     } else {

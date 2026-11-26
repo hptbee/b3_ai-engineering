@@ -251,7 +251,7 @@ export function execGh(args, options = {}) {
         return { ok: false, reason: 'unsafe_gh_arg', error: new Error('Unsafe argument rejected for Windows batch gh CLI'), status: null, stdout: '', stderr: '', ghBin };
       }
     }
-    const comSpec = process.env.ComSpec || 'cmd.exe';
+    const comSpec = baseEnv.ComSpec || baseEnv.COMSPEC || 'cmd.exe';
     if (hasControlChars(comSpec) || /["&|<>^%!]/.test(comSpec)) {
       return { ok: false, reason: 'unsafe_comspec', error: new Error('Unsafe ComSpec rejected'), status: null, stdout: '', stderr: '', ghBin };
     }

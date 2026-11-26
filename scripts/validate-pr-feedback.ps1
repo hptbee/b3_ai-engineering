@@ -1158,6 +1158,7 @@ console.log(JSON.stringify({
                    ($r4Obj.errTrail -eq 'unsafe_gh_arg') -and
                    ($r4Obj.errQuote -eq 'unsafe_gh_arg') -and
                    ($r4Obj.errParen -eq 'unsafe_gh_path') -and
+                   ($r4Obj.errComspec -eq 'unsafe_comspec') -and
                    ($r4Obj.toOk -eq $false) -and ($r4Obj.toReason -eq 'timeout')
 
         # LOW #1: Missing node (with gh present) & missing gh (with node + coreutils present) on b3-github-verify.{ps1,sh}
