@@ -97,6 +97,15 @@ fn path_without_gh(empty_dir: &Path) -> String {
             .any(|name| d.join(name).is_file());
         if !has_gh {
             kept.push(d);
+            continue;
+        }
+        #[cfg(unix)]
+        for tool in ["git", "sh", "bash"] {
+            let src = d.join(tool);
+            let dst = empty_dir.join(tool);
+            if src.is_file() && !dst.exists() {
+                std::os::unix::fs::symlink(&src, &dst).expect("symlink tool");
+            }
         }
     }
     std::env::join_paths(kept)
@@ -880,7 +889,7 @@ fn stacked_targets_base_sha_and_mock_gh_ci_gates() {
         &[("PATH", &nogh_path)],
         &["B3_GH_BIN"],
     );
-    assert_eq!(ng_c, 2);
+    assert_eq!(ng_c, 2, "{ng_err}");
     assert!(
         ng_err.contains("PROVIDER_UNAVAILABLE:") && ng_err.contains("gh_cli_unavailable"),
         "{ng_err}"

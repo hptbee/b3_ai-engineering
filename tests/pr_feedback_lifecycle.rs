@@ -25,11 +25,14 @@ const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
 const argv = process.argv.slice(2);
 const stdinData = argv.includes('--input') ? fs.readFileSync(0, 'utf8') : '';
 const save = () => fs.writeFileSync(stateFile, JSON.stringify(state), 'utf8');
+const DONE = Symbol('done');
 const out = (obj, code = 0) => {
-  process.stdout.write(JSON.stringify(obj) + '\n');
-  process.exit(code);
+  process.exitCode = code;
+  process.stdout.end(JSON.stringify(obj) + '\n');
+  throw DONE;
 };
 
+try {
 if (argv[0] !== 'api') {
   process.stderr.write('Unexpected gh subcommand: ' + argv.join(' ') + '\n');
   process.exit(1);
@@ -423,7 +426,10 @@ if (pathPart === `${repoPrefix}/pulls/${prNum}/files` && method === 'GET') {
 
 save();
 process.stderr.write(`Unhandled mock REST route: ${method} ${target}\n`);
-process.exit(1);
+process.exitCode = 1;
+} catch (err) {
+  if (err !== DONE) throw err;
+}
 "#;
 
 struct PrFixture {
@@ -1841,7 +1847,13 @@ fn pr_large_pipe_stdout_and_error_non_deadlock() {
         "124",
         "--include-bodies",
     ]);
-    assert_eq!(c1, 0);
+    assert_eq!(
+        c1,
+        0,
+        "pr fetch failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out1),
+        String::from_utf8_lossy(&_err1)
+    );
     assert!(
         out1.len() > 250_000,
         "expected >250KB stdout, got {}",
@@ -1869,7 +1881,13 @@ fn pr_large_pipe_stdout_and_error_non_deadlock() {
         fx.reply_body.to_str().unwrap(),
         "--authorize-write",
     ]);
-    assert_eq!(c2, 2);
+    assert_eq!(
+        c2,
+        2,
+        "pr reply unexpected exit: stdout={} stderr={}",
+        String::from_utf8_lossy(&out2),
+        String::from_utf8_lossy(&_err2)
+    );
     assert!(
         out2.len() > 120_000,
         "expected >120KB error JSON, got {}",
