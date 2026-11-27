@@ -2,7 +2,7 @@
 
 A personal AI-assisted software engineering system built on a **host-neutral canonical core** supporting **Cursor**, **Codex**, **Claude Code**, and **Antigravity**. The conceptual core (`24` canonical Agent Skills + `11` command-skills = `35` total `SKILL.md` files, `5` rules, `11` commands, `5` agents, workflows, review-loop, eval fixtures, research) stays portable and provider-neutral; thin host wrappers and adapters map it onto each product without duplicating prose.
 
-This is an **evolving** operating layer for AI coding agents. It is not a company handbook.
+This is an **evolving** operating layer for AI coding agents. It is not a company handbook. B3 currently optimizes host-executed engineering workflows; it does **not** include a standalone model/tool agent runtime. The [outcome-first roadmap](docs/roadmap.md) prioritizes verified work per total token/cost and a minimal boundary for future coding-agent CLIs without exposing private integration details.
 
 ## Repository layout
 
@@ -32,7 +32,9 @@ Catalogs: [`skills/README.md`](skills/README.md), [`docs/engineering-philosophy.
 
 ## Why it exists
 
-Agents are useful when they have durable constraints, reusable methods, verification instead of assertion, a way to learn without turning preference into dogma, and a core whose **meaning** is not rewritten per product.
+B3 makes existing coding agents more effective under practical model/context limits: fewer unnecessary tokens and retries, better task coordination, strong verification, and less manual intervention. Agents still benefit from durable constraints, reusable methods, evidence over assertion, and a core whose **meaning** is not rewritten per product.
+
+**Current focus:** Measure Cursor-with-B3 against Cursor without B3 on identical verified tasks, then optimize only proven bottlenecks. **Future portability:** Keep canonical workflows and native Rust checks reusable by other coding-agent runtimes through opt-in adapters; do not build another IDE/agent loop by default. See [roadmap](docs/roadmap.md) and [evaluation method](docs/evaluation.md).
 
 ## Host-neutral core, 4-host activation
 
@@ -120,6 +122,6 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Maturity & governance
 
-System evolution, promotion gates, the canonical maturity table, and single-source ownership boundaries live in [`docs/system-lifecycle.md`](docs/system-lifecycle.md).
+The [canonical roadmap](docs/roadmap.md) defines priorities and phase exit evidence. System evolution, current maturity, promotion gates, and single-source ownership boundaries live in [`docs/system-lifecycle.md`](docs/system-lifecycle.md).
 
 **Present rules:** `engineering-principles`, `verification`, `portability`, `evidence-and-provenance`, `simplest-correct`.

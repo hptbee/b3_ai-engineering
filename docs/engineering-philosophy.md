@@ -6,6 +6,8 @@ The governing principle of `b3-ai-engineering` is:
 
 Every workflow, skill, subagent dispatch, and optimization is evaluated against verified engineering outcomes per unit of total cost and context—never raw speed, raw agent count, or unverified output.
 
+**Product north star:** Make the coding agents developers already use complete real tasks with less total token/context spend, fewer retries, and less manual correction. Current daily-use optimization is host-first (especially Cursor); the architecture remains host-neutral for future coding-agent CLIs. Native Rust checks provide deterministic execution but do not constitute a standalone AI model/agent runtime. See the [canonical roadmap](roadmap.md).
+
 ## Precedence
 
 This philosophy operates strictly inside the authority stack in [`precedence.md`](precedence.md) (ranks 1–8 remain unchanged and authoritative):
@@ -46,6 +48,13 @@ In practice:
 - **Adaptive concurrency:** Scale active workers dynamically by available independent work, context budget, host limits, CPU/memory/rate limits, and cost/throughput benefit rather than fixed `3`/`4` worker caps.
 - **4 isolation modes (least-expensive-safe):** Select the lightest safe mode (`SHARED_READ_ONLY` for read-only analysis/review without worktrees, `SHARED_DISJOINT_WRITES` in one worktree only when strictly disjoint and parent-validated, `ISOLATED_WRITES` via verified worktrees when risk or side effects require it, or `SEQUENTIAL` fallback) — never create worktrees for read-only agents or claim stronger isolation than the host enforces.
 - **Native-first `b3` CLI & canonical ownership:** Execute deterministic 0-token checks via native `b3` (`b3 guard`, `b3 pr`, `b3 sync`, `b3 install`, `b3 context measure`) and enforce single-source ownership: workers execute bounded units without nested spawning, while the parent orchestrator owns shared state, integration, commits, and external PR mutations.
+
+## Outcome Before Infrastructure
+
+- **Baseline before claiming savings:** Compare the same host/model/task with and without B3. Measure total tokens, verified completion, wall-clock time, retries, and human interventions. Use `UNKNOWN` for unavailable runtime telemetry; static prompt-byte estimates are not actual bills.
+- **Minimize coordination tax:** Extra agents, reviews, context refreshes, and guards must justify their overhead. Inline/no-dispatch is the default when it is the simplest safe option; high-risk independent review still applies when warranted.
+- **No speculative runtime rebuild:** Integrate an existing coding-agent host through a minimal capability boundary when a real need arises. Private/custom adapters stay outside the public core.
+- **Evidence-gated expansion:** A new layer must pass reproducible end-to-end evaluation and fit one canonical owner before it becomes a permanent part of B3.
 
 ## Operational Cross-Links
 

@@ -34,6 +34,8 @@ To avoid always-on context bloat, `AGENTS.md` and `rules/*.md` do not load model
 
 B3 never claims a model switch occurred unless the host runtime actually confirms or applies it.
 
+**Future runtime boundary:** These Markdown files are advisory role preferences, not a universal model API, pricing service, or guaranteed cost router. A future external coding-agent CLI must expose and confirm the capabilities it actually supports; B3 does not assume every host can switch models per subagent or report tokens. Keep private provider configuration and credentials outside the public repository. See the [roadmap](roadmap.md) and [evaluation method](evaluation.md).
+
 ## Upgrading from Earlier PR #21 JSON Config
 
 Earlier PR #21 drafts used `~/.b3/models.local.json` or `<project>/.b3/models.local.json`. B3 does not delete or overwrite existing JSON files automatically:

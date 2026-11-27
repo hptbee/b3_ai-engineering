@@ -16,6 +16,14 @@ B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `ag
 
 The system is evolving. Layers marked **specified** exist as documentation and directories. Layers marked **present** have usable files.
 
+## Harness boundary and runtime portability
+
+B3 is an **engineering harness layer** around existing coding-agent hosts, not a replacement IDE or a standalone model-serving agent runtime. The canonical workflows and skills define *what* to do; host agents perform model inference, tool invocation, and agent sessions; native Rust `b3` performs deterministic Git, verification, evidence, context, PR, and installation tasks. Do not mistake a host-executed workflow contract for a B3-managed agent scheduler.
+
+**Now:** Cursor-centered everyday use with reusable adapters for the other documented hosts. **Future (conditional):** A coding-agent CLI may integrate through a small capability-oriented adapter (task execution/status/events, optional cancellation/resume and usage), defined only when a concrete need exists. A hypothetical private/custom adapter is not part of the public B3 repository, and its internal details are not required to maintain core functionality. No current adapter is claimed to implement this hypothetical runtime API.
+
+Keep provider/model choices, credentials, proprietary details, and runtime-specific session mechanics out of canonical rules and native guard contracts. The [roadmap](roadmap.md) owns future priorities; the [system lifecycle](system-lifecycle.md) owns current maturity.
+
 ## Feedback-loop model
 
 The system is **not** a strict execution pipeline. The diagram is conceptual: it shows how constraints, methods, action, and learning relate. A given task may enter at a command, a skill, or a review — it does not walk every box.
@@ -262,3 +270,4 @@ Example:
 
 - Precedence: [`precedence.md`](precedence.md)
 - Evolution: [`system-lifecycle.md`](system-lifecycle.md)
+- Roadmap and outcome criteria: [`roadmap.md`](roadmap.md)

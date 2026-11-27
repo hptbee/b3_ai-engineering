@@ -75,4 +75,4 @@ Validation: run `cargo test` (plus compatibility script suites under `scripts/`)
 
 - **Live external MCP server execution:** Local CLI tests validate deterministic `b3 guard context-cache`, `diff-scope`, contract hooks, and static budgets; they do **not** run live Codebase Memory or Serena MCP servers.
 - **Live host IDE UI discovery:** Adapter checks verify local symlinks/junctions and `.agents/skills.json`, not live MCP tool registration or UI discovery inside Cursor, Antigravity, Codex, or Claude Code.
-- **Runtime token / cost savings:** Actual runtime token, latency, and cost impact depend on host implementation, MCP server indexing, and repository workload; no synthetic or unmeasured runtime savings are claimed here.
+- **Runtime token / cost savings:** Actual runtime token, latency, and cost impact depend on host implementation, MCP server indexing, and repository workload; no synthetic or unmeasured runtime savings are claimed here. Paired host-with/without-B3 measurement is specified in [evaluation.md](evaluation.md); see [roadmap.md](roadmap.md) for priorities.

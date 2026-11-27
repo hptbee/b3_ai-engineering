@@ -75,6 +75,8 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 
 ## Maturity (Single Canonical Table)
 
+**Current status only.** Future priorities and phase acceptance criteria are owned by the [roadmap](roadmap.md), not this maturity table.
+
 | Area | Status |
 | --- | --- |
 | Architecture, standards, precedence, lifecycle | **Present** (`docs/`) |
@@ -88,6 +90,8 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 | Knowledge after lessons | **Minimal** — [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md); no `stable/` or `volatile/` yet |
 | Profile files (`profiles/`) | **Not created** (`knowledge/personal/` holds background) |
 | Host adapters (Cursor, Codex, Claude Code, Antigravity) | **Present** (`b3 sync`, `b3 install product`, `b3 install global`, Antigravity plugin); live IDE discovery **UNKNOWN / INCOMPLETE** |
+| Standalone agent runtime / generic CLI runtime adapter | **Not implemented**; current orchestration is executed by the active coding-agent host. A public mock-based adapter contract is conditional roadmap work, not an existing integration. |
+| Measured token/cost advantage over host baseline | **Not verified**; static context caps are measured, end-to-end billed usage and cost per verified task have no established benchmark. |
 
 Do not skip Research → Synthesis when adding more skills. Do not tell agents the review loop is unspecified: the procedure exists; product-repo exercise and host isolation remain unverified.
 

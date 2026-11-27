@@ -133,6 +133,8 @@ Each case should record: intent, input, expected bucket or outcome, and the arti
 
 ## Optimization measurement (proposed methodology)
 
+**Priority:** Establish a paired **same-host, same-model** benchmark before claiming B3 reduces token usage or costs. This is the acceptance method for the [roadmap](roadmap.md); it is not implemented telemetry or an observed result.
+
 > **Status: proposed, not verified.** The runtime metrics and formulas below are evaluation methodology specifications aligned with [`engineering-philosophy.md`](engineering-philosophy.md). Zero runtime telemetry infrastructure is implemented or wired by this document.
 
 Optimization claims (context reduction, model routing, or parallel dispatch) should be evaluated end-to-end across nine proposed dimensions:
@@ -157,6 +159,17 @@ Efficiency (proposed) = Verified useful results
 ```
 
 Subject to hard constraints: false `PASS` rate `= 0` and all precedence/verification invariants satisfied.
+
+### Paired harness-efficiency baseline (not yet run)
+
+1. **Corpus:** Use representative real-world tasks grouped XS/S/M/L/XL/XXL, each with a frozen starting Git state, acceptance criteria, allowed scope, and independent verification. Separate bugfix, feature, refactor, and review-heavy cases where practical.
+2. **Arms:** Compare the current coding-agent host without B3 against the *same host, same model, same effort/settings, same task* with B3. Repeat enough runs to expose variance and record failures. Different model/provider comparisons are separate experiments; do not attribute their price or quality differences to the harness.
+3. **Metering:** Record actual input/output/cached tokens and billable cost if reported by the host; include parent, child, reviewer, fixer, retry, and integration steps. Also capture wall-clock time, verified completion, defects/regressions, review passes, number of subagents, and manual intervention count.
+4. **Missing data:** Mark model usage or cost `UNKNOWN` when not exposed. Keep static bytes and estimated tokens in separate columns; do not convert them to asserted billed cost.
+5. **Decision:** Compare distribution by task size and total *cost per verified completed task* (total run cost including failed attempts divided by verified completions). Reject any apparent saving that weakens safety, review independence, or evidence quality. Keep beneficial optimizations and remove repeated coordination overhead that does not pay for itself.
+6. **Portability later:** When a new coding-agent CLI is available in an authorized environment, validate the identical acceptance/evidence contracts through its adapter. Never require proprietary logs, API specs, or credentials in public fixtures.
+
+**Artifact:** A reproducible results table with task IDs, host/model/settings, evidence refs, telemetry availability, observed metrics, and clear `PASS`/`FAIL`/`UNKNOWN` labels. Do not state a percentage improvement before this benchmark exists.
 
 ### Structural comparison: Sequential vs. Parallel scenarios
 
