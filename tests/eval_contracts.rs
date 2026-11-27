@@ -51,6 +51,14 @@ const EXPECTED_NEW_ORCHESTRATION_EVALS: &[&str] = &[
     "evals/workflows/orchestration/resource-contention-adaptive-throttle.yaml",
     "evals/workflows/orchestration/avoid-duplicate-investigations.yaml",
     "evals/workflows/orchestration/independent-reviewers-preserved.yaml",
+    "evals/workflows/orchestration/abcde-continuous-release.yaml",
+    "evals/workflows/orchestration/cross-wave-write-conflict.yaml",
+    "evals/workflows/orchestration/cross-wave-rw-conflict.yaml",
+    "evals/workflows/orchestration/concurrency-slot-saturation.yaml",
+    "evals/workflows/orchestration/isolated-output-unintegrated-gate.yaml",
+    "evals/workflows/orchestration/resume-mid-wave-active-workers.yaml",
+    "evals/workflows/orchestration/task-decomposition-shared-prereq.yaml",
+    "evals/workflows/orchestration/research-ship-parallel-disputed-isolation.yaml",
     "evals/commands/standalone-commands-scope-preserved.yaml",
     "evals/commands/all-commands-canonical-policy.yaml",
     "evals/commands/future-commands-inheritance.yaml",
@@ -582,8 +590,8 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 330,
-        "expected >= 330 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 338,
+        "expected >= 338 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(
@@ -1429,4 +1437,295 @@ fn b3_binary_verify_check_staleness_and_pr_mutation_owner_guards() {
         "out={out_wt_comment}"
     );
     let _ = git_in(repo, &["worktree", "remove", "--force", wt_str]);
+}
+
+#[test]
+fn continuous_scheduling_and_incremental_integration_contracts() {
+    let root = repo_root();
+    let canon_root = fs::canonicalize(&root).expect("canonicalize repo_root");
+    let read_lf = |rel: &str| -> String {
+        let raw = fs::read_to_string(root.join(rel))
+            .unwrap_or_else(|e| panic!("failed to read {rel}: {e}"));
+        normalize_lf(&raw)
+    };
+
+    // 1. Canonical planning: 3-way dependency classification, early shared-contract extraction,
+    //    critical-path ordering, and strict <= 4,000 B caps.
+    let planning_skill = read_lf("skills/engineering/planning/SKILL.md");
+    let plan_cmd = read_lf("commands/b3-plan.md");
+    let plan_cs = read_lf("adapters/command-skills/b3-plan/SKILL.md");
+
+    for (rel, body) in [
+        (
+            "skills/engineering/planning/SKILL.md",
+            planning_skill.as_str(),
+        ),
+        ("commands/b3-plan.md", plan_cmd.as_str()),
+        ("adapters/command-skills/b3-plan/SKILL.md", plan_cs.as_str()),
+    ] {
+        assert!(
+            body.len() <= 4_000,
+            "{rel} ({} B) exceeds 4000 B cap",
+            body.len()
+        );
+        let low = body.to_ascii_lowercase();
+        assert!(
+            body.contains("depends_on")
+                && body.contains("read_only_deps")
+                && low.contains("integration constraint")
+                && low.contains("3-way")
+                && low.contains("shared")
+                && low.contains("early")
+                && (low.contains("critical-path") || low.contains("critical path")),
+            "{rel} missing 3-way dependency classification, early shared-contract extraction, or critical-path ordering"
+        );
+    }
+
+    // 2. Canonical scheduling (`workflows/references/dispatch-naming.md` <= 9,200 B).
+    let dispatch_doc = read_lf("workflows/references/dispatch-naming.md");
+    assert!(
+        dispatch_doc.len() <= 9_200,
+        "workflows/references/dispatch-naming.md ({} B) exceeds 9200 B cap",
+        dispatch_doc.len()
+    );
+    for token in [
+        "14 B3 commands",
+        "TASK_VERIFIED != DEPENDENCY_OUTPUT_AVAILABLE",
+        "--active-specs",
+        "--active-reads",
+        "--verified-dirty-paths",
+        "admitted_tasks",
+        "deferred_tasks",
+        "--worker-bases",
+        "stale_base_conflict",
+    ] {
+        assert!(
+            dispatch_doc.contains(token),
+            "workflows/references/dispatch-naming.md missing '{token}'"
+        );
+    }
+
+    // 3. Workflows (`ship.md`, `research-ship.md`), resume procedures, and templates
+    //    wire `output_ready` / `integrated`, `--active-specs`, `--verified-dirty-paths`,
+    //    and `--worker-bases` within strict byte caps.
+    let ship_wf = read_lf("workflows/ship.md");
+    let rs_wf = read_lf("workflows/research-ship.md");
+    let ship_resume = read_lf("workflows/references/ship-resume.md");
+    let rs_resume = read_lf("workflows/references/research-ship-resume.md");
+    let ship_tpl = read_lf("workflows/references/ship-templates.md");
+    let rs_tpl = read_lf("workflows/references/research-ship-templates.md");
+    let rs_gates = read_lf("workflows/references/research-ship-gates.md");
+
+    assert!(
+        ship_wf.len() <= 9_500,
+        "workflows/ship.md ({} B) exceeds 9500 B cap",
+        ship_wf.len()
+    );
+    assert!(
+        rs_wf.len() <= 9_500,
+        "workflows/research-ship.md ({} B) exceeds 9500 B cap",
+        rs_wf.len()
+    );
+    assert!(
+        ship_tpl.len() + ship_resume.len() <= 6_000,
+        "ship-templates.md + ship-resume.md ({} B) exceeds 6000 B cap",
+        ship_tpl.len() + ship_resume.len()
+    );
+    assert!(
+        rs_tpl.len() + rs_resume.len() + rs_gates.len() <= 12_000,
+        "research-ship-{{templates,resume,gates}}.md ({} B) exceeds 12000 B cap",
+        rs_tpl.len() + rs_resume.len() + rs_gates.len()
+    );
+
+    for (rel, body) in [
+        ("workflows/ship.md", ship_wf.as_str()),
+        ("workflows/research-ship.md", rs_wf.as_str()),
+        ("workflows/references/ship-resume.md", ship_resume.as_str()),
+        (
+            "workflows/references/research-ship-resume.md",
+            rs_resume.as_str(),
+        ),
+    ] {
+        for token in [
+            "output_ready",
+            "integrated",
+            "--active-specs",
+            "--active-reads",
+            "--verified-dirty-paths",
+            "--worker-bases",
+        ] {
+            assert!(body.contains(token), "{rel} missing '{token}'");
+        }
+    }
+
+    for (rel, body) in [
+        ("workflows/references/ship-templates.md", ship_tpl.as_str()),
+        (
+            "workflows/references/research-ship-templates.md",
+            rs_tpl.as_str(),
+        ),
+    ] {
+        assert!(
+            body.contains("pending|output_ready|integrated") && body.contains("| integration |"),
+            "{rel} missing integration state column or pending|output_ready|integrated enum"
+        );
+    }
+
+    // 4. All 10 mandatory orchestration scenarios exist in `evals/workflows/orchestration/`,
+    //    parse cleanly with valid contained `artifact` links, and match `evals/README.md` (`338` / `22`).
+    const MANDATORY_ORCHESTRATION_SCENARIOS: &[&str] = &[
+        "abcde-continuous-release.yaml",
+        "cross-wave-write-conflict.yaml",
+        "cross-wave-rw-conflict.yaml",
+        "concurrency-slot-saturation.yaml",
+        "isolated-output-unintegrated-gate.yaml",
+        "partial-worker-failure-isolation.yaml",
+        "resume-mid-wave-active-workers.yaml",
+        "task-decomposition-shared-prereq.yaml",
+        "research-ship-parallel-disputed-isolation.yaml",
+        "host-limitation-sequential-fallback.yaml",
+    ];
+
+    let orch_dir = root.join("evals/workflows/orchestration");
+    for fname in MANDATORY_ORCHESTRATION_SCENARIOS {
+        let p = orch_dir.join(fname);
+        assert!(
+            p.is_file(),
+            "missing mandatory orchestration scenario: evals/workflows/orchestration/{fname}"
+        );
+        let raw = fs::read_to_string(&p).expect("read orchestration yaml");
+        let parsed = parse_eval_yaml_scalars(&raw)
+            .unwrap_or_else(|e| panic!("failed to parse {fname}: {e}"));
+        for req_key in ["id", "intent", "expected_outcome", "artifact"] {
+            let val = parsed.get(req_key).map(|s| s.trim()).unwrap_or_default();
+            assert!(!val.is_empty(), "{fname} missing or empty '{req_key}'");
+        }
+        let artifact = parsed["artifact"].trim();
+        assert!(
+            !is_unsafe_artifact_path(artifact),
+            "{fname} has unsafe artifact path '{artifact}'"
+        );
+        let target = root.join(artifact.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let meta = fs::symlink_metadata(&target)
+            .unwrap_or_else(|e| panic!("{fname} artifact '{artifact}' missing: {e}"));
+        assert!(
+            meta.is_file()
+                && !meta.file_type().is_symlink()
+                && !b3::fs::is_reparse_or_symlink(&target),
+            "{fname} artifact '{artifact}' is not a regular file"
+        );
+        let canon_target = fs::canonicalize(&target).expect("canonicalize artifact");
+        assert!(
+            canon_target.starts_with(&canon_root),
+            "{fname} artifact '{artifact}' escapes repo_root"
+        );
+    }
+
+    let orch_yaml_count = fs::read_dir(&orch_dir)
+        .expect("read evals/workflows/orchestration")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_file() && e.file_name().to_string_lossy().ends_with(".yaml"))
+        .count();
+    assert_eq!(
+        orch_yaml_count, 22,
+        "expected 22 YAML fixtures in evals/workflows/orchestration/, found {orch_yaml_count}"
+    );
+
+    let evals_dir = root.join("evals");
+    let mut all_yaml = Vec::new();
+    let mut all_readmes = Vec::new();
+    let mut collect_errs = Vec::new();
+    collect_eval_files(
+        &evals_dir,
+        &evals_dir,
+        &mut all_yaml,
+        &mut all_readmes,
+        &mut collect_errs,
+    );
+    assert!(collect_errs.is_empty(), "collect errors: {collect_errs:?}");
+    assert_eq!(
+        all_yaml.len(),
+        338,
+        "expected 338 total YAML fixtures across evals/, found {}",
+        all_yaml.len()
+    );
+
+    let evals_readme = read_lf("evals/README.md");
+    assert!(
+        evals_readme.contains("`338` YAML")
+            && evals_readme.contains("| `workflows/orchestration/` | 22 |"),
+        "evals/README.md inventory out of sync with 338 total / 22 workflows/orchestration fixtures"
+    );
+
+    // 5. `scripts/README.md` flag documentation & end-to-end `run_b3` smoke check on
+    //    `check-wave --partition --active-specs ... --verified-dirty-paths ...`.
+    let scripts_readme = read_lf("scripts/README.md");
+    for flag in [
+        "--active-specs",
+        "--active-reads",
+        "--verified-dirty-paths",
+        "--worker-bases",
+    ] {
+        assert!(
+            scripts_readme.contains(flag),
+            "scripts/README.md missing CLI flag documentation for '{flag}'"
+        );
+    }
+
+    let tmp = TempDirGuard::new("eval-cont-wave");
+    let repo = &tmp.path;
+    let base_sha = init_fresh_git_repo(repo);
+    let r = repo.to_str().expect("repo utf8");
+
+    // Simulate A verified in shared WT (`src/a.txt` dirty, uncommitted) while E is still active (`src/e.txt` dirty).
+    // Newly ready B, C, D read `src/a.txt`; F conflicts with active E (`src/e.txt`); max-concurrency=3 -> 2 slots open.
+    write_lf(&repo.join("src/a.txt"), "verified output from A\n");
+    write_lf(&repo.join("src/e.txt"), "in-flight edit from E\n");
+
+    let (code, out, err) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--expected-base-sha",
+        &base_sha,
+        "--check-dirty-scope",
+        "--partition",
+        "--max-concurrency",
+        "3",
+        "--wave-specs",
+        "B=src/b.txt;C=src/c.txt;D=src/d.txt;F=src/e.txt",
+        "--wave-reads",
+        "B=src/a.txt;C=src/a.txt;D=src/a.txt",
+        "--active-specs",
+        "E=src/e.txt",
+        "--active-reads",
+        "E=docs/guide.md",
+        "--verified-dirty-paths",
+        "src/a.txt",
+    ]);
+    assert_eq!(
+        code, 0,
+        "continuous check-wave smoke test failed: out={out} err={err}"
+    );
+    for expected in [
+        "dirty_scope=clean",
+        "unexpected_dirty=none",
+        "active_tasks=E",
+        "active_count=1",
+        "available_slots=2",
+        "active_dirty=src/e.txt",
+        "verified_dirty=src/a.txt",
+        "conflicts=active:src/e.txt(E,F)",
+        "admitted_tasks=B,C",
+        "deferred_tasks=D,F",
+        "wave|1|PARALLEL|agents=2|tasks=B,C|reason=independent_ready_tasks",
+        "wave|2|SEQUENTIAL|agents=1|tasks=D|reason=bounded_concurrency",
+        "WAVE_PARTITIONED: waves=2 max_parallel=2",
+    ] {
+        assert!(
+            out.contains(expected),
+            "expected '{expected}' in check-wave output:\n{out}"
+        );
+    }
 }

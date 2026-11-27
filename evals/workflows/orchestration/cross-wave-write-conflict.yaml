@@ -1,0 +1,10 @@
+id: orch-cross-wave-write-conflict-001
+artifact: workflows/references/dispatch-naming.md
+intent: Active-worker admission defers a newly ready task that writes an active worker's file while admitting non-conflicting siblings
+scenario: |
+  E is actively editing src/shared.rs while A finishes and unlocks ready tasks B (src/shared.rs), C (src/c.rs), and D (src/d.rs)
+  Parent runs b3 guard check-wave --partition --wave-specs "B=src/shared.rs;C=src/c.rs;D=src/d.rs" --active-specs "E=src/shared.rs"
+  check-wave emits admitted_tasks=C,D and deferred_tasks=B with conflicts=active:src/shared.rs(E,B), so Parent dispatches C and D immediately and keeps B queued until E finishes
+expected_outcome: PASS
+failure_mode: newly-unblocked-task-collides-with-in-flight-worker-write-scope
+notes: Cross-wave write safety checks newly ready candidates against --active-specs before any shared-worktree dispatch

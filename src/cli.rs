@@ -158,6 +158,9 @@ pub enum GuardSubcommand {
         protected_paths: String,
         check_dirty_scope: bool,
         ignore_dirty_paths: String,
+        active_specs: String,
+        active_reads: String,
+        verified_dirty_paths: String,
     },
     SymbolCheck {
         repo_root: String,
@@ -183,6 +186,7 @@ pub enum GuardSubcommand {
         wave_specs: String,
         worker_changes: String,
         worker_roots: String,
+        worker_bases: String,
         protected_paths: String,
         dirty_digests: String,
         has_dirty_digests: bool,
@@ -1158,6 +1162,9 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
             let mut protected_paths = String::new();
             let mut check_dirty_scope = false;
             let mut ignore_dirty_paths = String::new();
+            let mut active_specs = String::new();
+            let mut active_reads = String::new();
+            let mut verified_dirty_paths = String::new();
             let mut i = 0;
             while i < rest.len() {
                 let (flag, iv) = parse_opt(&rest[i]);
@@ -1189,6 +1196,15 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                         ignore_dirty_paths =
                             take_val(rest, &mut i, "--ignore-dirty-paths", iv, "WAVE_FAIL")?;
                     }
+                    "--active-specs" | "-ActiveSpecs" => {
+                        active_specs = take_val(rest, &mut i, flag, iv, "WAVE_FAIL")?;
+                    }
+                    "--active-reads" | "-ActiveReads" => {
+                        active_reads = take_val(rest, &mut i, flag, iv, "WAVE_FAIL")?;
+                    }
+                    "--verified-dirty-paths" | "-VerifiedDirtyPaths" => {
+                        verified_dirty_paths = take_val(rest, &mut i, flag, iv, "WAVE_FAIL")?;
+                    }
                     other => {
                         return Err(fail(format!("WAVE_FAIL: unknown option '{other}'"), 1));
                     }
@@ -1205,6 +1221,9 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                 protected_paths,
                 check_dirty_scope,
                 ignore_dirty_paths,
+                active_specs,
+                active_reads,
+                verified_dirty_paths,
             })
         }
         "symbol-check" => {
@@ -1296,6 +1315,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
             let mut wave_specs = String::new();
             let mut worker_changes = String::new();
             let mut worker_roots = String::new();
+            let mut worker_bases = String::new();
             let mut protected_paths = String::new();
             let mut dirty_digests = String::new();
             let mut has_dirty_digests = false;
@@ -1335,6 +1355,9 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                         worker_roots =
                             take_val(rest, &mut i, "--worker-roots", iv, "MECHANICAL_FAIL")?;
                     }
+                    "--worker-bases" | "-WorkerBases" => {
+                        worker_bases = take_val(rest, &mut i, flag, iv, "MECHANICAL_FAIL")?;
+                    }
                     "--protected-paths" => {
                         protected_paths =
                             take_val(rest, &mut i, "--protected-paths", iv, "MECHANICAL_FAIL")?;
@@ -1364,6 +1387,7 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                 wave_specs,
                 worker_changes,
                 worker_roots,
+                worker_bases,
                 protected_paths,
                 dirty_digests,
                 has_dirty_digests,
@@ -1779,5 +1803,123 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
             format!("GUARD_FAIL: unknown guard subcommand '{other}'"),
             1,
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_args, Command, GuardSubcommand};
+
+    fn to_args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_check_wave_and_mechanical_check_continuous_flags() {
+        let parsed = parse_args(&to_args(&[
+            "guard",
+            "check-wave",
+            "--wave-specs",
+            "T2=src/b.rs",
+            "--active-specs=T1=src/a.rs",
+            "--active-reads",
+            "T1=src/common.rs",
+            "--verified-dirty-paths",
+            "src/done.rs",
+            "--partition",
+        ]))
+        .expect("parse check-wave");
+
+        match parsed {
+            Command::Guard(GuardSubcommand::CheckWave {
+                wave_specs,
+                active_specs,
+                active_reads,
+                verified_dirty_paths,
+                partition,
+                ..
+            }) => {
+                assert_eq!(wave_specs, "T2=src/b.rs");
+                assert_eq!(active_specs, "T1=src/a.rs");
+                assert_eq!(active_reads, "T1=src/common.rs");
+                assert_eq!(verified_dirty_paths, "src/done.rs");
+                assert!(partition);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let parsed_ps = parse_args(&to_args(&[
+            "guard",
+            "check-wave",
+            "--wave-specs",
+            "T2=src/b.rs",
+            "-ActiveSpecs",
+            "T1=src/a.rs",
+            "-ActiveReads",
+            "T1=src/common.rs",
+            "-VerifiedDirtyPaths",
+            "src/done.rs",
+        ]))
+        .expect("parse check-wave PowerShell aliases");
+
+        match parsed_ps {
+            Command::Guard(GuardSubcommand::CheckWave {
+                active_specs,
+                active_reads,
+                verified_dirty_paths,
+                ..
+            }) => {
+                assert_eq!(active_specs, "T1=src/a.rs");
+                assert_eq!(active_reads, "T1=src/common.rs");
+                assert_eq!(verified_dirty_paths, "src/done.rs");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let err_wave = parse_args(&to_args(&["guard", "check-wave", "--bogus"])).unwrap_err();
+        assert_eq!(err_wave.code, 1);
+        assert!(err_wave
+            .message
+            .starts_with("WAVE_FAIL: unknown option '--bogus'"));
+
+        let parsed_mc = parse_args(&to_args(&[
+            "guard",
+            "mechanical-check",
+            "--wave-specs",
+            "T1=src/a.rs",
+            "--worker-roots",
+            "T1=/tmp/wt1",
+            "--worker-bases=T1=0123456789abcdef0123456789abcdef01234567",
+        ]))
+        .expect("parse mechanical-check --worker-bases");
+
+        match parsed_mc {
+            Command::Guard(GuardSubcommand::MechanicalCheck {
+                wave_specs,
+                worker_roots,
+                worker_bases,
+                ..
+            }) => {
+                assert_eq!(wave_specs, "T1=src/a.rs");
+                assert_eq!(worker_roots, "T1=/tmp/wt1");
+                assert_eq!(worker_bases, "T1=0123456789abcdef0123456789abcdef01234567");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let parsed_mc_ps = parse_args(&to_args(&[
+            "guard",
+            "mechanical-check",
+            "-WorkerBases",
+            "T1=abcdef0123456789abcdef0123456789abcdef01",
+        ]))
+        .expect("parse mechanical-check -WorkerBases");
+
+        match parsed_mc_ps {
+            Command::Guard(GuardSubcommand::MechanicalCheck { worker_bases, .. }) => {
+                assert_eq!(worker_bases, "T1=abcdef0123456789abcdef0123456789abcdef01");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

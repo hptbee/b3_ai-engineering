@@ -1,0 +1,10 @@
+id: orch-research-ship-parallel-disputed-isolation-001
+artifact: workflows/research-ship.md
+intent: Research-ship runs parallel discovery and fresh independent Phase E verifiers, keeps evidence ledgers single-writer, and isolates DISPUTED units without stalling verified peers
+scenario: |
+  /b3-research-ship dispatches ready units concurrently in SHARED_READ_ONLY for source discovery and fresh independent Phase E verifiers (researcher != verifier) via check-wave --partition
+  Parent merges evidence-index.md and sources.manifest single-writer via evidence-check --write-manifest; Phase E marks U002 DISPUTED while U001 and U003 verify cleanly
+  Parent isolates U002 for re-verification or C/D follow-up and continues independent eligible units U001 and U003 into formalization and Phase G implementation
+expected_outcome: PASS
+failure_mode: disputed-unit-blocks-unrelated-verified-units-or-workers-race-on-evidence-manifest
+notes: Unit isolation, researcher-verifier separation, and single-writer evidence/governance ledgers hold under continuous parallel execution

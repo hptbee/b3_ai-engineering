@@ -5,52 +5,32 @@ description: "Use when writing a multi-step implementation plan before coding: f
 
 # Planning
 
-Write a plan an agent can execute without inventing scope. No TBD where a decision is required.
+Write an executable plan without inventing scope, optimizing **verified independent completion** and **useful parallelism**. No `TBD` where a decision is required.
 
-Adapted from Superpowers writing-plans (file map, bite-sized tasks) without Superpowers paths or TDD ritual.
+## When to use / not use
 
-## When to use
-
-- Multi-file or multi-layer feature
-- User asks for a plan, design, or breakdown first
-- Spec exists but order of work is unclear
-
-## When not to use
-
-- One localized bug with known cause → `debugging`
-- User said implement now on a tiny change → `problem-solving`
-- Pattern mining → `research-engineering-patterns`
-- Per-task implementation approach inside `/b3-ship` → `workflows/ship.md` `Scope` & `Gate` (not a second master plan)
-
-Near miss: “is this architecture sound?” with no implementation yet → this skill plus `architecture/simplest-correct`.
+- **Use:** multi-file/layer work; user asks for plan/design/breakdown first; unclear execution order; architecture soundness check (+ `architecture/simplest-correct`).
+- **Skip:** localized bug with known cause (`debugging`); tiny edit now (`problem-solving`); pattern mining (`research-engineering-patterns`); per-task `/b3-ship` approach (`workflows/ship.md` `Scope` & `Gate`).
 
 ## Procedure
 
-1. **Restate goal & scope** in one sentence, naming explicit **in-scope / out-of-scope** bounds and top-level success evidence (command or probe).
-2. **Map files, reuse & proportionality (parallel on multi-area):** on multi-area work, fan out concurrent `SHARED_READ_ONLY` discovery (`workflows/references/dispatch-naming.md`); keep single-area inline. Reuse existing modules, native platform features, and stdlibs; prefer simple configs and direct workflows over custom parsers, frameworks, or reusable subsystems unless justified by a named requirement (`architecture/simplest-correct`).
-3. **Assess risks (risk-adaptive depth):** list security/authz, data consistency, perf, a11y, or 3D resource risks and matching domain skills.
-   - **Low-risk / localized:** keep the plan compact (files, ACs, tasks, checks).
-   - **High-risk trigger** (ambiguity, architecture/contract changes, authz boundaries, stateful/concurrency/retry logic, cache/write-path invalidation, cross-module deps): explicitly capture shared contracts/interfaces, failure modes, and write/invalidation paths before task breakdown.
-4. **Dependency-ordered synthesis:** Parent synthesizes 1 plan of smallest independently verifiable tasks tagged with disjoint `files` and `depends_on` (folding scaffolding into the task that needs it) so independent ready tasks can run concurrently.
-5. **Each task:** intent, touched files/contracts, dependencies, testable acceptance criteria (`AC1..ACn`), and exact verification command or probe. Resolve decisions upfront — no `TBD`, implicit placeholders, or "add error handling later".
-6. **Readiness Check:** confirm every AC is observable/testable & mapped 1:1 to a check, reusable existing code was checked, contradictions/missing requirements/incomplete dependencies are flagged and asked before coding, and design is the simplest sound fit (`architecture/simplest-correct`).
-7. **Stop.** Do not write product code unless the user also asked to implement.
+1. **Goal & bounds:** 1 sentence naming explicit **in-scope / out-of-scope** bounds and top-level success evidence (command/probe).
+2. **Map files, reuse & proportionality:** fan out concurrent `SHARED_READ_ONLY` scouts on multi-area work (`workflows/references/dispatch-naming.md`); keep single-area inline. Reuse existing modules, native features, and stdlibs; prefer simple configs/direct flows over custom frameworks unless justified by a named requirement (`architecture/simplest-correct`).
+3. **Risk-adaptive depth:** list security/authz, data-consistency, perf, a11y, or 3D resource risks + domain skills.
+   - **Low-risk:** compact (`files`, ACs, tasks, checks).
+   - **High-risk** (ambiguity, contract/schema/authz changes, concurrency/retry/state, cache/write invalidation, cross-module deps): capture shared contracts, failure modes, and write/invalidation paths before breakdown.
+4. **Cohesive sizing, 3-way dependencies & critical path:** Parent synthesizes 1 plan:
+   - **Cohesive sizing & shared prerequisites:** Treat `>~800 LOC`, `>2` areas, or unrelated subsystems as a practical split heuristic, not mandatory fragmentation. Extract small shared types/interfaces/schema contracts early as compact prerequisites so downstream tasks unlock in parallel; avoid oversized foundational blockers and tiny overhead-dominated slices whose dispatch/verification cost exceeds inline execution. Keep a module and its paired unit tests together unless test scaffolding is genuinely independent.
+   - **3-way dependency classification (existing plan fields — no extra schema):**
+     - *Hard dependency (`depends_on`):* `B` needs `A`'s verified output before starting; never add fake sequential `depends_on` for ordering comfort.
+     - *Read/write conflict (`files` + `read_only_deps`):* concurrent writes/reads would race (`check-wave --partition` orders/isolates them without fake `depends_on`).
+     - *Integration constraint:* outputs require serialized commit, single-writer manifest/ledger update, or isolated-worktree integration before downstream use.
+   - **Critical-path ordering:** Order ready tasks by downstream tasks unlocked, grounded complexity/expected runtime (no speculative telemetry), and risk/isolation cost so critical-path blockers start first.
+5. **Per-task contract:** intent, `files`/`read_only_deps`/contracts, dependencies, testable `AC1..ACn`, and exact check command/probe. Resolve decisions upfront (no `TBD` or deferred error handling).
+6. **Readiness & stop:** verify 1:1 AC-to-check mapping, reuse checked, simplest-correct fit, and flag/ask contradictions or missing deps before coding. **Stop** unless asked to implement.
 
-## Progressive disclosure
+## Links, failure handling & provenance
 
-- Execution: `skills/engineering/problem-solving/SKILL.md`
-- Workflow: `workflows/feature-implementation.md`
-- Autonomous lifecycle: `/b3-ship` Scenario A/B uses this skill for the one master plan. Per-task approach is `workflows/ship.md` `Scope` (`problem-solving` + `Gate`). Do not load this skill again on a ready task.
-
-## Verification
-
-A good plan names how each task will be checked. A plan with only aspirations is incomplete.
-
-## Failure handling
-
-- Requirements conflict → record and ask; do not paper over
-- Unknown stack in product repo → read the repo; do not plan a parallel architecture
-
-## Provenance
-
-ADAPT obra/superpowers writing-plans. REJECT docs/superpowers/plans paths and mandatory subagent execution.
+- Execution: `skills/engineering/problem-solving/SKILL.md` (`workflows/feature-implementation.md`); `/b3-ship` uses this skill once for `master-plan.md`.
+- Conflict → record & ask; unknown stack → read repo (never invent parallel architecture); aspirations without checks → incomplete.
+- ADAPT `obra/superpowers` `writing-plans`; REJECT `docs/superpowers/plans` paths and mandatory subagents.

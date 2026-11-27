@@ -4,7 +4,7 @@ Research-first delivery complementing [`ship.md`](ship.md); reads product profil
 
 ## Core Invariants & State Boundaries
 
-- **Separated truth:** `RESEARCHED != VERIFIED != IMPLEMENTED != RELEASED`; `PR_MERGED != RUNTIME_SERVED != DEPLOYED`.
+- **Separated truth:** `RESEARCHED != VERIFIED != IMPLEMENTED != RELEASED`; `PR_MERGED != RUNTIME_SERVED != DEPLOYED`; `TASK_VERIFIED != DEPENDENCY_OUTPUT_AVAILABLE`.
 - **Fail closed:** missing evidence, Owner decision, stale receipt/manifest, tool error, or unmet gate → `INCOMPLETE`/`FAIL`/`BLOCKED`, never `PASS`/`PR_READY`.
 - **No fabrication:** never invent passages, editions, citations, witness outputs, Owner decisions, editorial approvals, or test passes.
 - **Policy fidelity:** follow product policy literally (authorized AI editorial review; never add unrequested human gates or bypass policy).
@@ -25,27 +25,27 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 - **Gate:** preserve `research/`, decisions, evidence; run `b3 guard check-worktree --expected-root <root> --require-isolated` ONLY on `ISOLATED_WRITES` (never block `research-only`/`SHARED_READ_ONLY` in Phase A; fall back to `SEQUENTIAL` when safe per [dispatch](references/dispatch-naming.md)); missing `B3_HOME`, unsafe isolated worktree failure, or dirty overlap → `BLOCKED`.
 
 ### B. Research Planning
-- **Out:** units `U001..U00N` (`research-plan.md`, or inline in `progress.md` for 1-unit): question, baseline, gaps, sources, domains, `depends_on`, disjoint `owned_files`, ACs, checks, implications.
+- **Out:** critical-path ordered units `U001..U00N` (`research-plan.md`, or inline in `progress.md` for 1-unit): question, baseline, gaps, sources, domains, hard verified-output `depends_on`, disjoint `owned_files`, ACs, checks, implications.
 - **Gate:** keep ledgers/manifests/`evidence-index.md`/authority single-writer ([dispatch](references/dispatch-naming.md)); isolate ambiguous units (`continue independent eligible units`) or `BLOCKED`.
 
 ### C. Source Discovery & Provenance
-- **Out:** `evidence-index.md` + SHA-256 `{RUN_DIR}/evidence/sources.manifest` (`b3 guard evidence-check --write-manifest`). Run independent unit source checks concurrently in `SHARED_READ_ONLY` (`dispatch-naming.md`); Parent merges `evidence-index.md` + manifest single-writer.
+- **Out:** `evidence-index.md` + SHA-256 `{RUN_DIR}/evidence/sources.manifest` (`b3 guard evidence-check --write-manifest`). Run ready unit source checks continuously in `SHARED_READ_ONLY` (`dispatch-naming.md`); Parent merges `evidence-index.md` + manifest single-writer and sets `integration=output_ready` once artifact + `evidence-check` pass.
 - **Gate:** index-first refs + digests; classify `primary`|`secondary-scholarly`|`repo-evidence`|`prior-verified`|`unverified`|`conflicting`; missing source → `EVIDENCE_MISSING` (`exit 1`, mark `incomplete`/`blocked` without guessing).
 
 ### D. Cross-Source Analysis
-- **Out:** concurrent `SHARED_READ_ONLY` analysis on independent units for agreement, contradictions, missing conditions, school differences, overgeneralizations, terminology.
-- **Gate:** genuine disagreements stay `UNRESOLVED`/`DISPUTED` (never force consensus); unsupported predicates block formalization.
+- **Out:** continuous `SHARED_READ_ONLY` analysis on ready units (`depends_on` `output_ready`, no artificial wave barrier) for agreement, contradictions, missing conditions, school differences, overgeneralizations, terminology.
+- **Gate:** genuine disagreements stay `UNRESOLVED`/`DISPUTED` (`continue independent eligible units`; never force consensus); unsupported predicates block formalization.
 
 ### E. Independent Evidence Verification
-- **Out:** verdict (`VERIFIED`|`DISPUTED`|`INCOMPLETE`) from fresh `SHARED_READ_ONLY` verifiers ([gates](references/research-ship-gates.md) §1, [dispatch](references/dispatch-naming.md)) using `TaskId=none`/`[]` + `--wave-reads`; run `b3 guard check-wave --partition` (`wave|N|...`) when `>=2` ready units exist (single ready unit or sequential chain runs sequentially directly while keeping scope/dirty/commit guards).
-- **Gate:** `EVIDENCE_STALE` (`exit 2`) or `DISPUTED` → re-verify or C/D; `SINGLE_AGENT_LIMIT` blocks `PASS`/`VERIFIED`/`MERGE_AUTHORIZED` on `HIGH`/`CRITICAL` (`INCOMPLETE`, no `auto_merge`).
+- **Out:** verdict (`VERIFIED`|`DISPUTED`|`INCOMPLETE`) from fresh independent `SHARED_READ_ONLY` verifiers (`researcher != verifier`; [gates](references/research-ship-gates.md) §1, [dispatch](references/dispatch-naming.md)) via `TaskId=none`/`[]` + `--wave-reads`, admitted continuously via `b3 guard check-wave --partition` (§Parallel Research).
+- **Gate:** isolate `EVIDENCE_STALE` (`exit 2`) or `DISPUTED` units for re-verify or C/D while verified peers advance (`continue independent eligible units`); `SINGLE_AGENT_LIMIT` blocks `PASS`/`VERIFIED`/`MERGE_AUTHORIZED` on `HIGH`/`CRITICAL` (`INCOMPLETE`, no `auto_merge`).
 
 ### F. Formalization & Knowledge Readiness
 - **Out:** target (`research-doc`|`structured-knowledge`|`executable-predicate`|`witness-fixture`|`internal-only`|`impl-spec`|`release-candidate`|`WITHHELD`|`BLOCKED`). Completeness != publication; `WITHHELD`/`internal-only` stay private; missing Owner/authority pin blocks unit.
 
 ### G. Implementation (Skip in `research-only`)
 - **Out:** verified commits via [`ship.md`](ship.md), [`references/dispatch-naming.md`](references/dispatch-naming.md), [`references/context-routing.md`](references/context-routing.md) (`repo-evidence` only), and [`../review-loop/strategy.md`](../review-loop/strategy.md).
-- **Gate:** in `SHARED_DISJOINT_WRITES`, no worker Git ops or nested subagents; `b3 guard mechanical-check` allows `UNVERIFIED_COMBINED_ONLY` on ordinary disjoint tasks (`CALLER_ATTRIBUTED` via `--worker-changes` or `VERIFIED_PER_WORKER` via `--worker-roots` when attributed; escalate to `ISOLATED_WRITES`/`SEQUENTIAL` if strict proof required). `WAVE_CONFLICT`/`WAVE_SEQUENTIAL`/`malformed_wave_output` → `SEQUENTIAL`; `WAVE_BASE_MISMATCH` → `BLOCKED`.
+- **Gate:** enforce `TASK_VERIFIED != DEPENDENCY_OUTPUT_AVAILABLE` (`output_ready` + `--verified-dirty-paths` in `SHARED_DISJOINT_WRITES`, **never** `git commit` in a shared WT while peer shared-WT writers remain active; `integrated` in Parent before starting dependents in `ISOLATED_WRITES`, without rebasing/mutating active peer WTs; 0 worker Git ops or nested subagents). `b3 guard mechanical-check` passes `--worker-bases` with `--worker-roots` when Parent `HEAD` advanced while peer WTs ran (`UNVERIFIED_COMBINED_ONLY` on ordinary disjoint tasks, `CALLER_ATTRIBUTED` via `--worker-changes`, `VERIFIED_PER_WORKER` via `--worker-roots`; escalate to `ISOLATED_WRITES`/`SEQUENTIAL` when strict proof is required). `WAVE_CONFLICT`/`WAVE_SEQUENTIAL`/`malformed_wave_output` → `SEQUENTIAL`; `WAVE_BASE_MISMATCH` → `BLOCKED`.
 
 ### H. Technical Verification & Independent Review / Editorial Gates
 - **Out:** separate **Research**, **Engineering**, and **Editorial / Authority** verdicts (`b3-reviewer.md`, specialists, [gates](references/research-ship-gates.md) §2). Green tests != source pass; fix blockers before Phase I.
@@ -62,4 +62,4 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 
 ## Parallel Research & Subagent Naming
 
-- Schedule ready research questions, source checks, and disjoint impl units continuously per [`references/dispatch-naming.md`](references/dispatch-naming.md) (when `>=2` ready units exist, run `b3 guard check-wave --partition` with `--protected-paths`, `--ignore-dirty-paths`, `--check-dirty-scope` for strict `wave|N|...` across `SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`; a single ready unit or sequential chain runs sequentially directly while keeping scope/dirty/commit guards; release newly unblocked units as prerequisites verify). Isolate blocked/failed units (`continue independent eligible units`), keep ledgers/manifests/authority/governance single-writer in Parent, record `last_wave:`, and use `b3-research-<slug>`/`b3-impl-<task-id>` without nested subagents.
+- Schedule ready research units, source checks, fresh Phase E verifiers (`researcher != verifier`), and Phase G impl units continuously by critical path per [`references/dispatch-naming.md`](references/dispatch-naming.md): on each worker exit, verify output availability (`output_ready` / `integrated`) and, when `>=2` ready units exist or active workers are running, run `b3 guard check-wave --partition` (`--wave-specs`, `--wave-reads`, `--active-specs`, `--active-reads`, `--verified-dirty-paths`, `--protected-paths`, `--ignore-dirty-paths`, `--check-dirty-scope`), acting strictly on `admitted_tasks` (`wave|1|`) and queuing `deferred_tasks` across `SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL` (1 ready unit w/ 0 active workers runs sequentially keeping scope/dirty/commit guards). Isolate `DISPUTED`/`blocked`/`failed` units (`continue independent eligible units`), keep `evidence-index.md`, `sources.manifest`, ledgers, authority records, and PR mutations single-writer in Parent, record `last_wave:`, and use `b3-research-<slug>`/`b3-verify-<slug>`/`b3-impl-<task-id>` without nested subagents.

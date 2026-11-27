@@ -1,0 +1,10 @@
+id: orch-isolated-output-unintegrated-gate-001
+artifact: workflows/ship.md
+intent: Isolated worktree verification does not unlock dependents until integrated into Parent, and active peer worktrees validate cleanly against their original base SHA
+scenario: |
+  A (wt-a) and E (wt-e) start in ISOLATED_WRITES at sha_0; B declares depends_on [A]
+  A passes verification inside wt-a, which does not yet unlock B (TASK_VERIFIED != DEPENDENCY_OUTPUT_AVAILABLE) until Parent integrates A (HEAD -> sha_A, integration=integrated) without rebasing or mutating active wt-e
+  B starts from sha_A while wt-e finishes at sha_0 and validates via b3 guard mechanical-check --base-sha sha_A --worker-roots E=wt-e --worker-bases E=sha_0 (failing closed with stale_base_conflict if sha_0..sha_A touched E's scope)
+expected_outcome: PASS
+failure_mode: dependent-starts-before-isolated-output-integrates-or-parent-advance-corrupts-peer-worktree-diff
+notes: Incremental isolated integration preserves active peer worktrees at their launch SHA and reconciles per-worker diffs via --worker-bases
