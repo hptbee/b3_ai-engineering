@@ -661,6 +661,26 @@ fn is_resolved_status(status: &str) -> bool {
     )
 }
 
+fn fallback_missing_op_id(record: &JsonValue, record_idx: usize) -> String {
+    let hash = sha256_bytes_hex(record.to_json_pretty().as_bytes());
+    format!("__missing_op_{record_idx}_{}", &hash[..8])
+}
+
+fn stamp_op_id(record: &JsonValue, op_id: &str) -> JsonValue {
+    match record {
+        JsonValue::Object(entries) => {
+            let mut out = entries.clone();
+            if let Some((_, val)) = out.iter_mut().find(|(k, _)| k == "op_id") {
+                *val = JsonValue::str(op_id);
+            } else {
+                out.push(("op_id".to_string(), JsonValue::str(op_id)));
+            }
+            JsonValue::Object(out)
+        }
+        other => other.clone(),
+    }
+}
+
 /// Returns all unresolved PENDING or reconciliation-required records for `(repo_full, pr_number)`.
 pub fn get_unresolved_pending_records(
     records: &[JsonValue],
@@ -668,7 +688,7 @@ pub fn get_unresolved_pending_records(
     pr_number: u64,
 ) -> Vec<JsonValue> {
     let mut by_op: Vec<(String, JsonValue)> = Vec::new();
-    for r in records {
+    for (idx, r) in records.iter().enumerate() {
         let r_repo = r
             .get("repo")
             .and_then(JsonValue::as_str)
@@ -677,11 +697,11 @@ pub fn get_unresolved_pending_records(
         if !r_repo.eq_ignore_ascii_case(repo_full) || r_pr != pr_number as i64 {
             continue;
         }
-        let op_id = r
+        let explicit_op_id = r
             .get("op_id")
             .and_then(JsonValue::as_str)
-            .unwrap_or("__legacy__")
-            .to_string();
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let status = r
             .get("status")
             .and_then(JsonValue::as_str)
@@ -691,14 +711,21 @@ pub fn get_unresolved_pending_records(
             .and_then(JsonValue::as_bool)
             .unwrap_or(false);
         if status == "PENDING" || recon_req {
-            if let Some(slot) = by_op.iter_mut().find(|(k, _)| *k == op_id) {
-                slot.1 = r.clone();
+            if let Some(op_id) = explicit_op_id {
+                if let Some(slot) = by_op.iter_mut().find(|(k, _)| *k == op_id) {
+                    slot.1 = r.clone();
+                } else {
+                    by_op.push((op_id.to_string(), r.clone()));
+                }
             } else {
-                by_op.push((op_id, r.clone()));
+                let synthetic_id = fallback_missing_op_id(r, idx);
+                by_op.push((synthetic_id.clone(), stamp_op_id(r, &synthetic_id)));
             }
         } else if is_resolved_status(status) {
-            if let Some(pos) = by_op.iter().position(|(k, _)| *k == op_id) {
-                by_op.remove(pos);
+            if let Some(op_id) = explicit_op_id {
+                if let Some(pos) = by_op.iter().position(|(k, _)| *k == op_id) {
+                    by_op.remove(pos);
+                }
             }
         }
     }
@@ -1079,4 +1106,68 @@ where
         token: lock_token,
     };
     f()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_rec(op_id: Option<&str>, status: &str, detail: &str) -> JsonValue {
+        let mut fields = vec![
+            ("repo".to_string(), JsonValue::str("acme/demo")),
+            ("pr".to_string(), JsonValue::num_u64(42)),
+            ("action".to_string(), JsonValue::str("reply")),
+            ("status".to_string(), JsonValue::str(status)),
+            ("detail".to_string(), JsonValue::str(detail)),
+        ];
+        if let Some(id) = op_id {
+            fields.push(("op_id".to_string(), JsonValue::str(id)));
+        }
+        JsonValue::obj(fields)
+    }
+
+    #[test]
+    fn unresolved_pending_missing_op_id_is_fail_closed_and_isolated() {
+        let p1 = mk_rec(None, "PENDING", "first");
+        let p2 = mk_rec(None, "PENDING", "second");
+        let p3 = mk_rec(Some("   "), "PENDING", "blank");
+        let r_ok = mk_rec(None, "PR_REPLY_OK", "resolved-no-id");
+        let r_conf = mk_rec(None, "RECONCILED_CONFIRMED", "reconciled-no-id");
+
+        let mut records = vec![p1, p2, p3, r_ok, r_conf];
+        let pending = get_unresolved_pending_records(&records, "acme/demo", 42);
+        assert_eq!(
+            pending.len(),
+            3,
+            "all missing/blank op_id pending records must survive unlabelled resolved entries"
+        );
+
+        let ids: Vec<String> = pending
+            .iter()
+            .map(|r| {
+                r.get("op_id")
+                    .and_then(JsonValue::as_str)
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert!(ids.iter().all(|id| id.starts_with("__missing_op_")));
+        assert_ne!(ids[0], ids[1]);
+        assert_ne!(ids[1], ids[2]);
+        assert_ne!(ids[0], ids[2]);
+
+        // Reconciling only the first synthetic op_id clears p1 while leaving p2 and p3 blocked.
+        records.push(mk_rec(
+            Some(&ids[0]),
+            "RECONCILED_CONFIRMED",
+            "reconciled-p1",
+        ));
+        let remaining = get_unresolved_pending_records(&records, "acme/demo", 42);
+        assert_eq!(remaining.len(), 2);
+        let rem_details: Vec<&str> = remaining
+            .iter()
+            .map(|r| r.get("detail").and_then(JsonValue::as_str).unwrap())
+            .collect();
+        assert_eq!(rem_details, vec!["second", "blank"]);
+    }
 }

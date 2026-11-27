@@ -557,7 +557,7 @@ pub fn run(
         let literal_files: Vec<String> = scope_files
             .map(|files| files.iter().map(|fp| format!(":(literal){fp}")).collect())
             .unwrap_or_default();
-        let mut args: Vec<&str> = Vec::with_capacity(syms.len() * 2 + literal_files.len() + 12);
+        let mut args: Vec<&str> = Vec::with_capacity(syms.len() * 2 + literal_files.len() + 13);
         args.push("grep");
         if target_trim.is_empty() {
             args.push("--untracked");
@@ -565,6 +565,7 @@ pub fn run(
         args.push("-w");
         args.push("-F");
         args.push(flag_mode);
+        args.push("-z");
         for &sym in syms {
             args.push("-e");
             args.push(sym);
@@ -583,22 +584,26 @@ pub fn run(
         run_git(&repo_root, &args, &no_env, None)
     };
 
-    let parse_grep_hit_files = |stdout: &[u8]| -> Vec<String> {
-        let mut hit_files = Vec::new();
-        for row in String::from_utf8_lossy(stdout).lines() {
-            let mut r_str = row.trim();
-            if r_str.is_empty() {
+    let parse_grep_hit_files = |stdout: &[u8]| -> Vec<(String, String)> {
+        let mut hit_files: Vec<(String, String)> = Vec::new();
+        for raw_bytes in stdout.split(|&b| b == b'\0') {
+            if raw_bytes.is_empty() {
                 continue;
             }
+            let raw_lossy = String::from_utf8_lossy(raw_bytes);
+            let mut raw_path = raw_lossy.as_ref();
             if !target_trim.is_empty() {
-                r_str = r_str.strip_prefix(&commit_prefix).unwrap_or(r_str);
+                raw_path = raw_path.strip_prefix(&commit_prefix).unwrap_or(raw_path);
             }
-            let np = normalize_path_value(r_str);
+            if raw_path.is_empty() {
+                continue;
+            }
+            let np = normalize_path_value(raw_path);
             if should_skip_symbol_file(&np, &ignored) {
                 continue;
             }
-            if !hit_files.iter().any(|x| x == &np) {
-                hit_files.push(np);
+            if !hit_files.iter().any(|(r, _)| r == raw_path) {
+                hit_files.push((raw_path.to_string(), np));
             }
         }
         hit_files
@@ -624,15 +629,16 @@ pub fn run(
             let (s_name, in_same_file, f) = chunk[0];
             let count = batch_hits
                 .iter()
-                .filter(|np| !(in_same_file && np.as_str() == f))
+                .filter(|(_, np)| !(in_same_file && np.as_str() == f))
                 .count();
             if count > 0 {
                 dangling_refs.push(format!("{s_name}({count}f)"));
             }
             continue;
         }
-        let scoped = if batch_hits.len() <= 200 {
-            Some(batch_hits.as_slice())
+        let raw_scope: Vec<String> = batch_hits.iter().map(|(raw, _)| raw.clone()).collect();
+        let scoped = if raw_scope.len() <= 200 {
+            Some(raw_scope.as_slice())
         } else {
             None
         };
@@ -647,7 +653,7 @@ pub fn run(
             if g_res.exit_code == 0 {
                 let count = parse_grep_hit_files(&g_res.stdout)
                     .into_iter()
-                    .filter(|np| !(in_same_file && np.as_str() == f))
+                    .filter(|(_, np)| !(in_same_file && np.as_str() == f))
                     .count();
                 if count > 0 {
                     dangling_refs.push(format!("{s_name}({count}f)"));
@@ -688,7 +694,10 @@ pub fn run(
                 }
                 continue;
             }
-            scoped_storage = parse_grep_hit_files(&batch_res.stdout);
+            scoped_storage = parse_grep_hit_files(&batch_res.stdout)
+                .into_iter()
+                .map(|(raw, _)| raw)
+                .collect();
             if scoped_storage.is_empty() {
                 for &(f, s_name) in chunk {
                     orphan_internal.push(format!("{f}:{s_name}"));
@@ -712,21 +721,19 @@ pub fn run(
             }
             let mut line_hits = 0usize;
             if gn_res.exit_code == 0 {
-                for row in String::from_utf8_lossy(&gn_res.stdout).lines() {
-                    let mut r_str = row.trim();
-                    if r_str.is_empty() {
-                        continue;
-                    }
-                    if !target_trim.is_empty() {
-                        r_str = r_str.strip_prefix(&commit_prefix).unwrap_or(r_str);
-                    }
-                    let Some(c_idx) = r_str.find(':') else {
+                for raw_row in gn_res.stdout.split(|&b| b == b'\n') {
+                    let Some(nul_idx) = raw_row.iter().position(|&b| b == b'\0') else {
                         continue;
                     };
-                    if c_idx < 1 {
+                    let raw_lossy = String::from_utf8_lossy(&raw_row[..nul_idx]);
+                    let mut raw_path = raw_lossy.as_ref();
+                    if !target_trim.is_empty() {
+                        raw_path = raw_path.strip_prefix(&commit_prefix).unwrap_or(raw_path);
+                    }
+                    if raw_path.is_empty() {
                         continue;
                     }
-                    let np = normalize_path_value(&r_str[..c_idx]);
+                    let np = normalize_path_value(raw_path);
                     if should_skip_symbol_file(&np, &ignored) {
                         continue;
                     }

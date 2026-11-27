@@ -4,7 +4,7 @@ Reconcile [`../ship.md`](../ship.md) checkpoints against Git before acting (prog
 
 ## 1. Load checkpoint & verify Git identity
 
-1. Resolve `{RUN_DIR}` via `b3 guard resolve-run` (`<run_id>`, `.b3/ship/CURRENT`, `.b3/ship/progress.md`, or `.b3/autodev/`); update `CURRENT` on `runs/` without scanning sibling dirs.
+1. Resolve `{RUN_DIR}` via `b3 guard resolve-run` (`<run_id>`, `.b3/ship/CURRENT`, or `.b3/ship/progress.md`); update `CURRENT` on `runs/` without scanning sibling dirs.
 2. Load `master-plan.md`, `progress.md`, active `findings.md`, and `approach/T00N.md` **only** for `in_progress`/next ready `pending` tasks.
 3. Verify `B3_HOME`, `PRODUCT_ROOT`, `plan_id`, `branch`: mismatch → `BLOCKED`.
 

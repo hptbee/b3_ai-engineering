@@ -3613,3 +3613,84 @@ fn pr_state_safety_locks_worktrees_and_verify() {
     assert_eq!(c_401, 2);
     assert_eq!(out_401, "GH_VERIFY_UNAVAILABLE: github_auth_failed");
 }
+
+#[test]
+fn pr_reconcile_blocks_when_multiple_pending_records_lack_op_id() {
+    let fx = PrFixture::new("pf-legacy-noid");
+    let pr = 108u64;
+    let canon108 = fx.canonical_state_path(pr);
+    fs::create_dir_all(canon108.parent().unwrap()).unwrap();
+
+    let s_leg = fx.base_state(pr);
+    let st_leg = fx.write_state("legacy-noid.json", &s_leg);
+    write_lf(
+        &canon108,
+        concat!(
+            "[",
+            r#"{"action":"reply","status":"PENDING","repo":"acme/demo","pr":108,"actor":"b3-bot","reviewed_sha":"0000","target_kind":"review_thread","target_id":"PRRT_t1","key":"k-a","op_hash":"1111111111111111","body_sha256":"0000"},"#,
+            r#"{"action":"reply","status":"PENDING","repo":"acme/demo","pr":108,"actor":"b3-bot","reviewed_sha":"0000","target_kind":"review_thread","target_id":"PRRT_t1","key":"k-b","op_hash":"2222222222222222","body_sha256":"0000"},"#,
+            r#"{"op_id":"","action":"reply","status":"RECONCILED_CONFIRMED","repo":"acme/demo","pr":108,"detail":"unlabelled-resolved"}"#,
+            "]"
+        ),
+    );
+
+    let (c_blk, j_blk, err_blk) = fx.run_pr(
+        &st_leg,
+        &[
+            "reply",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "108",
+            "--repo-root",
+            fx.repo.to_str().unwrap(),
+            "--expected-head",
+            &fx.head_sha,
+            "--target-kind",
+            "review_thread",
+            "--target-id",
+            "PRRT_t1",
+            "--body-file",
+            fx.reply_body.to_str().unwrap(),
+            "--authorize-write",
+        ],
+        None,
+        &[],
+    );
+    assert_eq!(c_blk, 2, "{j_blk:?}\n{err_blk}");
+    assert_eq!(status_str(&j_blk), "PR_RECONCILIATION_REQUIRED");
+    let pending = j_blk
+        .get("pending_records")
+        .and_then(JsonValue::as_array)
+        .expect("pending_records array");
+    assert_eq!(
+        pending.len(),
+        2,
+        "both missing-op_id PENDING records must remain blocking: {j_blk:?}"
+    );
+    let id0 = pending[0].get("op_id").and_then(JsonValue::as_str).unwrap();
+    let id1 = pending[1].get("op_id").and_then(JsonValue::as_str).unwrap();
+    assert_ne!(id0, id1);
+    assert!(id0.starts_with("__missing_op_") && id1.starts_with("__missing_op_"));
+
+    let (c_rec, j_rec, err_rec) = fx.run_pr(
+        &st_leg,
+        &[
+            "reconcile",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "108",
+            "--repo-root",
+            fx.repo.to_str().unwrap(),
+        ],
+        None,
+        &[],
+    );
+    assert_eq!(c_rec, 0, "{j_rec:?}\n{err_rec}");
+    let outcomes = j_rec
+        .get("outcomes")
+        .and_then(JsonValue::as_array)
+        .expect("outcomes array");
+    assert_eq!(outcomes.len(), 2);
+}

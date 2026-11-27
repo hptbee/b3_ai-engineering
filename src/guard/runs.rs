@@ -296,16 +296,13 @@ pub fn new_run(
     Ok(candidate)
 }
 
-/// Resolves the relative run path (from `CURRENT`, `--run-id`, or legacy fallback).
+/// Resolves the relative run path (from `CURRENT`, `--run-id`, or legacy `.b3/ship/progress.md`).
 pub fn resolve_run(repo_root_raw: &str, run_id: &str, namespace: &str) -> Result<String, B3Error> {
     let root = normalize_repo_root(repo_root_raw)?;
     let (ns_trim, ns_dir) = resolve_namespace_dir(&root, namespace)?;
     let ns_rel = format!(".b3/{ns_trim}");
     let runs_dir = ns_dir.join("runs");
     assert_runs_dirs_not_links(&root, &ns_dir, &runs_dir, "RESOLVE_FAIL")?;
-
-    let autodev_dir = root.join(".b3").join("autodev");
-    let autodev_runs_dir = autodev_dir.join("runs");
 
     if !run_id.is_empty() {
         let trimmed = run_id.trim();
@@ -315,12 +312,6 @@ pub fn resolve_run(repo_root_raw: &str, run_id: &str, namespace: &str) -> Result
         let target = runs_dir.join(trimmed);
         if target.is_dir() && !is_reparse_or_symlink(&target) {
             return Ok(format!("{ns_rel}/runs/{trimmed}"));
-        }
-        if ns_trim == "ship" {
-            let legacy_target = autodev_runs_dir.join(trimmed);
-            if legacy_target.is_dir() && !is_reparse_or_symlink(&legacy_target) {
-                return Ok(format!(".b3/autodev/runs/{trimmed}"));
-            }
         }
         return Err(fail(format!("RESOLVE_FAIL: run not found '{trimmed}'"), 1));
     }
@@ -347,33 +338,8 @@ pub fn resolve_run(repo_root_raw: &str, run_id: &str, namespace: &str) -> Result
         return Ok(format!("{ns_rel}/runs/{cur_id}"));
     }
 
-    if ns_trim == "ship" {
-        if ns_dir.join("progress.md").is_file() {
-            return Ok(".b3/ship".to_string());
-        }
-        let ad_cur_file = autodev_dir.join("CURRENT");
-        if ad_cur_file.is_file() {
-            let ac_id = fs::read_to_string(&ad_cur_file)
-                .map_err(|e| fail(format!("RESOLVE_FAIL: unable to read CURRENT: {e}"), 1))?
-                .trim()
-                .to_string();
-            if !valid_run_id(&ac_id) {
-                return Err(fail(
-                    format!("RESOLVE_FAIL: CURRENT contains invalid run id '{ac_id}'"),
-                    1,
-                ));
-            }
-            if !autodev_runs_dir.join(&ac_id).is_dir() {
-                return Err(fail(
-                    format!("RESOLVE_FAIL: CURRENT points to missing run '{ac_id}'"),
-                    1,
-                ));
-            }
-            return Ok(format!(".b3/autodev/runs/{ac_id}"));
-        }
-        if autodev_dir.join("progress.md").is_file() {
-            return Ok(".b3/autodev".to_string());
-        }
+    if ns_trim == "ship" && ns_dir.join("progress.md").is_file() {
+        return Ok(".b3/ship".to_string());
     }
 
     Err(fail("NO_ACTIVE_RUN", 1))
@@ -407,36 +373,9 @@ pub fn list_runs(repo_root_raw: &str, namespace: &str) -> Result<String, B3Error
         return Ok(lines.join("\n"));
     }
 
-    if ns_trim == "ship" {
-        if ns_dir.join("progress.md").is_file() {
-            let st = read_run_status(&ns_dir);
-            return Ok(format!("* legacy [{st}]"));
-        }
-        let autodev_dir = root.join(".b3").join("autodev");
-        let autodev_runs_dir = autodev_dir.join("runs");
-        let ad_cur = read_current_run_id(&autodev_dir);
-        let ad_names = if autodev_runs_dir.is_dir() {
-            list_non_link_dir_names_desc(&autodev_runs_dir)
-        } else {
-            Vec::new()
-        };
-        if !ad_names.is_empty() {
-            let mut lines = Vec::with_capacity(ad_names.len());
-            for id in ad_names {
-                let st = read_run_status(&autodev_runs_dir.join(&id));
-                let mark = if ad_cur.as_deref() == Some(id.as_str()) {
-                    "* "
-                } else {
-                    "  "
-                };
-                lines.push(format!("{mark}{id} [{st}] (legacy-autodev)"));
-            }
-            return Ok(lines.join("\n"));
-        }
-        if autodev_dir.join("progress.md").is_file() {
-            let st = read_run_status(&autodev_dir);
-            return Ok(format!("* legacy (legacy-autodev) [{st}]"));
-        }
+    if ns_trim == "ship" && ns_dir.join("progress.md").is_file() {
+        let st = read_run_status(&ns_dir);
+        return Ok(format!("* legacy [{st}]"));
     }
 
     Ok("NO_RUNS".to_string())

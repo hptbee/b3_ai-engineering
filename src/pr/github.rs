@@ -2920,7 +2920,9 @@ fn handle_reconcile(flags: &ParsedFlags) -> Result<PrExit, PrExit> {
             let op_id = rec
                 .get("op_id")
                 .and_then(JsonValue::as_str)
-                .unwrap_or("__legacy__")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("__missing_op_unknown")
                 .to_string();
             let action = rec
                 .get("action")

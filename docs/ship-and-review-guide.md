@@ -14,7 +14,7 @@ Core 7-step flow: `Preflight → Plan → [Scope → Build → Verify → Review
 ```mermaid
 flowchart TD
     Entry["Host Entrypoint (1-hop): Cursor / Codex / Claude / Antigravity"] --> Resolve{"Mode?"}
-    Resolve -->|"status / --all"| StatusOut["b3 guard resolve-run or list-runs (.b3/ship + .b3/autodev fallback)"]
+    Resolve -->|"status / --all"| StatusOut["b3 guard resolve-run or list-runs (.b3/ship)"]
     Resolve -->|"resume / unfinished run"| Resume["Scenario C: ship-resume.md (Git ancestry + verify-check)"]
     Resolve -->|"New requirement / plan"| NewRun["b3 guard new-run (.b3/ship/runs/run_id + CURRENT)"]
 

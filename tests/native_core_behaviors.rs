@@ -959,3 +959,74 @@ fn core_review_inventory_subdivides_oversized_test_only_directory() {
         "{gout}\n{gerr}"
     );
 }
+
+#[test]
+fn core_symbol_check_batch_preserves_leading_space_and_special_filenames() {
+    let tmp = TempDirGuard::new("sym-batch-special-names");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(
+        &repo,
+        "src/api.rs",
+        "pub fn alpha_removed() {}\npub fn beta_removed() {}\n",
+        "add api",
+    );
+    commit_file(
+        &repo,
+        " caller.rs",
+        "fn call_a() { alpha_removed(); }\n",
+        "add leading-space caller",
+    );
+    let base_head = commit_file(
+        &repo,
+        "src/[id]/special caller.rs",
+        "fn call_b() { beta_removed(); }\n",
+        "add special caller",
+    );
+
+    fs::write(
+        repo.join("src/api.rs"),
+        "fn helper_used_fn() {}\nfn orphan_only_fn() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join(" caller.rs"),
+        "fn call_a() { alpha_removed(); helper_used_fn(); }\n",
+    )
+    .unwrap();
+
+    let (c1, out1, err1) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_head,
+    ]);
+    assert_eq!(c1, 2, "working-tree symbol-check failed: {out1}\n{err1}");
+    assert!(out1.contains("alpha_removed(1f)"), "{out1}");
+    assert!(out1.contains("beta_removed(1f)"), "{out1}");
+    assert!(out1.contains("src/api.rs:orphan_only_fn"), "{out1}");
+    assert!(!out1.contains("helper_used_fn"), "{out1}");
+
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-m", "remove exports and add privs"]);
+
+    let (c2, out2, err2) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_head,
+        "--target-ref",
+        "HEAD",
+    ]);
+    assert_eq!(c2, 2, "commit-ref symbol-check failed: {out2}\n{err2}");
+    assert!(out2.contains("alpha_removed(1f)"), "{out2}");
+    assert!(out2.contains("beta_removed(1f)"), "{out2}");
+    assert!(out2.contains("src/api.rs:orphan_only_fn"), "{out2}");
+    assert!(!out2.contains("helper_used_fn"), "{out2}");
+}

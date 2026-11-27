@@ -764,6 +764,15 @@ fn commands_and_command_skills_canonical_contracts() {
 
     let (plan_cmd, plan_cs) = read_pair("b3-plan");
     assert!(plan_cmd.contains("plan-only") && plan_cs.contains("plan-only"));
+    assert!(
+        !plan_cmd.contains("inline on `main`")
+            && !plan_cs.contains("inline on `main`")
+            && plan_cmd.contains("independent of parallelism")
+            && plan_cs.contains("independent of parallelism")
+            && plan_cmd.contains("never disabled by")
+            && plan_cs.contains("never disabled by"),
+        "b3-plan command and skill must decouple model routing from parallelism"
+    );
 
     let (impl_cmd, impl_cs) = read_pair("b3-implement");
     assert!(impl_cmd.contains("do **not** eagerly load"));
@@ -775,11 +784,17 @@ fn commands_and_command_skills_canonical_contracts() {
         dbg_cmd.contains("debugging/SKILL.md")
             && dbg_cmd.contains("verification/SKILL.md")
             && dbg_cmd.contains("3 failed")
+            && !dbg_cmd.contains("inline on `main`")
+            && dbg_cmd.contains("independent of parallelism")
+            && dbg_cmd.contains("never disabled by")
     );
     assert!(
         dbg_cs.contains("debugging/SKILL.md")
             && dbg_cs.contains("verification/SKILL.md")
             && dbg_cs.contains("3 failed")
+            && !dbg_cs.contains("inline on `main`")
+            && dbg_cs.contains("independent of parallelism")
+            && dbg_cs.contains("never disabled by")
     );
 
     let (rev_cmd, rev_cs) = read_pair("b3-review");

@@ -2179,7 +2179,7 @@ fn mechanical_symbol_and_prune_safety() {
     assert_eq!(fi_c, 1);
     assert!(fi_err.contains("DIFF_SCOPE_FAIL"), "{fi_err}");
 
-    // 4. Prune safety: nested junction + runs-dir junction + default keep=10 PASS + autodev legacy fallback
+    // 4. Prune safety: nested junction + runs-dir junction + default keep=10 PASS + autodev retired fallback (still staged-blocked)
     let decoy_nested = tmp.path.join("decoy-nested");
     let decoy_top = tmp.path.join("decoy-top");
     let decoy_runs = tmp.path.join("decoy-runs");
@@ -2297,7 +2297,7 @@ fn mechanical_symbol_and_prune_safety() {
         .join(format!(".b3/ship/runs/{}", active_id.trim()))
         .is_dir());
 
-    // .b3/autodev legacy fallback
+    // .b3/autodev fallback retired in runs.rs, but checkpoint staging guard still blocks it
     let ad_repo = tmp.path.join("autodev-repo");
     init_fresh_git_repo(&ad_repo);
     write_lf(
@@ -2306,12 +2306,12 @@ fn mechanical_symbol_and_prune_safety() {
     );
     write_lf(&ad_repo.join(".b3/autodev/CURRENT"), "20261121-0100-old\n");
     let ad_str = ad_repo.to_str().unwrap();
-    let (adr_c, adr_out, _) = run_b3(&["guard", "resolve-run", "--repo-root", ad_str]);
-    assert_eq!(adr_c, 0);
-    assert_eq!(adr_out, ".b3/autodev/runs/20261121-0100-old");
+    let (adr_c, _, adr_err) = run_b3(&["guard", "resolve-run", "--repo-root", ad_str]);
+    assert_eq!(adr_c, 1);
+    assert!(adr_err.contains("NO_ACTIVE_RUN"), "{adr_err}");
     let (adl_c, adl_out, _) = run_b3(&["guard", "list-runs", "--repo-root", ad_str]);
     assert_eq!(adl_c, 0);
-    assert!(adl_out.contains("(legacy-autodev)"), "{adl_out}");
+    assert_eq!(adl_out, "NO_RUNS");
     git_in(
         &ad_repo,
         &[
