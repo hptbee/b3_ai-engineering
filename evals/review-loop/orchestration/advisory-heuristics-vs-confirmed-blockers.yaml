@@ -1,0 +1,12 @@
+id: review-orchestration-009
+artifact: review-loop/strategy.md
+intent: Surface exit-0 advisory heuristic signals to Reviewer for contextual triage without blocking commit mechanically, while fixing exit-2 confirmed blockers
+scenario: |
+  User runs /b3-review-loop on a diff containing a justified `@ts-ignore` comment and an internal helper flagged only as `orphan_internal`
+  `b3 guard mechanical-check` exits 0 with `MECHANICAL_ADVISORY` (`advisory_hits=`) and `b3 guard symbol-check` exits 0 with `SYMBOL_ADVISORY` (`orphan_internal`-only)
+  Orchestrator surfaces both advisory signals to `b3-reviewer` alongside native compiler/linter/typechecker output instead of blocking mechanically
+  Reviewer confirms the `@ts-ignore` is documented/justified and the internal helper is not dead code (no `CONFIRMED` findings, `verify-run` exits 0)
+  Orchestrator emits PASS; in a paired run where `mechanical-check` or `symbol-check` exits 2 (`MECHANICAL_FINDINGS` or `SYMBOL_FINDINGS` `dangling_refs`), Orchestrator requires fix/block before PASS
+expected_outcome: PASS
+failure_mode: blocking-on-advisory-signal-or-ignoring-exit2-blocker
+notes: Advisory `exit 0` heuristic signals (`MECHANICAL_ADVISORY` `advisory_hits=` / `SYMBOL_ADVISORY` `orphan_internal`) inform contextual review with native compiler/linter output; confirmed `exit 2` findings (`MECHANICAL_FINDINGS` / `SYMBOL_FINDINGS` `dangling_refs`) must be fixed or blocked.

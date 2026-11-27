@@ -847,6 +847,33 @@ fn commands_and_command_skills_canonical_contracts() {
             "{pr_cmd_name} command-skill missing pr-feedback/SKILL.md or PR_MUTATION_OWNER_REQUIRED"
         );
     }
+
+    // Items B, E, H: proportional escalation, advisory vs blocker triage, anti-overengineering parity
+    let ship_wf = fs::read_to_string(root.join("workflows/ship.md")).expect("read ship.md");
+    assert!(
+        !ship_wf.contains("`>=4` tasks"),
+        "workflows/ship.md must not escalate to detailed purely on task count"
+    );
+    assert!(
+        ship_wf.contains("SYMBOL_ADVISORY") && ship_wf.contains("MECHANICAL_ADVISORY"),
+        "workflows/ship.md must distinguish advisory heuristic signals from confirmed blockers"
+    );
+    let rev_role =
+        fs::read_to_string(root.join("agents/b3-reviewer.md")).expect("read b3-reviewer");
+    let fix_role = fs::read_to_string(root.join("agents/b3-fixer.md")).expect("read b3-fixer");
+    let arch_role =
+        fs::read_to_string(root.join("agents/b3-architecture-reviewer.md")).expect("read arch");
+    for (name, body) in [
+        ("b3-reviewer", rev_role.as_str()),
+        ("b3-fixer", fix_role.as_str()),
+        ("b3-architecture-reviewer", arch_role.as_str()),
+        ("review-loop/strategy", strategy.as_str()),
+    ] {
+        assert!(
+            body.contains("INTENTIONAL COMPLEXITY"),
+            "{name} must recognize INTENTIONAL COMPLEXITY consistently"
+        );
+    }
 }
 
 #[test]

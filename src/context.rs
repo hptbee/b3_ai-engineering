@@ -72,8 +72,8 @@ fn collect_skill_files(base: &Path, root: &Path, out: &mut Vec<(String, PathBuf)
     }
 }
 
-/// Computes the exact B3 Context Budget Report and warnings matching
-/// `scripts/measure-context.{ps1,sh}`.
+/// Computes the exact B3 Context Budget Report and warnings for native
+/// `b3 context measure --strict`.
 pub fn measure_context(repo_root_raw: &str, strict: bool) -> Result<(String, i32), B3Error> {
     let repo_root = resolve_b3_repo_root_auto(repo_root_raw)?;
     let mut warnings: Vec<String> = Vec::new();

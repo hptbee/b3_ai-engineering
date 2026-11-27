@@ -767,10 +767,12 @@ pub fn run(
         sort_ordinal(orphan_internal, false).join(",")
     };
 
-    let (term, code) = if dan_out == "none" && orp_out == "none" {
-        ("SYMBOL_OK", 0)
-    } else {
+    let (term, code) = if dan_out != "none" {
         ("SYMBOL_FINDINGS", 2)
+    } else if orp_out != "none" {
+        ("SYMBOL_ADVISORY", 0)
+    } else {
+        ("SYMBOL_OK", 0)
     };
 
     let output = format!(

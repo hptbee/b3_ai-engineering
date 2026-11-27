@@ -1,0 +1,9 @@
+id: code-review-not-trigger-005
+artifact: skills/engineering/code-review/SKILL.md
+intent: Do not flag defensive boundary validation as redundant
+scenario: |
+  Review this webhook controller.
+  Reviewer says validating the signature and payload structure is redundant because internal services send it.
+expected_outcome: NO_BLOCKING_FINDINGS
+failure_mode: false-positive-intentional-complexity
+notes: Trust boundary requires defensive validation; preserve as INTENTIONAL COMPLEXITY, not CONFIRMED REDUNDANCY or residue.

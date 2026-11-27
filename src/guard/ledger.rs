@@ -8,17 +8,19 @@ use crate::fs::{
     test_path_match, test_test_path, write_atomic_lf,
 };
 use crate::git::{
-    assert_valid_git_rev, git_err_detail, git_hash_text, is_hex40, new_working_tree_oid,
-    resolve_scope_target_and_base, run_git,
+    assert_valid_git_rev, git_err_detail, git_hash_text, is_hex40, resolve_scope_target_and_base,
+    run_git,
 };
 use crate::guard::inventory::{build_inventory, eval_level1_dispatch, is_oversized_unit};
 use crate::guard::scope::{
     collect_scope_data, eval_risk_for_subset, get_tshirt_size, normalize_size_class,
     test_contract_path, test_doc_or_asset_path,
 };
+use crate::guard::snapshot::resolve_or_create_snapshot_sha;
 use crate::guard::verify::{
     collect_tree_fingerprint_maps, hash_tree_fingerprint_maps, test_verify_receipt,
-    TreeFingerprintMaps,
+    valid_receipt_rel_list, validate_receipt_covers_paths, TreeFingerprintMaps,
+    VerifyReceiptResult,
 };
 use crate::guard::wave::resolve_concurrency;
 
@@ -39,16 +41,6 @@ pub(crate) struct LedgerUnit {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PassLogEntry {
-    pub seq: usize,
-    pub scope: String,
-    pub kind: String,
-    pub delta: i64,
-    pub ref_sha: String,
-    pub chain_hash: String,
-}
-
-#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(crate) struct VerifiedReceiptRecord {
     pub unit_id: String,
@@ -61,7 +53,6 @@ pub(crate) struct VerifiedReceiptRecord {
 pub(crate) struct ReviewLedger {
     pub meta: HashMap<String, String>,
     pub units: Vec<LedgerUnit>,
-    pub pass_log: Vec<PassLogEntry>,
     pub verified_receipts: Vec<VerifiedReceiptRecord>,
 }
 
@@ -190,121 +181,9 @@ fn test_waiver_attempt(rationale: &str) -> bool {
     t.len() >= 7 && t[..7].eq_ignore_ascii_case("WAIVER:")
 }
 
-fn test_high_skip_rationale(rationale: &str) -> bool {
-    let t = rationale.trim();
-    if t.is_empty() || t.eq_ignore_ascii_case("none") || test_waiver_attempt(t) || t.len() < 15 {
-        return false;
-    }
-    let low = t.to_ascii_lowercase();
-    let chars: Vec<char> = low.chars().collect();
-    if chars
-        .windows(4)
-        .any(|w| w[0] == w[1] && w[1] == w[2] && w[2] == w[3])
-    {
-        return false;
-    }
-    let mut uniq = HashSet::new();
-    let mut run = String::new();
-    for b in low.bytes() {
-        if b.is_ascii_lowercase() {
-            run.push(b as char);
-        } else {
-            if run.len() >= 3 {
-                uniq.insert(std::mem::take(&mut run));
-            } else {
-                run.clear();
-            }
-        }
-    }
-    if run.len() >= 3 {
-        uniq.insert(run);
-    }
-    uniq.len() >= 2
-}
-
-fn get_initial_pass_chain(root: &Path, base_sha: &str) -> Result<String, B3Error> {
-    git_hash_text(
-        root,
-        &format!("b3-pass-v1|init|{base_sha}|0\n"),
-        "LEDGER_FAIL",
-        "pass_chain init",
-    )
-}
-
-fn step_pass_chain(
-    root: &Path,
-    prev_chain: &str,
-    seq: usize,
-    scope_id: &str,
-    kind: &str,
-    delta: i64,
-    ref_sha: &str,
-) -> Result<String, B3Error> {
-    git_hash_text(
-        root,
-        &format!("b3-pass-v1|step|{prev_chain}|{seq}|{scope_id}|{kind}|{delta}|{ref_sha}\n"),
-        "LEDGER_FAIL",
-        "pass_chain step",
-    )
-}
-
-fn verify_ledger_pass_chain(root: &Path, ledger: &ReviewLedger) -> Result<(), B3Error> {
-    let base_sha = ledger
-        .meta
-        .get("base_sha")
-        .map(String::as_str)
-        .unwrap_or("");
-    let mut cur = get_initial_pass_chain(root, base_sha)?;
-    let mut sum = 0i64;
-    for (i, entry) in ledger.pass_log.iter().enumerate() {
-        if entry.seq != i + 1 || entry.delta < 1 {
-            return Err(fail(
-                format!(
-                    "LEDGER_CORRUPT: passes_used tamper detected (invalid sequence or delta at index {})",
-                    i + 1
-                ),
-                1,
-            ));
-        }
-        sum += entry.delta;
-        cur = step_pass_chain(
-            root,
-            &cur,
-            entry.seq,
-            &entry.scope,
-            &entry.kind,
-            entry.delta,
-            &entry.ref_sha,
-        )?;
-        if cur != entry.chain_hash {
-            return Err(fail(
-                format!(
-                    "LEDGER_CORRUPT: passes_used tamper detected (chain hash mismatch at seq {})",
-                    entry.seq
-                ),
-                1,
-            ));
-        }
-    }
-    let passes_used = ledger
-        .meta
-        .get("passes_used")
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or(-1);
-    let pass_chain = ledger
-        .meta
-        .get("pass_chain")
-        .map(String::as_str)
-        .unwrap_or("");
-    if sum != passes_used || cur != pass_chain {
-        return Err(fail(
-            format!(
-                "LEDGER_CORRUPT: passes_used tamper detected (passes={passes_used} log_sum={sum})"
-            ),
-            1,
-        ));
-    }
-    Ok(())
+fn has_explicit_skip_rationale(raw: &str) -> bool {
+    let t = raw.trim();
+    !t.is_empty() && !t.eq_ignore_ascii_case("none") && !test_waiver_attempt(t)
 }
 
 fn serialize_review_ledger(ledger: &ReviewLedger) -> String {
@@ -327,7 +206,6 @@ fn serialize_review_ledger(ledger: &ReviewLedger) -> String {
         "max_concurrency",
         "max_passes",
         "passes_used",
-        "pass_chain",
         "budget_status",
         "review_independence",
         "cross_unit_status",
@@ -360,13 +238,6 @@ fn serialize_review_ledger(ledger: &ReviewLedger) -> String {
             u.files_csv
         ));
     }
-    out.push_str("\n## Pass Log\n");
-    for pe in &ledger.pass_log {
-        out.push_str(&format!(
-            "pass|{}|{}|{}|{}|{}|{}\n",
-            pe.seq, pe.scope, pe.kind, pe.delta, pe.ref_sha, pe.chain_hash
-        ));
-    }
     out
 }
 
@@ -377,51 +248,11 @@ fn is_valid_unit_id_str(s: &str) -> bool {
     rest.len() >= 2 && rest.bytes().all(|b| b.is_ascii_digit())
 }
 
-fn parse_pass_log_line(ln: &str) -> Option<PassLogEntry> {
-    let mut parts = ln.split('|');
-    if parts.next()? != "pass" {
-        return None;
-    }
-    let seq_s = parts.next()?;
-    let scope = parts.next()?;
-    let kind = parts.next()?;
-    let delta_s = parts.next()?;
-    let ref_sha = parts.next()?;
-    let chain_hash = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    if seq_s.is_empty() || !seq_s.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    if scope.is_empty() || kind.is_empty() {
-        return None;
-    }
-    if delta_s.is_empty() || !delta_s.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    if ref_sha != "none" && !is_hex40(ref_sha) {
-        return None;
-    }
-    if !is_hex40(chain_hash) {
-        return None;
-    }
-    Some(PassLogEntry {
-        seq: seq_s.parse().ok()?,
-        scope: scope.to_string(),
-        kind: kind.to_string(),
-        delta: delta_s.parse().ok()?,
-        ref_sha: ref_sha.to_string(),
-        chain_hash: chain_hash.to_string(),
-    })
-}
-
 fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
     let raw = std::fs::read_to_string(full_path)
         .map_err(|e| fail(format!("LEDGER_FAIL: failed reading ledger: {e}"), 1))?;
     let mut meta: HashMap<String, String> = HashMap::new();
     let mut units: Vec<LedgerUnit> = Vec::new();
-    let mut pass_log: Vec<PassLogEntry> = Vec::new();
 
     for raw_ln in raw.lines() {
         let ln = raw_ln.trim();
@@ -471,13 +302,6 @@ fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
             continue;
         }
         if ln.starts_with("pass|") {
-            let entry = parse_pass_log_line(ln).ok_or_else(|| {
-                fail(
-                    format!("LEDGER_CORRUPT: malformed pass log entry '{ln}'"),
-                    1,
-                )
-            })?;
-            pass_log.push(entry);
             continue;
         }
         let Some(eq) = ln.find('=') else {
@@ -487,6 +311,9 @@ fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
             return Err(fail(format!("LEDGER_CORRUPT: unexpected line '{ln}'"), 1));
         }
         let k = ln[..eq].trim().to_string();
+        if k == "pass_chain" {
+            continue;
+        }
         let v = ln[eq + 1..].trim().to_string();
         if meta.contains_key(&k) {
             return Err(fail(format!("LEDGER_CORRUPT: duplicate key '{k}'"), 1));
@@ -562,12 +389,6 @@ fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
         return Err(fail("LEDGER_CORRUPT: invalid pass counter", 1));
     }
 
-    if !meta.get("pass_chain").is_some_and(|v| !v.is_empty()) {
-        return Err(fail("LEDGER_CORRUPT: missing pass_chain", 1));
-    }
-    if !is_hex40(&meta["pass_chain"]) {
-        return Err(fail("LEDGER_CORRUPT: invalid pass_chain", 1));
-    }
     if !meta
         .get("review_independence")
         .is_some_and(|v| !v.is_empty())
@@ -610,9 +431,51 @@ fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
     Ok(ReviewLedger {
         meta,
         units,
-        pass_log,
         verified_receipts: Vec::new(),
     })
+}
+
+fn normalize_ledger_size_meta(ledger: &mut ReviewLedger) -> Result<(String, String), B3Error> {
+    let orig_raw_size = ledger.meta["size_class"].clone();
+    let norm_size = normalize_size_class(&orig_raw_size)
+        .ok_or_else(|| {
+            fail(
+                format!("LEDGER_CORRUPT: invalid size_class '{orig_raw_size}'"),
+                1,
+            )
+        })?
+        .to_string();
+    let legacy_norm_note = if orig_raw_size != norm_size {
+        format!("{orig_raw_size}:{norm_size}")
+    } else {
+        ledger.meta["normalized_legacy_size"].clone()
+    };
+    ledger
+        .meta
+        .insert("size_class".to_string(), norm_size.clone());
+    ledger
+        .meta
+        .insert("normalized_legacy_size".to_string(), legacy_norm_note);
+    Ok((orig_raw_size, norm_size))
+}
+
+fn resolve_ledger_target_commit(root: &Path, target_ref_val: &str) -> Result<String, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    let spec = format!("{target_ref_val}^{{commit}}");
+    let res = run_git(
+        root,
+        &["rev-parse", "--verify", "--quiet", &spec],
+        &no_env,
+        None,
+    )?;
+    let sha = String::from_utf8_lossy(&res.stdout).trim().to_string();
+    if res.exit_code != 0 || !is_hex40(&sha) {
+        return Err(fail(
+            format!("LEDGER_STALE: target_ref '{target_ref_val}' cannot be resolved"),
+            2,
+        ));
+    }
+    Ok(sha)
 }
 
 fn contains_unresolved_finding_word(findings: &str) -> bool {
@@ -647,26 +510,7 @@ pub(crate) fn invoke_review_ledger_check(
         return Err(fail(format!("LEDGER_MISSING: {ledger_rel}"), 1));
     }
     let mut ledger = parse_review_ledger(ledger_full)?;
-    let orig_raw_size = ledger.meta["size_class"].clone();
-    let norm_size = normalize_size_class(&orig_raw_size)
-        .ok_or_else(|| {
-            fail(
-                format!("LEDGER_CORRUPT: invalid size_class '{orig_raw_size}'"),
-                1,
-            )
-        })?
-        .to_string();
-    let legacy_norm_note = if orig_raw_size != norm_size {
-        format!("{orig_raw_size}:{norm_size}")
-    } else {
-        ledger.meta["normalized_legacy_size"].clone()
-    };
-    ledger
-        .meta
-        .insert("size_class".to_string(), norm_size.clone());
-    ledger
-        .meta
-        .insert("normalized_legacy_size".to_string(), legacy_norm_note);
+    let (orig_raw_size, norm_size) = normalize_ledger_size_meta(&mut ledger)?;
 
     let target_ref_val = ledger.meta["target_ref"].clone();
     let target_commit_sha = if target_ref_val != "working_tree" {
@@ -675,7 +519,6 @@ pub(crate) fn invoke_review_ledger_check(
         String::new()
     };
 
-    verify_ledger_pass_chain(root, &ledger)?;
     let max_p: i64 = ledger.meta["max_passes"].parse().unwrap_or(0);
     let used_p: i64 = ledger.meta["passes_used"].parse().unwrap_or(0);
     if max_p <= 0 {
@@ -726,22 +569,8 @@ pub(crate) fn invoke_review_ledger_check(
         }
     }
 
-    let no_env: [(&str, &str); 0] = [];
     if target_ref_val != "working_tree" {
-        let spec = format!("{target_ref_val}^{{commit}}");
-        let res = run_git(
-            root,
-            &["rev-parse", "--verify", "--quiet", &spec],
-            &no_env,
-            None,
-        )?;
-        let sha = String::from_utf8_lossy(&res.stdout).trim().to_string();
-        if res.exit_code != 0 || !is_hex40(&sha) {
-            return Err(fail(
-                format!("LEDGER_STALE: target_ref '{target_ref_val}' cannot be resolved"),
-                2,
-            ));
-        }
+        let sha = resolve_ledger_target_commit(root, &target_ref_val)?;
         if sha != target_commit_sha {
             return Err(fail(
                 format!("LEDGER_STALE: target_ref '{target_ref_val}' moved ({target_commit_sha}->{sha})"),
@@ -758,6 +587,7 @@ pub(crate) fn invoke_review_ledger_check(
             ));
         }
     } else {
+        let no_env: [(&str, &str); 0] = [];
         let res = run_git(
             root,
             &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
@@ -856,6 +686,7 @@ pub(crate) fn invoke_review_ledger_check(
         .collect();
     let unit_count = ledger.units.len();
     let mut verified_receipts = Vec::new();
+    let mut receipt_cache: HashMap<String, VerifyReceiptResult> = HashMap::new();
     let tree_snap = RepoTreeSnapshot::build(root, &target_commit_sha, ign_paths)?;
 
     for u in &ledger.units {
@@ -930,21 +761,13 @@ pub(crate) fn invoke_review_ledger_check(
                         format!("LEDGER_INCOMPLETE: mandatory CRITICAL specialist ({missing_csv}) required on {uid} (waivers disabled without trusted owner approval)"),
                         2,
                     ));
-                } else if live_u_risk.risk_level == "HIGH" {
-                    if !test_high_skip_rationale(&u.rationale) {
-                        return Err(fail(
-                            format!("LEDGER_INCOMPLETE: missing specialist ({missing_csv}) or valid HIGH skip rationale on {uid}"),
-                            2,
-                        ));
-                    }
-                } else {
-                    let rat_trim = u.rationale.trim();
-                    if rat_trim == "none" || rat_trim.len() < 5 || test_waiver_attempt(rat_trim) {
-                        return Err(fail(
-                            format!("LEDGER_INCOMPLETE: missing specialist ({missing_csv}) or rationale on {uid}"),
-                            2,
-                        ));
-                    }
+                } else if !has_explicit_skip_rationale(&u.rationale) {
+                    let msg = if live_u_risk.risk_level == "HIGH" {
+                        format!("LEDGER_INCOMPLETE: missing specialist ({missing_csv}) or valid HIGH skip rationale on {uid}")
+                    } else {
+                        format!("LEDGER_INCOMPLETE: missing specialist ({missing_csv}) or rationale on {uid}")
+                    };
+                    return Err(fail(msg, 2));
                 }
             }
         }
@@ -987,14 +810,18 @@ pub(crate) fn invoke_review_ledger_check(
                 ));
             }
         } else {
-            let vr = test_verify_receipt(
-                root,
-                &u.verify_receipt,
-                ign_paths,
-                "",
-                &u.files_csv,
-                &target_commit_sha,
-            );
+            let vr = receipt_cache
+                .entry(u.verify_receipt.clone())
+                .or_insert_with(|| {
+                    test_verify_receipt(
+                        root,
+                        &u.verify_receipt,
+                        ign_paths,
+                        "",
+                        "",
+                        &target_commit_sha,
+                    )
+                });
             if vr.code == 2 {
                 return Err(fail(
                     format!("LEDGER_STALE: unit {uid} receipt invalid ({})", vr.message),
@@ -1010,12 +837,31 @@ pub(crate) fn invoke_review_ledger_check(
                     2,
                 ));
             }
+            let Some(valid_unit_files) = valid_receipt_rel_list(&u.files_csv) else {
+                return Err(fail(
+                    format!(
+                        "LEDGER_INCOMPLETE: unit {uid} receipt invalid (VERIFY_CHECK_FAIL: invalid relevant_paths)"
+                    ),
+                    2,
+                ));
+            };
+            if let Some(uncovered) =
+                validate_receipt_covers_paths(&vr.relevant_paths_csv, &valid_unit_files)
+            {
+                return Err(fail(
+                    format!(
+                        "LEDGER_INCOMPLETE: unit {uid} receipt invalid (VERIFY_SCOPE_MISMATCH: uncovered path ({}))",
+                        uncovered.join(",")
+                    ),
+                    2,
+                ));
+            }
             if !target_commit_sha.is_empty() {
                 verified_receipts.push(VerifiedReceiptRecord {
                     unit_id: uid.clone(),
                     receipt_path: u.verify_receipt.clone(),
                     target_commit_sha: target_commit_sha.clone(),
-                    relevant_paths_csv: vr.relevant_paths_csv,
+                    relevant_paths_csv: vr.relevant_paths_csv.clone(),
                 });
             }
         }
@@ -1251,9 +1097,7 @@ pub fn run(
         };
 
         if !force && ledger_full.is_file() {
-            let probe = parse_review_ledger(&ledger_full)
-                .and_then(|led| verify_ledger_pass_chain(&repo_root, &led).map(|()| led));
-            let Ok(existing_led) = probe else {
+            let Ok(existing_led) = parse_review_ledger(&ledger_full) else {
                 return Err(fail(
                     format!("LEDGER_CORRUPT: cannot overwrite corrupt ledger '{ledger_rel}' without --force"),
                     1,
@@ -1293,35 +1137,9 @@ pub fn run(
         let snap_sha = if !target_commit_sha.is_empty() {
             target_commit_sha.clone()
         } else {
-            let head_tree =
-                assert_valid_git_rev(&repo_root, "HEAD", "tree", "LEDGER_FAIL", "HEAD^{tree}")?;
-            let wt_tree = new_working_tree_oid(&repo_root, "LEDGER_FAIL", false)?;
-            if wt_tree == head_tree {
-                head_sha.clone()
-            } else {
-                let no_env: [(&str, &str); 0] = [];
-                let ct_res = run_git(
-                    &repo_root,
-                    &[
-                        "commit-tree",
-                        &wt_tree,
-                        "-p",
-                        &head_sha,
-                        "-m",
-                        "b3-ledger-snapshot",
-                    ],
-                    &no_env,
-                    None,
-                )?;
-                let sha = String::from_utf8_lossy(&ct_res.stdout).trim().to_string();
-                if ct_res.exit_code != 0 || !is_hex40(&sha) {
-                    return Err(fail("LEDGER_FAIL: git commit-tree failed", 1));
-                }
-                sha
-            }
+            resolve_or_create_snapshot_sha(&repo_root, "LEDGER_FAIL")?
         };
 
-        let init_chain = get_initial_pass_chain(&repo_root, &resolved_base)?;
         let tree_snap = RepoTreeSnapshot::build(&repo_root, &target_commit_sha, &ignored)?;
         let mut unit_rows = Vec::with_capacity(inv.units.len());
         for u in &inv.units {
@@ -1413,7 +1231,6 @@ pub fn run(
         );
         meta.insert("max_passes".to_string(), effective_max_passes.to_string());
         meta.insert("passes_used".to_string(), "0".to_string());
-        meta.insert("pass_chain".to_string(), init_chain);
         meta.insert("budget_status".to_string(), "OK".to_string());
         meta.insert("review_independence".to_string(), ri_init);
         meta.insert("cross_unit_status".to_string(), cross_status.to_string());
@@ -1423,7 +1240,6 @@ pub fn run(
         let ledger = ReviewLedger {
             meta,
             units: unit_rows,
-            pass_log: Vec::new(),
             verified_receipts: Vec::new(),
         };
         write_atomic_lf(&ledger_full, &serialize_review_ledger(&ledger))?;
@@ -1444,26 +1260,7 @@ pub fn run(
 
     if act == "update" {
         let mut ledger = parse_review_ledger(&ledger_full)?;
-        let orig_raw_size = ledger.meta["size_class"].clone();
-        let norm_size = normalize_size_class(&orig_raw_size)
-            .ok_or_else(|| {
-                fail(
-                    format!("LEDGER_CORRUPT: invalid size_class '{orig_raw_size}'"),
-                    1,
-                )
-            })?
-            .to_string();
-        let legacy_norm_note = if orig_raw_size != norm_size {
-            format!("{orig_raw_size}:{norm_size}")
-        } else {
-            ledger.meta["normalized_legacy_size"].clone()
-        };
-        ledger.meta.insert("size_class".to_string(), norm_size);
-        ledger
-            .meta
-            .insert("normalized_legacy_size".to_string(), legacy_norm_note);
-
-        verify_ledger_pass_chain(&repo_root, &ledger)?;
+        let _ = normalize_ledger_size_meta(&mut ledger)?;
 
         let cur_max_passes: i64 = ledger.meta["max_passes"].parse().unwrap_or(0);
         if let Some(mp) = max_passes {
@@ -1600,21 +1397,7 @@ pub fn run(
         let mut live_contracts_upd: Vec<String> = Vec::new();
         if (found_idx.is_some() && st_val == "REVIEWED") || cu_val == "REVIEWED" {
             if target_ref_val != "working_tree" {
-                let no_env: [(&str, &str); 0] = [];
-                let spec = format!("{target_ref_val}^{{commit}}");
-                let tr_res = run_git(
-                    &repo_root,
-                    &["rev-parse", "--verify", "--quiet", &spec],
-                    &no_env,
-                    None,
-                )?;
-                let tr_sha = String::from_utf8_lossy(&tr_res.stdout).trim().to_string();
-                if tr_res.exit_code != 0 || !is_hex40(&tr_sha) {
-                    return Err(fail(
-                        format!("LEDGER_STALE: target_ref '{target_ref_val}' cannot be resolved"),
-                        2,
-                    ));
-                }
+                let tr_sha = resolve_ledger_target_commit(&repo_root, &target_ref_val)?;
                 target_commit_sha = tr_sha.clone();
                 ledger.meta.insert("target_sha".to_string(), tr_sha.clone());
                 ledger.meta.insert("head_sha".to_string(), tr_sha.clone());
@@ -1760,20 +1543,16 @@ pub fn run(
                 .insert("review_independence".to_string(), "UNKNOWN".to_string());
         }
 
-        let mut pass_events: Vec<(String, String, i64)> = Vec::new();
-        if let Some(idx) = found_idx {
-            let uid = ledger.units[idx].unit_id.clone();
-            if matches!(st_val.as_str(), "REVIEWED" | "INCOMPLETE" | "BLOCKED") {
-                pass_events.push((uid, format!("unit:{st_val}"), 1));
-            } else if added_new_spec {
-                pass_events.push((uid, "specialist".to_string(), 1));
-            }
+        let mut auto_delta = 0i64;
+        if found_idx.is_some()
+            && (matches!(st_val.as_str(), "REVIEWED" | "INCOMPLETE" | "BLOCKED") || added_new_spec)
+        {
+            auto_delta += 1;
         }
         if matches!(cu_val.as_str(), "REVIEWED" | "INCOMPLETE" | "BLOCKED") {
-            pass_events.push(("cross_unit".to_string(), format!("cross_unit:{cu_val}"), 1));
+            auto_delta += 1;
         }
 
-        let auto_delta: i64 = pass_events.iter().map(|pe| pe.2).sum();
         let cur_passes: i64 = ledger.meta["passes_used"].parse().unwrap_or(0);
         let min_next_passes = cur_passes + auto_delta;
         let new_passes = if let Some(pu) = passes_used {
@@ -1791,47 +1570,14 @@ pub fn run(
                     1,
                 ));
             }
-            let extra_manual = pu - min_next_passes;
-            if extra_manual > 0 {
-                pass_events.push(("manual".to_string(), "manual".to_string(), extra_manual));
-            }
             pu
         } else {
             min_next_passes
         };
 
-        let mut cur_chain = ledger.meta["pass_chain"].clone();
-        let evt_ref_sha = if !target_commit_sha.is_empty() {
-            target_commit_sha
-        } else if is_hex40(&ledger.meta["head_sha"]) {
-            ledger.meta["head_sha"].clone()
-        } else {
-            "none".to_string()
-        };
-        for (pe_scope, pe_kind, pe_delta) in pass_events {
-            let next_seq = ledger.pass_log.len() + 1;
-            cur_chain = step_pass_chain(
-                &repo_root,
-                &cur_chain,
-                next_seq,
-                &pe_scope,
-                &pe_kind,
-                pe_delta,
-                &evt_ref_sha,
-            )?;
-            ledger.pass_log.push(PassLogEntry {
-                seq: next_seq,
-                scope: pe_scope,
-                kind: pe_kind,
-                delta: pe_delta,
-                ref_sha: evt_ref_sha.clone(),
-                chain_hash: cur_chain.clone(),
-            });
-        }
         ledger
             .meta
             .insert("passes_used".to_string(), new_passes.to_string());
-        ledger.meta.insert("pass_chain".to_string(), cur_chain);
 
         if let Some(mp) = max_passes {
             ledger.meta.insert("max_passes".to_string(), mp.to_string());

@@ -71,28 +71,29 @@ pub enum GitZMode {
     LsFilesStage,
 }
 
-/// Executes Git with canonical non-interpolating flags (`--literal-pathspecs`,
-/// `-C <root>`, `core.quotepath=false`, consistent diff prefixes).
-pub fn run_git<S, K, V>(
+fn run_git_inner<S, K, V>(
     root: &Path,
     git_args: &[S],
     extra_env: &[(K, V)],
     stdin_bytes: Option<&[u8]>,
+    allow_pathspec_magic: bool,
 ) -> Result<CmdOutput, B3Error>
 where
     S: AsRef<OsStr>,
     K: AsRef<OsStr>,
     V: AsRef<OsStr>,
 {
-    let mut use_lit_ps = true;
-    for arg in git_args {
-        let s = arg.as_ref().to_string_lossy();
-        if s == "--" {
-            break;
-        }
-        if s == "grep" {
-            use_lit_ps = false;
-            break;
+    let mut use_lit_ps = !allow_pathspec_magic;
+    if use_lit_ps {
+        for arg in git_args {
+            let s = arg.as_ref().to_string_lossy();
+            if s == "--" {
+                break;
+            }
+            if s == "grep" {
+                use_lit_ps = false;
+                break;
+            }
         }
     }
 
@@ -128,6 +129,37 @@ where
         &["MSYS2_ARG_CONV_EXCL"],
         stdin_bytes,
     )
+}
+
+/// Executes Git with canonical non-interpolating flags (`--literal-pathspecs`,
+/// `-C <root>`, `core.quotepath=false`, consistent diff prefixes).
+pub fn run_git<S, K, V>(
+    root: &Path,
+    git_args: &[S],
+    extra_env: &[(K, V)],
+    stdin_bytes: Option<&[u8]>,
+) -> Result<CmdOutput, B3Error>
+where
+    S: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    run_git_inner(root, git_args, extra_env, stdin_bytes, false)
+}
+
+/// Executes Git allowing explicit pathspec magic (callers must wrap user paths with `:(literal)`).
+pub fn run_git_pathspecs<S, K, V>(
+    root: &Path,
+    git_args: &[S],
+    extra_env: &[(K, V)],
+    stdin_bytes: Option<&[u8]>,
+) -> Result<CmdOutput, B3Error>
+where
+    S: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    run_git_inner(root, git_args, extra_env, stdin_bytes, true)
 }
 
 pub fn git_err_detail(out: &CmdOutput) -> String {
@@ -199,7 +231,39 @@ where
     K: AsRef<OsStr>,
     V: AsRef<OsStr>,
 {
-    let res = run_git(root, git_args, extra_env, None)?;
+    run_git_paths_z_inner(root, git_args, mode, fail_prefix, extra_env, false)
+}
+
+/// Runs a NUL-delimited (`-z`) Git command with explicit pathspec magic allowed.
+pub fn run_git_pathspecs_z<S, K, V>(
+    root: &Path,
+    git_args: &[S],
+    mode: GitZMode,
+    fail_prefix: &str,
+    extra_env: &[(K, V)],
+) -> Result<Vec<String>, B3Error>
+where
+    S: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    run_git_paths_z_inner(root, git_args, mode, fail_prefix, extra_env, true)
+}
+
+fn run_git_paths_z_inner<S, K, V>(
+    root: &Path,
+    git_args: &[S],
+    mode: GitZMode,
+    fail_prefix: &str,
+    extra_env: &[(K, V)],
+    allow_pathspec_magic: bool,
+) -> Result<Vec<String>, B3Error>
+where
+    S: AsRef<OsStr>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    let res = run_git_inner(root, git_args, extra_env, None, allow_pathspec_magic)?;
     if res.exit_code != 0 {
         let joined: Vec<String> = git_args
             .iter()

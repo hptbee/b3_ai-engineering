@@ -1,6 +1,6 @@
 id: ship-parallel-wave-auto-001
 artifact: workflows/ship.md
-intent: Automatic wave scheduling must run check-wave --partition on every ready queue, choose the least-expensive safe isolation mode, enforce dirty-scope and protected-path gates, act strictly on selected wave|N| rows, and fall back sequentially without false PARALLEL claims
+intent: Automatic wave scheduling must run check-wave --partition when >=2 ready tasks exist, choose the least-expensive safe isolation mode, enforce dirty-scope and protected-path gates, act strictly on selected wave|N| rows, and fall back sequentially without false PARALLEL claims
 scenario: |
   Ready queue has T001 (src/api/a.ts), T002 (src/ui/b.tsx), T003 (src/api/a.ts), and T004 reading src/api/a.ts while docs/scratch.md is in initial_dirty_paths
   Parent runs check-wave --partition with --wave-reads, --protected-paths, --ignore-dirty-paths, --check-dirty-scope, and --expected-base-sha, then acts strictly on wave|N| rows (supports singleton wave|1|SEQUENTIAL before wave|2|PARALLEL)

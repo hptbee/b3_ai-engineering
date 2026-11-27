@@ -14,7 +14,7 @@ Research-first delivery complementing [`ship.md`](ship.md); reads product profil
 
 - `status [<run_id>|--all]` (read-only): `b3 guard list-runs --namespace research-ship`/`resolve-run` + summarize `progress.md`.
 - `resume [<run_id>]`: [`references/research-ship-resume.md`](references/research-ship-resume.md), reconcile Git + `b3 guard evidence-check`, continue eligible units.
-- `research-only`|`research+implement`|`research+governed-release`|`existing-plan`: init `{RUN_DIR}` (`.b3/research-ship/runs/<run_id>/`), run A–K.
+- `research-only`|`research+implement`|`research+governed-release`|`existing-plan`: init `{RUN_DIR}` (`.b3/research-ship/runs/<run_id>/`), run A–K (local non-PR `research-only` stops after Phase H and skips Phases I–K).
 
 ## Lifecycle (Phases A–K)
 
@@ -22,7 +22,7 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 
 ### A. Preflight
 - **Out:** `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo), `PRODUCT_ROOT`, branch/HEAD, open PR on GitHub (`gh pr list --head <branch>`), `.b3/research-{profile.md,policy.json}`, `--protected-paths`, `initial_dirty_paths`, `{RUN_DIR}` (`b3 guard new-run --namespace research-ship --slug <slug>`).
-- **Gate:** preserve `research/`, decisions, evidence; verify `ISOLATED_WRITES` via `b3 guard check-worktree --require-isolated` ([dispatch](references/dispatch-naming.md)); missing `B3_HOME`, worktree failure, or dirty overlap → `BLOCKED`.
+- **Gate:** preserve `research/`, decisions, evidence; run `b3 guard check-worktree --require-isolated` ONLY on `ISOLATED_WRITES` (never block `research-only`/`SHARED_READ_ONLY` in Phase A; [dispatch](references/dispatch-naming.md)); missing `B3_HOME`, isolated worktree failure, or dirty overlap → `BLOCKED`.
 
 ### B. Research Planning
 - **Out:** units `U001..U00N` (`research-plan.md`, or inline in `progress.md` for 1-unit): question, baseline, gaps, sources, domains, `depends_on`, disjoint `owned_files`, ACs, checks, implications.
@@ -37,7 +37,7 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 - **Gate:** genuine disagreements stay `UNRESOLVED`/`DISPUTED` (never force consensus); unsupported predicates block formalization.
 
 ### E. Independent Evidence Verification
-- **Out:** verdict (`VERIFIED`|`DISPUTED`|`INCOMPLETE`) from fresh `SHARED_READ_ONLY` verifiers ([gates](references/research-ship-gates.md) §1, [dispatch](references/dispatch-naming.md)) using `TaskId=none`/`[]` + `--wave-reads` via `b3 guard check-wave --partition` (`wave|N|...`).
+- **Out:** verdict (`VERIFIED`|`DISPUTED`|`INCOMPLETE`) from fresh `SHARED_READ_ONLY` verifiers ([gates](references/research-ship-gates.md) §1, [dispatch](references/dispatch-naming.md)) using `TaskId=none`/`[]` + `--wave-reads`; run `b3 guard check-wave --partition` (`wave|N|...`) when `>=2` ready units exist (single ready unit or sequential chain runs sequentially directly while keeping scope/dirty/commit guards).
 - **Gate:** `EVIDENCE_STALE` (`exit 2`) or `DISPUTED` → re-verify or C/D; `SINGLE_AGENT_LIMIT` blocks `PASS`/`VERIFIED`/`MERGE_AUTHORIZED` on `HIGH`/`CRITICAL` (`INCOMPLETE`, no `auto_merge`).
 
 ### F. Formalization & Knowledge Readiness
@@ -62,4 +62,4 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 
 ## Parallel Research & Subagent Naming
 
-- Schedule ready research questions, source checks, and disjoint impl units continuously per [`references/dispatch-naming.md`](references/dispatch-naming.md) (`b3 guard check-wave --partition` with `--protected-paths`, `--ignore-dirty-paths`, `--check-dirty-scope`; strict `wave|N|...` across `SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`; release newly unblocked units as prerequisites verify). Isolate blocked/failed units (`continue independent eligible units`), keep ledgers/manifests/authority/governance single-writer in Parent, record `last_wave:`, and use `b3-research-<slug>`/`b3-impl-<task-id>` without nested subagents.
+- Schedule ready research questions, source checks, and disjoint impl units continuously per [`references/dispatch-naming.md`](references/dispatch-naming.md) (when `>=2` ready units exist, run `b3 guard check-wave --partition` with `--protected-paths`, `--ignore-dirty-paths`, `--check-dirty-scope` for strict `wave|N|...` across `SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`; a single ready unit or sequential chain runs sequentially directly while keeping scope/dirty/commit guards; release newly unblocked units as prerequisites verify). Isolate blocked/failed units (`continue independent eligible units`), keep ledgers/manifests/authority/governance single-writer in Parent, record `last_wave:`, and use `b3-research-<slug>`/`b3-impl-<task-id>` without nested subagents.

@@ -147,11 +147,15 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                     allowed_paths,
                     require_verify_receipt,
                     ignore_dirty_paths,
+                    expected_cmd,
+                    relevant_paths,
                 } => guard::precommit::run(
                     &repo_root,
                     &allowed_paths,
                     &require_verify_receipt,
                     &ignore_dirty_paths,
+                    &expected_cmd,
+                    &relevant_paths,
                 )?,
                 GuardSubcommand::VerifyRun {
                     repo_root,
