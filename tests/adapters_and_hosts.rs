@@ -2101,7 +2101,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         "unmodified stale B3 wrapper must be pruned"
     );
 
-    // Stale modified wrapper must NOT be deleted on sync
+    // Stale modified wrapper must NOT be deleted and must fail sync with STALE_RULE_CONFLICT + preserve sidecar
     write_lf(
         &tmp_rule_src,
         "---\ntype: rule\nstrength: hard\nscope: global\n---\n# Temp rule 2\nTemp constraint.\n",
@@ -2125,6 +2125,56 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         ),
     )
     .unwrap();
+    let rules_sidecar = sync_fx.join(".cursor/rules/.b3-rules-manifest.sha256");
+    let sidecar_before_conflict = fs::read_to_string(&rules_sidecar).unwrap();
+    assert!(sidecar_before_conflict.contains("temp-b3-rule.mdc="));
+    let (c_stale_mod, out_stale_mod, err_stale_mod) = run_b3_env(
+        &["sync", "--repo-root", sync_s, "--host", "cursor"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(
+        c_stale_mod, 1,
+        "modified stale wrapper must fail sync: {out_stale_mod}\n{err_stale_mod}"
+    );
+    let stale_msg = format!("{out_stale_mod}\n{err_stale_mod}");
+    assert!(
+        stale_msg.contains("STALE_RULE_CONFLICT") && stale_msg.contains("temp-b3-rule.mdc"),
+        "expected STALE_RULE_CONFLICT naming temp-b3-rule.mdc, got: {stale_msg}"
+    );
+    assert!(
+        tmp_rule_mdc.is_file()
+            && fs::read_to_string(&tmp_rule_mdc)
+                .unwrap()
+                .contains("# user kept"),
+        "stale wrapper modified by user must NOT be deleted"
+    );
+    assert_eq!(
+        fs::read_to_string(&rules_sidecar).unwrap(),
+        sidecar_before_conflict,
+        "sidecar ownership evidence must be preserved until conflict is resolved"
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(custom_mdc.is_file(), "unrelated user .mdc must stay intact");
+    // Manual resolution -> sync, idempotent repeat sync, and --verify-only all pass and prune sidecar entry
+    fs::remove_file(&tmp_rule_mdc).unwrap();
     assert_eq!(
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
@@ -2135,11 +2185,39 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .0,
         0
     );
-    assert!(
-        tmp_rule_mdc.is_file(),
-        "stale wrapper modified by user must NOT be deleted"
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
     );
-    fs::remove_file(&tmp_rule_mdc).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        !fs::read_to_string(&rules_sidecar)
+            .unwrap()
+            .contains("temp-b3-rule.mdc"),
+        "resolved stale wrapper must be removed from sidecar"
+    );
 
     // 5) Honest --verify-only checks (no false PASS from substring spoofing, duplicate frontmatter, missing hard rule, or empty rules/)
     for bad_eng in [
@@ -2990,6 +3068,191 @@ fn antigravity_manifest_upgrades_and_security_guards() {
     );
     assert_eq!(fs::read_to_string(&manifest).unwrap(), before_verify_raw);
     assert_eq!(fs::read_to_string(&sidecar).unwrap(), before_verify_sc);
+
+    // 5b. Exact-match user manifest WITHOUT sidecar must NOT be silently adopted (sync + verify-only fail; --force adopts)
+    let exact_raw = fs::read_to_string(&manifest).unwrap();
+    let orig_sidecar = fs::read_to_string(&sidecar).unwrap();
+    fs::remove_file(&sidecar).unwrap();
+    write_lf(&manifest, &exact_raw);
+    let (c_exact_noside, out_exact_noside, err_exact_noside) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_exact_noside, 1);
+    assert!(format!("{out_exact_noside}\n{err_exact_noside}").contains("OWNERSHIP_UNKNOWN"));
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), exact_raw);
+    assert!(!sidecar.exists(), "refused sync must not mint sidecar");
+    let (cv_exact_noside, outv_exact_noside, errv_exact_noside) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(cv_exact_noside, 1);
+    assert!(format!("{outv_exact_noside}\n{errv_exact_noside}").contains("OWNERSHIP_UNKNOWN"));
+    assert!(!sidecar.exists(), "--verify-only must not create sidecar");
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(sidecar.is_file());
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // 5c. Modified manifest retaining ALL expected entries + added top-level metadata + corrupt sidecar fail BOTH sync & verify-only
+    let drifted_manifest = format!(
+        "{{\n  \"inherits\": true,\n{}",
+        exact_raw.strip_prefix("{\n").unwrap()
+    );
+    write_lf(&manifest, &drifted_manifest);
+    let (c_drift_sync, out_drift_sync, err_drift_sync) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_drift_sync, 1);
+    assert!(format!("{out_drift_sync}\n{err_drift_sync}").contains("OWNERSHIP_MODIFIED"));
+    let (c_drift_ver, out_drift_ver, err_drift_ver) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(c_drift_ver, 1);
+    assert!(format!("{out_drift_ver}\n{err_drift_ver}").contains("OWNERSHIP_MODIFIED"));
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), drifted_manifest);
+
+    // Even if sidecar matches drifted top-level metadata manifest, --verify-only still fails on drift without mutating files
+    write_lf(
+        &sidecar,
+        &format!("{}\n", sha256_bytes_hex(drifted_manifest.as_bytes())),
+    );
+    let (c_drift_ms_ver, out_drift_ms_ver, err_drift_ms_ver) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(c_drift_ms_ver, 1);
+    assert!(format!("{out_drift_ms_ver}\n{err_drift_ms_ver}").contains("drifted"));
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), drifted_manifest);
+
+    // Corrupt sidecar with canonical manifest fails both normal sync and --verify-only without mutating files
+    write_lf(&manifest, &exact_raw);
+    write_lf(&sidecar, "not-a-valid-sha256\n");
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(&sidecar).unwrap(),
+        "not-a-valid-sha256\n"
+    );
+
+    // Restoring original valid sidecar makes both --verify-only and normal sync pass again
+    write_lf(&sidecar, &orig_sidecar);
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
 
     // Modified generated manifest (sidecar mismatch) -> refused with OWNERSHIP_MODIFIED and preserved
     write_lf(

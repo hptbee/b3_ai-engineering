@@ -89,6 +89,8 @@ b3 sync --host antigravity
 b3 sync --host antigravity --verify-only
 ```
 
+- **Adopting legacy `.agents/skills.json` without an ownership sidecar:** Existing `.agents/skills.json` files without `.agents/.b3-skills-manifest.sha256` are never adopted silently (`OWNERSHIP_UNKNOWN`), even if their contents resemble B3 defaults. Back up any local edits and run `b3 sync --host antigravity --force` once to record ownership; subsequent normal `b3 sync --host antigravity` and `--verify-only` runs then work without `--force`.
+
 ### Optional product repository attach (`b3 install product`)
 
 ```bash

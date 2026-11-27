@@ -386,19 +386,28 @@ fn is_valid_sha256_hex(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+fn render_antigravity_manifest(entries: &[String]) -> String {
+    let mut json_lines = Vec::new();
+    json_lines.push("{".to_string());
+    json_lines.push("  \"entries\": [".to_string());
+    for (i, e) in entries.iter().enumerate() {
+        let comma = if i + 1 < entries.len() { "," } else { "" };
+        json_lines.push(format!("    {{ \"path\": \"{e}\" }}{comma}"));
+    }
+    json_lines.push("  ]".to_string());
+    json_lines.push("}".to_string());
+    format!("{}\n", json_lines.join("\n"))
+}
+
 fn check_antigravity_manifest_ownership(
     manifest_path: &Path,
     sidecar_path: &Path,
-    expected_json: &str,
 ) -> Result<(), B3Error> {
     if !manifest_path.is_file() {
         return Ok(());
     }
     let raw = fs::read(manifest_path)
         .map_err(|e| fail(format!("cannot read {}: {e}", manifest_path.display()), 1))?;
-    if raw == expected_json.as_bytes() {
-        return Ok(());
-    }
     if sidecar_path.is_file() {
         let recorded = fs::read_to_string(sidecar_path)
             .map_err(|e| fail(format!("cannot read {}: {e}", sidecar_path.display()), 1))?;
@@ -425,8 +434,9 @@ fn check_antigravity_manifest_ownership(
     }
     Err(fail(
         format!(
-            "OWNERSHIP_UNKNOWN: existing .agents/skills.json at {} has no B3 ownership record; refusing to overwrite without --force",
-            manifest_path.display()
+            "OWNERSHIP_UNKNOWN: existing .agents/skills.json at {} has no B3 ownership record ({}); refusing to adopt or overwrite without --force",
+            manifest_path.display(),
+            sidecar_path.display()
         ),
         1,
     ))
@@ -738,19 +748,64 @@ fn sync_cursor_rules(
     }
 
     let mut stale_paths = Vec::new();
+    let mut stale_conflicts = Vec::new();
     for (file_name, recorded_sha) in &sidecar {
         let stem = file_name.strip_suffix(".mdc").unwrap_or("");
         if expected_stems.contains(stem) {
             continue;
         }
         let p = rules_dest.join(file_name);
-        if p.is_file() && !is_reparse_link(&p) {
-            if let Ok(bytes) = fs::read(&p) {
+        assert_regular_file_or_missing(&p, &format!(".cursor/rules/{file_name}"))?;
+        if p.is_file() {
+            if force {
+                stale_paths.push(p);
+            } else {
+                let bytes = fs::read(&p)
+                    .map_err(|e| fail(format!("cannot read {}: {e}", p.display()), 1))?;
                 if sha256_bytes_hex(&bytes) == *recorded_sha {
                     stale_paths.push(p);
+                } else {
+                    stale_conflicts.push(p.display().to_string());
                 }
             }
         }
+    }
+    if rules_dest.is_dir() {
+        if let Ok(rd) = fs::read_dir(&rules_dest) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("mdc") {
+                    continue;
+                }
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if expected_stems.contains(stem) {
+                    continue;
+                }
+                let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if sidecar.contains_key(file_name) || is_reparse_link(&p) {
+                    continue;
+                }
+                if fs::read_to_string(&p)
+                    .ok()
+                    .is_some_and(|raw| raw.contains("<!-- b3-generated-cursor-rule:"))
+                {
+                    if force {
+                        stale_paths.push(p);
+                    } else {
+                        stale_conflicts.push(p.display().to_string());
+                    }
+                }
+            }
+        }
+    }
+    if !stale_conflicts.is_empty() {
+        return Err(fail(
+            format!(
+                "STALE_RULE_CONFLICT: modified stale B3 Cursor rule wrapper(s) preserved at {}; resolve manually by reviewing edits and removing/renaming the stale file (or re-run 'b3 sync --host cursor --force' to prune)",
+                stale_conflicts.join(", ")
+            ),
+            1,
+        ));
     }
 
     if dry_run {
@@ -884,21 +939,6 @@ pub fn run(
                 &antigravity_sidecar,
                 ".agents/.b3-skills-manifest.sha256",
             )?;
-            if verify_only {
-                match test_antigravity_manifest(&root, &antigravity_manifest) {
-                    Ok(count) => {
-                        return Ok((
-                            format!(
-                                "verify ok: {} (antigravity); {count} SKILL.md entries visible",
-                                antigravity_manifest.display()
-                            ),
-                            0,
-                        ));
-                    }
-                    Err(reason) => return Err(fail(format!("verify failed: {reason}"), 1)),
-                }
-            }
-
             let entries = get_antigravity_entry_paths(&root);
             if entries.is_empty() {
                 return Err(fail(
@@ -909,23 +949,41 @@ pub fn run(
                     1,
                 ));
             }
-            let mut json_lines = Vec::new();
-            json_lines.push("{".to_string());
-            json_lines.push("  \"entries\": [".to_string());
-            for (i, e) in entries.iter().enumerate() {
-                let comma = if i + 1 < entries.len() { "," } else { "" };
-                json_lines.push(format!("    {{ \"path\": \"{e}\" }}{comma}"));
+            let json_text = render_antigravity_manifest(&entries);
+
+            if verify_only {
+                let count = test_antigravity_manifest(&root, &antigravity_manifest)
+                    .map_err(|reason| fail(format!("verify failed: {reason}"), 1))?;
+                check_antigravity_manifest_ownership(&antigravity_manifest, &antigravity_sidecar)?;
+                let raw = fs::read(&antigravity_manifest).map_err(|e| {
+                    fail(
+                        format!(
+                            "verify failed: cannot read {}: {e}",
+                            antigravity_manifest.display()
+                        ),
+                        1,
+                    )
+                })?;
+                if raw != json_text.as_bytes() {
+                    return Err(fail(
+                        format!(
+                            "verify failed: .agents/skills.json at {} has drifted from expected canonical B3 manifest; re-run 'b3 sync --host antigravity'",
+                            antigravity_manifest.display()
+                        ),
+                        1,
+                    ));
+                }
+                return Ok((
+                    format!(
+                        "verify ok: {} (antigravity); {count} SKILL.md entries visible",
+                        antigravity_manifest.display()
+                    ),
+                    0,
+                ));
             }
-            json_lines.push("  ]".to_string());
-            json_lines.push("}".to_string());
-            let json_text = format!("{}\n", json_lines.join("\n"));
 
             if !force {
-                check_antigravity_manifest_ownership(
-                    &antigravity_manifest,
-                    &antigravity_sidecar,
-                    &json_text,
-                )?;
+                check_antigravity_manifest_ownership(&antigravity_manifest, &antigravity_sidecar)?;
             }
 
             if dry_run {
