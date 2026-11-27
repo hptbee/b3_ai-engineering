@@ -1791,7 +1791,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     );
     assert_eq!(c_ag_unmanaged, 1);
     assert!(
-        format!("{out_ag_unmanaged}\n{err_ag_unmanaged}").contains("unmanaged .agents/skills.json"),
+        format!("{out_ag_unmanaged}\n{err_ag_unmanaged}").contains("OWNERSHIP_UNKNOWN"),
         "got: {out_ag_unmanaged}\n{err_ag_unmanaged}"
     );
     assert!(fs::read_to_string(&ag_manifest)
@@ -1971,19 +1971,36 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         0
     );
 
-    // Cursor rules preserve user-owned .mdc, prune stale B3-generated .mdc, refuse unmanaged override without --force, and reject junctions
+    // Cursor rules ownership, stale pruning, user-edit preservation, and honest --verify-only
     let custom_mdc = sync_fx.join(".cursor/rules/my-custom.mdc");
     write_lf(
         &custom_mdc,
         "---\nalwaysApply: false\n---\n# custom user rule\n",
     );
-    let stale_mdc = sync_fx.join(".cursor/rules/obsolete-b3-rule.mdc");
-    write_lf(
-        &stale_mdc,
-        "<!-- b3-generated-cursor-rule: source=rules/obsolete-b3-rule.md -->\n@rules/obsolete-b3-rule.md\n",
+
+    // Unrelated user .mdc passes --verify-only and is never touched
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
     );
+
+    // 1) Generated wrapper modified while RETAINING B3 marker -> refused without --force and preserved
     let eng_mdc = sync_fx.join(".cursor/rules/engineering-principles.mdc");
-    write_lf(&eng_mdc, "---\nalwaysApply: false\n---\n# user override\n");
+    let eng_orig = fs::read_to_string(&eng_mdc).unwrap();
+    write_lf(&eng_mdc, &format!("{eng_orig}# user local tweak\n"));
     assert_eq!(
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
@@ -1996,7 +2013,28 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     );
     assert!(fs::read_to_string(&eng_mdc)
         .unwrap()
-        .contains("user override"));
+        .contains("# user local tweak"));
+
+    // 2) Legacy wrapper with user modification -> refused without --force and preserved
+    write_lf(
+        &eng_mdc,
+        "---\ndescription: custom\nalwaysApply: true\n---\nFollow the portable engineering-principles rule:\n@rules/engineering-principles.md\n# legacy user note\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(fs::read_to_string(&eng_mdc)
+        .unwrap()
+        .contains("# legacy user note"));
+
+    // 3) Explicit --force replaces conflicting wrapper while preserving custom my-custom.mdc
     assert_eq!(
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
@@ -2007,26 +2045,170 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .0,
         0
     );
-    assert!(fs::read_to_string(&eng_mdc)
-        .unwrap()
-        .contains("alwaysApply: true"));
+    assert_eq!(fs::read_to_string(&eng_mdc).unwrap(), eng_orig);
     assert!(custom_mdc.is_file(), "user custom .mdc must be preserved");
-    assert!(
-        !stale_mdc.exists(),
-        "stale B3-generated .mdc must be pruned"
-    );
 
-    // Verify-only detects tampered alwaysApply on generated rule
+    // 4) Stale unmodified B3 wrapper fails --verify-only and is pruned on sync; stale modified wrapper is NOT deleted
+    let tmp_rule_src = sync_fx.join("rules/temp-b3-rule.md");
     write_lf(
-        &eng_mdc,
-        "---\nalwaysApply: false\n---\n@rules/engineering-principles.md\n",
+        &tmp_rule_src,
+        "---\ntype: rule\nstrength: hard\nscope: global\n---\n# Temp rule\nTemp constraint.\n",
     );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    let tmp_rule_mdc = sync_fx.join(".cursor/rules/temp-b3-rule.mdc");
+    assert!(tmp_rule_mdc.is_file());
+    fs::remove_file(&tmp_rule_src).unwrap();
+    // Stale managed wrapper fails --verify-only
     assert_eq!(
         run_b3_env(
             &[
                 "sync",
                 "--repo-root",
                 sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    // Normal sync prunes unmodified stale B3 wrapper
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        !tmp_rule_mdc.exists(),
+        "unmodified stale B3 wrapper must be pruned"
+    );
+
+    // Stale modified wrapper must NOT be deleted on sync
+    write_lf(
+        &tmp_rule_src,
+        "---\ntype: rule\nstrength: hard\nscope: global\n---\n# Temp rule 2\nTemp constraint.\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    fs::remove_file(&tmp_rule_src).unwrap();
+    fs::write(
+        &tmp_rule_mdc,
+        format!(
+            "{}\n# user kept\n",
+            fs::read_to_string(&tmp_rule_mdc).unwrap()
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        tmp_rule_mdc.is_file(),
+        "stale wrapper modified by user must NOT be deleted"
+    );
+    fs::remove_file(&tmp_rule_mdc).unwrap();
+
+    // 5) Honest --verify-only checks (no false PASS from substring spoofing, duplicate frontmatter, missing hard rule, or empty rules/)
+    for bad_eng in [
+        "---\nalwaysApply: false\n---\n@rules/engineering-principles.md\n",
+        "---\nalwaysApply: false\n---\n# body spoof\nalwaysApply: true\n@rules/engineering-principles.md\n",
+        "---\nalwaysApply: true\nalwaysApply: false\n---\n@rules/engineering-principles.md\n",
+    ] {
+        write_lf(&eng_mdc, bad_eng);
+        assert_eq!(
+            run_b3_env(
+                &[
+                    "sync",
+                    "--repo-root",
+                    sync_s,
+                    "--host",
+                    "cursor",
+                    "--verify-only"
+                ],
+                None,
+                &[],
+                &[],
+            )
+            .0,
+            1
+        );
+    }
+    // Missing hard rule wrapper fails --verify-only
+    fs::remove_file(&eng_mdc).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    // Restore clean Cursor rules via --force
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // Empty canonical rules/ directory fails --verify-only
+    let empty_rules_fx = tmp.path.join("sync-empty-rules");
+    copy_b3_snapshot(&empty_rules_fx, true);
+    for entry in fs::read_dir(empty_rules_fx.join("rules")).unwrap() {
+        fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                empty_rules_fx.to_str().unwrap(),
                 "--host",
                 "cursor",
                 "--verify-only"
@@ -2061,17 +2243,6 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         )
         .0,
         1
-    );
-    // Restore tampered eng_mdc on sync_fx so downstream model-preference checks see valid cursor activation
-    assert_eq!(
-        run_b3_env(
-            &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
-            None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
-            &[],
-        )
-        .0,
-        0
     );
 
     // Claude sync + verify-only (using clean snapshot)
@@ -2795,14 +2966,77 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         .unwrap()
         .contains("skills/devops"));
 
-    // 5. Legacy previously generated B3 manifest (older subset) upgrades WITHOUT --force
-    write_lf(
-        &manifest,
-        "{\n  \"entries\": [\n    { \"path\": \"skills/engineering\" },\n    { \"path\": \"adapters/command-skills\" }\n  ]\n}\n",
-    );
+    // 5. B3-looking user-authored manifest & unknown legacy manifest (no sidecar) fail safely with OWNERSHIP_UNKNOWN
+    let sidecar = fx.join(".agents/.b3-skills-manifest.sha256");
+    assert!(sidecar.is_file(), "B3 sync must record manifest sidecar");
+    let before_verify_raw = fs::read_to_string(&manifest).unwrap();
+    let before_verify_sc = fs::read_to_string(&sidecar).unwrap();
     assert_eq!(
         run_b3_env(
-            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--dry-run"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), before_verify_raw);
+    assert_eq!(fs::read_to_string(&sidecar).unwrap(), before_verify_sc);
+
+    // Modified generated manifest (sidecar mismatch) -> refused with OWNERSHIP_MODIFIED and preserved
+    write_lf(
+        &manifest,
+        "{\n  \"entries\": [\n    { \"path\": \"skills/engineering\" }\n  ]\n}\n",
+    );
+    let (c_mod, out_mod, err_mod) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_mod, 1);
+    assert!(format!("{out_mod}\n{err_mod}").contains("OWNERSHIP_MODIFIED"));
+    assert!(!fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/backend"));
+
+    // B3-looking user-authored manifest without sidecar (e.g. skills/internal) -> refused with OWNERSHIP_UNKNOWN
+    fs::remove_file(&sidecar).unwrap();
+    write_lf(
+        &manifest,
+        "{\n  \"entries\": [\n    { \"path\": \"skills/internal\" }\n  ]\n}\n",
+    );
+    let (c_unk, out_unk, err_unk) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_unk, 1);
+    assert!(format!("{out_unk}\n{err_unk}").contains("OWNERSHIP_UNKNOWN"));
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/internal"));
+
+    // Explicit --force overwrites and restores sidecar
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
             None,
             &[("B3_SKIP_MODEL_INIT", "1")],
             &[],
@@ -2813,6 +3047,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
     assert!(fs::read_to_string(&manifest)
         .unwrap()
         .contains("skills/backend"));
+    assert!(sidecar.is_file());
 
     // 6. Customized user manifest refused WITHOUT --force, overwritten WITH --force
     write_lf(

@@ -31,6 +31,7 @@ venv/
 .cursor/commands
 .cursor/agents
 .agents/skills.json
+.agents/.b3-skills-manifest.sha256
 .agents/skills
 .claude/skills
 .claude/agents

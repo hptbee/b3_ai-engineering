@@ -9,7 +9,7 @@ use crate::adapters::common::{
     remove_link_only, resolve_b3_repo_root_auto, test_link_target, write_utf8_no_bom_lf,
 };
 use crate::error::{fail, B3Error};
-use crate::fs::sort_ordinal;
+use crate::fs::{sha256_bytes_hex, sort_ordinal};
 use crate::json::{parse_json, JsonValue};
 
 #[derive(Debug, Clone)]
@@ -382,58 +382,121 @@ fn test_antigravity_manifest(repo_root: &Path, manifest_path: &Path) -> Result<u
     Ok(total_skills)
 }
 
-fn is_b3_canonical_entry_path(p: &str) -> bool {
-    if p == "adapters/command-skills" {
-        return true;
-    }
-    let Some(cat) = p.strip_prefix("skills/") else {
-        return false;
-    };
-    !cat.is_empty()
-        && !cat.starts_with('-')
-        && cat
-            .bytes()
-            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'))
+fn is_valid_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn is_b3_managed_antigravity_manifest(manifest_path: &Path, expected_json: &str) -> bool {
-    let Ok(raw) = fs::read_to_string(manifest_path) else {
-        return false;
-    };
-    if raw == expected_json {
-        return true;
+fn check_antigravity_manifest_ownership(
+    manifest_path: &Path,
+    sidecar_path: &Path,
+    expected_json: &str,
+) -> Result<(), B3Error> {
+    if !manifest_path.is_file() {
+        return Ok(());
     }
-    let Ok(parsed) = parse_json(&raw) else {
-        return false;
-    };
-    let JsonValue::Object(obj) = parsed else {
-        return false;
-    };
-    if obj.len() != 1 || obj[0].0 != "entries" {
-        return false;
+    let raw = fs::read(manifest_path)
+        .map_err(|e| fail(format!("cannot read {}: {e}", manifest_path.display()), 1))?;
+    if raw == expected_json.as_bytes() {
+        return Ok(());
     }
-    let JsonValue::Array(arr) = &obj[0].1 else {
-        return false;
-    };
-    if arr.is_empty() {
-        return false;
-    }
-    let mut seen = BTreeSet::new();
-    for item in arr {
-        let JsonValue::Object(fields) = item else {
-            return false;
-        };
-        if fields.len() != 1 || fields[0].0 != "path" {
-            return false;
+    if sidecar_path.is_file() {
+        let recorded = fs::read_to_string(sidecar_path)
+            .map_err(|e| fail(format!("cannot read {}: {e}", sidecar_path.display()), 1))?;
+        let recorded = recorded.trim();
+        if !is_valid_sha256_hex(recorded) {
+            return Err(fail(
+                format!(
+                    "OWNERSHIP_UNKNOWN: corrupt B3 manifest sidecar at {}; refusing to overwrite without --force",
+                    sidecar_path.display()
+                ),
+                1,
+            ));
         }
-        let JsonValue::String(p) = &fields[0].1 else {
-            return false;
+        if sha256_bytes_hex(&raw) == recorded {
+            return Ok(());
+        }
+        return Err(fail(
+            format!(
+                "OWNERSHIP_MODIFIED: .agents/skills.json at {} was modified since last B3 sync; refusing to overwrite without --force",
+                manifest_path.display()
+            ),
+            1,
+        ));
+    }
+    Err(fail(
+        format!(
+            "OWNERSHIP_UNKNOWN: existing .agents/skills.json at {} has no B3 ownership record; refusing to overwrite without --force",
+            manifest_path.display()
+        ),
+        1,
+    ))
+}
+
+fn read_cursor_rules_sidecar(sidecar_path: &Path) -> Result<BTreeMap<String, String>, B3Error> {
+    assert_regular_file_or_missing(sidecar_path, ".cursor/rules/.b3-rules-manifest.sha256")?;
+    let mut map = BTreeMap::new();
+    if !sidecar_path.is_file() {
+        return Ok(map);
+    }
+    let raw = fs::read_to_string(sidecar_path)
+        .map_err(|e| fail(format!("cannot read {}: {e}", sidecar_path.display()), 1))?;
+    for line in raw.replace("\r\n", "\n").lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((name, hex)) = trimmed.split_once('=') else {
+            return Err(fail(
+                format!(
+                    "OWNERSHIP_UNKNOWN: corrupt Cursor rules sidecar at {}; refusing to overwrite without --force",
+                    sidecar_path.display()
+                ),
+                1,
+            ));
         };
-        if !is_b3_canonical_entry_path(p) || !seen.insert(p.as_str()) {
-            return false;
+        if !name.ends_with(".mdc")
+            || name.contains('/')
+            || name.contains('\\')
+            || name.contains(':')
+            || name.contains('\0')
+            || name == ".."
+            || !is_valid_sha256_hex(hex)
+        {
+            return Err(fail(
+                format!(
+                    "OWNERSHIP_UNKNOWN: invalid entry in Cursor rules sidecar at {}; refusing to overwrite without --force",
+                    sidecar_path.display()
+                ),
+                1,
+            ));
+        }
+        if map.insert(name.to_string(), hex.to_string()).is_some() {
+            return Err(fail(
+                format!(
+                    "OWNERSHIP_UNKNOWN: duplicate entry in Cursor rules sidecar at {}; refusing to overwrite without --force",
+                    sidecar_path.display()
+                ),
+                1,
+            ));
         }
     }
-    true
+    Ok(map)
+}
+
+fn write_cursor_rules_sidecar(
+    sidecar_path: &Path,
+    hashes: &BTreeMap<String, String>,
+) -> Result<(), B3Error> {
+    let mut lines = Vec::with_capacity(hashes.len());
+    for (name, hex) in hashes {
+        lines.push(format!("{name}={hex}"));
+    }
+    let body = if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    };
+    write_utf8_no_bom_lf(sidecar_path, &body)
 }
 
 #[derive(Debug, Clone)]
@@ -543,19 +606,6 @@ fn render_cursor_rule_mdc(rule: &CanonicalRule) -> String {
     )
 }
 
-fn is_b3_managed_cursor_rule(path: &Path, stem: &str) -> bool {
-    let Ok(raw) = fs::read_to_string(path) else {
-        return false;
-    };
-    let marker = format!("<!-- b3-generated-cursor-rule: source=rules/{stem}.md -->");
-    if raw.contains(&marker) {
-        return true;
-    }
-    let legacy_hdr = format!("Follow the portable {stem} rule:");
-    let legacy_ref = format!("@rules/{stem}.md");
-    raw.contains(&legacy_hdr) && raw.contains(&legacy_ref)
-}
-
 fn sync_cursor_rules(
     root: &Path,
     dry_run: bool,
@@ -565,12 +615,25 @@ fn sync_cursor_rules(
 ) -> Result<(), B3Error> {
     let rules = collect_canonical_rules(&root.join("rules"))?;
     if rules.is_empty() {
-        return Ok(());
+        return Err(fail(
+            format!(
+                "no canonical rules found under {}",
+                root.join("rules").display()
+            ),
+            1,
+        ));
     }
     let cursor_dir = root.join(".cursor");
     let rules_dest = cursor_dir.join("rules");
+    let sidecar_path = rules_dest.join(".b3-rules-manifest.sha256");
     assert_regular_dir_or_missing(&cursor_dir, ".cursor")?;
     assert_regular_dir_or_missing(&rules_dest, ".cursor/rules")?;
+    assert_regular_file_or_missing(&sidecar_path, ".cursor/rules/.b3-rules-manifest.sha256")?;
+
+    let mut expected_stems = BTreeSet::new();
+    for r in &rules {
+        expected_stems.insert(r.stem.as_str());
+    }
 
     if verify_only {
         if !rules_dest.is_dir() {
@@ -582,6 +645,7 @@ fn sync_cursor_rules(
                 1,
             ));
         }
+        let sidecar = read_cursor_rules_sidecar(&sidecar_path)?;
         for r in &rules {
             let mdc_path = rules_dest.join(format!("{}.mdc", r.stem));
             assert_regular_file_or_missing(&mdc_path, &format!(".cursor/rules/{}.mdc", r.stem))?;
@@ -593,41 +657,19 @@ fn sync_cursor_rules(
             }
             let raw = fs::read_to_string(&mdc_path)
                 .map_err(|e| fail(format!("verify failed: {}: {e}", mdc_path.display()), 1))?;
-            let expected_apply = format!("alwaysApply: {}", r.always_apply);
-            let expected_ref = format!("@rules/{}.md", r.stem);
-            if !raw.contains(&expected_apply) || !raw.contains(&expected_ref) {
+            let expected_content = render_cursor_rule_mdc(r);
+            if raw != expected_content {
                 return Err(fail(
                     format!(
-                        "verify failed: {} does not match canonical rules/{}.md ({expected_apply})",
+                        "verify failed: {} does not match exact generated wrapper for canonical rules/{}.md (alwaysApply: {})",
                         mdc_path.display(),
-                        r.stem
+                        r.stem,
+                        r.always_apply
                     ),
                     1,
                 ));
             }
         }
-        return Ok(());
-    }
-
-    let mut expected_stems = BTreeSet::new();
-    for r in &rules {
-        expected_stems.insert(r.stem.as_str());
-        let mdc_path = rules_dest.join(format!("{}.mdc", r.stem));
-        assert_regular_file_or_missing(&mdc_path, &format!(".cursor/rules/{}.mdc", r.stem))?;
-        if !force && mdc_path.is_file() && !is_b3_managed_cursor_rule(&mdc_path, &r.stem) {
-            return Err(fail(
-                format!(
-                    "existing unmanaged .cursor/rules/{}.mdc at {}; refusing to overwrite without --force",
-                    r.stem,
-                    mdc_path.display()
-                ),
-                1,
-            ));
-        }
-    }
-
-    let mut stale_paths = Vec::new();
-    if rules_dest.is_dir() {
         if let Ok(rd) = fs::read_dir(&rules_dest) {
             for entry in rd.flatten() {
                 let p = entry.path();
@@ -639,12 +681,73 @@ fn sync_cursor_rules(
                     continue;
                 }
                 if is_reparse_link(&p) {
-                    continue;
+                    return Err(fail(
+                        format!(
+                            "verify failed: reparse link found in Cursor rules: {}",
+                            p.display()
+                        ),
+                        1,
+                    ));
                 }
-                if let Ok(raw) = fs::read_to_string(&p) {
-                    if raw.contains("<!-- b3-generated-cursor-rule:") {
-                        stale_paths.push(p);
-                    }
+                let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                let has_marker = fs::read_to_string(&p)
+                    .ok()
+                    .is_some_and(|raw| raw.contains("<!-- b3-generated-cursor-rule:"));
+                if sidecar.contains_key(file_name) || has_marker {
+                    return Err(fail(
+                        format!(
+                            "verify failed: stale B3-generated Cursor rule wrapper found at {}",
+                            p.display()
+                        ),
+                        1,
+                    ));
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    let sidecar = if force {
+        read_cursor_rules_sidecar(&sidecar_path).unwrap_or_default()
+    } else {
+        read_cursor_rules_sidecar(&sidecar_path)?
+    };
+
+    for r in &rules {
+        let file_name = format!("{}.mdc", r.stem);
+        let mdc_path = rules_dest.join(&file_name);
+        assert_regular_file_or_missing(&mdc_path, &format!(".cursor/rules/{file_name}"))?;
+        if !force && mdc_path.is_file() {
+            let desired = render_cursor_rule_mdc(r);
+            let raw_bytes = fs::read(&mdc_path)
+                .map_err(|e| fail(format!("cannot read {}: {e}", mdc_path.display()), 1))?;
+            let exact_unchanged = raw_bytes == desired.as_bytes();
+            let sidecar_unchanged = sidecar
+                .get(&file_name)
+                .is_some_and(|recorded| *recorded == sha256_bytes_hex(&raw_bytes));
+            if !exact_unchanged && !sidecar_unchanged {
+                return Err(fail(
+                    format!(
+                        "existing modified or unmanaged .cursor/rules/{file_name} at {}; refusing to overwrite without --force",
+                        mdc_path.display()
+                    ),
+                    1,
+                ));
+            }
+        }
+    }
+
+    let mut stale_paths = Vec::new();
+    for (file_name, recorded_sha) in &sidecar {
+        let stem = file_name.strip_suffix(".mdc").unwrap_or("");
+        if expected_stems.contains(stem) {
+            continue;
+        }
+        let p = rules_dest.join(file_name);
+        if p.is_file() && !is_reparse_link(&p) {
+            if let Ok(bytes) = fs::read(&p) {
+                if sha256_bytes_hex(&bytes) == *recorded_sha {
+                    stale_paths.push(p);
                 }
             }
         }
@@ -663,19 +766,23 @@ fn sync_cursor_rules(
     fs::create_dir_all(&rules_dest)
         .map_err(|e| fail(format!("cannot create {}: {e}", rules_dest.display()), 1))?;
     let mut written = 0usize;
+    let mut next_hashes = BTreeMap::new();
     for r in &rules {
-        let mdc_path = rules_dest.join(format!("{}.mdc", r.stem));
+        let file_name = format!("{}.mdc", r.stem);
+        let mdc_path = rules_dest.join(&file_name);
         let desired = render_cursor_rule_mdc(r);
         let unchanged = fs::read_to_string(&mdc_path).ok().as_deref() == Some(desired.as_str());
         if !unchanged {
             write_utf8_no_bom_lf(&mdc_path, &desired)?;
             written += 1;
         }
+        next_hashes.insert(file_name, sha256_bytes_hex(desired.as_bytes()));
     }
     for stale in &stale_paths {
         fs::remove_file(stale)
             .map_err(|e| fail(format!("cannot prune {}: {e}", stale.display()), 1))?;
     }
+    write_cursor_rules_sidecar(&sidecar_path, &next_hashes)?;
     out.push(format!(
         "synced: {} ({} Cursor rule wrappers; {} updated, {} pruned)",
         rules_dest.display(),
@@ -760,6 +867,7 @@ pub fn run(
     let claude_skills_dest = root.join(".claude").join("skills");
     let claude_agents_dest = root.join(".claude").join("agents");
     let antigravity_manifest = root.join(".agents").join("skills.json");
+    let antigravity_sidecar = root.join(".agents").join(".b3-skills-manifest.sha256");
 
     let mut out = Vec::new();
 
@@ -770,9 +878,13 @@ pub fn run(
                     "WARNING: coexistence notice: .agents/skills exists alongside .agents/skills.json; Antigravity may double-discover skills."
                 );
             }
+            assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
+            assert_regular_file_or_missing(&antigravity_manifest, ".agents/skills.json")?;
+            assert_regular_file_or_missing(
+                &antigravity_sidecar,
+                ".agents/.b3-skills-manifest.sha256",
+            )?;
             if verify_only {
-                assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
-                assert_regular_file_or_missing(&antigravity_manifest, ".agents/skills.json")?;
                 match test_antigravity_manifest(&root, &antigravity_manifest) {
                     Ok(count) => {
                         return Ok((
@@ -808,20 +920,12 @@ pub fn run(
             json_lines.push("}".to_string());
             let json_text = format!("{}\n", json_lines.join("\n"));
 
-            assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
-            assert_regular_file_or_missing(&antigravity_manifest, ".agents/skills.json")?;
-
-            if !force
-                && antigravity_manifest.is_file()
-                && !is_b3_managed_antigravity_manifest(&antigravity_manifest, &json_text)
-            {
-                return Err(fail(
-                    format!(
-                        "existing unmanaged .agents/skills.json at {}; refusing to overwrite without --force",
-                        antigravity_manifest.display()
-                    ),
-                    1,
-                ));
+            if !force {
+                check_antigravity_manifest_ownership(
+                    &antigravity_manifest,
+                    &antigravity_sidecar,
+                    &json_text,
+                )?;
             }
 
             if dry_run {
@@ -837,6 +941,10 @@ pub fn run(
             }
 
             write_utf8_no_bom_lf(&antigravity_manifest, &json_text)?;
+            write_utf8_no_bom_lf(
+                &antigravity_sidecar,
+                &format!("{}\n", sha256_bytes_hex(json_text.as_bytes())),
+            )?;
             let count = test_antigravity_manifest(&root, &antigravity_manifest)
                 .map_err(|r| fail(format!("manifest written but verification failed: {r}"), 1))?;
             sync_personal_models(&root, dry_run, verify_only, &mut out);
@@ -896,6 +1004,10 @@ pub fn run(
                 }
             }
             assert_regular_dir_or_missing(&root.join(".cursor"), ".cursor")?;
+            if !dry_run {
+                let mut rule_preflight = Vec::new();
+                sync_cursor_rules(&root, true, false, force, &mut rule_preflight)?;
+            }
             sync_directory_link(
                 &cursor_skills_dest,
                 &skills_source,
