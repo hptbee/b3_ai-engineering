@@ -1,0 +1,9 @@
+id: cmd-b3-research-evidence-gaps-001
+artifact: commands/b3-research.md
+intent: Research preserves source attribution, separates observed evidence from inference, and keeps missing or conflicting evidence visible
+scenario: |
+  User asks "/b3-research compare two libraries where primary docs conflict with a secondary blog post and benchmarks are missing"
+  Agent attributes each source, labels inference explicitly, highlights the conflict and missing benchmark evidence, and avoids inventing false certainty
+expected_outcome: PASS
+failure_mode: research-fabricates-certainty-or-drops-source-attribution
+notes: Applies research-engineering-patterns only when external pattern adopt/reject provenance fits

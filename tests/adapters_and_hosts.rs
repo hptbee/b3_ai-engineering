@@ -213,6 +213,16 @@ fn cursor_global_lifecycle_links_guards_and_manifest_hardening() {
         .count();
     assert_eq!(cmd_count, expected_cmds);
     assert!(ch2.join("commands/b3-research-ship.md").is_file());
+    for new_cmd in ["b3-research", "b3-audit", "b3-refactor"] {
+        assert!(
+            ch2.join("commands").join(format!("{new_cmd}.md")).is_file(),
+            "missing Cursor global command {new_cmd}"
+        );
+        assert!(
+            !ch2.join("skills").join(new_cmd).exists(),
+            "Cursor global must not duplicate command-skill {new_cmd} under skills/"
+        );
+    }
 
     let ag_files: Vec<_> = fs::read_dir(ch2.join("agents"))
         .unwrap()
@@ -957,6 +967,12 @@ fn antigravity_plugin_and_unified_global_lifecycle() {
         fs::read_dir(pr2.join("skills")).unwrap().count(),
         total_skills
     );
+    for new_cmd in ["b3-research", "b3-audit", "b3-refactor"] {
+        assert!(
+            pr2.join("skills").join(new_cmd).join("SKILL.md").is_file(),
+            "missing Antigravity plugin skill {new_cmd}"
+        );
+    }
 
     // Strict 5-key plugin.json
     let pj_val = parse_json(&fs::read_to_string(pr2.join("plugin.json")).unwrap()).unwrap();
@@ -988,6 +1004,12 @@ fn antigravity_plugin_and_unified_global_lifecycle() {
     assert!(!rules_txt.trim_start().starts_with("---"));
     assert!(rules_txt.contains("Project-level AGENTS.md"));
     assert!(rules_txt.contains("install-product is optional"));
+    for slash in ["/b3-research", "/b3-audit", "/b3-refactor"] {
+        assert!(
+            rules_txt.contains(slash),
+            "Antigravity rules/AGENTS.md missing {slash}"
+        );
+    }
 
     // Subagent tools: mapping (readonly=true -> [read_file]; b3-fixer readonly=false -> full tools)
     let rev_ag = fs::read_to_string(pr2.join("agents/b3-reviewer.md")).unwrap();
@@ -1848,6 +1870,16 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .0,
         0
     );
+    for new_cmd in ["b3-research", "b3-audit", "b3-refactor"] {
+        assert!(
+            sync_fx
+                .join(".agents/skills")
+                .join(new_cmd)
+                .join("SKILL.md")
+                .is_file(),
+            "missing Codex synced skill {new_cmd}"
+        );
+    }
 
     // Cursor coexistence guard against .agents/skills, then clean empty dir replacement vs non-empty refusal
     assert_eq!(
@@ -1953,6 +1985,16 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .0,
         0
     );
+    for new_cmd in ["b3-research", "b3-audit", "b3-refactor"] {
+        assert!(
+            sync_cl
+                .join(".claude/skills")
+                .join(new_cmd)
+                .join("SKILL.md")
+                .is_file(),
+            "missing Claude synced skill {new_cmd}"
+        );
+    }
 
     // 2. Product attach: Cursor coexistence guard, customized b3-ship.md protection, CF-13 empty .b3/home refusal & --force refresh without .cursor/commands leak, .gitignore .b3/ dedup
     let prod = tmp.path.join("prod");
@@ -2012,6 +2054,14 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     assert_eq!(gi_lines.iter().filter(|l| *l == ".b3/ship/").count(), 1);
     assert_eq!(gi_lines.iter().filter(|l| *l == ".b3/models.md").count(), 1);
     assert_eq!(git_in(&prod, &["check-ignore", "-q", ".b3/models.md"]), "");
+    for new_cmd in ["b3-research", "b3-audit", "b3-refactor"] {
+        assert!(
+            prod.join(".cursor/commands")
+                .join(format!("{new_cmd}.md"))
+                .is_file(),
+            "missing Cursor product command {new_cmd}"
+        );
+    }
 
     // Customized .cursor/commands/b3-ship.md overwrite protection
     let ship_cmd = prod.join(".cursor/commands/b3-ship.md");

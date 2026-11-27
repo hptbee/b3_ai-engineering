@@ -229,6 +229,15 @@ pub fn measure_context(repo_root_raw: &str, strict: bool) -> Result<(String, i32
         + file_bytes(&repo_root, "skills/engineering/debugging/SKILL.md");
     let review_cmd_bytes = file_bytes(&repo_root, "commands/b3-review.md") + cr_skill_bytes;
     let standalone_rev_all_bytes = review_cmd_bytes + rev_tpl_bytes;
+    let research_cmd_bytes = file_bytes(&repo_root, "commands/b3-research.md");
+    let baseline_audit_bytes = file_bytes(
+        &repo_root,
+        "skills/engineering/code-review/references/baseline-audit.md",
+    );
+    let audit_cmd_bytes =
+        file_bytes(&repo_root, "commands/b3-audit.md") + cr_skill_bytes + baseline_audit_bytes;
+    let refactor_cmd_bytes = file_bytes(&repo_root, "commands/b3-refactor.md")
+        + file_bytes(&repo_root, "skills/engineering/refactoring/SKILL.md");
     let verify_cmd_bytes = file_bytes(&repo_root, "commands/b3-verify.md")
         + file_bytes(&repo_root, "skills/engineering/verification/SKILL.md");
     let pr_fb_skill_bytes = file_bytes(&repo_root, "skills/engineering/pr-feedback/SKILL.md");
@@ -317,7 +326,7 @@ pub fn measure_context(repo_root_raw: &str, strict: bool) -> Result<(String, i32
         est_tokens(rev_iter_subag_bytes)
     ));
     lines.push(format!(
-        "standalone_cmds   : plan={plan_cmd_bytes} B, impl={impl_cmd_bytes} B, debug={debug_cmd_bytes} B, review={review_cmd_bytes} B, verify={verify_cmd_bytes} B"
+        "standalone_cmds   : plan={plan_cmd_bytes} B, impl={impl_cmd_bytes} B, debug={debug_cmd_bytes} B, research={research_cmd_bytes} B, audit={audit_cmd_bytes} B, review={review_cmd_bytes} B, refactor={refactor_cmd_bytes} B, verify={verify_cmd_bytes} B"
     ));
     lines.push(format!(
         "standalone_rev_all: {:6} B (~{:4} tok)  [cmd + code-review/SKILL.md + review-template.md]",

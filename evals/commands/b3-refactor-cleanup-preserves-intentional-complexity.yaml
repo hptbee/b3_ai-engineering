@@ -1,0 +1,9 @@
+id: cmd-b3-refactor-cleanup-intentional-complexity-001
+artifact: commands/b3-refactor.md
+intent: Cleanup via /b3-refactor checks callers, exports, adapters, compatibility, and tests and preserves INTENTIONAL COMPLEXITY when redundancy is unproven
+scenario: |
+  User asks "/b3-refactor clean up apparent wrapper branches around pathspec normalization"
+  Agent inspects callers, exports, adapters, compatibility constraints, and tests via residue-checklist.md, keeps security/compatibility guards whose redundancy is unproven as INTENTIONAL COMPLEXITY, and deletes only proven dead code
+expected_outcome: PASS
+failure_mode: cleanup-deletes-intentional-security-or-compatibility-guard
+notes: Routes confirmed residue deletions through verification checks

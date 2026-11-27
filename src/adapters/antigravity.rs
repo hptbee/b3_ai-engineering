@@ -801,7 +801,7 @@ Generated from B3_HOME: `{b3_home_forward}` (do not edit here).\n\
 Resolve B3_HOME from `B3_HOME` env, product `.b3/home`, or `{b3_home_forward}`.\n\
 Precedence: `{b3_home_forward}/docs/precedence.md`. Ship: `{b3_home_forward}/workflows/ship.md`. Review loop: `{b3_home_forward}/review-loop/strategy.md`.\n\
 Project-level AGENTS.md, GEMINI.md, .agents/rules/, and .agents/skills/ override this global baseline within their project scope; per-project install-product is optional.\n\
-B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above."
+B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`) and workflows remain available across local projects via bundled skills using the fallback B3_HOME above."
     );
     let mut rules_parts = vec![rules_header];
     for rname in &rule_names {

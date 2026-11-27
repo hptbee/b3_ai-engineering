@@ -81,8 +81,8 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 | --- | --- |
 | Architecture, standards, precedence, lifecycle | **Present** (`docs/`) |
 | Foundation rules + universal `AGENTS.md` + Claude `CLAUDE.md` bridge | **Present** (`rules/`, `AGENTS.md`, `CLAUDE.md`) |
-| Skills (`24` canonical + `11` command-skills = `35` `SKILL.md`) | **Present** (`skills/`, `adapters/command-skills/`) |
-| Commands (`11`) & Subagent roles (`5`) | **Present** (`commands/`, `agents/`, host-neutral canonical core) |
+| Skills (`24` canonical + `14` command-skills = `38` `SKILL.md`) | **Present** (`skills/`, `adapters/command-skills/`) |
+| Commands (`14`) & Subagent roles (`5`) | **Present** (`commands/`, `agents/`, host-neutral canonical core) |
 | Eval fixtures (`evals/`) | **Present** — schema validator active; automated LLM runner deferred |
 | Review-loop orchestration (`/b3-review-loop`) | **Present** — [`../review-loop/strategy.md`](../review-loop/strategy.md), [`../review-loop/spec.md`](../review-loop/spec.md); product-repo exercise & host isolation **UNKNOWN / INCOMPLETE** ([`review-loop-results.md`](../research/validation/review-loop-results.md)) |
 | Full lifecycles (`/b3-ship`, `/b3-research-ship`) | **Present** — [`../workflows/ship.md`](../workflows/ship.md), [`../workflows/research-ship.md`](../workflows/research-ship.md); live host slash UX **UNKNOWN / INCOMPLETE** |
