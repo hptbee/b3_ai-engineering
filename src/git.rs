@@ -100,6 +100,8 @@ where
     let mut all_args: Vec<OsString> = Vec::with_capacity(git_args.len() + 14);
     if use_lit_ps {
         all_args.push(OsString::from("--literal-pathspecs"));
+    } else if allow_pathspec_magic {
+        all_args.push(OsString::from("--no-literal-pathspecs"));
     }
     all_args.push(OsString::from("-C"));
     all_args.push(root.as_os_str().to_os_string());
@@ -126,7 +128,13 @@ where
         &all_args,
         None,
         extra_env,
-        &["MSYS2_ARG_CONV_EXCL"],
+        &[
+            "MSYS2_ARG_CONV_EXCL",
+            "GIT_LITERAL_PATHSPECS",
+            "GIT_NOGLOB_PATHSPECS",
+            "GIT_GLOB_PATHSPECS",
+            "GIT_ICASE_PATHSPECS",
+        ],
         stdin_bytes,
     )
 }

@@ -1,6 +1,6 @@
 ---
 name: b3-pr-resolve
-description: Handle PR review feedback end-to-end: validate, fix confirmed root causes, verify, reply, and resolve eligible threads.
+description: "Handle PR review feedback end-to-end: validate, fix confirmed root causes, verify, reply, and resolve eligible threads."
 ---
 
 # b3-pr-resolve

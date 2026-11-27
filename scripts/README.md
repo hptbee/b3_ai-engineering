@@ -28,9 +28,28 @@ The `4` legacy script wrapper pairs were retired for zero wrapper overhead and a
 | `b3 context measure` | Measure always-on (`AGENTS.md`, `rules/*.md`, `35` `SKILL.md` frontmatters across `24` canonical `skills/` + `11` `adapters/command-skills/`), `/b3-ship`, `/b3-research-ship`, `/b3-review-loop`, `context_routing`, standalone command loads (`standalone_cmds`), subagent review delta, and role static context bytes/tokens (`--strict` exits `1` on cap violation) | `b3 context measure --strict` |
 | [`../tests/`](../tests/) | Native cross-platform Rust test suites (`eval_contracts`, `guard_security_and_behavior`, `merge_policy_security`, `pr_feedback_lifecycle`, `adapters_and_hosts`, `native_core_behaviors`, `native_golden_parity`, `bootstrap_lifecycle`) covering CLI contracts, merge/PR/filesystem security, installers, 322 eval fixtures, and bootstrap upgrades | `cargo test` |
 
-## Native CLI subcommands & trust boundaries
+## `b3 guard` subcommands (`src/cli.rs`)
 
-Run `b3 --help` (or `b3 <command> --help`, e.g., `b3 guard --help`) for full subcommand syntax, flags, and exit codes (defined in [`../src/cli.rs`](../src/cli.rs)).
+`b3 --help` prints the command list; per-subcommand syntax and flags live in [`../src/cli.rs`](../src/cli.rs) (note: `b3 guard --help` is not a standalone help entrypoint).
+
+| Subcommand | Exit codes | Key flags & contract |
+| --- | --- | --- |
+| `fingerprint` | `0` ok, `1` error | `--depends-on`, `--scope`, `--criteria` → canonical `depends_on=\|scope=\|acceptance_criteria=` |
+| `check-freshness` | `0` `FRESH`, `2` `STALE`, `1` error | `--approach-at-sha`, `--task-base-sha`, `--watched-paths` (`--owned-files`, `--ignore-dirty-paths`) |
+| `precommit` | `0` `PRECOMMIT_OK`, `1` fail | `--allowed-paths`, `--require-verify-receipt`, `--expected-cmd`, `--relevant-paths`; checks staging, `staged == WT`, receipt provenance/scope/manifests |
+| `snapshot` | `0` SHA, `1` error | Creates detached snapshot excluding `.b3/{ship,research-ship}` and failing on sensitive paths/dirty submodules |
+| `diff-scope` | `0` summary/`CLEAN_AFTER_FIX`, `2` `EMPTY_DIFF`, `1` error | `--base-sha`, `--prev-sha`, `--target-ref`, `--ignore-dirty-paths`; T-shirt size (`XS`..`XXL`, `NOISE_ONLY`) + decoupled risk |
+| `review-inventory` | `0` summary, `2` `EMPTY_DIFF`/`PARTITION_INCOMPLETE`, `1` error | `--base-sha`, `--target-ref`, `--max-concurrency`; L0 cohesive `unit\|U0N\|...`, `l1_specialists`, adaptive concurrency |
+| `review-ledger` | `0` ok/`LEDGER_GATE_PASS`, `2` incomplete/stale/blocked, `1` bad args/corrupt | `--action init\|update\|normalize\|check`, `--ledger-path`, `--max-passes`, `--passes-used`, `--review-independence`, `--unit-id`, `--status`, `--receipt-path` |
+| `mechanical-check` | `0` `MECHANICAL_OK`/`MECHANICAL_ADVISORY`, `2` findings/violations, `1` error | `--allowed-paths`, `--wave-specs`, `--worker-changes`/`--worker-roots`, `--protected-paths`, `--dirty-digests`, `--obsoletes` |
+| `symbol-check` | `0` `SYMBOL_OK`/`SYMBOL_ADVISORY`, `2` `SYMBOL_FINDINGS`, `1` error | `--base-sha`, `--target-ref`; blocks on `dangling_refs`, surfaces `orphan_internal` as `SYMBOL_ADVISORY` |
+| `verify-run` / `verify-check` | `verify-run`: `0` `VERIFY_PASS`, `1` fail; `verify-check`: `0` `VERIFY_VALID`, `2` `VERIFY_STALE`, `1` mismatch/corrupt | `--receipt-path`, `--verify-cmd` / `--expected-cmd`, `--relevant-paths`, `--log-path`, `--target-commit-sha` |
+| `check-wave` | `0` `WAVE_OK`/`WAVE_PARTITIONED`/`WAVE_SEQUENTIAL`, `2` conflict/base, `1` error | `--wave-specs`, `--wave-reads`, `--protected-paths`, `--expected-base-sha`, `--check-dirty-scope`, `--partition`, `--max-concurrency` |
+| `check-worktree` | `0` `WORKTREE_OK`, `2` `WORKTREE_UNSAFE`, `1` error | `--expected-root`, `--require-isolated`, `--peer-roots`, `--expected-base-sha` |
+| `new-run` / `resolve-run` / `list-runs` / `prune` | `0` ok (`resolve-run`: `1` `NO_ACTIVE_RUN`) | `--namespace ship\|research-ship`, `--slug` / `--run-id`, `--keep` (`prune` default `10`) |
+| `evidence-check` | `0` `EVIDENCE_FRESH`/`WRITTEN`, `2` `EVIDENCE_STALE`, `1` invalid | `--write-manifest`, `--manifest-path`, SHA-256 `b3-evidence-v1` containment checks |
+| `merge-policy-check` | `0` `MERGE_AUTHORIZED`/`POST_MERGE_VERIFIED`, `2` `PR_READY`/`LOCAL_ELIGIBLE_ONLY`/`PROVIDER_UNAVAILABLE`, `1` blocked/failed | `--pr-number`, `--receipt-path`, `--main-ref`, `--authority-ref`, `--post-merge`, `--local-only`, `--require-remote-ci` |
+| `context-cache` | `0` `CONTEXT_RECORDED`/`CONTEXT_FRESH`, `2` `CONTEXT_STALE`, `1` error/corrupt/mismatch | `--action record\|check`, `--cache-path`, `--anchor-paths`, `--scope-paths`, `--summary-ref`, `--graph-index-sha` |
 
 ### Merge Authorization Trust Boundary & Migration
 
