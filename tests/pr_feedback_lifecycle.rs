@@ -1360,7 +1360,7 @@ fn pr_reply_draft_auth_idempotency_r001_and_races() {
                     let is_ours = c
                         .get("body")
                         .and_then(JsonValue::as_str)
-                        .is_some_and(|b| b.contains("b3-pr-key:k-auth"))
+                        .is_some_and(|b| b.contains("pr-key:k-auth") && !b.contains("b3-pr-key"))
                         && c.get("author")
                             .and_then(|a| a.get("login"))
                             .and_then(JsonValue::as_str)

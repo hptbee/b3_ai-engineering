@@ -163,11 +163,14 @@ fn scan_b3_markers(s: &str) -> Vec<(usize, usize, String, String)> {
         while p < bytes.len() && bytes[p].is_ascii_whitespace() {
             p += 1;
         }
-        if !bytes[p..].starts_with(b"b3-pr-key:") {
+        if bytes[p..].starts_with(b"pr-key:") {
+            p += b"pr-key:".len();
+        } else if bytes[p..].starts_with(b"b3-pr-key:") {
+            p += b"b3-pr-key:".len();
+        } else {
             pos = start + 4;
             continue;
         }
-        p += b"b3-pr-key:".len();
         let key_start = p;
         while p < bytes.len()
             && p - key_start < 80
@@ -1204,7 +1207,7 @@ fn compute_operation_identity(
     } else {
         explicit_key.to_string()
     };
-    let marker = format!("<!-- b3-pr-key:{key};op={op_hash} -->");
+    let marker = format!("<!-- pr-key:{key};op={op_hash} -->");
     OpIdentity {
         key,
         op_hash,
@@ -2943,7 +2946,7 @@ fn handle_reconcile(flags: &ParsedFlags) -> Result<PrExit, PrExit> {
             let key = rec.get("key").and_then(JsonValue::as_str).unwrap_or("");
             let op_hash = rec.get("op_hash").and_then(JsonValue::as_str).unwrap_or("");
             let marker = if !key.is_empty() && !op_hash.is_empty() {
-                format!("<!-- b3-pr-key:{key};op={op_hash} -->")
+                format!("<!-- pr-key:{key};op={op_hash} -->")
             } else {
                 String::new()
             };
