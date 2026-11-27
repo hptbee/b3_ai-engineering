@@ -10,12 +10,13 @@ Reference for `/b3-audit` read-only baseline reviews of an existing repository, 
 2. Record actual source state: `HEAD` SHA, branch name, and any dirty or untracked working-tree paths within or adjacent to scope (or note non-Git directory state).
 3. **Missing, empty, or inaccessible targets:** report `UNKNOWN / INCOMPLETE` with the exact gap — **never** `PASS`.
 
-## 2. Unchanged-file inspection (empty diff allowed)
+## 2. Unchanged-file inspection & safe read-only checks (empty diff allowed)
 
 - Read and inspect requested target files directly; an empty Git diff is normal and expected for baseline audits.
 - Do **not** fabricate a whole-repository diff (e.g., against an empty tree) to satisfy diff-based helpers (`b3 guard diff-scope` or `git diff`).
 - Never interpret `EMPTY_DIFF`, `NOISE_ONLY`, or unrelated passing checks as proof that a baseline audit passed.
-- Run deterministic helpers (`b3 guard` checks where edit semantics actually apply, `b3 guard verify-run`, compilers, linters, test suites) **only** where their semantics match the audit target.
+- **Allowed read-only verification & checks (only where semantics fit the target):** direct file reads, read-only Git inspection (`git rev-parse`, `git status`, `git log`), `b3 guard verify-check` against existing receipts, and non-mutating compiler, linter, or test commands (e.g., `cargo check`, `cargo clippy`, `cargo test` without auto-fix or write flags).
+- **Disallowed artifact-creating operations on the default read-only path:** never invoke `b3 guard verify-run` (writes `b3-verify-v1` receipts and `.log` files), `b3 guard new-run`, `b3 guard review-ledger`, `b3 guard snapshot`, or any fixer/formatter that creates receipts, logs, or `.b3/` state. Receipt-generating verification (`b3 guard verify-run`) remains reserved for `/b3-verify`, `/b3-implement`, `/b3-review-loop`, and `/b3-ship` (or explicit user opt-in); report `UNKNOWN / INCOMPLETE` whenever read-only checks cannot run or evidence is unavailable.
 
 ## 3. Proportional dimensions & subsystem partitioning
 
@@ -26,7 +27,7 @@ Reference for `/b3-audit` read-only baseline reviews of an existing repository, 
 
 ## 4. Read-only default & repair routing
 
-- Read-only by default: do **not** auto-fix findings, modify files, stage or commit Git state, or publish external reports.
+- Read-only by default: do **not** auto-fix findings, modify source files, write receipts/logs (`verify-run`) or `.b3/` workflow state, stage or commit Git state, or publish external reports.
 - When the user requests repairs after reviewing the audit, route fixes to `/b3-implement` (scoped change) or `/b3-ship` (full lifecycle).
 
 ## 5. Output contract

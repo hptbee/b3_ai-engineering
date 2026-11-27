@@ -881,11 +881,14 @@ fn commands_and_command_skills_canonical_contracts() {
         ("command", res_cmd.as_str()),
         ("command-skill", res_cs.as_str()),
     ] {
+        let low = body.to_ascii_lowercase();
         assert!(
             body.contains(".b3/research-ship/")
                 && body.contains("research-engineering-patterns/SKILL.md")
-                && body.contains("workflows/research-ship.md"),
-            "b3-research {label} missing lightweight/routing boundaries"
+                && body.contains("workflows/research-ship.md")
+                && low.contains("read-only")
+                && low.contains("stop when"),
+            "b3-research {label} missing lightweight/read-only/routing boundaries"
         );
     }
 
@@ -899,8 +902,11 @@ fn commands_and_command_skills_canonical_contracts() {
                 && body.contains("references/review-template.md")
                 && body.contains("UNKNOWN / INCOMPLETE")
                 && body.contains("EMPTY_DIFF")
-                && body.contains("SINGLE_AGENT_LIMIT"),
-            "b3-audit {label} missing baseline-audit or empty-diff/honesty contracts"
+                && body.contains("SINGLE_AGENT_LIMIT")
+                && body.contains("verify-check")
+                && body.contains("verify-run")
+                && body.contains(".b3/"),
+            "b3-audit {label} missing baseline-audit, strict read-only verify-check vs verify-run exclusion, or empty-diff/honesty contracts"
         );
     }
     let baseline_ref = fs::read_to_string(
@@ -911,8 +917,12 @@ fn commands_and_command_skills_canonical_contracts() {
         baseline_ref.contains("EMPTY_DIFF")
             && baseline_ref.contains("UNKNOWN / INCOMPLETE")
             && baseline_ref.contains("SINGLE_AGENT_LIMIT")
-            && baseline_ref.contains("review-template.md"),
-        "baseline-audit.md missing core contract terms"
+            && baseline_ref.contains("review-template.md")
+            && baseline_ref.contains("**Allowed read-only verification & checks")
+            && baseline_ref.contains("b3 guard verify-check")
+            && baseline_ref.contains("**Disallowed artifact-creating operations")
+            && baseline_ref.contains("never invoke `b3 guard verify-run`"),
+        "baseline-audit.md missing strict read-only vs artifact-creating boundary"
     );
 
     let (ref_cmd, ref_cs) = read_pair("b3-refactor");
@@ -926,8 +936,11 @@ fn commands_and_command_skills_canonical_contracts() {
                 && body.contains("refactoring/SKILL.md")
                 && body.contains("residue-checklist.md")
                 && body.contains("INTENTIONAL COMPLEXITY")
-                && body.contains("b3-performance-reviewer.md"),
-            "b3-refactor {label} missing refactor/cleanup/optimize routing contracts"
+                && body.contains("b3-performance-reviewer.md")
+                && body.contains("/b3-audit")
+                && body.contains("/b3-review-loop")
+                && body.contains("/b3-ship"),
+            "b3-refactor {label} missing refactor/cleanup/optimize routing or non-escalation contracts"
         );
     }
 
