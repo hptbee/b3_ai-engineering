@@ -1,0 +1,9 @@
+id: cmd-b3-audit-empty-diff-unchanged-001
+artifact: commands/b3-audit.md
+intent: Baseline /b3-audit inspects unchanged files in scope when Git diff is empty without fabricating diffs or treating EMPTY_DIFF as PASS
+scenario: |
+  User runs "/b3-audit review src/auth/ for security and correctness defects" on a clean Git tree with empty working diff
+  Agent inspects unchanged files directly via baseline-audit.md, records HEAD/branch state, does not fabricate a whole-repo diff, does not treat EMPTY_DIFF or NOISE_ONLY as PASS, and reports findings read-only
+expected_outcome: PASS
+failure_mode: baseline-audit-returns-empty-diff-pass-or-skips-unchanged-files
+notes: Preserves /b3-review diff/PR workflow separately

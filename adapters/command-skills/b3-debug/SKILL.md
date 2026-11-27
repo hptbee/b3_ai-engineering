@@ -1,6 +1,6 @@
 ---
 name: b3-debug
-description: Explicit command wrapper ($b3-debug, /b3-debug, b3-debug) for root-cause diagnosis before patching via debugging skill. Not for guess-and-patch or /b3-ship.
+description: "Root-cause diagnosis before patching via debugging skill ($b3-debug, /b3-debug). Not for guess-and-patch or /b3-ship."
 ---
 
 # b3-debug

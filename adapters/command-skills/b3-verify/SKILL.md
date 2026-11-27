@@ -1,6 +1,6 @@
 ---
 name: b3-verify
-description: Explicit command wrapper ($b3-verify, /b3-verify, b3-verify) to run executed evidence for a named claim via verification skill (PASS, FAIL, or INCOMPLETE).
+description: "Run executed verification evidence for a named claim via verification skill ($b3-verify, /b3-verify) for PASS, FAIL, or INCOMPLETE."
 ---
 
 # b3-verify

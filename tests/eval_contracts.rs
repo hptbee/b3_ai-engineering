@@ -1,5 +1,5 @@
 //! Executable contracts migrating `scripts/validate-evals.sh`, guarding
-//! always-on context budgets & keyword isolation, validating all 11 command +
+//! always-on context budgets & keyword isolation, validating all 14 command +
 //! command-skill contracts, and exercising native `b3` orchestration invariants.
 
 mod common;
@@ -20,12 +20,15 @@ const EXPECTED_EVAL_CATEGORIES: &[&str] = &[
 ];
 
 const EXPECTED_COMMANDS: &[&str] = &[
+    "b3-audit",
     "b3-debug",
     "b3-implement",
     "b3-plan",
     "b3-pr-comment",
     "b3-pr-reply",
     "b3-pr-resolve",
+    "b3-refactor",
+    "b3-research",
     "b3-research-ship",
     "b3-review",
     "b3-review-loop",
@@ -51,6 +54,14 @@ const EXPECTED_NEW_ORCHESTRATION_EVALS: &[&str] = &[
     "evals/commands/standalone-commands-scope-preserved.yaml",
     "evals/commands/all-commands-canonical-policy.yaml",
     "evals/commands/future-commands-inheritance.yaml",
+    "evals/commands/b3-research-local-explanation-no-ship-state.yaml",
+    "evals/commands/b3-research-preserves-missing-conflicting-evidence.yaml",
+    "evals/commands/b3-audit-unchanged-file-empty-diff.yaml",
+    "evals/commands/b3-audit-missing-target-or-incomplete-coverage.yaml",
+    "evals/commands/b3-refactor-preserves-behavior.yaml",
+    "evals/commands/b3-refactor-cleanup-preserves-intentional-complexity.yaml",
+    "evals/commands/b3-refactor-optimize-measured-guidance.yaml",
+    "evals/commands/daily-commands-canonical-wrapper-parity.yaml",
 ];
 
 fn normalize_lf(raw: &str) -> String {
@@ -571,8 +582,8 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 321,
-        "expected >= 321 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 330,
+        "expected >= 330 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(
@@ -664,8 +675,8 @@ fn always_on_context_budget_and_no_forbidden_routing_leaks() {
     collect_skill_md_files(&root.join("adapters/command-skills"), &mut skill_files);
     assert_eq!(
         skill_files.len(),
-        35,
-        "expected 35 SKILL.md files (24 skills + 11 command-skills), found {}",
+        38,
+        "expected 38 SKILL.md files (24 skills + 14 command-skills), found {}",
         skill_files.len()
     );
 
@@ -864,6 +875,61 @@ fn commands_and_command_skills_canonical_contracts() {
             && ver_cs.contains("verify-check")
             && ver_cs.contains("verification/SKILL.md")
     );
+
+    let (res_cmd, res_cs) = read_pair("b3-research");
+    for (label, body) in [
+        ("command", res_cmd.as_str()),
+        ("command-skill", res_cs.as_str()),
+    ] {
+        assert!(
+            body.contains(".b3/research-ship/")
+                && body.contains("research-engineering-patterns/SKILL.md")
+                && body.contains("workflows/research-ship.md"),
+            "b3-research {label} missing lightweight/routing boundaries"
+        );
+    }
+
+    let (aud_cmd, aud_cs) = read_pair("b3-audit");
+    for (label, body) in [
+        ("command", aud_cmd.as_str()),
+        ("command-skill", aud_cs.as_str()),
+    ] {
+        assert!(
+            body.contains("references/baseline-audit.md")
+                && body.contains("references/review-template.md")
+                && body.contains("UNKNOWN / INCOMPLETE")
+                && body.contains("EMPTY_DIFF")
+                && body.contains("SINGLE_AGENT_LIMIT"),
+            "b3-audit {label} missing baseline-audit or empty-diff/honesty contracts"
+        );
+    }
+    let baseline_ref = fs::read_to_string(
+        root.join("skills/engineering/code-review/references/baseline-audit.md"),
+    )
+    .expect("read baseline-audit.md");
+    assert!(
+        baseline_ref.contains("EMPTY_DIFF")
+            && baseline_ref.contains("UNKNOWN / INCOMPLETE")
+            && baseline_ref.contains("SINGLE_AGENT_LIMIT")
+            && baseline_ref.contains("review-template.md"),
+        "baseline-audit.md missing core contract terms"
+    );
+
+    let (ref_cmd, ref_cs) = read_pair("b3-refactor");
+    for (label, body) in [
+        ("command", ref_cmd.as_str()),
+        ("command-skill", ref_cs.as_str()),
+    ] {
+        assert!(
+            body.contains("problem-solving/SKILL.md")
+                && body.contains("verification/SKILL.md")
+                && body.contains("refactoring/SKILL.md")
+                && body.contains("residue-checklist.md")
+                && body.contains("INTENTIONAL COMPLEXITY")
+                && body.contains("b3-performance-reviewer.md"),
+            "b3-refactor {label} missing refactor/cleanup/optimize routing contracts"
+        );
+    }
 
     for pr_cmd_name in ["b3-pr-resolve", "b3-pr-reply", "b3-pr-comment"] {
         let (c, s) = read_pair(pr_cmd_name);

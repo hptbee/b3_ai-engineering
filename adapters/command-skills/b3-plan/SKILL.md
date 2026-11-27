@@ -1,6 +1,6 @@
 ---
 name: b3-plan
-description: Explicit command wrapper ($b3-plan, /b3-plan, b3-plan) for scoped plan-only breakdown via planning skill without writing product code. Not for /b3-ship or implementation.
+description: "Scoped plan-only breakdown via planning skill without editing product code ($b3-plan, /b3-plan). Not for /b3-ship or impl."
 ---
 
 # b3-plan

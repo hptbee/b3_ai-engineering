@@ -16,7 +16,7 @@ Resolve `B3_HOME` in order; stop at the first dir containing `workflows/ship.md`
 | Rules / Workflows / Review / Roles | `{B3_HOME}/rules/*.md`, `{B3_HOME}/workflows/`, `{B3_HOME}/review-loop/`, `{B3_HOME}/agents/` (or `.claude/agents/`). |
 | Cursor commands / Checkpoints | `.cursor/commands/` (from `{B3_HOME}/commands/`); checkpoints in `.b3/ship/` and `.b3/research-ship/` (gitignored). |
 
-Hosts use `$<name>` (Codex), `/<name>` (Claude), or intent (AGY): `b3-ship`, `b3-research-ship`, `b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`.
+Hosts use `$<name>` (Codex), `/<name>` (Claude), or intent (AGY): `b3-ship`, `b3-research-ship`, `b3-plan`, `b3-implement`, `b3-debug`, `b3-research`, `b3-audit`, `b3-review`, `b3-refactor`, `b3-verify`, `b3-review-loop`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`.
 - On `/b3-ship`, `$b3-ship`, or `b3-ship`: **read and follow** `{B3_HOME}/workflows/ship.md` directly (do not stop after Plan).
 - On `/b3-review-loop` or `$b3-review-loop`: **read and follow** `{B3_HOME}/review-loop/strategy.md` directly; delegate `{B3_HOME}/agents/{b3-reviewer,b3-fixer,b3-security-reviewer,b3-architecture-reviewer,b3-performance-reviewer}.md` when isolated (parent owns `PASS`/`FAIL`/`UNKNOWN`/`INCOMPLETE`).
 

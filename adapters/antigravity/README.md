@@ -11,7 +11,7 @@
 | `AGENTS.md` | Native workspace rule (auto-loaded from repo root) |
 | `rules/*.md` | Referenced via `AGENTS.md` in-repo, or bundled into plugin `rules/AGENTS.md` (plain Markdown, no frontmatter, `< 24 KB`, with global `B3_HOME` and project-precedence header) |
 | `skills/` | Committed `.agents/skills.json` (in this repo), flattened `.agents/skills/<name>` (`b3 install product --host antigravity`), or global `~/.gemini/config/skills.json` category entries + plugin `skills/<name>` links |
-| `commands/` + `adapters/command-skills/` | Exposed as command skills (`b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`, `b3-ship`, `b3-research-ship`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`) inside `~/.gemini/config/skills.json`, plugin `skills/`, or `.agents/` |
+| `commands/` + `adapters/command-skills/` | Exposed as command skills (`b3-plan`, `b3-implement`, `b3-debug`, `b3-research`, `b3-audit`, `b3-review`, `b3-refactor`, `b3-verify`, `b3-review-loop`, `b3-ship`, `b3-research-ship`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`) inside `~/.gemini/config/skills.json`, plugin `skills/`, or `.agents/` |
 | `agents/*.md` | Rendered into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, least-privilege `tools:`, zero hardcoded models), or dynamically delegated via `define_subagent` / `invoke_subagent` |
 
 ## Capability classification
@@ -66,7 +66,7 @@ b3 install antigravity uninstall
 ### Arbitrary-project usage examples
 
 In any local repository that has never run `b3 install product`:
-- Invoke `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, or `/b3-pr-comment` (or describe the workflow intent).
+- Invoke `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, or `/b3-pr-comment` (or describe the workflow intent).
 - Bundled `rules/AGENTS.md` supplies the global `B3_HOME` fallback when neither `B3_HOME` env nor product `.b3/home` exists, so canonical `workflows/ship.md`, `review-loop/strategy.md`, native `b3 guard` commands, and skills resolve cleanly.
 - **Host-native parallel/subagent fallback:** When Antigravity parallel subagent dispatch or isolation is unavailable in the active session, workflows fall back to `SEQUENTIAL` (`no_host_isolation` / `sequential_host_fallback` per [`../../workflows/references/dispatch-naming.md`](../../workflows/references/dispatch-naming.md)) and record `SINGLE_AGENT_LIMIT` / `UNKNOWN` where independent review is required.
 

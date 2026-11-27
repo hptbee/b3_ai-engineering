@@ -1,0 +1,9 @@
+id: cmd-daily-wrapper-parity-001
+artifact: commands/README.md
+intent: Canonical commands/b3-{research,audit,refactor}.md and adapters/command-skills/b3-{research,audit,refactor}/SKILL.md expose aligned intent, scope, and stop rules
+scenario: |
+  Compare commands/b3-{research,audit,refactor}.md with adapters/command-skills/b3-{research,audit,refactor}/SKILL.md
+  Each pair quotes YAML description safely, references dispatch-naming.md, routes to the same skills/references, and preserves identical read-only/stop/escalation boundaries without divergent prose
+expected_outcome: PASS
+failure_mode: command-wrapper-diverges-from-canonical-command-contract
+notes: Validated statically in tests/eval_contracts.rs (does not substitute for live LLM runtime testing)

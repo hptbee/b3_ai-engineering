@@ -1,0 +1,9 @@
+id: cmd-b3-refactor-preserves-behavior-001
+artifact: commands/b3-refactor.md
+intent: Scoped /b3-refactor improves code structure while preserving externally observable behavior and public contracts without escalating to /b3-ship
+scenario: |
+  User asks "/b3-refactor split the oversized parser helper in one module without changing its public API"
+  Agent infers Refactor only, applies refactoring/SKILL.md with smallest structural changes, preserves public contracts, runs characterization verification checks, and stops without starting /b3-audit, /b3-review-loop, or /b3-ship
+expected_outcome: PASS
+failure_mode: refactor-changes-public-contract-or-triggers-unrequested-workflows
+notes: Also verifies no unrelated feature work, dependency upgrades, or formatting churn

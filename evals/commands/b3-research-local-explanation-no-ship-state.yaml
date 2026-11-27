@@ -1,0 +1,9 @@
+id: cmd-b3-research-local-explanation-001
+artifact: commands/b3-research.md
+intent: A local code explanation through /b3-research answers the bounded question read-only and finishes without product edits or research-ship state
+scenario: |
+  User asks "/b3-research explain how B3_HOME resolves in this repository"
+  Agent reads only the relevant resolver code and docs, answers conclusion-first with evidence, creates no .b3/research-ship/ run state or source manifests, makes no product code edits, and stops when answered
+expected_outcome: PASS
+failure_mode: lightweight-research-initializes-research-ship-or-edits-files
+notes: Also mirrored thinly in adapters/command-skills/b3-research/SKILL.md

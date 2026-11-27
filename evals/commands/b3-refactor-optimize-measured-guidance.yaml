@@ -1,0 +1,9 @@
+id: cmd-b3-refactor-optimize-measured-001
+artifact: commands/b3-refactor.md
+intent: Optimize via /b3-refactor selects matching performance guidance, uses baseline/after probes, and labels unmeasured improvements honestly
+scenario: |
+  User asks "/b3-refactor optimize unnecessary re-renders in the React table view"
+  Agent infers Optimize, loads react-performance SKILL.md (plus b3-performance-reviewer when warranted) instead of broadening refactoring/SKILL.md, compares before/after measurements, or explicitly labels unmeasured gains when profiling is unavailable
+expected_outcome: PASS
+failure_mode: optimize-claims-unmeasured-speedup-or-broadens-refactoring-skill
+notes: Reports bottleneck, measurements, and preserved contracts in output

@@ -1,6 +1,6 @@
 # b3-ai-engineering
 
-A personal AI-assisted software engineering system built on a **host-neutral canonical core** supporting **Cursor**, **Codex**, **Claude Code**, and **Antigravity**. The conceptual core (`24` canonical Agent Skills + `11` command-skills = `35` total `SKILL.md` files, `5` rules, `11` commands, `5` agents, workflows, review-loop, eval fixtures, research) stays portable and provider-neutral; thin host wrappers and adapters map it onto each product without duplicating prose.
+A personal AI-assisted software engineering system built on a **host-neutral canonical core** supporting **Cursor**, **Codex**, **Claude Code**, and **Antigravity**. The conceptual core (`24` canonical Agent Skills + `14` command-skills = `38` total `SKILL.md` files, `5` rules, `14` commands, `5` agents, workflows, review-loop, eval fixtures, research) stays portable and provider-neutral; thin host wrappers and adapters map it onto each product without duplicating prose.
 
 This is an **evolving** operating layer for AI coding agents. It is not a company handbook. B3 currently optimizes host-executed engineering workflows; it does **not** include a standalone model/tool agent runtime. The [outcome-first roadmap](docs/roadmap.md) prioritizes verified work per total token/cost and a minimal boundary for future coding-agent CLIs without exposing private integration details.
 
@@ -13,14 +13,14 @@ b3-ai-engineering/
 ├── README.md                 Human-facing entry
 ├── rules/                    Portable rule bodies (source of meaning)
 ├── skills/                   24 canonical skills (Agent Skills SKILL.md)
-├── commands/                 11 canonical user-facing /b3-* actions
+├── commands/                 14 canonical user-facing /b3-* actions
 ├── agents/                   5 canonical reviewer / fixer subagent specs
 ├── workflows/                Default product sequence, /b3-ship & /b3-research-ship lifecycles
 ├── review-loop/              Spec + orchestration procedure
 ├── knowledge/                Reusable internal knowledge
 ├── research/                 Provenance & architecture decisions
 ├── evals/                    YAML fixtures (not a runner)
-├── adapters/                 4-host adapters, 11 command-skills & templates
+├── adapters/                 4-host adapters, 14 command-skills & templates
 ├── .cursor/rules/            Committed thin Cursor .mdc wrappers (@rules/*.md)
 ├── .agents/skills.json       Committed Antigravity 1-level skill manifest
 ├── scripts/                  Zero-Rust bootstrapper (bootstrap-b3.{ps1,sh}) & local CI preflight
@@ -38,7 +38,7 @@ B3 makes existing coding agents more effective under practical model/context lim
 
 ## Host-neutral core, 4-host activation
 
-Skills are Agent Skills (`SKILL.md`) stored canonically under `skills/` (`24` domain & engineering skills) plus `11` thin `adapters/command-skills/` (`35` total `SKILL.md` files), commands under `commands/` (`11` `/b3-*` actions), subagent roles under `agents/` (`5` roles), and rule bodies under `rules/`. Each host consumes that single source of truth through thin committed entrypoints (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`) and/or gitignored local links managed directly by the native `b3` CLI (`b3 sync`, `b3 install product`, `b3 install global`, `b3 install cursor`, `b3 install antigravity`).
+Skills are Agent Skills (`SKILL.md`) stored canonically under `skills/` (`24` domain & engineering skills) plus `14` thin `adapters/command-skills/` (`38` total `SKILL.md` files), commands under `commands/` (`14` `/b3-*` actions), subagent roles under `agents/` (`5` roles), and rule bodies under `rules/`. Each host consumes that single source of truth through thin committed entrypoints (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`) and/or gitignored local links managed directly by the native `b3` CLI (`b3 sync`, `b3 install product`, `b3 install global`, `b3 install cursor`, `b3 install antigravity`).
 
 Evidence over opinion. Progressive disclosure. Small composable skills. Research, then adapt — do not copy skill packs.
 
@@ -85,8 +85,8 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Standalone commands, review & review loop
 
-- **Standalone commands** ([`commands/README.md`](commands/README.md), `4` core standalone of `11` total commands): `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-verify`.
-- **Single-pass `/b3-review`** ([`commands/b3-review.md`](commands/b3-review.md) / [`code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): local diff/branch review, read-only GitHub PR inspection, or optional `--post` via [`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md).
+- **Standalone commands** ([`commands/README.md`](commands/README.md#practical-distinctions-and-examples), `7` core standalone of `14` total commands): `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research` (read-only Q&A/comparison; no research-ship state), `/b3-audit` (read-only baseline review of unchanged files; empty diff OK), `/b3-refactor` (scoped refactor/cleanup/measured optimization; no `/b3-ship` escalation), `/b3-verify`.
+- **Single-pass `/b3-review`** ([`commands/b3-review.md`](commands/b3-review.md) / [`code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): local diff/branch review, read-only GitHub PR inspection, or optional `--post` via [`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md) (use `/b3-audit` for unchanged-file baseline inspection).
 - **PR feedback (`/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`)** ([`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md)): single-writer PR thread/comment lifecycle via native `b3 pr <fetch|reconcile|reply|resolve|comment>`.
 - **Iterative `/b3-review-loop`** ([`review-loop/strategy.md`](review-loop/strategy.md)): self-sufficient loop orchestrator; normative contracts in [`review-loop/spec.md`](review-loop/spec.md) and [`review-loop/models.md`](review-loop/models.md).
 
