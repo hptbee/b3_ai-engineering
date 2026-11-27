@@ -1,0 +1,9 @@
+id: code-review-not-trigger-006
+artifact: skills/engineering/code-review/SKILL.md
+intent: Do not flag active feature flag still needed for rollout/rollback as residue
+scenario: |
+  Review this PR.
+  Reviewer claims an in-progress rollout feature flag is dead code because 10% of users are on it, and demands deleting the old branch.
+expected_outcome: NO_BLOCKING_FINDINGS
+failure_mode: false-positive-intentional-complexity
+notes: In-progress rollout requires rollback path; preserve as INTENTIONAL COMPLEXITY, not CONFIRMED REDUNDANCY or dead code.

@@ -986,7 +986,7 @@ pub struct ParsedWavePaths {
     pub explicit_empty: bool,
 }
 
-fn is_protected_wave_path(norm: &str) -> bool {
+pub fn is_protected_wave_path(norm: &str) -> bool {
     let low = norm.to_ascii_lowercase();
     if low == ".b3" || low.starts_with(".b3/") {
         return true;

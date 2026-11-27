@@ -29,7 +29,7 @@ Skip a review dimension only when it is out of scope **and** that skip is record
 
 The **performance** dimension is always in the general review (light). An extra `b3-performance-reviewer` pass is **risk-based** — [`strategy.md`](strategy.md) routing — not every PR. Hot-path `EVIDENCED RISK` performance findings block the quality gate; `SPECULATIVE` performance items are not quality-gate blockers.
 
-The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. This is not aesthetic cleanup or line-count reduction; only `CONFIRMED REDUNDANCY` becomes a fix requirement. Later loop passes pay special attention to residue introduced by earlier fix passes.
+The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. Only `CONFIRMED REDUNDANCY` or evidenced `CONFIRMED` overengineering (requiring a concrete simpler alternative that meets all security, correctness, portability, compatibility, and verified performance requirements — never LOC alone) becomes a fix requirement; `SPECULATIVE` items stay non-blocking, `INTENTIONAL COMPLEXITY` is accepted/preserved, and `UNKNOWN` is never converted into deletion. Local-diff simplification belongs to `code-review`/`b3-reviewer`; system-shape architecture belongs to `simplest-correct`/`b3-architecture-reviewer`. Later loop passes pay special attention to residue introduced by earlier fix passes.
 
 Adaptive path: `XS`/`S`/`M` = this loop on the full PR. `L`/`XL` = bounded cohesive review **units** (`<= 4` units), and `XXL` = dynamic cohesive review **units**; all three (`L`/`XL`/`XXL`) use adaptive concurrency (`dispatch-naming.md`), a mandatory fail-closed coverage ledger, and a **cross-cutting** review (`sizing.md`, [`hierarchical.md`](hierarchical.md)). Size governs partitioning; **Risk** (`LOW|MEDIUM|HIGH|CRITICAL`, never inferred from LOC alone) governs specialist dispatch and verification depth.
 
@@ -79,7 +79,7 @@ INVESTIGATING
 | `FALSE_POSITIVE` | Investigation showed it is not a real issue |
 | `SPECULATIVE` | Too thin to confirm; parked, not blocking |
 
-`FIXED` without `VERIFIED` is not closed. `SPECULATIVE` must not be presented as `CONFIRMED`. Runtime shorthand statuses (`OPEN` = blocking `CONFIRMED` / `CONFIRMED REDUNDANCY` / hot-path `EVIDENCED RISK`, `REJECTED` = `FALSE_POSITIVE`, `ACCEPTED` = `INTENTIONAL COMPLEXITY` / out-of-scope with reason) map directly to this lifecycle ([`strategy.md`](strategy.md) §0.3).
+`FIXED` without `VERIFIED` is not closed. `SPECULATIVE` must not be presented as `CONFIRMED`, and `UNKNOWN` must not become deletion. Runtime shorthand statuses (`OPEN` = blocking `CONFIRMED` / `CONFIRMED REDUNDANCY` / evidenced `CONFIRMED` overengineering / hot-path `EVIDENCED RISK`, `REJECTED` = `FALSE_POSITIVE`, `ACCEPTED` = `INTENTIONAL COMPLEXITY` / out-of-scope with reason) map directly to this lifecycle ([`strategy.md`](strategy.md) §0.3).
 
 ## Finding schema (conceptual)
 
@@ -208,7 +208,7 @@ When consolidating, drop stale items, merge duplicates, and carry evidence and `
 
 ## Quality gate
 
-A scope passes when blocking `OPEN` items are zero (**critical = 0**, **high = 0**, **medium = 0**, **CONFIRMED REDUNDANCY = 0**, hot-path **EVIDENCED RISK = 0**), all required units & cross-unit checks (plus fail-closed coverage ledger on `L`/`XL`/`XXL`) are complete without stale contracts/receipts, and required build/tests are **PASS**. LOW/NIT and non-blocking `SPECULATIVE` items may remain and must be listed. Missing tool/coverage evidence → `INCOMPLETE` (`UNKNOWN / INCOMPLETE`) or `BLOCKED`, never `PASS`.
+A scope passes when blocking `OPEN` items are zero (**critical = 0**, **high = 0**, **medium = 0**, **CONFIRMED REDUNDANCY / evidenced overengineering = 0**, hot-path **EVIDENCED RISK = 0**), all required units & cross-unit checks (plus fail-closed coverage ledger on `L`/`XL`/`XXL`) are complete without stale contracts/receipts, and required build/tests are **PASS**. LOW/NIT and non-blocking `SPECULATIVE` items may remain and must be listed. Missing tool/coverage evidence → `INCOMPLETE` (`UNKNOWN / INCOMPLETE`) or `BLOCKED`, never `PASS`.
 
 Runtime IDs (`R001`…) and `OPEN`/`FIXED`/`REJECTED`/`ACCEPTED`/`VERIFIED`/`SPECULATIVE` statuses: [`strategy.md`](strategy.md) §0.3.
 

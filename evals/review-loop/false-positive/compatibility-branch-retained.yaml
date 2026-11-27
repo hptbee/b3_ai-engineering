@@ -1,0 +1,9 @@
+id: code-review-not-trigger-004
+artifact: skills/engineering/code-review/SKILL.md
+intent: Do not flag compatibility branch required by supported version as residue
+scenario: |
+  Review this client SDK PR.
+  Reviewer wants to delete the v1 payload branch as 'residue' even though v1 API support is explicitly documented until 2027.
+expected_outcome: NO_BLOCKING_FINDINGS
+failure_mode: false-positive-intentional-complexity
+notes: Compatibility requirement holds; preserve as INTENTIONAL COMPLEXITY and do not flag as CONFIRMED REDUNDANCY.

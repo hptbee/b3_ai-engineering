@@ -2099,10 +2099,10 @@ fn pr_resolve_verification_forged_deleted_dismiss_r007_and_reconcile() {
         pr,
         &[("resolution_basis", JsonValue::str("DISMISSED_BY_USER"))],
     );
-    let ev_short_sum = fx.write_ev(
-        "ev-short.json",
+    let ev_empty_sum = fx.write_ev(
+        "ev-empty-sum.json",
         pr,
-        &[("summary", JsonValue::str("too short"))],
+        &[("summary", JsonValue::str("   "))],
     );
 
     for (tag, evp, fix_c, exp_code, exp_st) in [
@@ -2160,8 +2160,8 @@ fn pr_resolve_verification_forged_deleted_dismiss_r007_and_reconcile() {
             "PR_VERIFY_REQUIRED",
         ),
         (
-            "short-summary",
-            &ev_short_sum,
+            "empty-summary",
+            &ev_empty_sum,
             fx.fix_sha.as_str(),
             2,
             "PR_VERIFY_REQUIRED",
@@ -2242,6 +2242,45 @@ fn pr_resolve_verification_forged_deleted_dismiss_r007_and_reconcile() {
             .and_then(JsonValue::as_bool),
         Some(true)
     );
+
+    // Concise non-empty summary ("pass", 4 chars) with valid checked_command/receipt/fix_commit succeeds
+    let pr_concise = 111u64;
+    let st_concise = fx.write_state("resolve-concise.json", &fx.base_state(pr_concise));
+    let ev_concise = fx.write_ev(
+        "ev-concise.json",
+        pr_concise,
+        &[("summary", JsonValue::str("pass"))],
+    );
+    let (c_concise, j_concise, _) = fx.run_pr(
+        &st_concise,
+        &[
+            "resolve",
+            "--repo",
+            "acme/demo",
+            "--pr",
+            "111",
+            "--repo-root",
+            fx.repo.to_str().unwrap(),
+            "--expected-head",
+            &fx.head_sha,
+            "--thread-id",
+            "PRRT_t1",
+            "--fix-commit",
+            &fx.fix_sha,
+            "--evidence-file",
+            ev_concise.to_str().unwrap(),
+            "--authorize-resolve",
+        ],
+        Some(&fx.work_dir),
+        &[],
+    );
+    assert_eq!(
+        c_concise,
+        0,
+        "resolve concise summary: {}",
+        j_concise.to_json_string()
+    );
+    assert_eq!(status_str(&j_concise), "PR_RESOLVE_OK");
 
     // DUPLICATE_FIXED / ALREADY_FIXED valid resolve on PRRT_t2 -> PR_RESOLVE_OK, then repeat -> PR_ALREADY_RESOLVED
     let ev_dup_ok = fx.write_ev(

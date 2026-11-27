@@ -119,6 +119,8 @@ pub enum GuardSubcommand {
         allowed_paths: String,
         require_verify_receipt: String,
         ignore_dirty_paths: String,
+        expected_cmd: String,
+        relevant_paths: String,
     },
     VerifyRun {
         repo_root: String,
@@ -283,7 +285,7 @@ GUARD SUBCOMMANDS:
   diff-scope        Classify T-shirt size, changed/noise files, delta files, and risk signals
   mechanical-check  Run mechanical scope, leftover, obsolete, safety, and ownership gates
   review-inventory  Build scope inventory, specialists dispatch, and cohesive review units
-  review-ledger     Manage tamper-evident b3-review-ledger-v1 coverage state and pass chain
+  review-ledger     Manage b3-review-ledger-v1 coverage state and pass budget
   context-cache     Record and verify b3-context-v1 anchor/graph/summary cache freshness
   evidence-check    Write or validate SHA-256 b3-evidence-v1 manifests
   merge-policy-check Enforce provider-neutral pre-merge and post-merge governance policy
@@ -936,6 +938,8 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
             let mut allowed_paths = String::new();
             let mut require_verify_receipt = String::new();
             let mut ignore_dirty_paths = String::new();
+            let mut expected_cmd = String::new();
+            let mut relevant_paths = String::new();
             let mut i = 0;
             while i < rest.len() {
                 let (flag, iv) = parse_opt(&rest[i]);
@@ -960,6 +964,14 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                         ignore_dirty_paths =
                             take_val(rest, &mut i, "--ignore-dirty-paths", iv, "PRECOMMIT_FAIL")?;
                     }
+                    "--expected-cmd" => {
+                        expected_cmd =
+                            take_val(rest, &mut i, "--expected-cmd", iv, "PRECOMMIT_FAIL")?;
+                    }
+                    "--relevant-paths" => {
+                        relevant_paths =
+                            take_val(rest, &mut i, "--relevant-paths", iv, "PRECOMMIT_FAIL")?;
+                    }
                     other => {
                         return Err(fail(format!("PRECOMMIT_FAIL: unknown option '{other}'"), 1));
                     }
@@ -971,6 +983,8 @@ fn parse_guard(args: &[String]) -> Result<GuardSubcommand, B3Error> {
                 allowed_paths,
                 require_verify_receipt,
                 ignore_dirty_paths,
+                expected_cmd,
+                relevant_paths,
             })
         }
         "verify-run" => {

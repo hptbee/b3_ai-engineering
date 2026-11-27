@@ -1,7 +1,7 @@
 # Checksum-verified bootstrap & rollback helper for the native `b3` binary.
 # Supports local offline release bundles (-ReleaseDir) or GitHub Releases (-Version).
 # Usage:
-#   .\scripts\bootstrap-b3.ps1 [-Version latest|v0.1.0] [-ReleaseDir <dir>] [-InstallDir <dir>] [-Repo hptbee/b3_ai-engineering] [-Target x86_64-pc-windows-msvc] [-Rollback] [-DryRun]
+#   .\scripts\bootstrap-b3.ps1 [-Version latest|v0.2.0] [-ReleaseDir <dir>] [-InstallDir <dir>] [-Repo hptbee/b3_ai-engineering] [-Target x86_64-pc-windows-msvc] [-Rollback] [-DryRun]
 param(
     [string]$Version = 'latest',
     [string]$ReleaseDir = '',

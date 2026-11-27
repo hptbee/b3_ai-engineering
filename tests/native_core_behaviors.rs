@@ -1030,3 +1030,292 @@ fn core_symbol_check_batch_preserves_leading_space_and_special_filenames() {
     assert!(out2.contains("src/api.rs:orphan_only_fn"), "{out2}");
     assert!(!out2.contains("helper_used_fn"), "{out2}");
 }
+
+#[test]
+fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalidation() {
+    let tmp = TempDirGuard::new("precommit-consolidated");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(
+        &repo,
+        "Cargo.toml",
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        "add cargo manifest",
+    );
+    commit_file(
+        &repo,
+        "src/app.rs",
+        "pub fn run() -> i32 { 1 }\n",
+        "add app",
+    );
+    commit_file(
+        &repo,
+        "tests/shared.rs",
+        "pub fn shared_assert() {}\n",
+        "add shared test",
+    );
+
+    fs::write(repo.join("src/app.rs"), "pub fn run() -> i32 { 2 }\n").unwrap();
+    git_in(&repo, &["add", "src/app.rs"]);
+
+    let receipt_rel = ".b3/ship/evidence/T1.verify";
+    let (vc, vout, verr) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T1",
+        "--relevant-paths",
+        "src/app.rs,tests/shared.rs",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        "cmd /c echo ok",
+    ]);
+    assert_eq!(vc, 0, "verify-run failed: {vout}\n{verr}");
+
+    // Flags without --require-verify-receipt fail closed
+    let (nf_c, nf_out, _) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs",
+        "--expected-cmd",
+        "cmd /c echo ok",
+    ]);
+    assert_eq!(nf_c, 1);
+    assert!(
+        nf_out.contains("require --require-verify-receipt"),
+        "{nf_out}"
+    );
+
+    // Wrong expected-cmd rejected cleanly
+    let (wc, w_out, _) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--expected-cmd",
+        "cmd /c echo wrong",
+    ]);
+    assert_eq!(wc, 1);
+    assert!(w_out.contains("VERIFY_MISMATCH"), "{w_out}");
+
+    // Uncovered required non-staged path rejected cleanly
+    let (rc, r_out, _) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--relevant-paths",
+        "src/app.rs,tests/other.rs",
+    ]);
+    assert_eq!(rc, 1);
+    assert!(r_out.contains("VERIFY_SCOPE_MISMATCH"), "{r_out}");
+
+    // Valid consolidated precommit passes (without separate verify-check)
+    let (okc, okout, okerr) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--expected-cmd",
+        "cmd /c echo ok",
+        "--relevant-paths",
+        "src/app.rs,tests/shared.rs",
+    ]);
+    assert_eq!(okc, 0, "consolidated precommit failed: {okout}\n{okerr}");
+
+    // Modifying Cargo.toml invalidates scoped receipt in both verify-check and precommit
+    fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.2.0\"\n",
+    )
+    .unwrap();
+    let (vsc, vs_out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "cmd /c echo ok",
+    ]);
+    assert_eq!(vsc, 2);
+    assert!(vs_out.contains("VERIFY_STALE"), "{vs_out}");
+
+    let (psc, ps_out, _) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--expected-cmd",
+        "cmd /c echo ok",
+    ]);
+    assert_eq!(psc, 1);
+    assert!(ps_out.contains("VERIFY_STALE"), "{ps_out}");
+
+    // Untracked nested manifest creation also invalidates scoped receipt via ls-files pathspecs
+    git_in(&repo, &["add", "Cargo.toml"]);
+    let (vc2, _, verr2) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T2",
+        "--relevant-paths",
+        "src/app.rs,tests/shared.rs",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        "cmd /c echo ok",
+    ]);
+    assert_eq!(vc2, 0, "re-verify failed: {verr2}");
+    fs::create_dir_all(repo.join("packages/web")).unwrap();
+    fs::write(
+        repo.join("packages/web/package.json"),
+        "{\"name\":\"web\",\"version\":\"1.0.0\"}\n",
+    )
+    .unwrap();
+    let (u_vc, u_out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "cmd /c echo ok",
+    ]);
+    assert_eq!(u_vc, 2);
+    assert!(u_out.contains("VERIFY_STALE"), "{u_out}");
+}
+
+#[test]
+fn core_mechanical_and_symbol_advisory_vs_confirmed_blockers() {
+    let tmp = TempDirGuard::new("advisory-vs-blocker");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    let base = commit_file(
+        &repo,
+        "src/mod_x.rs",
+        "pub fn exported_removed_sym() -> i32 { 1 }\npub fn kept() -> i32 { 2 }\n",
+        "seed",
+    );
+    commit_file(
+        &repo,
+        "src/caller.rs",
+        "pub fn use_it() -> i32 { exported_removed_sym() }\n",
+        "caller",
+    );
+    let base2 = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    // 1. Advisory-only signals (eslint-disable, @ts-ignore, empty TODO) -> exit 0 MECHANICAL_ADVISORY
+    fs::write(
+        repo.join("src/adv.ts"),
+        "// eslint-disable-next-line\n// @ts-ignore\n// TODO:\nexport const ok = 1;\n",
+    )
+    .unwrap();
+    let (mac, maout, maerr) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base2,
+        "--allowed-paths",
+        "src/adv.ts",
+    ]);
+    assert_eq!(mac, 0, "advisory-only should exit 0: {maout}\n{maerr}");
+    assert!(maout.contains("MECHANICAL_ADVISORY"), "{maout}");
+    assert!(maout.contains("advisory_hits="), "{maout}");
+    assert!(maout.contains("eslint-disable"), "{maout}");
+
+    // 2. Confirmed blocker (debugger / .only() alongside advisory -> exit 2 MECHANICAL_FINDINGS
+    fs::write(
+        repo.join("src/adv.ts"),
+        "// @ts-ignore\ndebugger;\nexport const ok = 1;\n",
+    )
+    .unwrap();
+    let (mbc, mbout, _) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base2,
+        "--allowed-paths",
+        "src/adv.ts",
+    ]);
+    assert_eq!(mbc, 2, "{mbout}");
+    assert!(mbout.contains("MECHANICAL_FINDINGS"), "{mbout}");
+    assert!(mbout.contains("debugger"), "{mbout}");
+    fs::remove_file(repo.join("src/adv.ts")).unwrap();
+
+    // 3. symbol-check: orphan_internal-only -> exit 0 SYMBOL_ADVISORY; dangling_refs -> exit 2 SYMBOL_FINDINGS
+    fs::write(
+        repo.join("src/mod_x.rs"),
+        "pub fn exported_removed_sym() -> i32 { 1 }\npub fn kept() -> i32 { 2 }\nfn unreferenced_priv() -> i32 { 3 }\n",
+    )
+    .unwrap();
+    let (sac, saout, saerr) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base2,
+    ]);
+    assert_eq!(sac, 0, "orphan_internal-only must exit 0: {saout}\n{saerr}");
+    assert!(saout.contains("SYMBOL_ADVISORY"), "{saout}");
+    assert!(
+        saout.contains("orphan_internal=src/mod_x.rs:unreferenced_priv"),
+        "{saout}"
+    );
+
+    let _ = base;
+    fs::write(
+        repo.join("src/mod_x.rs"),
+        "pub fn kept() -> i32 { 2 }\nfn unreferenced_priv() -> i32 { 3 }\n",
+    )
+    .unwrap();
+    let (sbc, sbout, _) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base2,
+    ]);
+    assert_eq!(sbc, 2, "dangling_refs must exit 2: {sbout}");
+    assert!(sbout.contains("SYMBOL_FINDINGS"), "{sbout}");
+    assert!(
+        sbout.contains("dangling_refs=exported_removed_sym(1f)"),
+        "{sbout}"
+    );
+}

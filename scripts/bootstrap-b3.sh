@@ -2,7 +2,7 @@
 # Checksum-verified bootstrap & rollback helper for the native `b3` binary.
 # Supports local offline release bundles (--release-dir) or GitHub Releases (--version).
 # Usage:
-#   ./scripts/bootstrap-b3.sh [--version latest|v0.1.0] [--release-dir DIR] [--install-dir DIR] [--repo OWNER/REPO] [--target TRIPLE] [--rollback] [--dry-run]
+#   ./scripts/bootstrap-b3.sh [--version latest|v0.2.0] [--release-dir DIR] [--install-dir DIR] [--repo OWNER/REPO] [--target TRIPLE] [--rollback] [--dry-run]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

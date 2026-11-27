@@ -16,5 +16,5 @@ readonly: false
 **Rules:**
 1. Fix only valid, in-scope `CONFIRMED` items (`review-loop/strategy.md` §0.3); mark invalid `REJECTED`.
 2. **Bug-class sweep:** state 1L broken invariant, sweep sibling sites strictly in `OWNED FILES`/`DIFF SCOPE` (report unowned), add/update behavior test when applicable, remove obsolete/replaced symbols, verify green on current tree.
-3. Simplification: act **only** on `CONFIRMED REDUNDANCY` (prove → minimal removal → re-verify); leave `LIKELY REDUNDANT`/`INTENTIONAL COMPLEXITY`/`UNKNOWN` untouched.
+3. Simplification: act **only** on `CONFIRMED REDUNDANCY`/evidenced `CONFIRMED` overengineering (simpler alt meeting all security/correctness/portability/compat/perf reqs—never LOC alone; prove → fix → re-verify); leave `SPECULATIVE` (`LIKELY REDUNDANT`)/`INTENTIONAL COMPLEXITY`/`UNKNOWN` untouched.
 4. Map every edit to a finding ID; mark `FIXED` after edit, `VERIFIED` only after passing check. Never emit loop `PASS`/`STOP`, fix `SPECULATIVE`/`LOW` nits out of scope, or re-review PR.

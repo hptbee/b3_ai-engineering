@@ -26,7 +26,7 @@ Scope → Plan → Build → Verify → Review → Fix → Verify
 5. **Review (risk-sensitive)** — Run `b3 guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) first; check plan alignment, callers, tests, and `CONFIRMED` residue:
    - **Low-risk:** 1 `b3-reviewer` pass if subagents exist (else self-review noting `SINGLE_AGENT_LIMIT`).
    - **High-risk** (authz, schema, concurrency, hot perf, shared contracts): fan out `b3-reviewer` + matching `b3-{security,architecture,performance}-reviewer` concurrently in `SHARED_READ_ONLY` (`SINGLE_AGENT_LIMIT` caps to `INCOMPLETE`). Not `/b3-review-loop` or `/b3-ship`.
-6. **Fix** — Fix confirmed causes in scope, add regression tests, delete only `CONFIRMED` redundancy (`LIKELY REDUNDANT`/`INTENTIONAL COMPLEXITY` untouched); map each edit to a finding.
+6. **Fix** — Fix confirmed causes in scope, add regression tests, act only on `CONFIRMED REDUNDANCY` or evidenced `CONFIRMED` overengineering (concrete simpler alt meeting all security/correctness/portability/compat/perf reqs — never LOC alone; leave `SPECULATIVE`/`INTENTIONAL COMPLEXITY`/`UNKNOWN` untouched); map each edit to a finding.
 7. **Verify (re-run)** — Re-run checks + fresh delta review if blockers existed (max 2 fix-verify rounds). Still blocked → `FAIL`/`INCOMPLETE` or suggest `/b3-review-loop` (never silently escalate).
 
 ## Progressive disclosure

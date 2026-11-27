@@ -7,6 +7,7 @@ use crate::fs::{
     test_test_path,
 };
 use crate::git::{resolve_scope_target_and_base, run_git};
+use crate::guard::push_unique_str;
 use crate::guard::scope::{
     collect_scope_data, eval_risk_for_subset, get_raw_module_group, get_tshirt_size,
     test_contract_path, test_doc_or_asset_path, test_generated_code_path,
@@ -97,12 +98,6 @@ fn get_unit_metrics(
         signals: ev.risk_signals,
         files_csv,
         feature_tokens: grp.feature_tokens,
-    }
-}
-
-fn push_unique_str(vec: &mut Vec<String>, val: String) {
-    if !vec.iter().any(|x| x == &val) {
-        vec.push(val);
     }
 }
 

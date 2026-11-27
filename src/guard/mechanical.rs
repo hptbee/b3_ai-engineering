@@ -4,10 +4,10 @@ use std::path::Path;
 use crate::error::{fail, B3Error};
 use crate::fs::{
     convert_to_wave_paths, convert_to_wave_task_map, has_control_chars, is_hex64_lower,
-    is_reparse_or_symlink, is_valid_task_id, is_windows_junction, normalize_path_value,
-    normalize_repo_root, paths_equal_fs, sha256_file_hex, sort_ordinal, split_csv_list,
-    split_path_csv_checked, test_binary_file, test_checkpoint_path, test_noise_file,
-    test_ownership_path_match, test_path_match, test_secret_path, test_test_path,
+    is_protected_wave_path, is_reparse_or_symlink, is_valid_task_id, is_windows_junction,
+    normalize_path_value, normalize_repo_root, paths_equal_fs, sha256_file_hex, sort_ordinal,
+    split_csv_list, split_path_csv_checked, test_binary_file, test_checkpoint_path,
+    test_noise_file, test_ownership_path_match, test_path_match, test_secret_path, test_test_path,
     test_wave_path_contained, test_wave_path_overlap, test_worktree_root_overlap, WaveOverlap,
 };
 use crate::git::{
@@ -15,7 +15,10 @@ use crate::git::{
     resolve_scope_target_and_base, run_git, run_git_paths_z, test_git_dir_mid_operation,
     test_git_mid_operation, test_repo_case_insensitive, GitZMode,
 };
-use crate::guard::verify::{get_submodule_entry_identity, get_symlink_blob_oid};
+use crate::guard::scope::find_destructive_sql;
+use crate::guard::verify::{
+    get_submodule_entry_identity, get_symlink_blob_oid, git_hash_object_file,
+};
 use crate::guard::worktree::resolve_safe_worktree_identity;
 
 fn find_leftover_tag(line: &str) -> Option<&'static str> {
@@ -39,6 +42,11 @@ fn find_leftover_tag(line: &str) -> Option<&'static str> {
     if line.contains(only_tok) {
         return Some(only_tok);
     }
+
+    None
+}
+
+fn find_advisory_tag(line: &str) -> Option<&'static str> {
     let ts_tok = concat!("@ts-", "ignore");
     if line.contains(ts_tok) {
         return Some(ts_tok);
@@ -48,6 +56,8 @@ fn find_leftover_tag(line: &str) -> Option<&'static str> {
         return Some(eslint_tok);
     }
 
+    let bytes = line.as_bytes();
+    let is_w = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     for kw in ["TODO", "FIXME"] {
         let mut s = 0;
         while let Some(pos) = line[s..].find(kw) {
@@ -67,39 +77,6 @@ fn find_leftover_tag(line: &str) -> Option<&'static str> {
     }
 
     None
-}
-
-fn find_destructive_sql(line: &str) -> bool {
-    let low = line.to_ascii_lowercase();
-    let bytes = low.as_bytes();
-    let is_w = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    for (first, second) in [
-        ("drop", "table"),
-        ("drop", "database"),
-        ("truncate", "table"),
-    ] {
-        let mut start = 0;
-        while let Some(pos) = low[start..].find(first) {
-            let abs = start + pos;
-            let left_ok = abs == 0 || !is_w(bytes[abs - 1]);
-            if left_ok {
-                let mut j = abs + first.len();
-                let mut ws = 0;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    ws += 1;
-                    j += 1;
-                }
-                if ws > 0 && low[j..].starts_with(second) {
-                    let end = j + second.len();
-                    if end == bytes.len() || !is_w(bytes[end]) {
-                        return true;
-                    }
-                }
-            }
-            start = abs + 1;
-        }
-    }
-    false
 }
 
 fn parse_added_hunk_start(ln: &str) -> Option<usize> {
@@ -235,19 +212,18 @@ fn get_effective_repo_path_state(
         return Ok("UNSAFE_REPARSE".to_string());
     }
     if full.is_file() {
-        let h_res = run_git(root, &["hash-object", "--", rel_path], &no_env, None)?;
-        let h_sha = String::from_utf8_lossy(&h_res.stdout).trim().to_string();
-        if h_res.exit_code != 0 || !is_hex40(&h_sha) {
-            let detail = if h_sha.is_empty() {
-                git_err_detail(&h_res)
-            } else {
-                h_sha
-            };
-            return Err(fail(
-                format!("{fail_prefix}: git hash-object failed for {rel_path}: {detail}"),
-                1,
-            ));
-        }
+        let h_sha = git_hash_object_file(
+            root,
+            rel_path,
+            &format!("git hash-object failed for {rel_path}"),
+        )
+        .map_err(|e| {
+            fail(
+                e.message
+                    .replacen("GIT_ERROR:", &format!("{fail_prefix}:"), 1),
+                e.code,
+            )
+        })?;
         return Ok(format!("blob:{h_sha}"));
     }
     if full.is_dir() {
@@ -259,19 +235,6 @@ fn get_effective_repo_path_state(
         return Ok("DIR".to_string());
     }
     Ok("DELETED".to_string())
-}
-
-fn is_protected_worker_path(norm: &str, protected_list: &[String], case_insensitive: bool) -> bool {
-    let low = norm.to_ascii_lowercase();
-    if low == ".b3"
-        || low.starts_with(".b3/")
-        || low.split('/').any(|s| s == ".git")
-        || low == ".gitmodules"
-        || low.ends_with("/.gitmodules")
-    {
-        return true;
-    }
-    test_ownership_path_match(norm, protected_list, case_insensitive)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -862,6 +825,7 @@ pub fn run(
     }
 
     let mut leftover_hits: Vec<String> = Vec::new();
+    let mut advisory_hits: Vec<String> = Vec::new();
     let mut safety_hits: Vec<String> = Vec::new();
     for p in &non_del_changed {
         if test_secret_path(p) {
@@ -978,7 +942,18 @@ pub fn run(
                         }
                     }
                 }
-                if !test_test_path(&cur_file) && find_destructive_sql(body) && sql_hit_count < 10 {
+                if let Some(tag) = find_advisory_tag(body) {
+                    if advisory_hits.len() < 10 {
+                        let entry = format!("{cur_file}:{cur_line}:{tag}");
+                        if !advisory_hits.iter().any(|x| x == &entry) {
+                            advisory_hits.push(entry);
+                        }
+                    }
+                }
+                if !test_test_path(&cur_file)
+                    && find_destructive_sql(body).is_some()
+                    && sql_hit_count < 10
+                {
                     let entry = format!("destructive_sql:{cur_file}:{cur_line}");
                     if !safety_hits.iter().any(|x| x == &entry) {
                         safety_hits.push(entry);
@@ -991,7 +966,7 @@ pub fn run(
     }
 
     for u in sort_ordinal(untracked.clone(), false) {
-        if leftover_hits.len() >= 10 && sql_hit_count >= 10 {
+        if leftover_hits.len() >= 10 && advisory_hits.len() >= 10 && sql_hit_count >= 10 {
             break;
         }
         if u.is_empty()
@@ -1009,13 +984,21 @@ pub fn run(
         let is_u_test = test_test_path(&u);
         if let Ok(content) = std::fs::read_to_string(&full) {
             for (idx, fl) in content.lines().enumerate() {
+                if leftover_hits.len() >= 10 && advisory_hits.len() >= 10 && sql_hit_count >= 10 {
+                    break;
+                }
                 let lno = idx + 1;
-                if let Some(tag) = find_leftover_tag(fl) {
-                    if leftover_hits.len() < 10 {
+                if leftover_hits.len() < 10 {
+                    if let Some(tag) = find_leftover_tag(fl) {
                         leftover_hits.push(format!("{u}:{lno}:{tag}"));
                     }
                 }
-                if !is_u_test && find_destructive_sql(fl) && sql_hit_count < 10 {
+                if advisory_hits.len() < 10 {
+                    if let Some(tag) = find_advisory_tag(fl) {
+                        advisory_hits.push(format!("{u}:{lno}:{tag}"));
+                    }
+                }
+                if !is_u_test && sql_hit_count < 10 && find_destructive_sql(fl).is_some() {
                     safety_hits.push(format!("destructive_sql:{u}:{lno}"));
                     sql_hit_count += 1;
                 }
@@ -1276,7 +1259,9 @@ pub fn run(
                     let tid_owned = &ws_map[tid];
                     for wp in &wc_map[tid] {
                         attributed_paths.push(wp.clone());
-                        if is_protected_worker_path(wp, &protected_list, case_insensitive) {
+                        if is_protected_wave_path(wp)
+                            || test_ownership_path_match(wp, &protected_list, case_insensitive)
+                        {
                             ov_violations.push(format!("{wp}({tid}->protected)"));
                             continue;
                         }
@@ -1434,7 +1419,9 @@ pub fn run(
                     let tid_owned = &ws_map[tid];
                     for wp in &w_changed {
                         attributed_paths.push(wp.clone());
-                        if is_protected_worker_path(wp, &protected_list, case_insensitive) {
+                        if is_protected_wave_path(wp)
+                            || test_ownership_path_match(wp, &protected_list, case_insensitive)
+                        {
                             ov_violations.push(format!("{wp}({tid}->protected)"));
                             continue;
                         }
@@ -1520,6 +1507,11 @@ pub fn run(
     } else {
         leftover_hits.join(",")
     };
+    let adv_out = if advisory_hits.is_empty() {
+        "none".to_string()
+    } else {
+        advisory_hits.join(",")
+    };
     let ob_out = if obsolete_hits.is_empty() {
         "none".to_string()
     } else {
@@ -1544,6 +1536,7 @@ pub fn run(
     let mut lines = vec![
         format!("scope_creep={sc_out}"),
         format!("leftovers={lo_out}"),
+        format!("advisory_hits={adv_out}"),
         format!("obsolete_hits={ob_out}"),
         format!("safety_hits={sf_out}"),
     ];
@@ -1563,17 +1556,19 @@ pub fn run(
             ov_status.as_str(),
             "UNVERIFIED_COMBINED_ONLY" | "CALLER_ATTRIBUTED" | "VERIFIED_PER_WORKER"
         );
-    let (term, code) = if sc_out == "none"
+    let has_blockers = !(sc_out == "none"
         && lo_out == "none"
         && ob_out == "none"
         && sf_out == "none"
         && pv_out == "none"
         && dt_out == "none"
-        && ov_ok
-    {
-        ("MECHANICAL_OK", 0)
-    } else {
+        && ov_ok);
+    let (term, code) = if has_blockers {
         ("MECHANICAL_FINDINGS", 2)
+    } else if adv_out != "none" {
+        ("MECHANICAL_ADVISORY", 0)
+    } else {
+        ("MECHANICAL_OK", 0)
     };
     lines.push(term.to_string());
     Ok((lines.join("\n"), code))

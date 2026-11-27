@@ -4013,7 +4013,7 @@ fn review_ledger_security_tamper_and_independence() {
         .0,
         0
     );
-    // HIGH skip rationale: weak 5-char rejected, valid >=15-char multi-word (even containing "CONFIRMED") accepted
+    // HIGH skip rationale: update stores provided rationale; check enforces non-empty non-none non-waiver rationale
     assert_eq!(
         run_b3(&[
             "guard",
@@ -4097,7 +4097,7 @@ fn review_ledger_security_tamper_and_independence() {
         );
     }
 
-    // Complete u_auth with mandatory specialist; weak HIGH rationale on u_con still blocks
+    // Complete u_auth with mandatory specialist; "none" rationale on u_con still blocks
     assert_eq!(
         run_b3(&[
             "guard",
@@ -4122,19 +4122,6 @@ fn review_ledger_security_tamper_and_independence() {
         .0,
         0
     );
-    let (wkc, _, wk_err) = run_b3(&[
-        "guard",
-        "review-ledger",
-        "--repo-root",
-        r_str,
-        "--action",
-        "check",
-        "--ledger-path",
-        lp,
-    ]);
-    assert_eq!(wkc, 2);
-    assert!(wk_err.contains("valid HIGH skip rationale"), "{wk_err}");
-
     assert_eq!(
         run_b3(&[
             "guard",
@@ -4152,7 +4139,43 @@ fn review_ledger_security_tamper_and_independence() {
             "--receipt-path",
             ".b3/ship/u_con.verify",
             "--rationale",
-            "CONFIRMED inline that additive field preserves wire compat"
+            "none"
+        ])
+        .0,
+        0
+    );
+    let (wkc, _, wk_err) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r_str,
+        "--action",
+        "check",
+        "--ledger-path",
+        lp,
+    ]);
+    assert_eq!(wkc, 2);
+    assert!(wk_err.contains("valid HIGH skip rationale"), "{wk_err}");
+
+    // Concise explicit rationale (<15 chars, no prose-shape proxy) is accepted on HIGH
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r_str,
+            "--action",
+            "update",
+            "--ledger-path",
+            lp,
+            "--unit-id",
+            u_con,
+            "--status",
+            "REVIEWED",
+            "--receipt-path",
+            ".b3/ship/u_con.verify",
+            "--rationale",
+            "docs-only"
         ])
         .0,
         0
@@ -4467,15 +4490,34 @@ fn review_ledger_security_tamper_and_independence() {
         "{mp_err}"
     );
 
-    // Stripping pass_chain rejected as LEDGER_CORRUPT
+    // Legacy pass_chain / Pass Log lines remain backward-compatible on read; corrupt passes_used fails LEDGER_CORRUPT
     let esc_raw = fs::read_to_string(esc_repo.join(".b3/ship/esc.md")).unwrap();
-    let stripped: String = esc_raw
-        .lines()
-        .filter(|l| !l.starts_with("pass_chain=") && !l.starts_with("pass|"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
-    write_lf(&esc_repo.join(".b3/ship/esc-strip.md"), &stripped);
+    let mut with_legacy = String::new();
+    for line in esc_raw.lines() {
+        with_legacy.push_str(line);
+        with_legacy.push('\n');
+        if line.starts_with("passes_used=") {
+            with_legacy.push_str("pass_chain=0123456789abcdef0123456789abcdef01234567\n");
+        }
+    }
+    with_legacy.push_str("\n## Pass Log\npass|1|U01|unit:REVIEWED|1|abc|def\n");
+    write_lf(&esc_repo.join(".b3/ship/esc-legacy.md"), &with_legacy);
+    let (leg_c, _, leg_err) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        esc_str,
+        "--action",
+        "check",
+        "--ledger-path",
+        ".b3/ship/esc-legacy.md",
+    ]);
+    assert!(
+        leg_c != 1,
+        "legacy pass_chain lines must not trigger LEDGER_CORRUPT: {leg_err}"
+    );
+    let corrupt_passes = esc_raw.replace("passes_used=1", "passes_used=notanint");
+    write_lf(&esc_repo.join(".b3/ship/esc-corrupt.md"), &corrupt_passes);
     let (st_c, _, st_err) = run_b3(&[
         "guard",
         "review-ledger",
@@ -4484,7 +4526,7 @@ fn review_ledger_security_tamper_and_independence() {
         "--action",
         "check",
         "--ledger-path",
-        ".b3/ship/esc-strip.md",
+        ".b3/ship/esc-corrupt.md",
     ]);
     assert_eq!(st_c, 1);
     assert!(st_err.contains("LEDGER_CORRUPT:"), "{st_err}");

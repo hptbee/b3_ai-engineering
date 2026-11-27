@@ -1,6 +1,0 @@
-id: simplest-correct-security-compat-justified-complexity
-artifact: skills/architecture/simplest-correct/SKILL.md
-intent: Preserve justified complexity required by security and cross-platform compatibility
-input: "The installer uses platform-specific symlink/junction validation, ancestor reparse checks, and atomic manifest updates to prevent path traversal across Windows and POSIX hosts."
-expected_bucket: should-not-trigger
-notes: Security and portability requirements explicitly take precedence; intentional complexity must not be rejected.

@@ -10,7 +10,7 @@ use crate::fs::{
 };
 use crate::git::{
     assert_valid_git_rev, git_err_detail, git_hash_text, is_hex40, merge_base_is_ancestor, run_git,
-    run_git_paths_z, GitZMode,
+    run_git_paths_z, run_git_pathspecs, run_git_pathspecs_z, GitZMode,
 };
 use crate::process::run_command;
 
@@ -45,10 +45,100 @@ fn git_entry_type(mode: &str) -> &'static str {
     }
 }
 
+const MANIFEST_EXACT_NAMES: &[&str] = &[
+    "cargo.toml",
+    "cargo.lock",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "go.mod",
+    "go.sum",
+    "pyproject.toml",
+    "poetry.lock",
+    "uv.lock",
+    "requirements.txt",
+    "pipfile.lock",
+    "gemfile",
+    "gemfile.lock",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "tsconfig.json",
+    "directory.build.props",
+    "directory.build.targets",
+    "directory.packages.props",
+    "global.json",
+];
+
+const MANIFEST_EXTS: &[&str] = &["csproj", "sln"];
+
+pub(crate) fn is_dependency_or_config_manifest(path: &str) -> bool {
+    let norm = path.replace('\\', "/");
+    let low = norm.trim_start_matches("./").to_ascii_lowercase();
+    if low.is_empty() {
+        return false;
+    }
+    if low == ".cargo/config.toml" || low.ends_with("/.cargo/config.toml") {
+        return true;
+    }
+    let leaf = low.rsplit('/').next().unwrap_or("");
+    if MANIFEST_EXACT_NAMES.contains(&leaf) {
+        return true;
+    }
+    matches!(
+        Path::new(&low).extension().and_then(|e| e.to_str()),
+        Some(ext) if MANIFEST_EXTS.contains(&ext)
+    )
+}
+
+fn manifest_git_pathspecs() -> Vec<String> {
+    let mut specs = Vec::with_capacity(MANIFEST_EXACT_NAMES.len() + MANIFEST_EXTS.len() + 1);
+    specs.push(":(icase,glob)**/.cargo/config.toml".to_string());
+    for name in MANIFEST_EXACT_NAMES {
+        specs.push(format!(":(icase,glob)**/{name}"));
+    }
+    for ext in MANIFEST_EXTS {
+        specs.push(format!(":(icase,glob)**/*.{ext}"));
+    }
+    specs
+}
+
+pub(crate) fn validate_receipt_covers_paths(
+    receipt_rel_csv: &str,
+    required_paths: &[String],
+) -> Option<Vec<String>> {
+    let trimmed = receipt_rel_csv.trim();
+    if trimmed == "ALL" {
+        return None;
+    }
+    if required_paths.is_empty() {
+        return Some(Vec::new());
+    }
+    let rec_list = split_csv_list_as_paths(trimmed);
+    let uncovered = sort_ordinal(
+        required_paths
+            .iter()
+            .filter(|p| !test_path_match(p, &rec_list))
+            .cloned(),
+        false,
+    );
+    if uncovered.is_empty() {
+        None
+    } else {
+        Some(uncovered)
+    }
+}
+
 fn parse_git_raw_diff_z(
     raw_bytes: &[u8],
     ign_paths: &[String],
     clean_rel: &[String],
+    include_manifests: bool,
     fail_prefix: &str,
 ) -> Result<BTreeMap<String, RawDiffEntry>, B3Error> {
     let mut map: BTreeMap<String, RawDiffEntry> = BTreeMap::new();
@@ -99,7 +189,10 @@ fn parse_git_raw_diff_z(
         if !ign_paths.is_empty() && test_path_match(&p, ign_paths) {
             continue;
         }
-        if !clean_rel.is_empty() && !test_path_match(&p, clean_rel) {
+        if !clean_rel.is_empty()
+            && !test_path_match(&p, clean_rel)
+            && !(include_manifests && is_dependency_or_config_manifest(&p))
+        {
             continue;
         }
         if let Some(existing) = map.get(&p) {
@@ -119,7 +212,11 @@ fn parse_git_raw_diff_z(
     Ok(map)
 }
 
-fn git_hash_object_file(root: &Path, rel_path: &str, err_ctx: &str) -> Result<String, B3Error> {
+pub(crate) fn git_hash_object_file(
+    root: &Path,
+    rel_path: &str,
+    err_ctx: &str,
+) -> Result<String, B3Error> {
     let no_env: [(&str, &str); 0] = [];
     let res = run_git(root, &["hash-object", "--", rel_path], &no_env, None)?;
     let sha = String::from_utf8_lossy(&res.stdout).trim().to_string();
@@ -333,6 +430,16 @@ pub(crate) fn collect_tree_fingerprint_maps(
     ign_paths: &[String],
     target_commit_sha: &str,
 ) -> Result<TreeFingerprintMaps, B3Error> {
+    collect_tree_fingerprint_maps_inner(root, clean_rel, ign_paths, target_commit_sha, false)
+}
+
+fn collect_tree_fingerprint_maps_inner(
+    root: &Path,
+    clean_rel: &[String],
+    ign_paths: &[String],
+    target_commit_sha: &str,
+    include_manifests: bool,
+) -> Result<TreeFingerprintMaps, B3Error> {
     let no_env: [(&str, &str); 0] = [];
     let t_arg = target_commit_sha.trim();
     let has_target_commit = !t_arg.is_empty();
@@ -382,9 +489,11 @@ pub(crate) fn collect_tree_fingerprint_maps(
     } else {
         "HEAD"
     };
+    // Note: `git ls-tree` rejects `:(glob)`/`:(icase)` magic and reads compressed `.git` tree objects only,
+    // while working-tree `diff --raw` and `ls-files --others` use bounded `scope_pathspecs`.
     let mut ls_args: Vec<String> =
         vec!["ls-tree".into(), "-r".into(), "-z".into(), tree_ref.into()];
-    if !clean_rel.is_empty() {
+    if !clean_rel.is_empty() && !include_manifests {
         ls_args.push("--".into());
         ls_args.extend(clean_rel.iter().cloned());
     }
@@ -421,7 +530,10 @@ pub(crate) fn collect_tree_fingerprint_maps(
         if !ign_paths.is_empty() && test_path_match(&p, ign_paths) {
             continue;
         }
-        if !clean_rel.is_empty() && !test_path_match(&p, clean_rel) {
+        if !clean_rel.is_empty()
+            && !test_path_match(&p, clean_rel)
+            && !(include_manifests && is_dependency_or_config_manifest(&p))
+        {
             continue;
         }
         effective.insert(p, format!("{} {} {}", meta[0], meta[1], meta[2]));
@@ -437,8 +549,23 @@ pub(crate) fn collect_tree_fingerprint_maps(
             !is_win
         };
 
+        let use_manifest_pathspecs = !clean_rel.is_empty() && include_manifests;
+        let mut scope_pathspecs: Vec<String> = Vec::new();
+        if use_manifest_pathspecs {
+            scope_pathspecs.extend(clean_rel.iter().map(|p| format!(":(literal){p}")));
+            scope_pathspecs.extend(manifest_git_pathspecs());
+        } else if !clean_rel.is_empty() {
+            scope_pathspecs.extend(clean_rel.iter().cloned());
+        }
         let mut scope_suffix: Vec<String> = vec!["--".into()];
-        scope_suffix.extend(clean_rel.iter().cloned());
+        scope_suffix.extend(scope_pathspecs.iter().cloned());
+        let run_scoped_git = |args: &[String]| {
+            if use_manifest_pathspecs {
+                run_git_pathspecs(root, args, &no_env, None)
+            } else {
+                run_git(root, args, &no_env, None)
+            }
+        };
 
         let mut hd_args: Vec<String> = vec![
             "diff".into(),
@@ -451,7 +578,7 @@ pub(crate) fn collect_tree_fingerprint_maps(
             "HEAD".into(),
         ];
         hd_args.extend(scope_suffix.iter().cloned());
-        let hd_res = run_git(root, &hd_args, &no_env, None)?;
+        let hd_res = run_scoped_git(&hd_args)?;
         if hd_res.exit_code != 0 {
             return Err(fail(
                 format!(
@@ -473,7 +600,7 @@ pub(crate) fn collect_tree_fingerprint_maps(
             "--ignore-submodules=none".into(),
         ];
         ca_args.extend(scope_suffix.iter().cloned());
-        let ca_res = run_git(root, &ca_args, &no_env, None)?;
+        let ca_res = run_scoped_git(&ca_args)?;
         if ca_res.exit_code != 0 {
             return Err(fail(
                 format!(
@@ -494,7 +621,7 @@ pub(crate) fn collect_tree_fingerprint_maps(
             "--ignore-submodules=none".into(),
         ];
         iw_args.extend(scope_suffix);
-        let iw_res = run_git(root, &iw_args, &no_env, None)?;
+        let iw_res = run_scoped_git(&iw_args)?;
         if iw_res.exit_code != 0 {
             return Err(fail(
                 format!(
@@ -511,15 +638,37 @@ pub(crate) fn collect_tree_fingerprint_maps(
             "--exclude-standard".into(),
             "-z".into(),
         ];
-        if !clean_rel.is_empty() {
+        if !scope_pathspecs.is_empty() {
             un_args.push("--".into());
-            un_args.extend(clean_rel.iter().cloned());
+            un_args.extend(scope_pathspecs);
         }
-        let untracked = run_git_paths_z(root, &un_args, GitZMode::Names, "GIT_ERROR", &no_env)?;
+        let untracked = if use_manifest_pathspecs {
+            run_git_pathspecs_z(root, &un_args, GitZMode::Names, "GIT_ERROR", &no_env)?
+        } else {
+            run_git_paths_z(root, &un_args, GitZMode::Names, "GIT_ERROR", &no_env)?
+        };
 
-        let head_diff = parse_git_raw_diff_z(&hd_res.stdout, ign_paths, clean_rel, "GIT_ERROR")?;
-        let cached_diff = parse_git_raw_diff_z(&ca_res.stdout, ign_paths, clean_rel, "GIT_ERROR")?;
-        let idx_wt_diff = parse_git_raw_diff_z(&iw_res.stdout, ign_paths, clean_rel, "GIT_ERROR")?;
+        let head_diff = parse_git_raw_diff_z(
+            &hd_res.stdout,
+            ign_paths,
+            clean_rel,
+            include_manifests,
+            "GIT_ERROR",
+        )?;
+        let cached_diff = parse_git_raw_diff_z(
+            &ca_res.stdout,
+            ign_paths,
+            clean_rel,
+            include_manifests,
+            "GIT_ERROR",
+        )?;
+        let idx_wt_diff = parse_git_raw_diff_z(
+            &iw_res.stdout,
+            ign_paths,
+            clean_rel,
+            include_manifests,
+            "GIT_ERROR",
+        )?;
 
         for (p, entry) in &head_diff {
             let m = entry.new_mode.as_str();
@@ -589,7 +738,10 @@ pub(crate) fn collect_tree_fingerprint_maps(
             if !ign_paths.is_empty() && test_path_match(&p, ign_paths) {
                 continue;
             }
-            if !clean_rel.is_empty() && !test_path_match(&p, clean_rel) {
+            if !clean_rel.is_empty()
+                && !test_path_match(&p, clean_rel)
+                && !(include_manifests && is_dependency_or_config_manifest(&p))
+            {
                 continue;
             }
             if head_diff.get(&p).is_some_and(|he| he.new_mode != "000000") {
@@ -678,6 +830,16 @@ pub fn get_tree_fingerprint(
     ign_paths: &[String],
     target_commit_sha: &str,
 ) -> Result<TreeFingerprint, B3Error> {
+    get_tree_fingerprint_inner(root, rel_paths, ign_paths, target_commit_sha, false)
+}
+
+fn get_tree_fingerprint_inner(
+    root: &Path,
+    rel_paths: &[String],
+    ign_paths: &[String],
+    target_commit_sha: &str,
+    include_manifests: bool,
+) -> Result<TreeFingerprint, B3Error> {
     let clean_rel = if !rel_paths.is_empty() {
         let filtered: Vec<String> = rel_paths
             .iter()
@@ -711,7 +873,13 @@ pub fn get_tree_fingerprint(
         clean_rel.join(",")
     };
 
-    let maps = collect_tree_fingerprint_maps(root, &clean_rel, ign_paths, target_commit_sha)?;
+    let maps = collect_tree_fingerprint_maps_inner(
+        root,
+        &clean_rel,
+        ign_paths,
+        target_commit_sha,
+        include_manifests,
+    )?;
     let tree_hash = hash_tree_fingerprint_maps(root, &paths_csv, &maps, None)?;
     Ok(TreeFingerprint {
         head_sha: maps.head_sha,
@@ -725,7 +893,7 @@ fn valid_exit_code_str(s: &str) -> bool {
     !digits.is_empty() && digits.len() <= 9 && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
-fn valid_receipt_rel_list(raw_csv: &str) -> Option<Vec<String>> {
+pub(crate) fn valid_receipt_rel_list(raw_csv: &str) -> Option<Vec<String>> {
     let mut trimmed = raw_csv.trim();
     if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
         trimmed = &trimmed[1..trimmed.len() - 1];
@@ -900,27 +1068,19 @@ pub fn test_verify_receipt(
         let Some(valid_req) = valid_receipt_rel_list(req_rel_paths_arg) else {
             return fail_res(1, "VERIFY_CHECK_FAIL: invalid relevant_paths".to_string());
         };
-        if kv["relevant_paths"] != "ALL" {
-            let uncovered = sort_ordinal(
-                valid_req
-                    .into_iter()
-                    .filter(|p| !test_path_match(p, &rel_spec)),
-                false,
+        if let Some(uncovered) = validate_receipt_covers_paths(&kv["relevant_paths"], &valid_req) {
+            return fail_res(
+                1,
+                format!(
+                    "VERIFY_SCOPE_MISMATCH: uncovered path ({})",
+                    uncovered.join(",")
+                ),
             );
-            if !uncovered.is_empty() {
-                return fail_res(
-                    1,
-                    format!(
-                        "VERIFY_SCOPE_MISMATCH: uncovered path ({})",
-                        uncovered.join(",")
-                    ),
-                );
-            }
         }
     }
 
     let target_trim = target_commit_sha.trim();
-    let cur = match get_tree_fingerprint(root, &rel_spec, ign_paths, target_trim) {
+    let cur = match get_tree_fingerprint_inner(root, &rel_spec, ign_paths, target_trim, true) {
         Ok(fp) => fp,
         Err(e) => return fail_res(1, e.message),
     };
@@ -1162,7 +1322,7 @@ pub fn verify_run(
     }
     let out_lines: Vec<String> = combined.lines().map(|l| l.to_string()).collect();
 
-    let fp = get_tree_fingerprint(&repo_root, &rel_arr, &ignored, "")?;
+    let fp = get_tree_fingerprint_inner(&repo_root, &rel_arr, &ignored, "", true)?;
     let cmd_exit = cmd_out.exit_code;
     let status_val = if cmd_exit == 0 { "PASS" } else { "FAIL" };
 
