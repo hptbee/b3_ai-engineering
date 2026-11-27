@@ -336,7 +336,7 @@ pub(crate) fn probe_pid_liveness(pid: i64) -> PidLiveness {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn is_pid_alive(pid: u32) -> bool {
     pid != 0 && matches!(probe_pid_liveness(i64::from(pid)), PidLiveness::Alive)
 }

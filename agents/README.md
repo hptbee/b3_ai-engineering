@@ -12,11 +12,11 @@ Canonical role definitions live here (`agents/`). Cursor maps them via `.cursor/
 | [`b3-architecture-reviewer.md`](b3-architecture-reviewer.md) | Boundaries, unjustified complexity | Isolation from the author of the design |
 | [`b3-performance-reviewer.md`](b3-performance-reviewer.md) | Material perf risks/regressions; evidence before optimize | Isolation on **hot-path** diffs only |
 
-Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`, domain performance skills). Model slots: [`review-loop/models.md`](../review-loop/models.md) (4-tier escalation); optional Markdown preferences: [`docs/model-preferences.md`](../docs/model-preferences.md) (`config/models.example.md` + `~/.b3/models.md`). Committed default is `model: inherit` on these files. Host model-slot setup (Cursor): [`adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md).
+Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`, domain performance skills). Model slots: [`review-loop/models.md`](../review-loop/models.md) (4-tier escalation); optional Markdown preferences: [`docs/model-preferences.md`](../docs/model-preferences.md) (`config/models.example.md` + `~/.b3/models.md`). Committed default is `model: inherit` on these files. Host model-slot setup (Cursor): [`adapters/cursor/README.md`](../adapters/cursor/README.md).
 
 Backlog (not created): frontend/test/UX reviewers — use `code-review` dimensions until isolation is needed in real use.
 
-Do not treat this folder as a swarm. Independent review actually working in hosts (auto-delegation) is **NOT VERIFIED** in this change; files live in canonical `agents/` and are mapped onto host discovery paths via `adapters/`.
+Do not treat this folder as a swarm. Independent review actually working in hosts (auto-delegation) is **NOT VERIFIED runtime-wide** (see [`research/validation/cursor-host-v3.md`](../research/validation/cursor-host-v3.md)); files live in canonical `agents/` and are mapped onto host discovery paths via `adapters/`.
 
 ## Dispatch naming
 

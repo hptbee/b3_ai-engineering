@@ -10,7 +10,7 @@ Reconcile [`../ship.md`](../ship.md) checkpoints against Git before acting (prog
 
 ## 2. Verify completed & in-progress tasks
 
-1. Task is `completed` **only** when its SHA is a valid `commit`, descends into `HEAD` (`git merge-base --is-ancestor <sha> HEAD`), is unique, descends from `task_base`/`run_base_sha`, and passes `b3 guard verify-check` (legacy `b3-verify-v1` → `VERIFY_STALE`).
+1. Task is `completed` **only** when its SHA is a valid `commit`, descends into `HEAD` (`git merge-base --is-ancestor <sha> HEAD`), is unique, descends from `task_base`/`run_base_sha`, and passes `b3 guard verify-check` (legacy pre-v1 → `VERIFY_CORRUPT`; stale tree/HEAD → `VERIFY_STALE`).
 2. For `in_progress` edits (including partial waves): check `impl_agent` (never duplicate active work); verify `mode`, `worker_root` (`b3 guard check-worktree --require-isolated`), `task_base`, `scope`, verification, integration; reconcile dirty edits via `dispatch-naming.md`. Keep valid work (never `git reset`), run `verify-check`, isolate failed/stale tasks while continuing eligible tasks, reconcile `last_wave:`, and fail closed (`BLOCKED`/`INCOMPLETE`) on missing state.
 
 ## 3. Approach freshness

@@ -42,7 +42,7 @@ preference
 | `hard` | Non-negotiable constraint | No, except as [`precedence.md`](precedence.md) states (safety, honest user/project conflict handling). Never via preference. |
 | `strong` | Default that requires a stated reason to skip | Yes, with an explicit reason |
 | `guideline` | Advice; weaker than `strong` | Yes |
-| `preference` | Taste | **Does not belong in `rules/`** — use `profiles/` or `knowledge/personal/` |
+| `preference` | Taste | **Does not belong in `rules/`** — use `knowledge/personal/` (`profiles/` is uncreated) |
 
 If a “rule” is really a preference (“I like early returns”), do not file it here.
 

@@ -25,7 +25,7 @@ When the host supports per-agent or per-subagent model selection, split reasonin
 
 **Cost-Aware Escalation:** start bounded coding/fixes on **Fast**, multi-file/complex implementation on **Standard** (when host supports a middle tier), and **escalate one tier up** on repeated `verify-run` failures or when the **2-Tier Circuit Breaker** (`review-loop/strategy.md` §1.3) fires.
 
-Do not put vendor model IDs in `spec.md`, `strategy.md`, skills, or this file. Configure them in host agent files (e.g., Cursor `agents/*.md` `model:` field — see [`../adapters/cursor/review-loop-models.md`](../adapters/cursor/review-loop-models.md)).
+Do not put vendor model IDs in `spec.md`, `strategy.md`, skills, or this file. Configure them in host-local agent files (e.g., Cursor `~/.cursor/agents/*.md` / `.cursor/agents/*.md` `model:` field, never tracked `agents/*.md` — see [`../adapters/cursor/README.md`](../adapters/cursor/README.md)).
 
 ## Default: one session
 

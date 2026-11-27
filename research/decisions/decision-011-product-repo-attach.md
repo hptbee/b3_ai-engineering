@@ -1,5 +1,7 @@
 # Decision 011 — Attach B3 to a product repository
 
+> **Status:** Superseded in layout and CLI implementation by [decision-013-host-neutral-multi-host-layout.md](decision-013-host-neutral-multi-host-layout.md) and native `b3 install product` (retiring `.ps1`/`.sh` installers and `/autodev` product templates in favor of `/b3-ship`). Retained intact as historical provenance.
+
 ## Context
 
 Autonomous development v1 assumed the agent’s cwd was the B3 system repo. Skills, commands, and workflows used B3-relative paths. A product repository cannot follow those paths. Copying `.cursor/skills` into the product would duplicate Cursor discovery.

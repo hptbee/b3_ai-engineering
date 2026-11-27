@@ -9,8 +9,8 @@ use crate::fs::{
     test_contained_repo_path, test_path_match, valid_timestamp_utc, write_atomic_lf,
 };
 use crate::git::{
-    assert_valid_git_rev, git_err_detail, git_hash_text, is_hex40, merge_base_is_ancestor, run_git,
-    run_git_paths_z, GitZMode,
+    git_err_detail, git_hash_text, is_hex40, merge_base_is_ancestor, run_git, run_git_paths_z,
+    GitZMode,
 };
 use crate::process::run_command;
 
@@ -671,7 +671,7 @@ pub(crate) fn hash_tree_fingerprint_maps(
     git_hash_text(root, &manifest, "GIT_ERROR", "manifest failed")
 }
 
-/// Computes canonical tree fingerprint matching `Get-TreeFingerprint` (`b3-guard.ps1`).
+/// Computes canonical tree fingerprint matching `Get-TreeFingerprint` (`b3 guard`).
 pub fn get_tree_fingerprint(
     root: &Path,
     rel_paths: &[String],
@@ -1240,15 +1240,4 @@ pub fn verify_check(
         target_commit_sha,
     );
     Ok((res.message, res.code))
-}
-
-/// Helper re-export for `validate-commit-sha` checks where needed.
-#[allow(dead_code)]
-pub fn verify_commit_rev(
-    root: &Path,
-    rev: &str,
-    prefix: &str,
-    opt: &str,
-) -> Result<String, B3Error> {
-    assert_valid_git_rev(root, rev, "commit", prefix, opt)
 }

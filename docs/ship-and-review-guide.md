@@ -126,7 +126,7 @@ sequenceDiagram
 
 ## 3. `/b3-review-loop` Convergence & 2-Tier Circuit Breaker
 
-[`../review-loop/strategy.md`](../review-loop/strategy.md) is self-sufficient at runtime (skipping `spec.md`, `sizing.md`, and `models.md` on normal runs to save ~13 KB per invocation).
+[`../review-loop/strategy.md`](../review-loop/strategy.md) is self-sufficient at runtime (skipping `spec.md`, `sizing.md`, and `models.md` on normal runs to avoid loading large reference docs per invocation).
 
 ```mermaid
 flowchart TD
@@ -192,7 +192,7 @@ flowchart TD
 
 ## 5. Run-Scoped Checkpoints & Context Budget Architecture
 
-Checkpoints are isolated per run under `.b3/ship/runs/<run_id>/` (and `.b3/research-ship/runs/<run_id>/`, gitignored) and addressed via a 1-line plain-text `CURRENT` pointer, so normal runs never scan sibling history. `diff-scope` (`Test-CheckpointPath`) excludes `.b3/{ship,research-ship,autodev}/`, so standalone `/b3-verify` receipts (`.b3/ship/verify/`) and standalone `/b3-review-loop` state (`.b3/ship/review-loop/<slug>/`) stay out of diffs without affecting `CURRENT` or `resolve-run`. Canonical PR feedback state and PID locks live under `<git-common-dir>/b3/pr-feedback/` (shared across linked worktrees), while `.b3/pr-feedback/` is gitignored local scratch only.
+Checkpoints are isolated per run under `.b3/ship/runs/<run_id>/` (and `.b3/research-ship/runs/<run_id>/`, gitignored) and addressed via a 1-line plain-text `CURRENT` pointer, so normal runs never scan sibling history. `diff-scope` (`test_checkpoint_path` in [`../src/fs.rs`](../src/fs.rs)) excludes `.b3/{ship,research-ship,autodev}/`, so standalone `/b3-verify` receipts (`.b3/ship/verify/`) and standalone `/b3-review-loop` state (`.b3/ship/review-loop/<slug>/`) stay out of diffs without affecting `CURRENT` or `resolve-run`. Canonical PR feedback state and PID locks live under `<git-common-dir>/b3/pr-feedback/` (shared across linked worktrees), while `.b3/pr-feedback/` is gitignored local scratch only.
 
 ```mermaid
 flowchart LR
@@ -212,39 +212,13 @@ flowchart LR
 
 ### Static Context Budgets (`b3 context measure --strict`)
 
-All byte caps are measured in **canonical LF UTF-8 bytes** (identical across Windows PowerShell and Git Bash / macOS / Linux):
-
-| Budget metric | Strict cap / Tracking | What it guards |
-| --- | --- | --- |
-| `AGENTS.md` | `<= 3,600 B` | Always-on universal repository map |
-| Individual `SKILL.md` (`35` total) | `<= 4,000 B` | Keeps every canonical & command skill compact |
-| Individual skill frontmatter | `<= 280 B` | Prevents always-on skill-index bloat |
-| `workflows/ship.md` | `<= 9,500 B` | Core `/b3-ship` orchestrator prompt |
-| `ship_refs_load` (`templates` + `resume`) | `<= 6,000 B` | On-demand `/b3-ship` progressive-disclosure refs |
-| `workflows/research-ship.md` | `<= 9,500 B` | Core `/b3-research-ship` orchestrator prompt |
-| `research_ship_refs` (`templates` + `resume` + `gates`) | `<= 12,000 B` | On-demand `/b3-research-ship` progressive-disclosure refs |
-| `context_routing` (`workflows/references/context-routing.md`) | `<= 3,000 B` | On-demand MCP-aware routing contract (`0 B` always-on) |
-| `dispatch_naming` (`workflows/references/dispatch-naming.md`) | `<= 9,200 B` | On-demand wave dispatch, worktree, and naming contract |
-| `review-loop/strategy.md` | `<= 5,200 B` | Self-sufficient runtime `/b3-review-loop` prompt |
-| `review_delta_load` (`b3-reviewer.md` only) | Tracked | Self-contained per-pass independent review subagent payload |
-| `review_iter_subag` (`b3-reviewer.md` + `b3-fixer.md`) | Tracked | Self-contained per-iteration reviewer + fixer subagent payloads |
-| `review_hier_load` (`review_loop_op` + `hierarchical.md`) | Tracked | On-demand `L`/`XL`/`XXL` hierarchical review load |
-| `standalone_cmds` (`plan`, `impl`, `debug`, `review`, `verify`) | Tracked | Single-hop static load per standalone command |
-| `standalone_rev_all` (`cmd` + `code-review/SKILL.md` + `review-template.md`) | Tracked | Full standalone `/b3-review` report payload |
-| `agents_roles_total` (5 runtime roles) | `<= 8,500 B` | Compact subagent role specs with strict reply caps |
+All byte caps and `(bytes + 2) / 4` token estimates are measured in **canonical LF UTF-8 bytes** (identical across Windows PowerShell, Git Bash, macOS, and Linux) and enforced by `b3 context measure --strict` (canonical thresholds live in [`../src/context.rs`](../src/context.rs)).
 
 ---
 
 ## 6. Cost-Preserving Quality Model Tiering (4-Tier Routing)
 
-The system separates **Deep reasoning**, **Standard execution**, **Fast surgical execution**, and **Deterministic (0-token) verification** in a host-neutral way (contract details and **Cost-Aware Escalation** in [`../review-loop/models.md`](../review-loop/models.md)):
-
-| Tier | Roles in `/b3-ship` & Standalone Commands | Rationale & Quality Guardrail |
-| --- | --- | --- |
-| **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), hard debugging, `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Preserves design quality, invariants, API contracts, and independent defect detection |
-| **Standard execution** | Complex multi-file implementation, shared contract integration, large refactors | Keeps state and invariants stable before verification and reduces costly retry loops |
-| **Fast execution** | Small-scope coding (`inline`/`notes`), surgical `b3-fixer` edits (pinned `file:line` + `bug_class`), routine tests, docs | Reduces cost and latency once scope and contracts are clear; escalates 1 tier on circuit breaker or repeated `verify-run` failures |
-| **Deterministic (0-token)** | `b3 guard` (`diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`check`, `check-wave --partition`, `check-worktree`, `merge-policy-check`, `context-cache`, `precommit`), Git, lint, builds | Deterministic structural verification via CLI with zero token cost and zero hallucination |
+The system separates **Deep reasoning**, **Standard execution**, **Fast surgical execution**, and **Deterministic (0-token) verification** in a host-neutral way — see [`../review-loop/models.md`](../review-loop/models.md) for the canonical 4-tier routing table, guardrails, and **Cost-Aware Escalation** rules.
 
 ---
 
@@ -254,4 +228,4 @@ The system separates **Deep reasoning**, **Standard execution**, **Fast surgical
 - Core `/b3-review-loop` procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md)
 - Core `/b3-review` & PR feedback skills: [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md), [`../skills/engineering/pr-feedback/SKILL.md`](../skills/engineering/pr-feedback/SKILL.md), [`../skills/engineering/code-review/references/review-template.md`](../skills/engineering/code-review/references/review-template.md), [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md)
 - Deterministic CLI reference: [`../scripts/README.md`](../scripts/README.md)
-- Architecture decisions: [`../research/decisions/decision-012-autodev-v2-hardening.md`](../research/decisions/decision-012-autodev-v2-hardening.md), [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md), [`../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md`](../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md), [`../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md`](../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md), [`../research/decisions/decision-016-standalone-commands-quality-and-context.md`](../research/decisions/decision-016-standalone-commands-quality-and-context.md), [`../research/decisions/decision-018-research-ship-workflow.md`](../research/decisions/decision-018-research-ship-workflow.md)
+- Architecture decisions: [`../research/decisions/decision-012-autodev-v2-hardening.md`](../research/decisions/decision-012-autodev-v2-hardening.md), [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md), [`../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md`](../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md), [`../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md`](../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md), [`../research/decisions/decision-016-standalone-commands-quality-and-context.md`](../research/decisions/decision-016-standalone-commands-quality-and-context.md), [`../research/decisions/decision-017-global-cursor-integration.md`](../research/decisions/decision-017-global-cursor-integration.md), [`../research/decisions/decision-018-research-ship-workflow.md`](../research/decisions/decision-018-research-ship-workflow.md)

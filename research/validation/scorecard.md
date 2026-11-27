@@ -1,5 +1,7 @@
 # Skill scorecard v1
 
+> **Historical provenance note:** Point-in-time v1 tabletop scorecard (2026-09-07) covering the initial 23 synthesized skills prior to `pr-feedback` and post-synthesis description tuning. Retained intact as historical provenance.
+
 Ratings: GOOD | NEEDS_TUNING | NEEDS_BOUNDARY_CHANGE | CANDIDATE_FOR_REMOVAL | NOT_ENOUGH_EVIDENCE
 
 Capability from applying the skill body to the matrix snippet (tabletop), not a product repo.

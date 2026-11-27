@@ -3,7 +3,7 @@ use crate::fs::normalize_repo_root;
 use crate::git::{assert_valid_git_rev, git_err_detail, is_hex40, new_working_tree_oid, run_git};
 
 /// Creates a snapshot commit (or returns `HEAD` if working tree matches `HEAD^{tree}`)
-/// while excluding `.b3/{ship,research-ship,autodev}` checkpoint trees.
+/// while excluding `.b3/{ship,research-ship}` checkpoint trees.
 pub fn run(repo_root_raw: &str) -> Result<String, B3Error> {
     let repo_root = normalize_repo_root(repo_root_raw)?;
     let no_env: [(&str, &str); 0] = [];

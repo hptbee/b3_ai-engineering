@@ -49,7 +49,6 @@ pub(crate) struct PassLogEntry {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct VerifiedReceiptRecord {
     pub unit_id: String,
     pub receipt_path: String,
@@ -68,7 +67,6 @@ pub(crate) struct ReviewLedger {
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerCheckResult {
     pub message: String,
-    #[allow(dead_code)]
     pub ledger: ReviewLedger,
 }
 
@@ -187,7 +185,8 @@ pub(crate) fn get_size_rank(size_class: &str) -> i32 {
 
 fn test_waiver_attempt(rationale: &str) -> bool {
     let t = rationale.trim();
-    t.len() >= 7 && t[..7].eq_ignore_ascii_case("WAIVER:")
+    t.get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("WAIVER:"))
 }
 
 fn test_high_skip_rationale(rationale: &str) -> bool {
@@ -1104,7 +1103,10 @@ fn rewrite_legacy_size_line(ln: &str, changes: &mut usize) -> String {
     while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
         pos += 1;
     }
-    if ln.len() < pos + 10 || !ln[pos..pos + 10].eq_ignore_ascii_case("size_class") {
+    if !ln
+        .get(pos..pos + 10)
+        .is_some_and(|k| k.eq_ignore_ascii_case("size_class"))
+    {
         return ln.to_string();
     }
     pos += 10;

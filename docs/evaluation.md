@@ -4,40 +4,7 @@ This repository will evaluate **itself**: whether the right artifact activates, 
 
 Application test suites for product work live in those products. Evals here live under `evals/` when they exist.
 
-**Status:** `321` YAML schema/activation and lifecycle fixtures across `skills/` (`181`), `workflows/` (`78`), `review-loop/` (`26`), `commands/` (`19`), `rules/` (`10`), and `agents/` (`7`). Automated LLM runner, CI, and capability benchmarks **deferred** (decision-005). See [`evals/README.md`](../evals/README.md).
-
-## Intended layout
-
-```text
-evals/
-├── skills/
-│   └── <skill>/
-│       ├── should-trigger/
-│       ├── should-not-trigger/
-│       └── near-miss/
-│
-├── rules/
-│
-├── agents/
-│
-├── commands/
-│
-├── workflows/
-│   ├── ship/
-│   └── research-ship/
-│
-└── review-loop/
-    ├── false-positive/
-    ├── false-convergence/
-    ├── tool-failure/
-    ├── iteration-limit/
-    ├── finding-lifecycle/
-    ├── adaptive-sizing/
-    ├── quality-gate/
-    └── orchestration/
-```
-
-Empty case directories are omitted until a real case exists. See [`../evals/README.md`](../evals/README.md).
+**Status:** YAML schema, activation, boundary, rule, command, review-loop, and workflow fixtures live under `evals/` and run via `cargo test --test eval_contracts`. Automated LLM runner, CI, and capability benchmarks **deferred** (decision-005). See [`evals/README.md`](../evals/README.md) for current fixture counts/layout and [`ci-architecture.md`](ci-architecture.md) for the test ownership matrix.
 
 ## What to test
 
@@ -95,24 +62,9 @@ When a skill is applied to a fixture (or a recorded real task), score at least:
 
 Quality evals need fixtures with a known good outcome, not only prompt sniff tests.
 
-## Review-loop eval folders (`26` YAML cases across `8` folders)
+## Fixture coverage & native contract suites
 
-| Folder | Cases | Protects |
-| --- | ---: | --- |
-| `false-positive/` | 2 | Speculative noise not treated as confirmed defects |
-| `false-convergence/` | 2 | No-op diffs, repeated findings, papered-over disagreement |
-| `tool-failure/` | 2 | Failed/missing tools → INCOMPLETE, not PASS |
-| `iteration-limit/` | 1 | Budget exhaustion → INCOMPLETE, not PASS |
-| `finding-lifecycle/` | 2 | Status transitions and severity ≠ confidence |
-| `adaptive-sizing/` | 8 | 6-tier T-shirt sizing (`XS`..`XXL`), delta re-review, hierarchical `L0`–`L4` unit bounds, and decoupled risk dispatch |
-| `quality-gate/` | 1 | Non-blocking `LOW` remaining + zero open blockers + verified tests → `PASS` |
-| `orchestration/` | 8 | Single trigger vs single-pass `/b3-review`, independent reviewer/fixer, specialist routing, residue sweep, and `SINGLE_AGENT_LIMIT` honesty |
-
-A loop that always reports success is a failed loop. A loop that always reports dozens of speculative issues is also a failed loop.
-
-## Workflow & command eval folders
-
-`evals/workflows/ship/` (`50` YAML cases) holds lifecycle fixtures for `workflows/ship.md`, `evals/workflows/research-ship/` (`14` YAML cases) holds research-first delivery fixtures for `workflows/research-ship.md`, `evals/workflows/orchestration/` (`14` YAML cases) covers adaptive parallel orchestration & isolation invariants, and `evals/commands/` (`19` YAML cases) holds boundary, evidence, PR-feedback, orchestration, and convergence fixtures across all `11` public commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-review`, `/b3-review-loop`, `/b3-verify`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`). Each case names the artifact, the situation, and the required outcome (`PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED`). All `321` YAML cases plus executable contract and live `b3` orchestration checks run via `cargo test --test eval_contracts`. Deterministic guard, receipt provenance, PR feedback, merge security, isolation, install, hierarchical review, context routing, model preferences, and resume ancestry suites execute natively across Linux, macOS, and Windows via `cargo test` (`tests/{eval_contracts,guard_security_and_behavior,merge_policy_security,pr_feedback_lifecycle,adapters_and_hosts,native_core_behaviors,native_golden_parity,bootstrap_lifecycle}.rs`). Those native tests verify CLI, Git, and filesystem contracts, not live Cursor slash-command or IDE runtime discovery.
+Live folder inventory and fixture counts across `skills/`, `rules/`, `agents/`, `commands/`, `workflows/`, and `review-loop/` are maintained in [`../evals/README.md`](../evals/README.md) (and [`../evals/review-loop/README.md`](../evals/review-loop/README.md)); the native Rust integration test ownership matrix (`cargo test --test eval_contracts` and sibling suites) lives in [`ci-architecture.md`](ci-architecture.md). A loop that always reports success is a failed loop; a loop that always reports dozens of speculative issues is also a failed loop. Native tests verify CLI, Git, and filesystem contracts — not live Cursor slash-command or IDE runtime discovery.
 
 ## Honesty metrics
 

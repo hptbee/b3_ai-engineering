@@ -11,7 +11,7 @@ Each skill (folder name = skill slug; canonical path is the YAML `artifact:` fie
 
 Eval folders are not nested by `engineering/` / `frontend/` / `backend/` / … — that taxonomy lives in `skills/`.
 
-Foundation skills: 7 cases each (Track C). Synthesized domain skills: 6 cases each (decision-008).
+Minimum `2/2/2` (`should-trigger` / `should-not-trigger` / `near-miss`) per canonical skill, with larger suites where needed (for example, `simplest-correct/` and `code-review/`).
 
 Manual judge: read `description` + case `input`. Automated runner: **not implemented**.
 

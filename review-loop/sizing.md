@@ -29,12 +29,7 @@ Run `b3 guard diff-scope` (or `b3 guard review-inventory`) for deterministic sig
 
 ## Size × Risk Dispatch Matrix (existing `b3-*` roles only)
 
-| Risk | `XS` / `S` | `M` | `L` / `XL` / `XXL` |
-| --- | --- | --- | --- |
-| **LOW** | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | 0-tok checks + 1 fresh `b3-reviewer` (no specialists) | Inventory -> skip L1 (`l1_skip_rationale`) -> cohesive units (`b3-reviewer` only) -> Ledger Gate |
-| **MEDIUM** | Fresh `b3-reviewer` + triggered specialist only | Full-PR + triggered specialist only + checks | Cohesive units (adaptive concurrency) + conditional L1 / unit triggered specialists + L3 cross-unit + Ledger Gate |
-| **HIGH** | Fresh `b3-reviewer` + matching specialist(s) + contract check | Deep contract review + specialists + `verify-run` | L0 Inventory -> conditional L1 (`l1_specialists`) -> L2 Units + specialists + receipts -> L3 Cross-unit -> L4 Ledger Gate |
-| **CRITICAL** | **No downgrade:** Deep review + mandatory `b3-security-reviewer`/specialists (self-declared waivers disabled) + fail-closed `verify-run` | Full deep + mandatory specialists (self-declared waivers disabled) + fail-closed `verify-run` | L0–L4 fail-closed pipeline + mandatory `CRITICAL` specialists (self-declared waivers disabled) + bounded monotonic ledger & verification |
+See [`strategy.md`](strategy.md) (`Roles & dispatch`, §1) for `XS`/`S`/`M` risk routing and [`hierarchical.md`](hierarchical.md) (Levels 0–4) for `L`/`XL`/`XXL` specialist, receipt, and ledger rules (on `CRITICAL`, self-declared waivers are disabled and `verify-run` is mandatory across all sizes).
 
 ## Partitioning rules (`L` / `XL` / `XXL`)
 

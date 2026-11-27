@@ -23,7 +23,7 @@ b3-ai-engineering/
 ├── adapters/                 4-host adapters, 11 command-skills & templates
 ├── .cursor/rules/            Committed thin Cursor .mdc wrappers (@rules/*.md)
 ├── .agents/skills.json       Committed Antigravity 1-level skill manifest
-├── scripts/                  Zero-Rust bootstrapper (bootstrap-b3.{ps1,sh}) & validation helpers
+├── scripts/                  Zero-Rust bootstrapper (bootstrap-b3.{ps1,sh}) & local CI preflight
 ├── config/                   Optional Markdown model preference example (models.example.md)
 └── docs/                     Architecture, standards, contracts
 ```
@@ -61,21 +61,7 @@ Full per-host setup, coexistence guards, native binary distribution, and manual 
   - Antigravity: root `AGENTS.md` + committed `.agents/skills.json` work directly (`b3 sync --host antigravity --verify-only`).
 - **Attach a separate product repo:** `b3 install product --product-root <product-root> --host <host>` writes `.b3/home` + thin host bridge/links without copying `skills/` ([`decision-011`](research/decisions/decision-011-product-repo-attach.md), [`decision-013`](research/decisions/decision-013-host-neutral-multi-host-layout.md)).
 
-### Retired Compatibility Wrappers -> Native CLI Migration Table
-
-The 9 legacy PowerShell/Bash wrapper pairs (`18` files) were retired to eliminate PowerShell/Bash wrapper overhead and enforce a single native `b3` CLI contract. End users only need `bootstrap-b3` once to obtain `b3`; contributors can build via `cargo build --release`:
-
-| Retired wrapper pair (`.ps1` + `.sh`) | Native `b3` command |
-| --- | --- |
-| `scripts/b3-guard.{ps1,sh}` | `b3 guard <subcommand> [flags]` |
-| `scripts/b3-github-verify.{ps1,sh}` | `b3 pr verify --mode pre-merge\|post-merge --repo <owner/repo> --pr-number <N>` |
-| `scripts/b3-pr-github.{ps1,sh}` | `b3 pr <fetch\|reconcile\|reply\|resolve\|comment> [flags]` |
-| `scripts/measure-context.{ps1,sh}` | `b3 context measure [--repo-root <path>] [--strict]` |
-| `adapters/sync-skills.{ps1,sh}` | `b3 sync --host <cursor\|codex\|claude\|antigravity> [--dry-run] [--verify-only] [--force]` |
-| `adapters/install-product.{ps1,sh}` | `b3 install product --product-root <dir> --host <host> [--dry-run] [--force]` |
-| `adapters/install-global.{ps1,sh}` | `b3 install global [install\|verify\|update\|uninstall] --host <cursor\|antigravity\|all> [flags]` |
-| `adapters/cursor/install-global.{ps1,sh}` | `b3 install cursor [install\|verify\|update\|uninstall] [flags]` |
-| `adapters/antigravity/install-plugin.{ps1,sh}` | `b3 install antigravity [install\|verify\|update\|uninstall] [flags]` |
+- **Retired wrapper migration:** All 9 legacy PowerShell/Bash compatibility wrapper pairs were retired in favor of the single native `b3` CLI — see [`scripts/README.md`](scripts/README.md#retired-compatibility-wrappers) (`scripts/` wrappers) and [`adapters/README.md`](adapters/README.md#retired-adapter-compatibility-wrappers) (`adapters/` wrappers).
 
 ## Architecture
 
@@ -99,7 +85,7 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 
 ## Standalone commands, review & review loop
 
-- **Standalone commands** ([`commands/README.md`](commands/README.md), `11` commands): `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-verify`.
+- **Standalone commands** ([`commands/README.md`](commands/README.md), `4` core standalone of `11` total commands): `/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-verify`.
 - **Single-pass `/b3-review`** ([`commands/b3-review.md`](commands/b3-review.md) / [`code-review/SKILL.md`](skills/engineering/code-review/SKILL.md)): local diff/branch review, read-only GitHub PR inspection, or optional `--post` via [`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md).
 - **PR feedback (`/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`)** ([`pr-feedback/SKILL.md`](skills/engineering/pr-feedback/SKILL.md)): single-writer PR thread/comment lifecycle via native `b3 pr <fetch|reconcile|reply|resolve|comment>`.
 - **Iterative `/b3-review-loop`** ([`review-loop/strategy.md`](review-loop/strategy.md)): self-sufficient loop orchestrator; normative contracts in [`review-loop/spec.md`](review-loop/spec.md) and [`review-loop/models.md`](review-loop/models.md).
@@ -113,7 +99,7 @@ External sources → research/ → knowledge/ → skills / rules / workflows
 ## Context budget, validation & evaluation
 
 - **Static budgets & routing:** `b3 context measure --strict` enforces static context caps; conditional MCP routing (`0 B` always-on) is documented in [`docs/context-routing.md`](docs/context-routing.md).
-- **Behavioral & eval suites:** native Rust unit and integration tests run via `cargo test` (`tests/`); helper scripts and CLI reference live in [`scripts/README.md`](scripts/README.md), and YAML schema cases live under `evals/` ([`evals/README.md`](evals/README.md), [`docs/evaluation.md`](docs/evaluation.md)).
+- **Behavioral & eval suites:** native Rust unit and integration tests run via `cargo test` (`tests/`); bootstrapper & preflight scripts and CLI reference live in [`scripts/README.md`](scripts/README.md), and YAML schema cases live under `evals/` ([`evals/README.md`](evals/README.md), [`docs/evaluation.md`](docs/evaluation.md)).
 
 ## Personal profile & platforms
 
