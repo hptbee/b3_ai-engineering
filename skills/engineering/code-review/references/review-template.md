@@ -16,7 +16,7 @@ Single canonical output contract for **both** local `/b3-review` and GitHub PR `
 
 ## Report template (local diff & PR chat / summary comment)
 
-When posting to a GitHub PR after user confirmation, include **only `CONFIRMED` findings** and omit `## Speculative / Questions for Author` unless concrete clarification questions exist (`SPECULATIVE` guesses stay in chat only).
+When posting to a GitHub PR after user confirmation, include **only `CONFIRMED` findings**, omit `## Speculative / Questions for Author` unless concrete clarification questions exist (`SPECULATIVE` guesses stay in chat only), and keep posted PR reviews, summary comments, and inline comments tool-neutral (never include `b3`/`B3` keywords or a `Verification` section).
 
 ````markdown
 ## Review Summary
@@ -38,12 +38,6 @@ When posting to a GitHub PR after user confirmation, include **only `CONFIRMED` 
 
 <!-- Chat-only for speculative concerns (non-blocking). Omit SPECULATIVE items when posting to GitHub PR. -->
 - None (or `SPECULATIVE [CRITICAL|HIGH|MEDIUM|LOW] path/to/file.ext:line — <concern + what check would confirm or refute>`).
-
-## Verification & Coverage
-
-- **Executed checks:** `<command>` -> PASS / FAIL (`<exit code / counts>`), or `None run`
-- **Dimensions checked:** correctness, architecture, security, performance, simplification/residue, tests, maintainability
-- **Skipped / Unverified (`UNKNOWN / INCOMPLETE`):** <skipped dimensions with reason, or `None`>
 ````
 
 ## Inline GitHub PR comment format (`Files changed` tab)

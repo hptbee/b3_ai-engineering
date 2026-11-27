@@ -7,7 +7,7 @@ Native GitHub provider CLI for `skills/engineering/pr-feedback/SKILL.md`. Read-o
 - Requires authenticated `gh` CLI (all PR feedback & verification commands execute in native `b3` with zero Node.js or runtime dependencies, zero npm packages, and zero new MCP servers).
 - **Safe transport & stdout:** All GraphQL queries/mutations and REST POSTs pass structured JSON via `gh api ... --input -` (`stdin`).
 - **Unified file & path guards:** Rejects symlinks/reparse points on leaf and ancestor directories, `..` traversal, UNC/mixed-slash `^[\\/]{2}`, drive-relative paths, ADS `:`, Windows reserved device names (`CON`, `NUL .`, `CON .txt`), oversized inputs (`>256 KiB` / `>65536` chars), and corrupt state JSON; strips UTF-8 BOM.
-- **State, single writer & provider limits:** Enforces `thread-lifecycle.md` §4 & §6 via canonical `<git-common-dir>/b3/pr-feedback/<owner>__<repo>__pr-<pr>.state.json` (`--state-file` rejected, `PR_FILE_GUARD` outside git), `PR_MUTATION_OWNER_REQUIRED` (`git-dir != git-common-dir` or `B3_PR_MUTATION_ROLE=worker` / `B3_SUBAGENT=1`), PID/`ESRCH` + `.reclaim` lock, pre/post `OPEN`+`HEAD` checks, `<!-- b3-pr-key:<key>;op=<16hex> -->` revalidation, and explicit `reconcile`. Note: full clones or unflagged processes in the primary checkout share only local lockfile serialization.
+- **State, single writer & provider limits:** Enforces `thread-lifecycle.md` §4 & §6 via canonical `<git-common-dir>/b3/pr-feedback/<owner>__<repo>__pr-<pr>.state.json` (`--state-file` rejected, `PR_FILE_GUARD` outside git), `PR_MUTATION_OWNER_REQUIRED` (`git-dir != git-common-dir` or `B3_PR_MUTATION_ROLE=worker` / `B3_SUBAGENT=1`), PID/`ESRCH` + `.reclaim` lock, pre/post `OPEN`+`HEAD` checks, `<!-- pr-key:<key>;op=<16hex> -->` revalidation, and explicit `reconcile`. Note: full clones or unflagged processes in the primary checkout share only local lockfile serialization.
 
 ## Subcommands & Flags (`b3 pr <cmd> ...`)
 
@@ -33,7 +33,7 @@ b3 pr reply --repo <owner/repo> --pr <N> [--repo-root <dir>] --expected-head <sh
   [--authorize-write] [--draft] [--max-pages <M>]
 ```
 - Targeted `node(id)` (`review_thread`) or `GET issues/comments/<id>` (`general_comment`, prepending `> Replying to [comment #<id>](<html_url>)`).
-- Derives `<!-- b3-pr-key:<key>;op=<16hex> -->`, detects key collisions (`PR_KEY_COLLISION`), revalidates existing remote objects before skipping (`PR_REMOTE_STATE_MISMATCH` on edit), rechecks `OPEN` + `HEAD` pre-write, posts (never resolves), and verifies the created remote object + `HEAD` + `OPEN`.
+- Derives `<!-- pr-key:<key>;op=<16hex> -->`, detects key collisions (`PR_KEY_COLLISION`), revalidates existing remote objects before skipping (`PR_REMOTE_STATE_MISMATCH` on edit), rechecks `OPEN` + `HEAD` pre-write, posts (never resolves), and verifies the created remote object + `HEAD` + `OPEN`.
 
 ### 4. `resolve` (single-writer parent when `--authorize-resolve`; workers may run `--draft`)
 ```text
