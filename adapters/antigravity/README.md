@@ -10,7 +10,7 @@
 | --- | --- |
 | `AGENTS.md` | Native workspace rule (auto-loaded from repo root) |
 | `rules/*.md` | Referenced via `AGENTS.md` in-repo, or bundled into plugin `rules/AGENTS.md` (plain Markdown, no frontmatter, `< 24 KB`, with global `B3_HOME` and project-precedence header) |
-| `skills/` | Committed `.agents/skills.json` (in this repo), flattened `.agents/skills/<name>` (`b3 install product --host antigravity`), or global `~/.gemini/config/skills.json` category entries + plugin `skills/<name>` links |
+| `skills/` | Generated gitignored `.agents/skills.json` (`b3 sync --host antigravity`), flattened `.agents/skills/<name>` (`b3 install product --host antigravity`), or global `~/.gemini/config/skills.json` category entries + plugin `skills/<name>` links |
 | `commands/` + `adapters/command-skills/` | Exposed as command skills (`b3-plan`, `b3-implement`, `b3-debug`, `b3-review`, `b3-verify`, `b3-review-loop`, `b3-ship`, `b3-research-ship`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`) inside `~/.gemini/config/skills.json`, plugin `skills/`, or `.agents/` |
 | `agents/*.md` | Rendered into plugin `agents/<name>.md` (`subagent: true`, `mainAgent: false`, least-privilege `tools:`, zero hardcoded models), or dynamically delegated via `define_subagent` / `invoke_subagent` |
 
@@ -19,7 +19,7 @@
 | Antigravity mechanism | B3 use | Classification |
 | --- | --- | --- |
 | Root `AGENTS.md` / `GEMINI.md` | Durable project map and precedence | SUPPORTED |
-| `.agents/skills.json` (`entries`) | One-level discovery over categorized `skills/*` and `adapters/command-skills` in this repo | SUPPORTED |
+| `.agents/skills.json` (`entries`) | Generated one-level discovery over categorized `skills/*` and `adapters/command-skills` via `b3 sync --host antigravity` | SUPPORTED |
 | `.agents/skills/<name>/SKILL.md` | Optional flattened per-product skill discovery | SUPPORTED |
 | Global plugin (`~/.gemini/config/plugins/b3-ai-engineering/`) + global `~/.gemini/config/skills.json` | Machine-wide bundle (`plugin.json`, `rules/AGENTS.md`, `skills/`, `agents/`, `.b3-plugin-manifest`) plus `skills.json` real-directory entries for Antigravity's 1-level scanner across workspaces | SUPPORTED |
 | Subagents (`agents/<name>.md` or dynamic `define_subagent`) | Review-loop isolation (`b3-reviewer`, `b3-fixer`, specialists) | SUPPORTED BY ANTIGRAVITY; B3 runtime isolation `UNKNOWN / INCOMPLETE` |
@@ -82,9 +82,10 @@ In any local repository that has never run `b3 install product`:
 
 ### Working inside this B3 checkout
 
-No `.agents/skills` junction is needed (and **do not** add `.agents/skills` alongside committed `.agents/skills.json`). Verify `.agents/skills.json`:
+No `.agents/skills` junction is needed (and **do not** add `.agents/skills` alongside generated `.agents/skills.json`). Generate and verify `.agents/skills.json`:
 
 ```bash
+b3 sync --host antigravity
 b3 sync --host antigravity --verify-only
 ```
 

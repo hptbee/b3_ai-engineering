@@ -1673,12 +1673,127 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     let root_str = root.to_str().unwrap();
     let tmp = TempDirGuard::new("prod-sync");
 
-    // 1. b3 sync across cursor/codex/claude/antigravity + verify-only + empty vs non-empty replacement + coexistence guard
+    // 0. Source repo has no committed .cursor/rules or .agents/skills.json; verify-only fails cleanly before sync
+    let tracked_host_cfg = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", ".cursor/rules", ".agents/skills.json"])
+        .output()
+        .expect("git ls-files");
+    assert!(tracked_host_cfg.status.success());
+    assert!(
+        String::from_utf8_lossy(&tracked_host_cfg.stdout)
+            .trim()
+            .is_empty(),
+        "source repo must not commit .cursor/rules or .agents/skills.json"
+    );
+
+    // 1. b3 sync across cursor/codex/claude/antigravity + verify-only + unmanaged conflict + empty vs non-empty replacement + coexistence guard
     let sync_fx = tmp.path.join("sync-fx");
     copy_b3_snapshot(&sync_fx, true);
+    assert!(!sync_fx.join(".cursor/rules").exists());
+    assert!(!sync_fx.join(".agents/skills.json").exists());
     let sync_s = sync_fx.to_str().unwrap();
 
-    // Antigravity sync + verify-only
+    // Antigravity & Cursor verify-only report missing activation before sync
+    let (c_agv_pre, out_agv_pre, err_agv_pre) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            sync_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(c_agv_pre, 1);
+    assert!(
+        format!("{out_agv_pre}\n{err_agv_pre}").contains("missing manifest"),
+        "expected missing manifest, got: {out_agv_pre}\n{err_agv_pre}"
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only",
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+
+    // Path-traversal entry in .agents/skills.json is rejected by --verify-only and refused by sync without --force
+    let ag_manifest = sync_fx.join(".agents/skills.json");
+    write_lf(
+        &ag_manifest,
+        "{\n  \"entries\": [{ \"path\": \"../outside\" }]\n}\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "antigravity",
+                "--verify-only",
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+
+    // Unmanaged .agents/skills.json (extra top-level key or extra per-entry key) refused without --force, overwritten with --force
+    write_lf(
+        &ag_manifest,
+        "{\n  \"entries\": [{ \"path\": \"custom\", \"note\": \"keep\" }],\n  \"inherits\": true\n}\n",
+    );
+    let (c_ag_unmanaged, out_ag_unmanaged, err_ag_unmanaged) = run_b3_env(
+        &["sync", "--repo-root", sync_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_ag_unmanaged, 1);
+    assert!(
+        format!("{out_ag_unmanaged}\n{err_ag_unmanaged}").contains("unmanaged .agents/skills.json"),
+        "got: {out_ag_unmanaged}\n{err_ag_unmanaged}"
+    );
+    assert!(fs::read_to_string(&ag_manifest)
+        .unwrap()
+        .contains("inherits"));
+
+    // Antigravity sync (--force overwrites unmanaged, repeated sync is idempotent, verify-only passes)
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
     assert_eq!(
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "antigravity"],
@@ -1773,6 +1888,21 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         )
         .0,
         0
+    );
+    // Repeated cursor sync is idempotent and does not generate redundant .cursor/rules
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        !sync_fx.join(".cursor/rules").exists(),
+        "cursor sync must not generate redundant .cursor/rules/*.mdc"
     );
     assert_eq!(
         run_b3_env(

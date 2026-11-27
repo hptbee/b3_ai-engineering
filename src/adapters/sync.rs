@@ -310,16 +310,27 @@ fn test_antigravity_manifest(repo_root: &Path, manifest_path: &Path) -> Result<u
 
     for entry in entries {
         let rel_path = entry
-            .get("path")
+            .get_exact_unique("path")
+            .map_err(|_| "manifest entry has duplicate path key".to_string())?
             .and_then(JsonValue::as_str)
             .unwrap_or("")
             .to_string();
         if rel_path.is_empty() {
             return Err("manifest entry missing path".to_string());
         }
+        if !rel_path.split('/').all(|seg| {
+            !seg.is_empty()
+                && seg != "."
+                && seg != ".."
+                && !seg.contains('\\')
+                && !seg.contains(':')
+                && !seg.contains('\0')
+        }) {
+            return Err(format!("manifest entry path is unsafe: {rel_path}"));
+        }
         manifest_paths.push(rel_path.clone());
         let resolved = repo_root.join(rel_path.replace('/', std::path::MAIN_SEPARATOR_STR));
-        if !resolved.is_dir() {
+        if is_reparse_link(&resolved) || !resolved.is_dir() {
             return Err(format!("manifest entry path not found: {rel_path}"));
         }
         let mut entry_count = 0usize;
@@ -365,6 +376,52 @@ fn test_antigravity_manifest(repo_root: &Path, manifest_path: &Path) -> Result<u
         return Err("manifest resolved 0 skills".to_string());
     }
     Ok(total_skills)
+}
+
+fn is_b3_managed_antigravity_manifest(
+    repo_root: &Path,
+    manifest_path: &Path,
+    expected_entries: &[String],
+    expected_json: &str,
+) -> bool {
+    let Ok(raw) = fs::read_to_string(manifest_path) else {
+        return false;
+    };
+    if raw == expected_json {
+        return true;
+    }
+    let Ok(parsed) = parse_json(&raw) else {
+        return false;
+    };
+    let JsonValue::Object(obj) = parsed else {
+        return false;
+    };
+    if obj.len() != 1 || obj[0].0 != "entries" {
+        return false;
+    }
+    let JsonValue::Array(arr) = &obj[0].1 else {
+        return false;
+    };
+    if arr.len() != expected_entries.len() {
+        return false;
+    }
+    let expected_set: BTreeSet<&str> = expected_entries.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    for item in arr {
+        let JsonValue::Object(fields) = item else {
+            return false;
+        };
+        if fields.len() != 1 || fields[0].0 != "path" {
+            return false;
+        }
+        let JsonValue::String(p) = &fields[0].1 else {
+            return false;
+        };
+        if !expected_set.contains(p.as_str()) || !seen.insert(p.as_str()) {
+            return false;
+        }
+    }
+    test_antigravity_manifest(repo_root, manifest_path).is_ok()
 }
 
 fn extract_exact_fm_name(raw: &str) -> Option<String> {
@@ -452,6 +509,8 @@ pub fn run(
                 );
             }
             if verify_only {
+                assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
+                assert_regular_file_or_missing(&antigravity_manifest, ".agents/skills.json")?;
                 match test_antigravity_manifest(&root, &antigravity_manifest) {
                     Ok(count) => {
                         return Ok((
@@ -476,6 +535,38 @@ pub fn run(
                     1,
                 ));
             }
+            let mut json_lines = Vec::new();
+            json_lines.push("{".to_string());
+            json_lines.push("  \"entries\": [".to_string());
+            for (i, e) in entries.iter().enumerate() {
+                let comma = if i + 1 < entries.len() { "," } else { "" };
+                json_lines.push(format!("    {{ \"path\": \"{e}\" }}{comma}"));
+            }
+            json_lines.push("  ]".to_string());
+            json_lines.push("}".to_string());
+            let json_text = format!("{}\n", json_lines.join("\n"));
+
+            assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
+            assert_regular_file_or_missing(&antigravity_manifest, ".agents/skills.json")?;
+
+            if !force
+                && antigravity_manifest.is_file()
+                && !is_b3_managed_antigravity_manifest(
+                    &root,
+                    &antigravity_manifest,
+                    &entries,
+                    &json_text,
+                )
+            {
+                return Err(fail(
+                    format!(
+                        "existing unmanaged .agents/skills.json at {}; refusing to overwrite without --force",
+                        antigravity_manifest.display()
+                    ),
+                    1,
+                ));
+            }
+
             if dry_run {
                 return Ok((
                     format!(
@@ -487,20 +578,6 @@ pub fn run(
                     0,
                 ));
             }
-
-            assert_regular_dir_or_missing(&root.join(".agents"), ".agents")?;
-            assert_regular_file_or_missing(&antigravity_manifest, ".agents/skills.json")?;
-
-            let mut json_lines = Vec::new();
-            json_lines.push("{".to_string());
-            json_lines.push("  \"entries\": [".to_string());
-            for (i, e) in entries.iter().enumerate() {
-                let comma = if i + 1 < entries.len() { "," } else { "" };
-                json_lines.push(format!("    {{ \"path\": \"{e}\" }}{comma}"));
-            }
-            json_lines.push("  ]".to_string());
-            json_lines.push("}".to_string());
-            let json_text = format!("{}\n", json_lines.join("\n"));
 
             write_utf8_no_bom_lf(&antigravity_manifest, &json_text)?;
             let count = test_antigravity_manifest(&root, &antigravity_manifest)
@@ -620,7 +697,7 @@ pub fn run(
             }
             if antigravity_manifest.is_file() {
                 eprintln!(
-                    "WARNING: coexistence notice: .agents/skills.json is committed for Antigravity; if Antigravity also opens this checkout, it may read both .agents/skills.json and .agents/skills."
+                    "WARNING: coexistence notice: .agents/skills.json exists for Antigravity; if Antigravity also opens this checkout, it may read both .agents/skills.json and .agents/skills."
                 );
             }
             if !dry_run {

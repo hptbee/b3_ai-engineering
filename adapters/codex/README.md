@@ -29,7 +29,7 @@ b3 sync --host codex --verify-only
 
 > **Coexistence notes:**
 > - `b3 sync --host codex` refuses to run while `.cursor/skills` exists (Cursor cross-loads `.agents/skills` and duplicates skills) unless `--force` is passed.
-> - This repo also commits `.agents/skills.json` for Antigravity. If Antigravity opens the same checkout while `.agents/skills/` exists, Antigravity may read both.
+> - If `.agents/skills.json` is generated for Antigravity (`b3 sync --host antigravity`) while `.agents/skills/` exists, Antigravity may read both.
 
 ### Separate product repository
 

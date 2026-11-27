@@ -80,7 +80,7 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 | Area | Status |
 | --- | --- |
 | Architecture, standards, precedence, lifecycle | **Present** (`docs/`) |
-| Foundation rules + Cursor `.mdc` wrappers + Claude `CLAUDE.md` bridge | **Present** (`rules/`, `.cursor/rules/`, `CLAUDE.md`) |
+| Foundation rules + universal `AGENTS.md` + Claude `CLAUDE.md` bridge | **Present** (`rules/`, `AGENTS.md`, `CLAUDE.md`) |
 | Skills (`24` canonical + `11` command-skills = `35` `SKILL.md`) | **Present** (`skills/`, `adapters/command-skills/`) |
 | Commands (`11`) & Subagent roles (`5`) | **Present** (`commands/`, `agents/`, host-neutral canonical core) |
 | Eval fixtures (`evals/`) | **Present** — schema validator active; automated LLM runner deferred |

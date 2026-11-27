@@ -12,7 +12,7 @@ Hard rule: portable **meaning** (`AGENTS.md`, `docs/`, `rules/`, `skills/`, `com
 
 Hard rule: canonical skills, commands, agents, and rules live in host-neutral root directories (`skills/`, `commands/`, `agents/`, `rules/`) so Cursor, Codex, Claude Code, and Antigravity consume the same single source of truth (decision-013, superseding decision-009).
 
-Hard rule: host-only metadata and activation wrappers (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`, hooks, MCP, local discovery links, plugin generators) belong in thin host entrypoints or `adapters/`. Adapters may map, link, or generate; they may not fork meaning.
+Hard rule: host-only metadata and generated activation wrappers (`CLAUDE.md`, hooks, MCP, local discovery links/manifests, plugin generators) belong in thin host entrypoints or `adapters/`. Adapters may map, link, or generate; they may not fork meaning.
 
 Strong guideline: prefer Markdown, `SKILL.md`, YAML frontmatter, plain shell/Node/Python scripts, and the native `b3` CLI for deterministic core checks.
 

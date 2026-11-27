@@ -21,8 +21,8 @@ The normative runtime rules live in [`workflows/references/context-routing.md`](
 
 | Host | Canonical Consumption | MCP & Config Handling |
 | --- | --- | --- |
-| **Cursor** | `.cursor/rules/*.mdc` + `b3 sync --host cursor` | Detects active host MCP tools once/phase; never edits Cursor MCP config. |
-| **Antigravity** | `AGENTS.md` + `.agents/skills.json` / plugin (`b3 sync --host antigravity`) | Detects active host MCP tools once/phase; never edits `~/.gemini` config. |
+| **Cursor** | `AGENTS.md` + `b3 sync --host cursor` | Detects active host MCP tools once/phase; never edits Cursor MCP config. |
+| **Antigravity** | `AGENTS.md` + generated `.agents/skills.json` / plugin (`b3 sync --host antigravity`) | Detects active host MCP tools once/phase; never edits `~/.gemini` config. |
 | **Codex** | `AGENTS.md` + `b3 sync --host codex` | Detects active host MCP tools once/phase; never edits `~/.codex/config.toml`. |
 | **Claude Code** | `CLAUDE.md` (`@AGENTS.md`) + `b3 sync --host claude` | Detects active host MCP tools once/phase; never edits `~/.claude/settings.json`. |
 
