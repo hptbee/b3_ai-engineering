@@ -6,7 +6,7 @@ use crate::fs::{
     test_checkpoint_path, test_path_match, test_secret_path,
 };
 use crate::git::{run_git_paths_z, test_git_mid_operation, GitZMode};
-use crate::guard::verify::test_verify_receipt;
+use crate::guard::verify::{test_verify_receipt, validate_receipt_covers_paths};
 
 /// Validates staged index state, allowed paths, secrets, checkpoint exclusion,
 /// and optional verification receipt binding prior to commit.
@@ -15,7 +15,19 @@ pub fn run(
     allowed_paths: &str,
     require_verify_receipt: &str,
     ignore_dirty_paths: &str,
+    expected_cmd: &str,
+    relevant_paths: &str,
 ) -> Result<String, B3Error> {
+    let req_receipt = require_verify_receipt.trim();
+    if req_receipt.is_empty()
+        && (!expected_cmd.trim().is_empty() || !relevant_paths.trim().is_empty())
+    {
+        return Err(fail(
+            "PRECOMMIT_FAIL: --expected-cmd and --relevant-paths require --require-verify-receipt",
+            1,
+        ));
+    }
+
     let repo_root = normalize_repo_root(repo_root_raw)?;
     if let Some(mid_op) = test_git_mid_operation(&repo_root) {
         return Err(fail(
@@ -101,7 +113,6 @@ pub fn run(
         ));
     }
 
-    let req_receipt = require_verify_receipt.trim();
     if !req_receipt.is_empty() {
         let mut wt_args: Vec<String> = vec![
             "diff".into(),
@@ -165,7 +176,14 @@ pub fn run(
             }
         }
 
-        let vr = test_verify_receipt(&repo_root, req_receipt, &ignored, "", "", "");
+        let vr = test_verify_receipt(
+            &repo_root,
+            req_receipt,
+            &ignored,
+            expected_cmd,
+            relevant_paths,
+            "",
+        );
         if vr.code != 0 {
             return Err(fail(
                 format!(
@@ -186,23 +204,14 @@ pub fn run(
             split_csv_list_as_paths(&vr.relevant_paths_csv)
         };
 
-        if vr.relevant_paths_csv != "ALL" {
-            let outside = sort_ordinal(
-                staged
-                    .iter()
-                    .filter(|p| !test_path_match(p, &rec_paths))
-                    .cloned(),
-                false,
-            );
-            if !outside.is_empty() {
-                return Err(fail(
-                    format!(
-                        "PRECOMMIT_FAIL: staged path outside receipt scope ({})",
-                        outside.join(", ")
-                    ),
-                    1,
-                ));
-            }
+        if let Some(outside) = validate_receipt_covers_paths(&vr.relevant_paths_csv, &staged) {
+            return Err(fail(
+                format!(
+                    "PRECOMMIT_FAIL: staged path outside receipt scope ({})",
+                    outside.join(", ")
+                ),
+                1,
+            ));
         }
 
         let mut unstaged_args: Vec<String> = vec![

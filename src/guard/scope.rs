@@ -349,6 +349,45 @@ fn contains_word_token(line_lower: &str, tokens: &[&str]) -> bool {
     false
 }
 
+/// Detects destructive SQL statements (`DROP TABLE`, `DROP DATABASE`, `TRUNCATE TABLE`)
+/// with word-boundary accuracy.
+pub(crate) fn find_destructive_sql(line: &str) -> Option<&'static str> {
+    let low = line.to_ascii_lowercase();
+    find_destructive_sql_lower(&low)
+}
+
+fn find_destructive_sql_lower(low: &str) -> Option<&'static str> {
+    let bytes = low.as_bytes();
+    let is_w = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    for (first, second, tag) in [
+        ("drop", "table", "drop table"),
+        ("drop", "database", "drop database"),
+        ("truncate", "table", "truncate table"),
+    ] {
+        let mut start = 0;
+        while let Some(pos) = low[start..].find(first) {
+            let abs = start + pos;
+            let left_ok = abs == 0 || !is_w(bytes[abs - 1]);
+            if left_ok {
+                let mut j = abs + first.len();
+                let mut ws = 0;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    ws += 1;
+                    j += 1;
+                }
+                if ws > 0 && low[j..].starts_with(second) {
+                    let end = j + second.len();
+                    if end == bytes.len() || !is_w(bytes[end]) {
+                        return Some(tag);
+                    }
+                }
+            }
+            start = abs + 1;
+        }
+    }
+    None
+}
+
 fn contains_two_word_sql(
     line_lower: &str,
     first: &str,
@@ -436,9 +475,7 @@ fn scan_line_risk_signals(
         add_signal_tag(map, path_val, "fs_git_security");
     }
 
-    let is_destructive = contains_two_word_sql(line_lower, "drop", "table", true)
-        || contains_two_word_sql(line_lower, "drop", "database", true)
-        || contains_two_word_sql(line_lower, "truncate", "table", true);
+    let is_destructive = find_destructive_sql_lower(line_lower).is_some();
     let is_db_tx = is_destructive
         || contains_two_word_sql(line_lower, "alter", "table", false)
         || contains_two_word_sql(line_lower, "begin", "transaction", false)

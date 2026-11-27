@@ -12,8 +12,8 @@ unnecessary abstraction
 ```
 
 This skill is **not** “always choose the simplest implementation.”
-Local smallest-change is `rules/engineering-principles.md`.
-This skill is **system shape**: extra services, layers, and patterns need a **named requirement** (scale, team boundary, consistency, compliance). Justified complexity is in bounds.
+Local-diff redundancy/dead branches belong to `code-review` / `b3-reviewer` (`rules/engineering-principles.md`).
+This skill (`b3-architecture-reviewer`) is **system shape**: extra services, layers, and components need a **named requirement** (scale, team boundary, consistency, compliance). Justified complexity is `INTENTIONAL COMPLEXITY` and preserved.
 
 ## When to use
 
@@ -50,7 +50,8 @@ The chosen shape can be explained in five sentences and maps to requirements. If
 
 - Requirements, scale targets, or team/compliance boundaries are unstated → surface the missing inputs and mark the design `UNKNOWN / INCOMPLETE` instead of guessing extra layers.
 - The product repo already enforces an architecture → follow repo conventions (`docs/precedence.md`); do not force a rewrite.
-- Evidence is partial (e.g., unmeasured throughput/latency claims) → record the assumption explicitly and defer complexity until measured.
+- Evidence is partial (e.g., unmeasured throughput/latency claims) → record the assumption as `SPECULATIVE` (non-blocking) and defer complexity until measured.
+- Flagging over-architecture as `CONFIRMED` requires `CONFIRMED REDUNDANCY` or evidenced `CONFIRMED` overengineering (a concrete simpler alternative meeting ALL security, correctness, portability, compatibility, and verified performance requirements — never LOC alone); preserve `INTENTIONAL COMPLEXITY` and leave `UNKNOWN` unconfirmed.
 - The problem is a measured runtime bottleneck or local code-style fix → hand off to performance skills or `problem-solving` rather than stretching this skill.
 
 ## Provenance

@@ -14,3 +14,9 @@ pub mod symbol;
 pub mod verify;
 pub mod wave;
 pub mod worktree;
+
+pub(crate) fn push_unique_str(vec: &mut Vec<String>, val: String) {
+    if !vec.iter().any(|x| x == &val) {
+        vec.push(val);
+    }
+}

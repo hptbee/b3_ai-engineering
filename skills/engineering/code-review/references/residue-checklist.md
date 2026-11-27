@@ -1,6 +1,6 @@
 # Simplification, overengineering & implementation residue checklist
 
-Reference for [`../SKILL.md`](../SKILL.md). Ask:
+Reference for [`../SKILL.md`](../SKILL.md) (local-diff simplification/residue; system-shape architecture belongs to `simplest-correct` / `b3-architecture-reviewer`). Ask:
 - *“Given the final implementation and current requirements, is all of this code still necessary?”*
 - *“Could the same requirements be satisfied with substantially less implementation and maintenance complexity?”*
 
@@ -30,9 +30,9 @@ Reference for [`../SKILL.md`](../SKILL.md). Ask:
 
 | Class | Meaning | Action |
 | --- | --- | --- |
-| **CONFIRMED** (`CONFIRMED REDUNDANCY` / overengineering) | Repo evidence proves no remaining responsibility, full duplication, or a concrete evidence-based simpler alternative that meets all requirements | Map to `simplification` + `CONFIRMED`; require minimal cleanup |
+| **CONFIRMED** (`CONFIRMED REDUNDANCY` / evidenced `CONFIRMED` overengineering) | Repo evidence proves no remaining responsibility, full duplication, or a concrete simpler alternative that meets ALL security, correctness, portability, compatibility, and verified performance requirements (never LOC alone) | Map to `simplification` + `CONFIRMED`; require minimal cleanup |
 | **SPECULATIVE** (`LIKELY REDUNDANT`) | Strong signal, but a dependency, requirement, or simpler alternative remains unproven | Keep `SPECULATIVE` / non-blocking; do not delete without proof |
-| **INTENTIONAL COMPLEXITY** | Concrete requirement holds (security, correctness, portability, compatibility, explicit spec, verified perf, external consumer) | Accept; do not flag or simplify away |
+| **INTENTIONAL COMPLEXITY** | Concrete requirement holds (security, correctness, portability, compatibility, explicit spec, verified perf, external consumer) | Accept / preserve; do not flag or simplify away |
 | **UNKNOWN** | Insufficient evidence to judge safety | Do not convert uncertainty into deletion |
 
-Require an evidence-based simpler alternative before classifying overengineering as `CONFIRMED`. Never flag complexity on line count alone, never turn stylistic preferences into blocking findings, and never perform aesthetic line-count golf or unrelated refactors.
+Require a concrete simpler alternative meeting ALL security, correctness, portability, compatibility, and verified performance requirements before classifying overengineering as `CONFIRMED`. Never flag complexity on line count alone, never turn stylistic preferences into blocking findings, and never perform aesthetic line-count golf or unrelated refactors.

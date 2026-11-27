@@ -1,0 +1,9 @@
+id: code-review-not-trigger-007
+artifact: skills/engineering/code-review/SKILL.md
+intent: Do not flag non-simplifiable complexity required for correctness and crash recovery
+scenario: |
+  Review this PR.
+  A reviewer suggests removing the atomic lockfile reclaim mutex and post-write remote verification state machine because they look verbose, even though removing them reintroduces concurrent write races and silent partial-failure corruption.
+expected_outcome: NO_BLOCKING_FINDINGS
+failure_mode: false-positive-intentional-complexity
+notes: Non-simplifiable correctness/concurrency requirement; preserve as INTENTIONAL COMPLEXITY, not evidenced CONFIRMED overengineering (never flag on LOC alone).

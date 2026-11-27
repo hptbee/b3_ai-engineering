@@ -13,9 +13,9 @@ Scope → Plan → Build → Verify → Review → Fix → Verify
 | Build | `problem-solving` + smallest domain skill (`XS`+`inline` runs inline when `implementation` model in `.b3/models.md` is unset/`auto` or matches `main`; multi-slice work validates disjoint impl/test/doc slices via `b3 guard check-wave --partition` and dispatches `b3-impl-t00N` per [`references/dispatch-naming.md`](references/dispatch-naming.md)) |
 | Verify | `verification` (executed checks; `b3 guard verify-run` for non-trivial changes/handoffs) |
 | Review | `b3 guard diff-scope` + `mechanical-check` (+ `symbol-check` on refactors) → diff-first, risk-sensitive `code-review` (concurrent `SHARED_READ_ONLY` `b3-reviewer` + triggered specialists on high risk; optional [`references/context-routing.md`](references/context-routing.md) on demand with native fallback) |
-| Fix / Verify | Fix root causes, add regression tests, remove `CONFIRMED` residue, re-verify (max 2 bounded rounds) |
+| Fix / Verify | Fix root causes, add regression tests, remove `CONFIRMED REDUNDANCY` / evidenced `CONFIRMED` overengineering (concrete simpler alt meeting all reqs, never LOC alone; leave `SPECULATIVE`/`INTENTIONAL COMPLEXITY`/`UNKNOWN`), re-verify (max 2 bounded rounds) |
 
-During **Review**, do not only ask "is it correct?" Also ask: *given final requirements, is all of this code still necessary?* Remove temporary scaffolding, dead branches, and redundant state.
+During **Review**, do not only ask "is it correct?" Also ask: *given final requirements, is all of this code still necessary?* Remove `CONFIRMED REDUNDANCY` (local diff via `code-review`/`b3-reviewer`; system shape via `simplest-correct`/`b3-architecture-reviewer`) and preserve `INTENTIONAL COMPLEXITY`.
 
 Independent multi-iteration loop: `commands/b3-review-loop.md` → `review-loop/strategy.md`. `/b3-implement` uses the one-pass review here and does not start the review loop.
 

@@ -1,6 +1,6 @@
 # Real-world validation & pilot provenance
 
-> **Historical framing:** Individual validation records (`v1`–`v3`, `autodev-v1`/`v2`, `codex-host-v1`, `research-ship-pilot-notes.md`) preserve point-in-time evidence and boundary validations without rewriting past runs. Current canonical layout uses host-neutral root directories per [../decisions/decision-013-host-neutral-multi-host-layout.md](../decisions/decision-013-host-neutral-multi-host-layout.md) (`24` canonical skills + `11` command-skills = `35` `SKILL.md` files, `11` commands, and `321` YAML eval fixtures).
+> **Historical framing:** Individual validation records (`v1`–`v3`, `autodev-v1`/`v2`, `codex-host-v1`, `research-ship-pilot-notes.md`) preserve point-in-time evidence and boundary validations without rewriting past runs. Current canonical layout uses host-neutral root directories per [../decisions/decision-013-host-neutral-multi-host-layout.md](../decisions/decision-013-host-neutral-multi-host-layout.md) (`24` canonical skills + `11` command-skills = `35` `SKILL.md` files, `11` commands, and `322` YAML eval fixtures).
 
 **Initial date:** 2026-09-07  
 **Branch:** `cursor/real-world-validation-v1-a097`  

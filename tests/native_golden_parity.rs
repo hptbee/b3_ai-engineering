@@ -565,10 +565,13 @@ fn dead_non_test_helper() -> i32 {
         "--base-sha",
         &base_sha,
     ]);
-    assert_eq!(sym_c, 2, "expected dead_non_test_helper finding: {sym_out}");
+    assert_eq!(
+        sym_c, 0,
+        "orphan_internal-only should emit SYMBOL_ADVISORY exit 0: {sym_out}"
+    );
     assert!(
-        sym_out.contains("dead_non_test_helper"),
-        "missing real dead helper: {sym_out}"
+        sym_out.contains("SYMBOL_ADVISORY") && sym_out.contains("dead_non_test_helper"),
+        "missing real dead helper advisory: {sym_out}"
     );
     assert!(
         !sym_out.contains("unit_test_should_not_be_orphan"),

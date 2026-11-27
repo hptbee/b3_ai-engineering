@@ -46,12 +46,12 @@ flowchart TD
     Hub --> TaskVerify
 
     TaskVerify --> Mech["0-Token Guard: diff-scope + mechanical-check (--wave-specs, --worker-changes/--worker-roots, --protected-paths, --dirty-digests) + symbol-check"]
-    Mech -->|"Exit 2: VIOLATION / PARTIAL_ATTRIBUTION / Findings"| FixMech["Fix ownership, scope_creep, leftovers, obsoletes, or symbol findings"]
+    Mech -->|"Exit 2: VIOLATION / PARTIAL_ATTRIBUTION / MECHANICAL_FINDINGS / SYMBOL_FINDINGS (dangling_refs)"| FixMech["Fix ownership, scope_creep, leftovers, obsoletes, safety_hits (-> BLOCKED), or confirmed dangling_refs"]
     FixMech --> Mech
-    Mech -->|"MECHANICAL_OK"| ReviewTier["Review pass (inline+XS/S+LOW: 1 reviewer; else review-loop/strategy.md)"]
+    Mech -->|"Exit 0: MECHANICAL_OK / MECHANICAL_ADVISORY (advisory_hits) / SYMBOL_ADVISORY (orphan_internal)"| ReviewTier["Review pass (surface advisory signals to Reviewer w/ native compiler/linter output; inline+XS/S+LOW: 1 reviewer; else review-loop/strategy.md)"]
     ReviewTier -->|"Blocking CONFIRMED"| LazySnap["Lazy b3 guard snapshot (pre_fix_object) -> Fix -> delta Review"]
     LazySnap --> ReviewTier
-    ReviewTier -->|"Pass"| PreCommit["Commit (precommit --require-verify-receipt + git commit + collapse approach)"]
+    ReviewTier -->|"Pass"| PreCommit["Commit (precommit --require-verify-receipt single validator + git commit + collapse approach)"]
 
     PreCommit --> MoreTasks{"More ready tasks?"}
     MoreTasks -->|"Yes"| ReadyCheck
@@ -132,7 +132,7 @@ sequenceDiagram
 flowchart TD
     Start["/b3-review-loop or /b3-ship Review"] --> Scope["Guard (0-Token CLI): diff-scope + mechanical-check + symbol-check"]
     Scope -->|"EMPTY_DIFF"| Incomplete["UNKNOWN / INCOMPLETE"]
-    Scope -->|"Exit 2: mechanical / symbol"| FixMech["Fix scope_creep / leftovers / obsoletes / dangling symbols"]
+    Scope -->|"Exit 2: MECHANICAL_FINDINGS / SYMBOL_FINDINGS (dangling_refs)"| FixMech["Fix scope_creep / leftovers / obsoletes / safety_hits (-> BLOCKED) / confirmed dangling_refs"]
     FixMech --> Scope
     Scope -->|"NOISE_ONLY"| NoiseTest["Verify: b3 guard verify-run / verify-check"]
     NoiseTest -->|"Green"| Pass["PASS (0 LLM review tokens)"]
@@ -140,7 +140,7 @@ flowchart TD
 
     Scope -->|"L / XL / XXL"| Hier["Hierarchical L0-L4 (review-inventory + L1 contracts + L2 adaptive conc units + L3 cross-unit + review-ledger check)"]
     Hier --> Gate
-    Scope -->|"XS / S / M"| Rev["Review: Fresh Independent Reviewer + Risk-Triggered Specialists (Iter 2+: delta_files + callers + residue; <= 25L; else SINGLE_AGENT_LIMIT)"]
+    Scope -->|"XS / S / M (incl. Exit 0 advisory_hits / orphan_internal)"| Rev["Review: Fresh Reviewer + Specialists (triage advisory signals w/ native compiler/linter output; Iter 2+: delta_files + callers + residue; <= 25L; else SINGLE_AGENT_LIMIT)"]
     Rev --> Merge["Orchestrator merges & classifies findings (OPEN / FIXED / REJECTED / ACCEPTED / SPECULATIVE)"]
     Merge --> Gate{"Blocking OPEN == 0 AND verify-check / checks PASS?"}
     Gate -->|"Yes"| Pass2["PASS"]

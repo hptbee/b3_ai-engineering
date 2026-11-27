@@ -6,22 +6,17 @@ use crate::error::{fail, B3Error};
 use crate::fs::{
     has_control_chars, is_reparse_or_symlink, normalize_repo_root, sort_ordinal,
     split_csv_list_as_paths, split_path_csv_checked, test_checkpoint_path,
-    test_contained_repo_path, test_ownership_path_match,
+    test_contained_repo_path,
 };
 use crate::git::{
     git_program, is_hex40, run_git, run_git_paths_z, test_repo_case_insensitive,
     test_valid_literal_git_path, GitZMode,
 };
 use crate::guard::ledger::{invoke_review_ledger_check, ReviewLedger};
-use crate::guard::verify::test_verify_receipt;
+use crate::guard::push_unique_str;
+use crate::guard::verify::{test_verify_receipt, validate_receipt_covers_paths};
 use crate::json::{parse_json, JsonValue};
 use crate::process::run_command_timeout;
-
-fn push_unique_str(vec: &mut Vec<String>, val: String) {
-    if !vec.iter().any(|x| x == &val) {
-        vec.push(val);
-    }
-}
 
 fn is_invalid_ref_token(s: &str) -> bool {
     let low = s.to_ascii_lowercase();
@@ -352,7 +347,6 @@ fn assert_single_verify_receipt_matches_target(
     ign_paths: &[String],
     head_sha: &str,
     required_paths: &[String],
-    case_insensitive: bool,
 ) -> Result<(), B3Error> {
     if !is_hex40(head_sha) {
         return Err(fail(
@@ -367,22 +361,20 @@ fn assert_single_verify_receipt_matches_target(
             1,
         ));
     }
-    if vr.relevant_paths_csv != "ALL" {
-        if required_paths.is_empty() {
+    if let Some(uncovered) = validate_receipt_covers_paths(&vr.relevant_paths_csv, required_paths) {
+        if uncovered.is_empty() {
             return Err(fail(
                 "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)",
                 1,
             ));
         }
-        let rec_list = split_csv_list_as_paths(&vr.relevant_paths_csv);
-        for cp in required_paths {
-            if !test_ownership_path_match(cp, &rec_list, case_insensitive) {
-                return Err(fail(
-                    format!("MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: {cp})"),
-                    1,
-                ));
-            }
-        }
+        return Err(fail(
+            format!(
+                "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: {})",
+                uncovered[0]
+            ),
+            1,
+        ));
     }
     Ok(())
 }
@@ -397,7 +389,6 @@ fn assert_local_ci_evidence(
     ign_paths: &[String],
     caller_ci_status: &str,
     require_ci: bool,
-    case_insensitive: bool,
 ) -> Result<(), B3Error> {
     if !rec_path.trim().is_empty() {
         assert_single_verify_receipt_matches_target(
@@ -406,7 +397,6 @@ fn assert_local_ci_evidence(
             ign_paths,
             head_sha,
             changed_paths,
-            case_insensitive,
         )?;
         return Ok(());
     }
@@ -461,21 +451,22 @@ fn assert_local_ci_evidence(
                 }
             }
             if !has_all_scope {
-                if changed_paths.is_empty() {
-                    return Err(fail(
-                        "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)",
-                        1,
-                    ));
-                }
-                for cp in changed_paths {
-                    if !test_ownership_path_match(cp, &covered_list, case_insensitive) {
+                let covered_csv = covered_list.join(",");
+                if let Some(uncovered) = validate_receipt_covers_paths(&covered_csv, changed_paths)
+                {
+                    if uncovered.is_empty() {
                         return Err(fail(
-                            format!(
-                                "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: {cp})"
-                            ),
+                            "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH)",
                             1,
                         ));
                     }
+                    return Err(fail(
+                        format!(
+                            "MERGE_BLOCKED: ci_evidence_invalid(VERIFY_SCOPE_MISMATCH: {})",
+                            uncovered[0]
+                        ),
+                        1,
+                    ));
                 }
             }
             return Ok(());
@@ -2188,7 +2179,6 @@ pub fn run(
                 &ignored,
                 ci_st,
                 require_ci,
-                mp_case_insensitive,
             )?;
         }
         if require_review && rev_st != "PASS" && ledger_path.trim().is_empty() {
@@ -2454,7 +2444,6 @@ pub fn run(
         &ignored,
         ci_st,
         auth_loc_pol.require_ci,
-        mp_case_insensitive,
     )?;
 
     if target_sym_full.is_empty() || eff_auth_sym_full.is_empty() {

@@ -2196,10 +2196,9 @@ fn parse_resolve_evidence(
         .and_then(JsonValue::as_str)
         .unwrap_or("")
         .trim();
-    if checked_command.is_empty() || summary.chars().count() < 10 {
+    if checked_command.is_empty() || summary.trim().is_empty() {
         return Err(blocked(
-            "Evidence requires non-empty checked_command and descriptive summary (>=10 chars)"
-                .to_string(),
+            "Evidence requires non-empty checked_command and summary".to_string(),
         ));
     }
     let receipt_rel = ev
