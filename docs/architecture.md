@@ -6,11 +6,28 @@ This document defines the building blocks of the system. It is definitional. Ope
 
 | Kind | What | Where |
 | --- | --- | --- |
-| **Source (meaning)** | Rule bodies, skills, commands, agents, review-loop, workflows, evals, knowledge | `rules/`, `skills/`, `commands/`, `agents/`, `review-loop/`, `workflows/`, `evals/`, `knowledge/` |
-| **Host entrypoints (committed)** | Thin wrappers/manifests that activate canonical core without duplicating prose | `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json` |
+| **Canonical source files** | Committed host-neutral core: rule bodies, skills, commands, agents, review-loop, workflows, evals, knowledge | `rules/`, `skills/`, `commands/`, `agents/`, `review-loop/`, `workflows/`, `evals/`, `knowledge/` |
+| **Canonical discovery entrypoints** | Committed universal workspace map and minimal Claude `@AGENTS.md` bridge | `AGENTS.md`, `CLAUDE.md` |
 | **Documentation** | Explains the system; not configuration | `docs/`, `README.md` |
 | **Research** | Provenance; not production config | `research/` |
-| **Local activation links** | Gitignored host discovery links created by `b3 sync` | `.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}` |
+| **Generated host activation** | Gitignored local host links/wrappers/manifests or global/product installs created by `b3 sync` / `b3 install` | `.cursor/{skills,commands,agents,rules}`, `.agents/skills.json`, `.agents/skills`, `.claude/{skills,agents}` |
+| **User-owned configuration** | Personal preferences or custom host rules/manifests; never silently overwritten without `--force` | `~/.b3/models.md`, `<project>/.b3/models.md`, unmanaged `.cursor/rules/*.mdc`, customized `.agents/skills.json` |
+
+Activation lifecycle:
+
+```text
+B3 Source
+    |
+    v
+Native b3 CLI
+    |
+    +-- b3 install global
+    +-- b3 install product
+    +-- b3 sync
+    |
+    v
+Host-specific generated activation
+```
 
 B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `agents/`) mapped onto Cursor, Codex, Claude Code, and Antigravity via thin adapters. Decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`).
 
@@ -242,7 +259,7 @@ An adapter maps the canonical core (`rules/`, `skills/`, `commands/`, `agents/`)
 
 Example:
 
-> `b3 sync --host <cursor|codex|claude|antigravity>` links `.cursor/{skills,commands,agents}`, `.agents/skills/<name>`, `.claude/{skills,agents}`, or verifies `.agents/skills.json`.
+> `b3 sync --host <cursor|codex|claude|antigravity>` generates gitignored `.cursor/{skills,commands,agents,rules}`, `.agents/skills/<name>`, `.claude/{skills,agents}`, or `.agents/skills.json`. See [`../adapters/README.md`](../adapters/README.md).
 
 ## Eval
 

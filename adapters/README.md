@@ -4,16 +4,16 @@ B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `ag
 
 > **Native CLI & zero-Rust bootstrap:** `b3 sync` and `b3 install <product|cursor|antigravity|global>` execute all sync, product-attach, NTFS junction (`DeviceIoControl`), symlink, manifest, and uninstall flows natively via the zero-dependency `b3` binary (`src/adapters/`). End users only need [`../scripts/bootstrap-b3.ps1`](../scripts/bootstrap-b3.ps1) / [`../scripts/bootstrap-b3.sh`](../scripts/bootstrap-b3.sh) once to download/verify `SHA256SUMS.txt` and install `b3` (with `--rollback` support, requiring zero Rust/Cargo/Node.js/Python/PowerShell/Bash at runtime); contributors can build via `cargo build --release`. Release targets (`.github/workflows/release.yml`): `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, `x86_64-apple-darwin`.
 
-Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only thin committed entrypoints (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json`) are committed; local discovery links are gitignored and managed by `b3 sync`.
+Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only canonical `AGENTS.md` (plus the minimal `CLAUDE.md` `@AGENTS.md` bridge for Claude Code) lives in the source repo; local discovery links and `.agents/skills.json` are gitignored and generated on demand by `b3 sync` or `b3 install`.
 
 ## Host path matrix
 
 | Host | Rules / context | Skills | Commands | Subagents |
 | --- | --- | --- | --- | --- |
-| **Cursor** | `AGENTS.md` + committed `.cursor/rules/*.mdc` (`@rules/*.md`) | Gitignored `.cursor/skills` → `skills/` (or global `~/.cursor/skills/<name>` via `b3 install global --action install --host cursor`) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
+| **Cursor** | `AGENTS.md` + generated gitignored `.cursor/rules/*.mdc` (`@rules/*.md`, `alwaysApply: true` for hard global rules; or global `~/.cursor/b3-user-rules.txt` via `b3 install cursor`) | Gitignored `.cursor/skills` → `skills/` (or global `~/.cursor/skills/<name>` via `b3 install global --action install --host cursor`) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
 | **Codex** | `AGENTS.md` | Gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`) | `adapters/command-skills/` (`$b3-ship`, `$b3-plan`, …) + prompt routing | Delegated role prompts from `agents/*.md` |
-| **Claude Code** | Committed `CLAUDE.md` (`@AGENTS.md`) | Gitignored flattened `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`) | Unified with skills (`adapters/command-skills/` via `.claude/skills/<name>`) | Gitignored `.claude/agents` → `agents/` |
-| **Antigravity** | `AGENTS.md` (or plugin `rules/AGENTS.md`) | Committed `.agents/skills.json` (in-repo), flattened `.agents/skills/<name>` (product), or plugin `skills/` | `adapters/command-skills/` via `.agents/skills.json` / plugin | Generated plugin `agents/*.md` (`subagent: true`, explicit `tools:`) or dynamic `define_subagent` |
+| **Claude Code** | `CLAUDE.md` (`@AGENTS.md`) | Gitignored flattened `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`) | Unified with skills (`adapters/command-skills/` via `.claude/skills/<name>`) | Gitignored `.claude/agents` → `agents/` |
+| **Antigravity** | `AGENTS.md` (or plugin `rules/AGENTS.md`) | Generated gitignored `.agents/skills.json` (`b3 sync --host antigravity`), flattened `.agents/skills/<name>` (`b3 install product`), or plugin `skills/` | `adapters/command-skills/` via `.agents/skills.json` / plugin | Generated plugin `agents/*.md` (`subagent: true`, explicit `tools:`) or dynamic `define_subagent` |
 
 **Host-native fallback:** All 4 hosts inherit [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md); when a host session lacks parallel subagents or required isolation, B3 degrades cleanly to `SEQUENTIAL` (`no_host_isolation` / `sequential_host_fallback`) without altering canonical workflow meaning.
 
@@ -32,12 +32,13 @@ Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.a
 b3 sync --host cursor
 b3 sync --host codex
 b3 sync --host claude
-b3 sync --host antigravity --verify-only
+b3 sync --host antigravity
 ```
 
 - On Windows, `b3 sync` creates unprivileged NTFS junctions via native `DeviceIoControl`; on macOS/Linux, it creates POSIX symlinks.
 - Supports `--dry-run`, `--verify-only`, `--force`, and `--repo-root <dir>`.
-- **Coexistence guards:** `b3 sync` refuses (unless `--force`) to create `.cursor/skills` alongside `.agents/skills` or `.claude/skills` (Cursor cross-loads those roots and duplicates skills), and warns when `.agents/skills` coexists with committed `.agents/skills.json` (Antigravity reads both). There is intentionally no unguarded `all` target.
+- **Coexistence guards & unmanaged preservation:** `b3 sync` refuses (unless `--force`) to create `.cursor/skills` alongside `.agents/skills` or `.claude/skills` (Cursor cross-loads those roots and duplicates skills), warns when `.agents/skills` coexists with generated `.agents/skills.json` (Antigravity reads both), and never overwrites user-owned `.cursor/rules/*.mdc` or customized `.agents/skills.json` without `--force`. There is intentionally no unguarded `all` target.
+- **Migration from previously committed `.cursor/rules/*.mdc` / `.agents/skills.json`:** Pull/update the repo (which removes those committed files and adds them to `.gitignore`), then run `b3 sync --host cursor` or `b3 sync --host antigravity` once per checkout to regenerate gitignored local activation. Previously generated B3 manifests upgrade cleanly without `--force`.
 - **Exit `1`** on missing sources, wrong links, or non-empty non-link content. Filesystem success is not runtime host-discovery `PASS`.
 
 ## Product repository attach (`b3 install product`)

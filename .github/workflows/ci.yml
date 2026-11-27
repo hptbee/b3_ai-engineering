@@ -90,7 +90,8 @@ jobs:
           fi
           "$bin" --version
           "$bin" context measure --strict
-          "$bin" sync --host antigravity --verify-only
+          "$bin" sync --host antigravity --dry-run
+          "$bin" sync --host cursor --dry-run
           "$bin" guard fingerprint --depends-on T2,T1 --scope src/a.rs --criteria ok
 
       - name: Run all native Rust unit & integration tests

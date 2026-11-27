@@ -55,7 +55,7 @@ In any Git repo that has never run `b3 install product`:
 
 | Mode | Command | When |
 | --- | --- | --- |
-| Inside this B3 checkout | `b3 sync --host cursor` | Developing B3 itself |
+| Inside this B3 checkout | `b3 sync --host cursor` | Generates gitignored `.cursor/{skills,commands,agents}` links + `.cursor/rules/*.mdc` wrappers (`alwaysApply: true` for hard global rules, `false` for `simplest-correct`) without overwriting user `.mdc` files |
 | Optional per-project attach | `b3 install product --product-root <dir> --host cursor` | Team-committed repo pointer |
 
 Do **not** also activate `.agents/skills` or `.claude/skills` in the same checkout — Cursor cross-loads those roots (`b3 install` / `b3 sync` emits `COEXISTENCE_WARNING:` if overlapping `~/.agents/skills/` or `~/.claude/skills/` exist).

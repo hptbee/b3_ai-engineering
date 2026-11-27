@@ -1695,12 +1695,127 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     let root_str = root.to_str().unwrap();
     let tmp = TempDirGuard::new("prod-sync");
 
-    // 1. b3 sync across cursor/codex/claude/antigravity + verify-only + empty vs non-empty replacement + coexistence guard
+    // 0. Source repo has no committed .cursor/rules or .agents/skills.json; verify-only fails cleanly before sync
+    let tracked_host_cfg = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", ".cursor/rules", ".agents/skills.json"])
+        .output()
+        .expect("git ls-files");
+    assert!(tracked_host_cfg.status.success());
+    assert!(
+        String::from_utf8_lossy(&tracked_host_cfg.stdout)
+            .trim()
+            .is_empty(),
+        "source repo must not commit .cursor/rules or .agents/skills.json"
+    );
+
+    // 1. b3 sync across cursor/codex/claude/antigravity + verify-only + unmanaged conflict + empty vs non-empty replacement + coexistence guard
     let sync_fx = tmp.path.join("sync-fx");
     copy_b3_snapshot(&sync_fx, true);
+    assert!(!sync_fx.join(".cursor/rules").exists());
+    assert!(!sync_fx.join(".agents/skills.json").exists());
     let sync_s = sync_fx.to_str().unwrap();
 
-    // Antigravity sync + verify-only
+    // Antigravity & Cursor verify-only report missing activation before sync
+    let (c_agv_pre, out_agv_pre, err_agv_pre) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            sync_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(c_agv_pre, 1);
+    assert!(
+        format!("{out_agv_pre}\n{err_agv_pre}").contains("missing manifest"),
+        "expected missing manifest, got: {out_agv_pre}\n{err_agv_pre}"
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only",
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+
+    // Path-traversal entry in .agents/skills.json is rejected by --verify-only and refused by sync without --force
+    let ag_manifest = sync_fx.join(".agents/skills.json");
+    write_lf(
+        &ag_manifest,
+        "{\n  \"entries\": [{ \"path\": \"../outside\" }]\n}\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "antigravity",
+                "--verify-only",
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+
+    // Unmanaged .agents/skills.json (extra top-level key or extra per-entry key) refused without --force, overwritten with --force
+    write_lf(
+        &ag_manifest,
+        "{\n  \"entries\": [{ \"path\": \"custom\", \"note\": \"keep\" }],\n  \"inherits\": true\n}\n",
+    );
+    let (c_ag_unmanaged, out_ag_unmanaged, err_ag_unmanaged) = run_b3_env(
+        &["sync", "--repo-root", sync_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_ag_unmanaged, 1);
+    assert!(
+        format!("{out_ag_unmanaged}\n{err_ag_unmanaged}").contains("OWNERSHIP_UNKNOWN"),
+        "got: {out_ag_unmanaged}\n{err_ag_unmanaged}"
+    );
+    assert!(fs::read_to_string(&ag_manifest)
+        .unwrap()
+        .contains("inherits"));
+
+    // Antigravity sync (--force overwrites unmanaged, repeated sync is idempotent, verify-only passes)
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
     assert_eq!(
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "antigravity"],
@@ -1806,6 +1921,38 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .0,
         0
     );
+    // Repeated cursor sync is idempotent and generates thin .cursor/rules/*.mdc wrappers without duplicating rule bodies
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    for (stem, expected_apply) in [
+        ("engineering-principles", true),
+        ("evidence-and-provenance", true),
+        ("portability", true),
+        ("verification", true),
+        ("simplest-correct", false),
+    ] {
+        let mdc = fs::read_to_string(sync_fx.join(format!(".cursor/rules/{stem}.mdc"))).unwrap();
+        assert!(
+            mdc.contains(&format!("alwaysApply: {expected_apply}")),
+            "{stem}.mdc missing alwaysApply: {expected_apply}:\n{mdc}"
+        );
+        assert!(
+            mdc.contains(&format!("@rules/{stem}.md")),
+            "{stem}.mdc missing @rules/{stem}.md:\n{mdc}"
+        );
+        assert!(
+            mdc.lines().count() <= 10 && !mdc.contains("Record tradeoffs"),
+            "{stem}.mdc must stay a thin wrapper without duplicating canonical rule body:\n{mdc}"
+        );
+    }
     assert_eq!(
         run_b3_env(
             &[
@@ -1822,6 +1969,358 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         )
         .0,
         0
+    );
+
+    // Cursor rules ownership, stale pruning, user-edit preservation, and honest --verify-only
+    let custom_mdc = sync_fx.join(".cursor/rules/my-custom.mdc");
+    write_lf(
+        &custom_mdc,
+        "---\nalwaysApply: false\n---\n# custom user rule\n",
+    );
+
+    // Unrelated user .mdc passes --verify-only and is never touched
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // 1) Generated wrapper modified while RETAINING B3 marker -> refused without --force and preserved
+    let eng_mdc = sync_fx.join(".cursor/rules/engineering-principles.mdc");
+    let eng_orig = fs::read_to_string(&eng_mdc).unwrap();
+    write_lf(&eng_mdc, &format!("{eng_orig}# user local tweak\n"));
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(fs::read_to_string(&eng_mdc)
+        .unwrap()
+        .contains("# user local tweak"));
+
+    // 2) Legacy wrapper with user modification -> refused without --force and preserved
+    write_lf(
+        &eng_mdc,
+        "---\ndescription: custom\nalwaysApply: true\n---\nFollow the portable engineering-principles rule:\n@rules/engineering-principles.md\n# legacy user note\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(fs::read_to_string(&eng_mdc)
+        .unwrap()
+        .contains("# legacy user note"));
+
+    // 3) Explicit --force replaces conflicting wrapper while preserving custom my-custom.mdc
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(fs::read_to_string(&eng_mdc).unwrap(), eng_orig);
+    assert!(custom_mdc.is_file(), "user custom .mdc must be preserved");
+
+    // 4) Stale unmodified B3 wrapper fails --verify-only and is pruned on sync; stale modified wrapper is NOT deleted
+    let tmp_rule_src = sync_fx.join("rules/temp-b3-rule.md");
+    write_lf(
+        &tmp_rule_src,
+        "---\ntype: rule\nstrength: hard\nscope: global\n---\n# Temp rule\nTemp constraint.\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    let tmp_rule_mdc = sync_fx.join(".cursor/rules/temp-b3-rule.mdc");
+    assert!(tmp_rule_mdc.is_file());
+    fs::remove_file(&tmp_rule_src).unwrap();
+    // Stale managed wrapper fails --verify-only
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    // Normal sync prunes unmodified stale B3 wrapper
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        !tmp_rule_mdc.exists(),
+        "unmodified stale B3 wrapper must be pruned"
+    );
+
+    // Stale modified wrapper must NOT be deleted and must fail sync with STALE_RULE_CONFLICT + preserve sidecar
+    write_lf(
+        &tmp_rule_src,
+        "---\ntype: rule\nstrength: hard\nscope: global\n---\n# Temp rule 2\nTemp constraint.\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    fs::remove_file(&tmp_rule_src).unwrap();
+    fs::write(
+        &tmp_rule_mdc,
+        format!(
+            "{}\n# user kept\n",
+            fs::read_to_string(&tmp_rule_mdc).unwrap()
+        ),
+    )
+    .unwrap();
+    let rules_sidecar = sync_fx.join(".cursor/rules/.b3-rules-manifest.sha256");
+    let sidecar_before_conflict = fs::read_to_string(&rules_sidecar).unwrap();
+    assert!(sidecar_before_conflict.contains("temp-b3-rule.mdc="));
+    let (c_stale_mod, out_stale_mod, err_stale_mod) = run_b3_env(
+        &["sync", "--repo-root", sync_s, "--host", "cursor"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(
+        c_stale_mod, 1,
+        "modified stale wrapper must fail sync: {out_stale_mod}\n{err_stale_mod}"
+    );
+    let stale_msg = format!("{out_stale_mod}\n{err_stale_mod}");
+    assert!(
+        stale_msg.contains("STALE_RULE_CONFLICT") && stale_msg.contains("temp-b3-rule.mdc"),
+        "expected STALE_RULE_CONFLICT naming temp-b3-rule.mdc, got: {stale_msg}"
+    );
+    assert!(
+        tmp_rule_mdc.is_file()
+            && fs::read_to_string(&tmp_rule_mdc)
+                .unwrap()
+                .contains("# user kept"),
+        "stale wrapper modified by user must NOT be deleted"
+    );
+    assert_eq!(
+        fs::read_to_string(&rules_sidecar).unwrap(),
+        sidecar_before_conflict,
+        "sidecar ownership evidence must be preserved until conflict is resolved"
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(custom_mdc.is_file(), "unrelated user .mdc must stay intact");
+    // Manual resolution -> sync, idempotent repeat sync, and --verify-only all pass and prune sidecar entry
+    fs::remove_file(&tmp_rule_mdc).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        !fs::read_to_string(&rules_sidecar)
+            .unwrap()
+            .contains("temp-b3-rule.mdc"),
+        "resolved stale wrapper must be removed from sidecar"
+    );
+
+    // 5) Honest --verify-only checks (no false PASS from substring spoofing, duplicate frontmatter, missing hard rule, or empty rules/)
+    for bad_eng in [
+        "---\nalwaysApply: false\n---\n@rules/engineering-principles.md\n",
+        "---\nalwaysApply: false\n---\n# body spoof\nalwaysApply: true\n@rules/engineering-principles.md\n",
+        "---\nalwaysApply: true\nalwaysApply: false\n---\n@rules/engineering-principles.md\n",
+    ] {
+        write_lf(&eng_mdc, bad_eng);
+        assert_eq!(
+            run_b3_env(
+                &[
+                    "sync",
+                    "--repo-root",
+                    sync_s,
+                    "--host",
+                    "cursor",
+                    "--verify-only"
+                ],
+                None,
+                &[],
+                &[],
+            )
+            .0,
+            1
+        );
+    }
+    // Missing hard rule wrapper fails --verify-only
+    fs::remove_file(&eng_mdc).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    // Restore clean Cursor rules via --force
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // Empty canonical rules/ directory fails --verify-only
+    let empty_rules_fx = tmp.path.join("sync-empty-rules");
+    copy_b3_snapshot(&empty_rules_fx, true);
+    for entry in fs::read_dir(empty_rules_fx.join("rules")).unwrap() {
+        fs::remove_file(entry.unwrap().path()).unwrap();
+    }
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                empty_rules_fx.to_str().unwrap(),
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+
+    // Junctioned .cursor/rules is refused even with --force (isolated repo so sync_fx remains valid)
+    let junc_fx = tmp.path.join("sync-cursor-junc");
+    copy_b3_snapshot(&junc_fx, true);
+    let decoy_rules = tmp.path.join("decoy-rules");
+    fs::create_dir_all(&decoy_rules).unwrap();
+    create_dir_link(&junc_fx.join(".cursor/rules"), &decoy_rules).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                junc_fx.to_str().unwrap(),
+                "--host",
+                "cursor",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
     );
 
     // Claude sync + verify-only (using clean snapshot)
@@ -2420,5 +2919,484 @@ fn b3_home_pointer_rejects_unc_and_reparse_parents() {
         recorded_j.trim(),
         to_forward_path(&decoy_snap),
         "pointer inside reparse .b3 dir must be ignored"
+    );
+}
+
+#[test]
+fn antigravity_manifest_upgrades_and_security_guards() {
+    let tmp = TempDirGuard::new("ag-manifest-upg");
+    let fx = tmp.path.join("b3-fx");
+    copy_b3_snapshot(&fx, true);
+    let fx_s = fx.to_str().unwrap();
+    let manifest = fx.join(".agents/skills.json");
+
+    // 1. Dry-run and verify-only without mutation on fresh checkout
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--dry-run"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        !manifest.exists(),
+        "--dry-run must not create .agents/skills.json"
+    );
+
+    // 2. Fresh generation + repeated idempotent sync + verify-only
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    let initial_raw = fs::read_to_string(&manifest).unwrap();
+    assert!(initial_raw.contains("adapters/command-skills"));
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), initial_raw);
+    let (vc0, vout0, _) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(vc0, 0, "{vout0}");
+
+    // 3. Adding a new canonical skill category upgrades manifest WITHOUT --force
+    write_lf(
+        &fx.join("skills/devops/ci-check/SKILL.md"),
+        "---\nname: ci-check\ndescription: ci check\n---\n# ci\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/devops"));
+
+    // 4. Removing a canonical skill category upgrades manifest WITHOUT --force
+    remove_dir_tree_safely(&fx.join("skills/devops")).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(!fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/devops"));
+
+    // 5. B3-looking user-authored manifest & unknown legacy manifest (no sidecar) fail safely with OWNERSHIP_UNKNOWN
+    let sidecar = fx.join(".agents/.b3-skills-manifest.sha256");
+    assert!(sidecar.is_file(), "B3 sync must record manifest sidecar");
+    let before_verify_raw = fs::read_to_string(&manifest).unwrap();
+    let before_verify_sc = fs::read_to_string(&sidecar).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--dry-run"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), before_verify_raw);
+    assert_eq!(fs::read_to_string(&sidecar).unwrap(), before_verify_sc);
+
+    // 5b. Exact-match user manifest WITHOUT sidecar must NOT be silently adopted (sync + verify-only fail; --force adopts)
+    let exact_raw = fs::read_to_string(&manifest).unwrap();
+    let orig_sidecar = fs::read_to_string(&sidecar).unwrap();
+    fs::remove_file(&sidecar).unwrap();
+    write_lf(&manifest, &exact_raw);
+    let (c_exact_noside, out_exact_noside, err_exact_noside) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_exact_noside, 1);
+    assert!(format!("{out_exact_noside}\n{err_exact_noside}").contains("OWNERSHIP_UNKNOWN"));
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), exact_raw);
+    assert!(!sidecar.exists(), "refused sync must not mint sidecar");
+    let (cv_exact_noside, outv_exact_noside, errv_exact_noside) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(cv_exact_noside, 1);
+    assert!(format!("{outv_exact_noside}\n{errv_exact_noside}").contains("OWNERSHIP_UNKNOWN"));
+    assert!(!sidecar.exists(), "--verify-only must not create sidecar");
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(sidecar.is_file());
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // 5c. Modified manifest retaining ALL expected entries + added top-level metadata + corrupt sidecar fail BOTH sync & verify-only
+    let drifted_manifest = format!(
+        "{{\n  \"inherits\": true,\n{}",
+        exact_raw.strip_prefix("{\n").unwrap()
+    );
+    write_lf(&manifest, &drifted_manifest);
+    let (c_drift_sync, out_drift_sync, err_drift_sync) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_drift_sync, 1);
+    assert!(format!("{out_drift_sync}\n{err_drift_sync}").contains("OWNERSHIP_MODIFIED"));
+    let (c_drift_ver, out_drift_ver, err_drift_ver) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(c_drift_ver, 1);
+    assert!(format!("{out_drift_ver}\n{err_drift_ver}").contains("OWNERSHIP_MODIFIED"));
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), drifted_manifest);
+
+    // Even if sidecar matches drifted top-level metadata manifest, --verify-only still fails on drift without mutating files
+    write_lf(
+        &sidecar,
+        &format!("{}\n", sha256_bytes_hex(drifted_manifest.as_bytes())),
+    );
+    let (c_drift_ms_ver, out_drift_ms_ver, err_drift_ms_ver) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(c_drift_ms_ver, 1);
+    assert!(format!("{out_drift_ms_ver}\n{err_drift_ms_ver}").contains("drifted"));
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), drifted_manifest);
+
+    // Corrupt sidecar with canonical manifest fails both normal sync and --verify-only without mutating files
+    write_lf(&manifest, &exact_raw);
+    write_lf(&sidecar, "not-a-valid-sha256\n");
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        fs::read_to_string(&sidecar).unwrap(),
+        "not-a-valid-sha256\n"
+    );
+
+    // Restoring original valid sidecar makes both --verify-only and normal sync pass again
+    write_lf(&sidecar, &orig_sidecar);
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // Modified generated manifest (sidecar mismatch) -> refused with OWNERSHIP_MODIFIED and preserved
+    write_lf(
+        &manifest,
+        "{\n  \"entries\": [\n    { \"path\": \"skills/engineering\" }\n  ]\n}\n",
+    );
+    let (c_mod, out_mod, err_mod) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_mod, 1);
+    assert!(format!("{out_mod}\n{err_mod}").contains("OWNERSHIP_MODIFIED"));
+    assert!(!fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/backend"));
+
+    // B3-looking user-authored manifest without sidecar (e.g. skills/internal) -> refused with OWNERSHIP_UNKNOWN
+    fs::remove_file(&sidecar).unwrap();
+    write_lf(
+        &manifest,
+        "{\n  \"entries\": [\n    { \"path\": \"skills/internal\" }\n  ]\n}\n",
+    );
+    let (c_unk, out_unk, err_unk) = run_b3_env(
+        &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+        None,
+        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[],
+    );
+    assert_eq!(c_unk, 1);
+    assert!(format!("{out_unk}\n{err_unk}").contains("OWNERSHIP_UNKNOWN"));
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/internal"));
+
+    // Explicit --force overwrites and restores sidecar
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/backend"));
+    assert!(sidecar.is_file());
+
+    // 6. Customized user manifest refused WITHOUT --force, overwritten WITH --force
+    write_lf(
+        &manifest,
+        "{\n  \"entries\": [\n    { \"path\": \"skills/engineering\" },\n    { \"path\": \"custom/my-skills\" }\n  ]\n}\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("custom/my-skills"));
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // 7. Duplicate JSON keys & unsafe traversal paths rejected by --verify-only and refused without --force
+    for bad in [
+        "{\"entries\":[{\"path\":\"skills/engineering\"}],\"entries\":[{\"path\":\"skills/backend\"}]}",
+        "{\"entries\":[{\"path\":\"skills/engineering\",\"path\":\"skills/backend\"}]}",
+        "{\"entries\":[{\"path\":\"../outside\"}]}",
+    ] {
+        write_lf(&manifest, bad);
+        assert_eq!(
+            run_b3_env(
+                &["sync", "--repo-root", fx_s, "--host", "antigravity", "--verify-only"],
+                None,
+                &[],
+                &[],
+            )
+            .0,
+            1
+        );
+        assert_eq!(
+            run_b3_env(
+                &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+                None,
+                &[("B3_SKIP_MODEL_INIT", "1")],
+                &[],
+            )
+            .0,
+            1
+        );
+    }
+
+    // 8. Symlink/junction .agents/skills.json refused even with --force
+    let decoy_file = tmp.path.join("decoy-skills");
+    fs::create_dir_all(&decoy_file).unwrap();
+    fs::remove_file(&manifest).unwrap();
+    create_dir_link(&manifest, &decoy_file).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
     );
 }
