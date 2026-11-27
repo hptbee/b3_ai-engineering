@@ -1073,7 +1073,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--receipt-path",
         receipt_rel,
         "--verify-cmd",
-        "cmd /c echo ok",
+        "echo ok",
     ]);
     assert_eq!(vc, 0, "verify-run failed: {vout}\n{verr}");
 
@@ -1086,7 +1086,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--allowed-paths",
         "src/app.rs",
         "--expected-cmd",
-        "cmd /c echo ok",
+        "echo ok",
     ]);
     assert_eq!(nf_c, 1);
     assert!(
@@ -1105,7 +1105,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--require-verify-receipt",
         receipt_rel,
         "--expected-cmd",
-        "cmd /c echo wrong",
+        "echo wrong",
     ]);
     assert_eq!(wc, 1);
     assert!(w_out.contains("VERIFY_MISMATCH"), "{w_out}");
@@ -1137,7 +1137,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--require-verify-receipt",
         receipt_rel,
         "--expected-cmd",
-        "cmd /c echo ok",
+        "echo ok",
         "--relevant-paths",
         "src/app.rs,tests/shared.rs",
     ]);
@@ -1157,7 +1157,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--receipt-path",
         receipt_rel,
         "--expected-cmd",
-        "cmd /c echo ok",
+        "echo ok",
     ]);
     assert_eq!(vsc, 2);
     assert!(vs_out.contains("VERIFY_STALE"), "{vs_out}");
@@ -1172,7 +1172,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--require-verify-receipt",
         receipt_rel,
         "--expected-cmd",
-        "cmd /c echo ok",
+        "echo ok",
     ]);
     assert_eq!(psc, 1);
     assert!(ps_out.contains("VERIFY_STALE"), "{ps_out}");
@@ -1191,7 +1191,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--receipt-path",
         receipt_rel,
         "--verify-cmd",
-        "cmd /c echo ok",
+        "echo ok",
     ]);
     assert_eq!(vc2, 0, "re-verify failed: {verr2}");
     fs::create_dir_all(repo.join("packages/web")).unwrap();
@@ -1208,7 +1208,7 @@ fn core_precommit_consolidated_expected_cmd_relevant_paths_and_manifest_invalida
         "--receipt-path",
         receipt_rel,
         "--expected-cmd",
-        "cmd /c echo ok",
+        "echo ok",
     ]);
     assert_eq!(u_vc, 2);
     assert!(u_out.contains("VERIFY_STALE"), "{u_out}");
