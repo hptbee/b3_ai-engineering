@@ -4,6 +4,19 @@ A personal AI-assisted software engineering system built on a **host-neutral can
 
 This is an **evolving** operating layer for AI coding agents. It is not a company handbook. B3 currently optimizes host-executed engineering workflows; it does **not** include a standalone model/tool agent runtime. The [outcome-first roadmap](docs/roadmap.md) prioritizes verified work per total token/cost and a minimal boundary for future coding-agent CLIs without exposing private integration details.
 
+## Documentation navigation
+
+| Topic | Canonical documentation |
+| --- | --- |
+| What B3 is & System Architecture (Diagram A) | [`docs/architecture.md`](docs/architecture.md), [`docs/engineering-philosophy.md`](docs/engineering-philosophy.md) |
+| Installation, 4-Host Compatibility & Sync (Diagram B) | [`adapters/README.md`](adapters/README.md) ([Cursor](adapters/cursor/README.md), [Codex](adapters/codex/README.md), [Claude](adapters/claude/README.md), [Antigravity](adapters/antigravity/README.md)) |
+| Commands, Skills & Subagent Roles | [`commands/README.md`](commands/README.md), [`skills/README.md`](skills/README.md), [`agents/README.md`](agents/README.md) |
+| Workflows, Adaptive Dispatch & Review Loop (Diagrams C–E) | [`docs/ship-and-review-guide.md`](docs/ship-and-review-guide.md), [`workflows/README.md`](workflows/README.md), [`review-loop/README.md`](review-loop/README.md) |
+| Context Routing & Evidence Lifecycle (Diagram H) | [`docs/context-routing.md`](docs/context-routing.md), [`docs/model-preferences.md`](docs/model-preferences.md) |
+| Evaluation & Benchmark Methodology (Diagram F) | [`docs/evaluation.md`](docs/evaluation.md), [`evals/README.md`](evals/README.md) |
+| CI, Release Pipeline & Native CLI (Diagram G) | [`docs/ci-architecture.md`](docs/ci-architecture.md), [`scripts/README.md`](scripts/README.md) |
+| Roadmap, Maturity, Ownership & Limitations | [`docs/roadmap.md`](docs/roadmap.md), [`docs/system-lifecycle.md`](docs/system-lifecycle.md), [`docs/precedence.md`](docs/precedence.md) |
+
 ## Repository layout
 
 ```text
@@ -32,7 +45,7 @@ Catalogs: [`skills/README.md`](skills/README.md), [`docs/engineering-philosophy.
 
 B3 makes existing coding agents more effective under practical model/context limits: fewer unnecessary tokens and retries, better task coordination, strong verification, and less manual intervention. Agents still benefit from durable constraints, reusable methods, evidence over assertion, and a core whose **meaning** is not rewritten per product.
 
-**Current focus:** Measure Cursor-with-B3 against Cursor without B3 on identical verified tasks, then optimize only proven bottlenecks. **Future portability:** Keep canonical workflows and native Rust checks reusable by other coding-agent runtimes through opt-in adapters; do not build another IDE/agent loop by default. See [roadmap](docs/roadmap.md) and [evaluation method](docs/evaluation.md).
+**Current focus:** Compare active coding-agent hosts (**Cursor**, **Codex**, **Antigravity**) with B3 against the same host without B3 on identical verified tasks, then optimize only proven bottlenecks. **Future portability:** Keep canonical workflows and native Rust checks reusable by external coding-agent CLIs through opt-in adapters; do not build another IDE/agent loop by default. See [roadmap](docs/roadmap.md) and [evaluation method](docs/evaluation.md).
 
 ## Host-neutral core, 4-host activation
 
@@ -53,7 +66,7 @@ Full per-host setup, coexistence guards, native binary distribution, and manual 
   # or per-host: b3 install cursor | b3 install antigravity
   # actions: install, verify, update, uninstall (supports --dry-run, --force)
   ```
-  Unified `b3 install global` (`install`/`update`) initializes missing `~/.b3/models.md` from [`config/models.example.md`](config/models.example.md) (`docs/model-preferences.md`).
+  `b3 install global`, `b3 install product`, and `b3 sync` initialize missing `~/.b3/models.md` from [`config/models.example.md`](config/models.example.md) without overwriting existing preferences (`docs/model-preferences.md`).
 - **Inside this B3 checkout:**
   - Cursor / Codex / Claude Code / Antigravity: `b3 sync --host <cursor|codex|claude|antigravity>` generates gitignored local activation links or `.agents/skills.json` without mixing conflicting discovery roots (`b3 sync --host <host> --verify-only` checks existing activation).
 - **Attach a separate product repo:** `b3 install product --product-root <product-root> --host <host>` writes `.b3/home` + thin host bridge/links without copying `skills/` ([`decision-011`](research/decisions/decision-011-product-repo-attach.md), [`decision-013`](research/decisions/decision-013-host-neutral-multi-host-layout.md)).

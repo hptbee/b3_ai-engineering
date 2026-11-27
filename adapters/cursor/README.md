@@ -71,7 +71,7 @@ Do **not** also activate `.agents/skills` or `.claude/skills` in the same checko
 
 Run this manual check on two local Git repos (`repo-a`, `repo-b`) that have **never** run `b3 install product`:
 1. Paste `~/.cursor/b3-user-rules.txt` into **Cursor Settings > Rules > User Rules**.
-2. **Commands (`/b3-plan`, `/b3-verify`):** in `repo-a` and `repo-b`, confirm `/` shows `/b3-plan`..`/b3-ship` and `/b3-research-ship`, and resolves `B3_HOME` via `~/.cursor/b3-home` without creating `.b3/home` in the repo.
+2. **Commands (`/b3-plan`, `/b3-verify`):** in `repo-a` and `repo-b`, confirm `/` shows all 14 B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-resolve`, `/b3-pr-reply`, `/b3-pr-comment`), and resolves `B3_HOME` via `~/.cursor/b3-home` without creating `.b3/home` in the repo.
 3. **Skills:** verify skill triggers (e.g., review/debugging) load from `~/.cursor/skills/<name>/SKILL.md` cleanly.
 4. **Rules precedence:** add a temporary project rule in `repo-a/.cursor/rules/` or `repo-a/AGENTS.md` and confirm Cursor honors the project rule over personal defaults.
 5. **Subagents:** invoke an independent review (`b3-reviewer` / `b3-security-reviewer`) and confirm isolated read-only findings return cleanly (or record `UNKNOWN / INCOMPLETE` / `SINGLE_AGENT_LIMIT` per [`../../workflows/references/dispatch-naming.md`](../../workflows/references/dispatch-naming.md) if the host cannot isolate subagents).

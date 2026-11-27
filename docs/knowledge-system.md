@@ -43,7 +43,7 @@ Technology-specific knowledge that changes often. Do not treat a 2022 React note
 Examples:
 
 - React, Next.js, TypeScript, Node.js
-- Cursor, Codex, Claude Code
+- Cursor, Codex, Claude Code, Antigravity
 - Azure, Cloudflare
 
 Volatile entries should include, where appropriate:
@@ -81,7 +81,7 @@ Preferences that are only taste stay in a profile rather than becoming a rule.
 | Skill `references/` | Material **used while performing a task** | `skills/frontend/react-performance/references/checklist.md` |
 | `research/` | Intake: sources, findings, comparisons, decisions, rejected, validation | A comparison of two public review-loop designs |
 
-Skill-local layout (when that skill exists):
+Skill-local layout:
 
 ```text
 skills/frontend/react-performance/

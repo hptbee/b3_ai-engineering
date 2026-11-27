@@ -2,7 +2,7 @@
 
 Workflows are multi-step orchestration. They answer: **in what order should things happen?**
 
-**Status:** present (default product sequence, plus full `/b3-ship` lifecycle). Independent review is not a separate workflow file — it is `review-loop/` invoked by `commands/b3-review-loop.md` and `/b3-ship`.
+**Status:** present (default product sequence, plus full `/b3-ship` and `/b3-research-ship` lifecycles). Independent review is not a separate workflow file — it is `review-loop/` invoked by `commands/b3-review-loop.md` and `/b3-ship`.
 
 | Workflow | Sequence |
 | --- | --- |
@@ -22,4 +22,4 @@ Progressive-disclosure references for `/b3-ship` and `/b3-research-ship` (opened
 - Deterministic native CLI (not an orchestrator): `b3 guard` / `b3 pr` / `b3 context measure` (`src/`)
 - Visual diagrams & walkthrough: [`../docs/ship-and-review-guide.md`](../docs/ship-and-review-guide.md)
 
-Single-pass review remains `commands/b3-review.md`. Full loop: `commands/b3-review-loop.md`. Full lifecycle: `commands/b3-ship.md`.
+Single-pass review remains `commands/b3-review.md`. Full loop: `commands/b3-review-loop.md`. Full lifecycles: `commands/b3-ship.md` and `commands/b3-research-ship.md`.

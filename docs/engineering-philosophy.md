@@ -6,7 +6,7 @@ The governing principle of `b3-ai-engineering` is:
 
 Every workflow, skill, subagent dispatch, and optimization is evaluated against verified engineering outcomes per unit of total cost and context—never raw speed, raw agent count, or unverified output.
 
-**Product north star:** Make the coding agents developers already use complete real tasks with less total token/context spend, fewer retries, and less manual correction. Current daily-use optimization is host-first (especially Cursor); the architecture remains host-neutral for future coding-agent CLIs. Native Rust checks provide deterministic execution but do not constitute a standalone AI model/agent runtime. See the [canonical roadmap](roadmap.md).
+**Product north star:** Make the coding agents developers already use complete real tasks with less total token/context spend, fewer retries, and less manual correction. Current daily usage spans Cursor, Codex, and Antigravity, with host-neutral adapters including Claude Code; the architecture stays portable for additional coding-agent CLIs. Native Rust checks provide deterministic execution but do not constitute a standalone AI model/agent runtime. See the [canonical roadmap](roadmap.md).
 
 ## Precedence
 
