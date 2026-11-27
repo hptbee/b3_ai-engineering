@@ -1921,7 +1921,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .0,
         0
     );
-    // Repeated cursor sync is idempotent and does not generate redundant .cursor/rules
+    // Repeated cursor sync is idempotent and generates thin .cursor/rules/*.mdc wrappers without duplicating rule bodies
     assert_eq!(
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
@@ -1932,9 +1932,94 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .0,
         0
     );
+    for (stem, expected_apply) in [
+        ("engineering-principles", true),
+        ("evidence-and-provenance", true),
+        ("portability", true),
+        ("verification", true),
+        ("simplest-correct", false),
+    ] {
+        let mdc = fs::read_to_string(sync_fx.join(format!(".cursor/rules/{stem}.mdc"))).unwrap();
+        assert!(
+            mdc.contains(&format!("alwaysApply: {expected_apply}")),
+            "{stem}.mdc missing alwaysApply: {expected_apply}:\n{mdc}"
+        );
+        assert!(
+            mdc.contains(&format!("@rules/{stem}.md")),
+            "{stem}.mdc missing @rules/{stem}.md:\n{mdc}"
+        );
+        assert!(
+            mdc.lines().count() <= 10 && !mdc.contains("Record tradeoffs"),
+            "{stem}.mdc must stay a thin wrapper without duplicating canonical rule body:\n{mdc}"
+        );
+    }
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                sync_s,
+                "--host",
+                "cursor",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // Cursor rules preserve user-owned .mdc, prune stale B3-generated .mdc, refuse unmanaged override without --force, and reject junctions
+    let custom_mdc = sync_fx.join(".cursor/rules/my-custom.mdc");
+    write_lf(
+        &custom_mdc,
+        "---\nalwaysApply: false\n---\n# custom user rule\n",
+    );
+    let stale_mdc = sync_fx.join(".cursor/rules/obsolete-b3-rule.mdc");
+    write_lf(
+        &stale_mdc,
+        "<!-- b3-generated-cursor-rule: source=rules/obsolete-b3-rule.md -->\n@rules/obsolete-b3-rule.md\n",
+    );
+    let eng_mdc = sync_fx.join(".cursor/rules/engineering-principles.mdc");
+    write_lf(&eng_mdc, "---\nalwaysApply: false\n---\n# user override\n");
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(fs::read_to_string(&eng_mdc)
+        .unwrap()
+        .contains("user override"));
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(fs::read_to_string(&eng_mdc)
+        .unwrap()
+        .contains("alwaysApply: true"));
+    assert!(custom_mdc.is_file(), "user custom .mdc must be preserved");
     assert!(
-        !sync_fx.join(".cursor/rules").exists(),
-        "cursor sync must not generate redundant .cursor/rules/*.mdc"
+        !stale_mdc.exists(),
+        "stale B3-generated .mdc must be pruned"
+    );
+
+    // Verify-only detects tampered alwaysApply on generated rule
+    write_lf(
+        &eng_mdc,
+        "---\nalwaysApply: false\n---\n@rules/engineering-principles.md\n",
     );
     assert_eq!(
         run_b3_env(
@@ -1948,6 +2033,41 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             ],
             None,
             &[],
+            &[],
+        )
+        .0,
+        1
+    );
+
+    // Junctioned .cursor/rules is refused even with --force (isolated repo so sync_fx remains valid)
+    let junc_fx = tmp.path.join("sync-cursor-junc");
+    copy_b3_snapshot(&junc_fx, true);
+    let decoy_rules = tmp.path.join("decoy-rules");
+    fs::create_dir_all(&decoy_rules).unwrap();
+    create_dir_link(&junc_fx.join(".cursor/rules"), &decoy_rules).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                junc_fx.to_str().unwrap(),
+                "--host",
+                "cursor",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    // Restore tampered eng_mdc on sync_fx so downstream model-preference checks see valid cursor activation
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
             &[],
         )
         .0,
@@ -2550,5 +2670,235 @@ fn b3_home_pointer_rejects_unc_and_reparse_parents() {
         recorded_j.trim(),
         to_forward_path(&decoy_snap),
         "pointer inside reparse .b3 dir must be ignored"
+    );
+}
+
+#[test]
+fn antigravity_manifest_upgrades_and_security_guards() {
+    let tmp = TempDirGuard::new("ag-manifest-upg");
+    let fx = tmp.path.join("b3-fx");
+    copy_b3_snapshot(&fx, true);
+    let fx_s = fx.to_str().unwrap();
+    let manifest = fx.join(".agents/skills.json");
+
+    // 1. Dry-run and verify-only without mutation on fresh checkout
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--verify-only"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--dry-run"
+            ],
+            None,
+            &[],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(
+        !manifest.exists(),
+        "--dry-run must not create .agents/skills.json"
+    );
+
+    // 2. Fresh generation + repeated idempotent sync + verify-only
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    let initial_raw = fs::read_to_string(&manifest).unwrap();
+    assert!(initial_raw.contains("adapters/command-skills"));
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert_eq!(fs::read_to_string(&manifest).unwrap(), initial_raw);
+    let (vc0, vout0, _) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            fx_s,
+            "--host",
+            "antigravity",
+            "--verify-only",
+        ],
+        None,
+        &[],
+        &[],
+    );
+    assert_eq!(vc0, 0, "{vout0}");
+
+    // 3. Adding a new canonical skill category upgrades manifest WITHOUT --force
+    write_lf(
+        &fx.join("skills/devops/ci-check/SKILL.md"),
+        "---\nname: ci-check\ndescription: ci check\n---\n# ci\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/devops"));
+
+    // 4. Removing a canonical skill category upgrades manifest WITHOUT --force
+    remove_dir_tree_safely(&fx.join("skills/devops")).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(!fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/devops"));
+
+    // 5. Legacy previously generated B3 manifest (older subset) upgrades WITHOUT --force
+    write_lf(
+        &manifest,
+        "{\n  \"entries\": [\n    { \"path\": \"skills/engineering\" },\n    { \"path\": \"adapters/command-skills\" }\n  ]\n}\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("skills/backend"));
+
+    // 6. Customized user manifest refused WITHOUT --force, overwritten WITH --force
+    write_lf(
+        &manifest,
+        "{\n  \"entries\": [\n    { \"path\": \"skills/engineering\" },\n    { \"path\": \"custom/my-skills\" }\n  ]\n}\n",
+    );
+    assert_eq!(
+        run_b3_env(
+            &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
+    );
+    assert!(fs::read_to_string(&manifest)
+        .unwrap()
+        .contains("custom/my-skills"));
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+
+    // 7. Duplicate JSON keys & unsafe traversal paths rejected by --verify-only and refused without --force
+    for bad in [
+        "{\"entries\":[{\"path\":\"skills/engineering\"}],\"entries\":[{\"path\":\"skills/backend\"}]}",
+        "{\"entries\":[{\"path\":\"skills/engineering\",\"path\":\"skills/backend\"}]}",
+        "{\"entries\":[{\"path\":\"../outside\"}]}",
+    ] {
+        write_lf(&manifest, bad);
+        assert_eq!(
+            run_b3_env(
+                &["sync", "--repo-root", fx_s, "--host", "antigravity", "--verify-only"],
+                None,
+                &[],
+                &[],
+            )
+            .0,
+            1
+        );
+        assert_eq!(
+            run_b3_env(
+                &["sync", "--repo-root", fx_s, "--host", "antigravity"],
+                None,
+                &[("B3_SKIP_MODEL_INIT", "1")],
+                &[],
+            )
+            .0,
+            1
+        );
+    }
+
+    // 8. Symlink/junction .agents/skills.json refused even with --force
+    let decoy_file = tmp.path.join("decoy-skills");
+    fs::create_dir_all(&decoy_file).unwrap();
+    fs::remove_file(&manifest).unwrap();
+    create_dir_link(&manifest, &decoy_file).unwrap();
+    assert_eq!(
+        run_b3_env(
+            &[
+                "sync",
+                "--repo-root",
+                fx_s,
+                "--host",
+                "antigravity",
+                "--force"
+            ],
+            None,
+            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[],
+        )
+        .0,
+        1
     );
 }

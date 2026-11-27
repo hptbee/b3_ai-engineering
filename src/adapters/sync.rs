@@ -291,7 +291,11 @@ fn test_antigravity_manifest(repo_root: &Path, manifest_path: &Path) -> Result<u
         .map_err(|_| format!("invalid JSON in {}", manifest_path.display()))?;
     let parsed =
         parse_json(&raw).map_err(|_| format!("invalid JSON in {}", manifest_path.display()))?;
-    let Some(entries) = parsed.get("entries").and_then(JsonValue::as_array) else {
+    let Some(entries) = parsed
+        .get_exact_unique("entries")
+        .map_err(|_| format!("duplicate entries key in {}", manifest_path.display()))?
+        .and_then(JsonValue::as_array)
+    else {
         return Err(format!(
             "manifest has no entries: {}",
             manifest_path.display()
@@ -378,12 +382,21 @@ fn test_antigravity_manifest(repo_root: &Path, manifest_path: &Path) -> Result<u
     Ok(total_skills)
 }
 
-fn is_b3_managed_antigravity_manifest(
-    repo_root: &Path,
-    manifest_path: &Path,
-    expected_entries: &[String],
-    expected_json: &str,
-) -> bool {
+fn is_b3_canonical_entry_path(p: &str) -> bool {
+    if p == "adapters/command-skills" {
+        return true;
+    }
+    let Some(cat) = p.strip_prefix("skills/") else {
+        return false;
+    };
+    !cat.is_empty()
+        && !cat.starts_with('-')
+        && cat
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'))
+}
+
+fn is_b3_managed_antigravity_manifest(manifest_path: &Path, expected_json: &str) -> bool {
     let Ok(raw) = fs::read_to_string(manifest_path) else {
         return false;
     };
@@ -402,10 +415,9 @@ fn is_b3_managed_antigravity_manifest(
     let JsonValue::Array(arr) = &obj[0].1 else {
         return false;
     };
-    if arr.len() != expected_entries.len() {
+    if arr.is_empty() {
         return false;
     }
-    let expected_set: BTreeSet<&str> = expected_entries.iter().map(String::as_str).collect();
     let mut seen = BTreeSet::new();
     for item in arr {
         let JsonValue::Object(fields) = item else {
@@ -417,11 +429,261 @@ fn is_b3_managed_antigravity_manifest(
         let JsonValue::String(p) = &fields[0].1 else {
             return false;
         };
-        if !expected_set.contains(p.as_str()) || !seen.insert(p.as_str()) {
+        if !is_b3_canonical_entry_path(p) || !seen.insert(p.as_str()) {
             return false;
         }
     }
-    test_antigravity_manifest(repo_root, manifest_path).is_ok()
+    true
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalRule {
+    stem: String,
+    always_apply: bool,
+    description: String,
+}
+
+fn collect_canonical_rules(rules_dir: &Path) -> Result<Vec<CanonicalRule>, B3Error> {
+    if !rules_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    let rd = fs::read_dir(rules_dir)
+        .map_err(|e| fail(format!("cannot read {}: {e}", rules_dir.display()), 1))?;
+    for entry in rd.flatten() {
+        if !entry.file_type().is_ok_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        paths.push(p);
+    }
+    paths.sort();
+
+    let mut rules = Vec::new();
+    for p in paths {
+        let raw = fs::read_to_string(&p)
+            .map_err(|e| fail(format!("cannot read {}: {e}", p.display()), 1))?;
+        let norm = raw.replace("\r\n", "\n").replace('\r', "\n");
+        let mut lines = norm.split('\n');
+        if lines.next().map(str::trim) != Some("---") {
+            continue;
+        }
+        let mut rule_type = String::new();
+        let mut strength = String::new();
+        let mut scope = String::new();
+        let mut found_end = false;
+        let mut body_lines = Vec::new();
+        for line in lines {
+            if !found_end {
+                if line.trim() == "---" {
+                    found_end = true;
+                } else if let Some((k, v)) = line.split_once(':') {
+                    let key = k.trim();
+                    let val = v.trim();
+                    match key {
+                        "type" => rule_type = val.to_string(),
+                        "strength" => strength = val.to_string(),
+                        "scope" => scope = val.to_string(),
+                        _ => {}
+                    }
+                }
+            } else {
+                body_lines.push(line);
+            }
+        }
+        if !found_end || rule_type != "rule" {
+            continue;
+        }
+        let stem = p
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if stem.is_empty() {
+            continue;
+        }
+        let mut heading = String::new();
+        let mut summary = String::new();
+        for b in body_lines {
+            let t = b.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if heading.is_empty() && t.starts_with("# ") {
+                heading = t.trim_start_matches("# ").trim().to_string();
+                continue;
+            }
+            summary = t.to_string();
+            break;
+        }
+        let raw_desc = match (heading.is_empty(), summary.is_empty()) {
+            (false, false) => format!("{heading} — {summary}"),
+            (false, true) => heading,
+            (true, false) => summary,
+            (true, true) => format!("Portable B3 rule: {stem}"),
+        };
+        let description: String = raw_desc.chars().take(160).collect();
+        rules.push(CanonicalRule {
+            stem,
+            always_apply: strength == "hard" && scope == "global",
+            description,
+        });
+    }
+    Ok(rules)
+}
+
+fn render_cursor_rule_mdc(rule: &CanonicalRule) -> String {
+    let escaped_desc = rule.description.replace('\\', "\\\\").replace('"', "\\\"");
+    format!(
+        "---\ndescription: \"{escaped_desc}\"\nalwaysApply: {}\n---\n<!-- b3-generated-cursor-rule: source=rules/{}.md -->\n\nFollow the portable {} rule:\n\n@rules/{}.md\n",
+        rule.always_apply, rule.stem, rule.stem, rule.stem
+    )
+}
+
+fn is_b3_managed_cursor_rule(path: &Path, stem: &str) -> bool {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return false;
+    };
+    let marker = format!("<!-- b3-generated-cursor-rule: source=rules/{stem}.md -->");
+    if raw.contains(&marker) {
+        return true;
+    }
+    let legacy_hdr = format!("Follow the portable {stem} rule:");
+    let legacy_ref = format!("@rules/{stem}.md");
+    raw.contains(&legacy_hdr) && raw.contains(&legacy_ref)
+}
+
+fn sync_cursor_rules(
+    root: &Path,
+    dry_run: bool,
+    verify_only: bool,
+    force: bool,
+    out: &mut Vec<String>,
+) -> Result<(), B3Error> {
+    let rules = collect_canonical_rules(&root.join("rules"))?;
+    if rules.is_empty() {
+        return Ok(());
+    }
+    let cursor_dir = root.join(".cursor");
+    let rules_dest = cursor_dir.join("rules");
+    assert_regular_dir_or_missing(&cursor_dir, ".cursor")?;
+    assert_regular_dir_or_missing(&rules_dest, ".cursor/rules")?;
+
+    if verify_only {
+        if !rules_dest.is_dir() {
+            return Err(fail(
+                format!(
+                    "verify failed: missing generated Cursor rules directory {}",
+                    rules_dest.display()
+                ),
+                1,
+            ));
+        }
+        for r in &rules {
+            let mdc_path = rules_dest.join(format!("{}.mdc", r.stem));
+            assert_regular_file_or_missing(&mdc_path, &format!(".cursor/rules/{}.mdc", r.stem))?;
+            if !mdc_path.is_file() {
+                return Err(fail(
+                    format!("verify failed: missing {}", mdc_path.display()),
+                    1,
+                ));
+            }
+            let raw = fs::read_to_string(&mdc_path)
+                .map_err(|e| fail(format!("verify failed: {}: {e}", mdc_path.display()), 1))?;
+            let expected_apply = format!("alwaysApply: {}", r.always_apply);
+            let expected_ref = format!("@rules/{}.md", r.stem);
+            if !raw.contains(&expected_apply) || !raw.contains(&expected_ref) {
+                return Err(fail(
+                    format!(
+                        "verify failed: {} does not match canonical rules/{}.md ({expected_apply})",
+                        mdc_path.display(),
+                        r.stem
+                    ),
+                    1,
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    let mut expected_stems = BTreeSet::new();
+    for r in &rules {
+        expected_stems.insert(r.stem.as_str());
+        let mdc_path = rules_dest.join(format!("{}.mdc", r.stem));
+        assert_regular_file_or_missing(&mdc_path, &format!(".cursor/rules/{}.mdc", r.stem))?;
+        if !force && mdc_path.is_file() && !is_b3_managed_cursor_rule(&mdc_path, &r.stem) {
+            return Err(fail(
+                format!(
+                    "existing unmanaged .cursor/rules/{}.mdc at {}; refusing to overwrite without --force",
+                    r.stem,
+                    mdc_path.display()
+                ),
+                1,
+            ));
+        }
+    }
+
+    let mut stale_paths = Vec::new();
+    if rules_dest.is_dir() {
+        if let Ok(rd) = fs::read_dir(&rules_dest) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("mdc") {
+                    continue;
+                }
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                if expected_stems.contains(stem) {
+                    continue;
+                }
+                if is_reparse_link(&p) {
+                    continue;
+                }
+                if let Ok(raw) = fs::read_to_string(&p) {
+                    if raw.contains("<!-- b3-generated-cursor-rule:") {
+                        stale_paths.push(p);
+                    }
+                }
+            }
+        }
+    }
+
+    if dry_run {
+        out.push(format!(
+            "dry-run: sync {} Cursor rule wrapper(s) in {} (prune {} stale)",
+            rules.len(),
+            rules_dest.display(),
+            stale_paths.len()
+        ));
+        return Ok(());
+    }
+
+    fs::create_dir_all(&rules_dest)
+        .map_err(|e| fail(format!("cannot create {}: {e}", rules_dest.display()), 1))?;
+    let mut written = 0usize;
+    for r in &rules {
+        let mdc_path = rules_dest.join(format!("{}.mdc", r.stem));
+        let desired = render_cursor_rule_mdc(r);
+        let unchanged = fs::read_to_string(&mdc_path).ok().as_deref() == Some(desired.as_str());
+        if !unchanged {
+            write_utf8_no_bom_lf(&mdc_path, &desired)?;
+            written += 1;
+        }
+    }
+    for stale in &stale_paths {
+        fs::remove_file(stale)
+            .map_err(|e| fail(format!("cannot prune {}: {e}", stale.display()), 1))?;
+    }
+    out.push(format!(
+        "synced: {} ({} Cursor rule wrappers; {} updated, {} pruned)",
+        rules_dest.display(),
+        rules.len(),
+        written,
+        stale_paths.len()
+    ));
+    Ok(())
 }
 
 fn extract_exact_fm_name(raw: &str) -> Option<String> {
@@ -551,12 +813,7 @@ pub fn run(
 
             if !force
                 && antigravity_manifest.is_file()
-                && !is_b3_managed_antigravity_manifest(
-                    &root,
-                    &antigravity_manifest,
-                    &entries,
-                    &json_text,
-                )
+                && !is_b3_managed_antigravity_manifest(&antigravity_manifest, &json_text)
             {
                 return Err(fail(
                     format!(
@@ -611,16 +868,17 @@ pub fn run(
                     && test_skill_source(&cursor_skills_dest)
                     && test_link_target(&cursor_commands_dest, &commands_source, false)
                     && test_link_target(&cursor_agents_dest, &agents_source, false);
-                if ok {
-                    return Ok((
-                        "verify ok: .cursor/{skills,commands,agents} -> canonical root (cursor)"
-                            .to_string(),
-                        0,
+                if !ok {
+                    return Err(fail(
+                        "verify failed: .cursor/{skills,commands,agents} links are missing or invalid",
+                        1,
                     ));
                 }
-                return Err(fail(
-                    "verify failed: .cursor/{skills,commands,agents} links are missing or invalid",
-                    1,
+                sync_cursor_rules(&root, false, true, force, &mut out)?;
+                return Ok((
+                    "verify ok: .cursor/{skills,commands,agents,rules} -> canonical root (cursor)"
+                        .to_string(),
+                    0,
                 ));
             }
             if !force {
@@ -637,9 +895,7 @@ pub fn run(
                     ));
                 }
             }
-            if !dry_run {
-                assert_regular_dir_or_missing(&root.join(".cursor"), ".cursor")?;
-            }
+            assert_regular_dir_or_missing(&root.join(".cursor"), ".cursor")?;
             sync_directory_link(
                 &cursor_skills_dest,
                 &skills_source,
@@ -661,6 +917,7 @@ pub fn run(
                 dry_run,
                 &mut out,
             )?;
+            sync_cursor_rules(&root, dry_run, false, force, &mut out)?;
             sync_personal_models(&root, dry_run, verify_only, &mut out);
             out.push(
                 "note: this proves filesystem links, not Cursor runtime skill discovery"

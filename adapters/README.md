@@ -10,7 +10,7 @@ Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.a
 
 | Host | Rules / context | Skills | Commands | Subagents |
 | --- | --- | --- | --- | --- |
-| **Cursor** | `AGENTS.md` (plus global `~/.cursor/rules/b3.mdc` or `~/.cursor/b3-user-rules.txt` via `b3 install cursor`) | Gitignored `.cursor/skills` → `skills/` (or global `~/.cursor/skills/<name>` via `b3 install global --action install --host cursor`) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
+| **Cursor** | `AGENTS.md` + generated gitignored `.cursor/rules/*.mdc` (`@rules/*.md`, `alwaysApply: true` for hard global rules; or global `~/.cursor/b3-user-rules.txt` via `b3 install cursor`) | Gitignored `.cursor/skills` → `skills/` (or global `~/.cursor/skills/<name>` via `b3 install global --action install --host cursor`) | Gitignored `.cursor/commands` → `commands/` (product: `.cursor/commands/*.md`) | Gitignored `.cursor/agents` → `agents/` |
 | **Codex** | `AGENTS.md` | Gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`) | `adapters/command-skills/` (`$b3-ship`, `$b3-plan`, …) + prompt routing | Delegated role prompts from `agents/*.md` |
 | **Claude Code** | `CLAUDE.md` (`@AGENTS.md`) | Gitignored flattened `.claude/skills/<name>` (core `skills/` + `adapters/command-skills/`) | Unified with skills (`adapters/command-skills/` via `.claude/skills/<name>`) | Gitignored `.claude/agents` → `agents/` |
 | **Antigravity** | `AGENTS.md` (or plugin `rules/AGENTS.md`) | Generated gitignored `.agents/skills.json` (`b3 sync --host antigravity`), flattened `.agents/skills/<name>` (`b3 install product`), or plugin `skills/` | `adapters/command-skills/` via `.agents/skills.json` / plugin | Generated plugin `agents/*.md` (`subagent: true`, explicit `tools:`) or dynamic `define_subagent` |
@@ -37,7 +37,8 @@ b3 sync --host antigravity
 
 - On Windows, `b3 sync` creates unprivileged NTFS junctions via native `DeviceIoControl`; on macOS/Linux, it creates POSIX symlinks.
 - Supports `--dry-run`, `--verify-only`, `--force`, and `--repo-root <dir>`.
-- **Coexistence guards:** `b3 sync` refuses (unless `--force`) to create `.cursor/skills` alongside `.agents/skills` or `.claude/skills` (Cursor cross-loads those roots and duplicates skills), and warns when `.agents/skills` coexists with generated `.agents/skills.json` (Antigravity reads both). There is intentionally no unguarded `all` target.
+- **Coexistence guards & unmanaged preservation:** `b3 sync` refuses (unless `--force`) to create `.cursor/skills` alongside `.agents/skills` or `.claude/skills` (Cursor cross-loads those roots and duplicates skills), warns when `.agents/skills` coexists with generated `.agents/skills.json` (Antigravity reads both), and never overwrites user-owned `.cursor/rules/*.mdc` or customized `.agents/skills.json` without `--force`. There is intentionally no unguarded `all` target.
+- **Migration from previously committed `.cursor/rules/*.mdc` / `.agents/skills.json`:** Pull/update the repo (which removes those committed files and adds them to `.gitignore`), then run `b3 sync --host cursor` or `b3 sync --host antigravity` once per checkout to regenerate gitignored local activation. Previously generated B3 manifests upgrade cleanly without `--force`.
 - **Exit `1`** on missing sources, wrong links, or non-empty non-link content. Filesystem success is not runtime host-discovery `PASS`.
 
 ## Product repository attach (`b3 install product`)
