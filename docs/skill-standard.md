@@ -49,7 +49,7 @@ The description and the “when not to use” section must make both sides obvio
 - when the skill **SHOULD** trigger
 - when it **SHOULD NOT** trigger
 
-Future evals will classify cases as:
+Activation evals under `evals/skills/` classify cases as:
 
 ```text
 should-trigger
@@ -83,7 +83,7 @@ reference  = material used to perform a task → this skill’s references/ (or 
 research   = where conclusions came from     → research/
 ```
 
-Skill-local example (when such a skill exists):
+Skill-local example:
 
 ```text
 skills/frontend/react-performance/
@@ -117,7 +117,7 @@ State what to do when:
 
 ### Portability
 
-Skills are portable core. Do not depend on Cursor rules, Claude hooks, or Codex-only paths. If a host needs a mapping, put it in `adapters/` and keep the skill text host-agnostic.
+Skills are portable core. Do not depend on Cursor rules, Claude hooks, Antigravity workflows/rules, or Codex-only paths. If a host needs a mapping, put it in `adapters/` and keep the skill text host-agnostic.
 
 ## What a skill is not
 

@@ -1,6 +1,6 @@
 # Subagent dispatch, adaptive scheduling & orchestration (on-demand)
 
-Single canonical orchestration contract inherited by all 11 B3 commands, workflows, and `/b3-review-loop`. Load once at dispatch; never copy into subagent briefs.
+Single canonical orchestration contract inherited by all 14 B3 commands, workflows, and `/b3-review-loop`. Load once at dispatch; never copy into subagent briefs.
 
 - **Canonical roles & aliases:** Keep `agents/b3-*.md` stems/`name:` stable (`b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer`). Prefer lowercase kebab-case `b3-impl-<task-id>` (impl) and `b3-research-<slug>` (research) when the host supports custom spawn names; never block on naming.
 - **Session IDs & no nesting:** Store host-returned agent IDs separately from aliases. Workers execute directly and **never** spawn nested subagents. Applies to B3 subagent IDs only, not product runtime workers or legacy `.b3/autodev/`.

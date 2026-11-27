@@ -54,31 +54,39 @@ Measured sequentially in worktree `refactor/native-ci-optimization` (`cedf068`, 
 | Markdown/YAML/eval/context-budget contracts (`AGENTS.md`, `rules/`, `workflows/`, `skills/`, [`evals/README.md`](../evals/README.md) `evals/*.yaml`) | `UNIQUE_REQUIRED` | `b3 context measure --strict` + `tests/eval_contracts.rs` | No — native Rust fast gate |
 | Adversarial `merge-policy-check` + `b3 pr verify` + mock-`gh` | `UNIQUE_REQUIRED` | `tests/merge_policy_security.rs` | No — migrated to native Rust |
 
-## 3. Current Dependency-Aware CI Architecture
+## 3. Current Dependency-Aware CI & Release Pipeline
 
-```text
-fast-gate (ubuntu-latest, <2m)
-  ├── cargo fmt --check
-  ├── cargo clippy --all-targets -- -D warnings
-  ├── cargo build --bin b3 + ./target/debug/b3 context measure --strict
-  └── cargo test --lib --test eval_contracts
-         │
-         └──► verify [ubuntu-latest, macos-latest, windows-latest]
-                ├── cargo build --release
-                ├── native b3 smoke (--version, context measure --strict, sync, fingerprint)
-                └── cargo test (unit + 8 native integration suites, 0 PS/Bash wrapper loops)
-                       │
-                       ▼
-              ci-gate (if: always()) — requires fast-gate == 'success' && verify == 'success'
+### Diagram G — CI, Verification & Release Pipeline
+
+```mermaid
+flowchart TD
+    subgraph CI["CI (.github/workflows/ci.yml)"]
+        CITrig["Triggers: push main, pull_request, workflow_dispatch"] --> FastGate["fast-gate (ubuntu-latest, timeout-minutes: 10): cargo fmt --check, cargo clippy --all-targets -- -D warnings, cargo build --bin b3, b3 context measure --strict, cargo test --lib --test eval_contracts"]
+        FastGate --> Verify["verify matrix (ubuntu-latest, macos-latest, windows-latest; timeout-minutes: 15): cargo build --release, CLI smoke (--version, context measure --strict, sync --host antigravity/cursor --dry-run, guard fingerprint), full cargo test (unit + 8 integration suites)"]
+        FastGate --> CIGate["ci-gate (ubuntu-latest, timeout-minutes: 5, if: always): requires fast-gate == success and verify == success"]
+        Verify --> CIGate
+    end
+
+    subgraph Release["Release Binaries (.github/workflows/release.yml)"]
+        RelTrig["Triggers: push tags v*.*.*, pull_request (Cargo.toml, Cargo.lock, src/**, scripts/bootstrap-b3.*, release.yml), workflow_dispatch"] --> BuildWin["build (windows-latest): x86_64-pc-windows-msvc + --version/fingerprint smoke"]
+        RelTrig --> BuildLin["build (ubuntu-latest): x86_64-unknown-linux-gnu + --version/fingerprint smoke"]
+        RelTrig --> BuildMacArm["build (macos-15): aarch64-apple-darwin + --version/fingerprint smoke"]
+        RelTrig --> BuildMacInt["build (macos-15-intel): x86_64-apple-darwin + --version/fingerprint smoke"]
+        BuildWin --> Package["package (ubuntu-latest, timeout-minutes: 10): verify 4 artifacts, SHA256SUMS.txt, bootstrap-b3.sh live Linux + --dry-run cross-target smoke"]
+        BuildLin --> Package
+        BuildMacArm --> Package
+        BuildMacInt --> Package
+        Package -->|"refs/tags/v* only"| Publish["publish (ubuntu-latest, timeout-minutes: 10): gh release create (dist/b3-*, dist/SHA256SUMS.txt)"]
+    end
 ```
 
 ### Controls
-- `concurrency`: cancels superseded PR/branch runs immediately.
-- `actions/cache@v4`: caches Cargo registry/git DB and `target` cleanly per OS and toolchain `1.100.0`.
-- `timeout-minutes`: explicit per-job timeouts (`fast-gate: 10`, `verify: 15`, `ci-gate: 5`).
-- `release.yml`: runs on tags `v*.*.*`, `workflow_dispatch`, or PRs touching Rust/bootstrap/release files (skipped on docs-only PRs).
+- `concurrency`: cancels superseded PR/branch runs immediately (`ci.yml`); `release.yml` preserves tag builds (`cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}`).
+- `actions/cache@v4`: caches Cargo registry/git DB and `target` cleanly per OS and toolchain `1.100.0` in `ci.yml`.
+- `timeout-minutes`: explicit per-job timeouts (`ci.yml`: `fast-gate: 10`, `verify: 15`, `ci-gate: 5`; `release.yml`: `build: 15`, `package: 10`, `publish: 10`).
+- `release.yml`: runs on tags `v*.*.*`, `workflow_dispatch`, or PRs touching `Cargo.toml`, `Cargo.lock`, `src/**`, `scripts/bootstrap-b3.*`, or `.github/workflows/release.yml` (skipped on docs-only PRs); `publish` runs only on `push` to `refs/tags/v*`.
 - **Local Preflight**: Run `.\scripts\ci-preflight.ps1` (Windows) or `./scripts/ci-preflight.sh` (Unix) before pushing (`-Fast`/`--fast` runs `--lib --test eval_contracts`).
 
-## 4. Measured Migration & Consolidation Summary
+## 4. Migration & Consolidation Summary
 
 All `9` legacy compatibility wrapper pairs (`18` files) and `14` legacy `.ps1`/`.sh`/wrapper test harnesses were retired and consolidated into `8` native cross-platform Rust integration test suites (`eval_contracts`, `guard_security_and_behavior`, `merge_policy_security`, `pr_feedback_lifecycle`, `adapters_and_hosts`, `native_core_behaviors`, `native_golden_parity`, `bootstrap_lifecycle`), eliminating duplicate PowerShell/Bash test loops across CI.

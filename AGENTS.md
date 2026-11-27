@@ -25,7 +25,7 @@ Loop (`docs/architecture.md`; conflicts: `docs/precedence.md`): `Knowledge → S
 2. Keep handoffs compact; never load files outside active scope.
 3. Empty **named review target** (empty diff, or missing approach in explicit `design-only`) or iteration cap → `UNKNOWN / INCOMPLETE`, never `PASS`.
 4. Never claim unimplemented layers; lessons never auto-become rules (`docs/system-lifecycle.md`).
-5. Host link dirs (`.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}`) are gitignored links via `b3 sync` — never edit through them or mix discovery roots.
+5. Generated host paths (`.cursor/{skills,commands,agents,rules}`, `.agents/{skills,skills.json}`, `.claude/{skills,agents}`) are gitignored via `b3 sync` — never edit through links or mix discovery roots.
 6. In products, resolve `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo); never copy `skills/` (`b3 install product`).
 
 Host setup: [`adapters/README.md`](adapters/README.md).

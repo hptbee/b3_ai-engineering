@@ -9,6 +9,20 @@ Human-facing guide (`0 B` runtime tokens — never loaded by `AGENTS.md`, `rules
 - **Hint-only subagents:** Orchestrators never paste `context-routing.md` into subagents. `agents/b3-reviewer.md` and `agents/b3-fixer.md` consume only a 1-line `context_hint: tools=<both|codebase-memory|serena|native> cache=<ref|none> delta=<files|none>` and explicitly never reload `context-routing.md`.
 - **Bounded disclosure & short-circuit:** Prefer bounded slices, symbol bodies, and compact summaries — never dump entire repositories, raw graphs, or full files. When target files/symbols are already known (**direct-known short-circuit**), read directly (or apply surgical `serena` edit) and skip graph scans and absent-MCP probing.
 
+## Diagram H — Context & Evidence Lifecycle
+
+```mermaid
+flowchart LR
+    AlwaysOn["1. Always-On: AGENTS.md + rules/ (+0 B MCP routing tax)"] --> Trigger{"Triggered? (optional MCPs, cross-file nav, or cache reuse)"}
+    Trigger -->|"No (native / direct-known short-circuit)"| Packet["3. Handoff: <=25L Context Packet + 1L context_hint:"]
+    Trigger -->|"Yes (<=1x/phase)"| OnDemand["2. On-Demand: SKILL.md + context-routing.md (4 MCP states w/ native fallback)"]
+    OnDemand --> Packet
+    Packet --> CtxCache["4a. b3 guard context-cache (b3-context-v1: anchor-paths, summary-ref, graph-index-sha)"]
+    Packet --> VerifyGuard["4b. b3 guard verify-run / verify-check (b3-verify-v1 tree-fingerprinted receipts)"]
+    CtxCache -->|"CONTEXT_FRESH or CONTEXT_STALE invalidation"| VerifyGuard
+    VerifyGuard --> Outcome["5. Verified Outcome: PASS | FAIL | UNKNOWN / INCOMPLETE"]
+```
+
 ## Canonical Routing, Staleness, Cache & Boundaries
 
 The normative runtime rules live in [`workflows/references/context-routing.md`](../workflows/references/context-routing.md) rather than being duplicated here:

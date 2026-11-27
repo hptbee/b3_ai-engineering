@@ -1,6 +1,6 @@
 # Research — Agent Engineering System
 
-> **Historical provenance note:** The intake, comparison, and synthesis sections below preserve point-in-time Phase 1 & Track A/B/C research provenance (2026-09) without rewriting historical evidence. For current canonical architecture (`4` hosts, `11` commands, `35` total `SKILL.md` files [`24` canonical + `11` command-skills], native Rust `b3` CLI, and `322` YAML eval fixtures), see [`../README.md`](../README.md), [`../docs/architecture.md`](../docs/architecture.md), and [decisions/README.md](decisions/README.md).
+> **Historical provenance note:** The intake, comparison, and synthesis sections below preserve point-in-time Phase 1 & Track A/B/C research provenance (2026-09) without rewriting historical evidence. For current canonical architecture (`4` hosts, `14` commands, `38` total `SKILL.md` files [`24` canonical + `14` command-skills], native Rust `b3` CLI, and `330` YAML eval fixtures), see [`../README.md`](../README.md), [`../docs/architecture.md`](../docs/architecture.md), and [decisions/README.md](decisions/README.md).
 
 Phase 1 (foundations) and **Phase 2 Tracks A/B** (domain research) are complete for this branch. **Track C** (adapters + eval fixtures) implemented outside `research/` per decision-005.
 

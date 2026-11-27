@@ -29,15 +29,64 @@ Native b3 CLI
 Host-specific generated activation
 ```
 
+For per-host paths, install modes, and ownership boundaries, see Diagram B in [`../adapters/README.md`](../adapters/README.md).
+
 B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `agents/`) mapped onto Cursor, Codex, Claude Code, and Antigravity via thin adapters. Decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`).
 
 The system is evolving. Layers marked **specified** exist as documentation and directories. Layers marked **present** have usable files.
 
 ## Harness boundary and runtime portability
 
-B3 is an **engineering harness layer** around existing coding-agent hosts, not a replacement IDE or a standalone model-serving agent runtime. The canonical workflows and skills define *what* to do; host agents perform model inference, tool invocation, and agent sessions; native Rust `b3` performs deterministic Git, verification, evidence, context, PR, and installation tasks. Do not mistake a host-executed workflow contract for a B3-managed agent scheduler.
+B3 is an **engineering harness layer** around existing coding-agent hosts, not a replacement IDE or a standalone model-serving agent runtime. The architecture separates four distinct concerns:
 
-**Now:** Cursor-centered everyday use with reusable adapters for the other documented hosts. **Future (conditional):** A coding-agent CLI may integrate through a small capability-oriented adapter (task execution/status/events, optional cancellation/resume and usage), defined only when a concrete need exists. A hypothetical private/custom adapter is not part of the public B3 repository, and its internal details are not required to maintain core functionality. No current adapter is claimed to implement this hypothetical runtime API.
+- **Canonical definitions** (`AGENTS.md` + `CLAUDE.md` bridge, `rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `review-loop/`, `research/`, `knowledge/`): host-neutral specifications of *what* must hold and *how* workflows run.
+- **Generated host activation** (`.cursor/`, `.agents/`, `.claude/`, `~/.cursor/`, `~/.gemini/config/plugins/`): gitignored or global links, wrappers, and manifests produced by `b3 sync` and `b3 install`.
+- **Native deterministic CLI** (Rust `b3` in `src/`): deterministic adapter management (`b3 sync`, `b3 install`) plus deterministic Git, verification, evidence, context, and PR checks (`b3 guard`, `b3 pr`, `b3 context`). Rust `b3` never runs LLM agents or acts as a model gateway.
+- **Host-owned LLM execution** (**Cursor**, **Codex**, **Antigravity**, **Claude Code**): the coding-agent hosts own model inference, tool-use loops, and agent sessions, consuming canonical definitions and generated host activation while invoking native `b3` checks.
+
+Do not mistake a host-executed workflow contract for a B3-managed agent scheduler.
+
+### Diagram A — Overall B3 System Architecture
+
+```mermaid
+flowchart TB
+    subgraph CORE["1. Canonical Engineering Core (Committed, Host-Neutral)"]
+        core_entry["Entrypoints: AGENTS.md and CLAUDE.md bridge"]
+        core_defs["Definitions: rules/, skills/, commands/, agents/, workflows/, review-loop/"]
+        core_stores["Stores: research/ and knowledge/"]
+    end
+
+    subgraph CLI["2. Native Deterministic CLI (Rust b3 in src/ - No LLM or Model Gateway)"]
+        cli_adapt["Host Adapters: b3 sync and b3 install"]
+        cli_det["Deterministic Checks: b3 guard, b3 pr, b3 context"]
+    end
+
+    subgraph ACT["3. Generated Host Activation (Gitignored or Machine-Global)"]
+        act_files["Links, Wrappers, Manifests: .cursor/, .agents/, .claude/, ~/.cursor/, ~/.gemini/"]
+    end
+
+    subgraph HOSTS["4. Coding Agent Hosts (Own Model Inference, Tool-Use Loop, and Sessions)"]
+        host_loop["Host Session Runtime (LLM Inference, Tool Calls, Agent Dispatch)"]
+        h_cursor["Cursor"]
+        h_codex["Codex"]
+        h_anti["Antigravity"]
+        h_claude["Claude Code"]
+        h_cursor --- host_loop
+        h_codex --- host_loop
+        h_anti --- host_loop
+        h_claude --- host_loop
+    end
+
+    core_entry --> cli_adapt
+    core_defs --> cli_adapt
+    cli_adapt -->|"generates and verifies"| act_files
+    act_files -->|"discovered by host"| host_loop
+    core_defs -->|"read as canonical instructions"| host_loop
+    core_stores -->|"consulted on demand"| host_loop
+    host_loop <-->|"invokes checks, reads exit codes and JSON"| cli_det
+```
+
+**Now:** Multi-host everyday use across **Cursor**, **Codex**, **Antigravity**, and supported **Claude Code** backed by one host-neutral canonical core and thin adapters. **Future (conditional):** A coding-agent CLI may integrate through a small capability-oriented adapter (task execution/status/events, optional cancellation/resume and usage), defined only when a concrete need exists. A hypothetical private/custom adapter is not part of the public B3 repository, and its internal details are not required to maintain core functionality. No current adapter is claimed to implement this hypothetical runtime API.
 
 Keep provider/model choices, credentials, proprietary details, and runtime-specific session mechanics out of canonical rules and native guard contracts. The [roadmap](roadmap.md) owns future priorities; the [system lifecycle](system-lifecycle.md) owns current maturity.
 

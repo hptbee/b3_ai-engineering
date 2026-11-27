@@ -6,6 +6,49 @@ B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `ag
 
 Do **not** commit duplicate skill, command, or agent trees under `.cursor/`, `.agents/`, `.claude/`, or `.codex/`. Only canonical `AGENTS.md` (plus the minimal `CLAUDE.md` `@AGENTS.md` bridge for Claude Code) lives in the source repo; local discovery links and `.agents/skills.json` are gitignored and generated on demand by `b3 sync` or `b3 install`.
 
+## Multi-host installation & activation
+
+### Diagram B — Multi-Host Installation & Activation
+
+```mermaid
+flowchart TD
+    src["Canonical B3 Source: AGENTS.md, CLAUDE.md, rules/, skills/, adapters/command-skills/, commands/, agents/"]
+
+    cmd_global["b3 install global (or b3 install cursor / antigravity)"]
+    cmd_product["b3 install product --host cursor, codex, claude, or antigravity"]
+    cmd_sync["b3 sync --host cursor, codex, claude, or antigravity"]
+
+    src --> cmd_global
+    src --> cmd_product
+    src --> cmd_sync
+
+    out_cursor_g["Cursor Global: ~/.cursor/{skills,commands,agents,b3-user-rules.txt,b3-home}"]
+    out_anti_g["Antigravity Global: ~/.gemini/config/plugins/b3-ai-engineering/ + ~/.gemini/config/skills.json"]
+    out_models["User-Owned Config: ~/.b3/models.md (seeded by install global, preserved on update/uninstall)"]
+
+    cmd_global --> out_cursor_g
+    cmd_global --> out_anti_g
+    cmd_global -->|"seeds if missing"| out_models
+
+    out_product["Project Attach: .b3/home, AGENTS.md or CLAUDE.md, .cursor/commands/*.md, .agents/skills/*, .claude/{skills,agents}"]
+    out_sync["Local Checkout (Gitignored): .cursor/{skills,commands,agents,rules}, .agents/skills.json, .agents/skills/*, .claude/{skills,agents}"]
+
+    cmd_product --> out_product
+    cmd_sync --> out_sync
+
+    subgraph BOUND["Ownership, Conflict, and User-Owned Boundaries"]
+        b_sha["SHA-256 Sidecars & Manifests: matching .b3-*-manifest* upgrades cleanly without --force"]
+        b_fail["Fail-Closed Conflicts: legacy unmanaged or edited files trigger OWNERSHIP_UNKNOWN / UPDATE_CONFLICT (--force once)"]
+        b_coex["Coexistence Guards: refuse Cursor roots alongside .agents/skills or .claude/skills unless --force"]
+        b_user["User-Owned Never Overwritten: ~/.b3/models.md, custom skills.json entries, unmanaged .cursor/rules/*.mdc"]
+    end
+
+    cmd_global -.->|"enforces"| b_sha
+    cmd_product -.->|"enforces"| b_coex
+    cmd_sync -.->|"enforces"| b_fail
+    out_models -.-> b_user
+```
+
 ## Host path matrix
 
 | Host | Rules / context | Skills | Commands | Subagents |
@@ -38,7 +81,7 @@ b3 sync --host antigravity
 - On Windows, `b3 sync` creates unprivileged NTFS junctions via native `DeviceIoControl`; on macOS/Linux, it creates POSIX symlinks.
 - Supports `--dry-run`, `--verify-only`, `--force`, and `--repo-root <dir>`.
 - **Coexistence guards & unmanaged preservation:** `b3 sync` refuses (unless `--force`) to create `.cursor/skills` alongside `.agents/skills` or `.claude/skills` (Cursor cross-loads those roots and duplicates skills), warns when `.agents/skills` coexists with generated `.agents/skills.json` (Antigravity reads both), and never overwrites user-owned `.cursor/rules/*.mdc` or customized `.agents/skills.json` without `--force`. There is intentionally no unguarded `all` target.
-- **Migration from previously committed `.cursor/rules/*.mdc` / `.agents/skills.json`:** Pull/update the repo (which removes those committed files and adds them to `.gitignore`), then run `b3 sync --host cursor` or `b3 sync --host antigravity` once per checkout to regenerate gitignored local activation. Previously generated B3 manifests upgrade cleanly without `--force`.
+- **Migration from previously committed `.cursor/rules/*.mdc` / `.agents/skills.json`:** Pull/update the repo (which removes those committed files and adds them to `.gitignore`), then run `b3 sync --host cursor` or `b3 sync --host antigravity` once per checkout to regenerate gitignored local activation. Files tracked by matching SHA-256 sidecars (`.agents/.b3-skills-manifest.sha256` or `.cursor/rules/.b3-rules-manifest.sha256`) and unmodified generated Cursor rule wrappers upgrade cleanly without `--force`; legacy unmanaged `.agents/skills.json` or `.cursor/rules/*.mdc` without SHA-256 sidecars (as well as locally modified files, and pre-manifest global installs) fail closed (`OWNERSHIP_UNKNOWN`, `OWNERSHIP_MODIFIED`, or `UPDATE_CONFLICT`) and require `--force` once to adopt ownership.
 - **Exit `1`** on missing sources, wrong links, or non-empty non-link content. Filesystem success is not runtime host-discovery `PASS`.
 
 ## Product repository attach (`b3 install product`)
