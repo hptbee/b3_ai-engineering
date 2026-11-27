@@ -6,8 +6,8 @@ use crate::fs::{has_control_chars, sort_ordinal};
 use crate::git::{is_hex40, run_git};
 use crate::json::{parse_json, JsonValue};
 use crate::pr::gh_exec::{
-    exec_gh, parse_github_remote_slug, resolve_bash_binary, resolve_gh_binary, validate_pr_number,
-    validate_repo_slug,
+    exec_gh, needs_bash_for_gh, parse_github_remote_slug, resolve_bash_binary, resolve_gh_binary,
+    validate_pr_number, validate_repo_slug,
 };
 
 fn gh_err(reason: &str) -> B3Error {
@@ -343,17 +343,7 @@ pub fn run(
     let Some(gh_bin) = resolve_gh_binary(gh_bin_arg) else {
         return Err(gh_unavail("gh_cli_unavailable"));
     };
-    let needs_bash = cfg!(windows)
-        && !gh_bin
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| {
-                matches!(
-                    e.to_ascii_lowercase().as_str(),
-                    "exe" | "com" | "cmd" | "bat"
-                )
-            });
-    let bash_bin = if needs_bash {
+    let bash_bin = if needs_bash_for_gh(&gh_bin) {
         let Some(b) = resolve_bash_binary(bash_bin_arg) else {
             return Err(gh_unavail("gh_cli_unavailable"));
         };

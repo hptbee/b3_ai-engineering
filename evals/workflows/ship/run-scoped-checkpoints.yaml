@@ -4,7 +4,7 @@ intent: New ship runs must isolate checkpoints under .b3/ship/runs/<run_id>/ via
 scenario: |
   A prior run completed under .b3/ship/runs/20261121-2300-old-run/ with approach/T003.md
   User starts /b3-ship with a new 2-task feature
-  Agent allocates a new run via b3-guard new-run, updates CURRENT, writes master-plan.md and progress.md in the new run directory, and never reads or deletes sibling runs
+  Agent allocates a new run via b3 guard new-run, updates CURRENT, writes master-plan.md and progress.md in the new run directory, and never reads or deletes sibling runs
 expected_outcome: PASS
 failure_mode: overwritten-checkpoint-or-stale-approach-residue
 notes: Use plain-text CURRENT pointer (never symlink); read only CURRENT and active {RUN_DIR} unless status --all or prune is invoked

@@ -1,6 +1,6 @@
 # Review-loop evals
 
-Scenarios (`26` YAML cases across `8` folders) for **`review-loop/spec.md`**, **`review-loop/strategy.md`**, and **`review-loop/hierarchical.md`**. Manual judge for prompt cases until an automated loop runner ships; deterministic inventory and ledger gates are exercised by `scripts/validate-tshirt-hierarchical.ps1` and `scripts/validate-merge-security.sh`.
+Scenarios (`26` YAML cases across `8` folders) for **`review-loop/spec.md`**, **`review-loop/strategy.md`**, and **`review-loop/hierarchical.md`**. Manual judge for prompt cases until an automated loop runner ships; deterministic inventory, ledger, and eval schema gates are exercised by `cargo test --test eval_contracts` and native `b3` integration tests.
 
 | Folder | Cases | Question |
 | --- | ---: | --- |
@@ -15,4 +15,4 @@ Scenarios (`26` YAML cases across `8` folders) for **`review-loop/spec.md`**, **
 
 Each YAML file includes `scenario`, `expected_outcome`, and `failure_mode`.
 
-Validate: `./scripts/validate-evals.sh`
+Validate: `cargo test --test eval_contracts`

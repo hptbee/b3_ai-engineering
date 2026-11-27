@@ -6,10 +6,10 @@ use crate::adapters::common::{
     add_canonical_skills, assert_regular_dir_or_missing, assert_regular_file_or_missing,
     collect_skill_md_files, create_dir_link, format_personal_models_status, has_active_path,
     initialize_personal_models_file, is_reparse_link, normalize_abs_path_str, path_exists_or_link,
-    remove_link_only, test_link_target, write_utf8_no_bom_lf,
+    remove_link_only, resolve_b3_repo_root_auto, test_link_target, write_utf8_no_bom_lf,
 };
 use crate::error::{fail, B3Error};
-use crate::fs::{normalize_repo_root, sort_ordinal};
+use crate::fs::sort_ordinal;
 use crate::json::{parse_json, JsonValue};
 
 #[derive(Debug, Clone)]
@@ -411,12 +411,7 @@ pub fn run(
         ));
     }
 
-    let root_raw_or_dot = if repo_root_raw.trim().is_empty() {
-        "."
-    } else {
-        repo_root_raw.trim()
-    };
-    let root_resolved = normalize_repo_root(root_raw_or_dot)?;
+    let root_resolved = resolve_b3_repo_root_auto(repo_root_raw)?;
     let root = PathBuf::from(normalize_abs_path_str(&root_resolved));
     if !verify_only && is_reparse_link(&root) {
         return Err(fail(

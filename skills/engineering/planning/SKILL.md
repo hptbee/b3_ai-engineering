@@ -7,7 +7,7 @@ description: "Use when writing a multi-step implementation plan before coding: f
 
 Write a plan an agent can execute without inventing scope. No TBD where a decision is required.
 
-Adapted from Superpowers writing-plans (file map, bite-sized tasks, no placeholders) without Superpowers paths, TDD ritual, or subagent-driven execution.
+Adapted from Superpowers writing-plans (file map, bite-sized tasks) without Superpowers paths or TDD ritual.
 
 ## When to use
 
@@ -27,11 +27,11 @@ Near miss: “is this architecture sound?” with no implementation yet → this
 ## Procedure
 
 1. **Restate goal & scope** in one sentence, naming explicit **in-scope / out-of-scope** bounds and top-level success evidence (command or probe).
-2. **Map files, reuse & proportionality:** identify files/modules to create or modify following project conventions; check existing components, native platform features, and standard libraries first. Prefer simple representations/configs and direct workflows over custom parsers, config frameworks, or reusable subsystems for one-off convenience features unless justified by a concrete requirement (security, correctness, portability, explicit spec, or verified perf — `architecture/simplest-correct`).
+2. **Map files, reuse & proportionality (parallel on multi-area):** on multi-area work, fan out concurrent `SHARED_READ_ONLY` discovery (`workflows/references/dispatch-naming.md`); keep single-area inline. Reuse existing modules, native platform features, and stdlibs; prefer simple configs and direct workflows over custom parsers, frameworks, or reusable subsystems unless justified by a named requirement (`architecture/simplest-correct`).
 3. **Assess risks (risk-adaptive depth):** list security/authz, data consistency, perf, a11y, or 3D resource risks and matching domain skills.
    - **Low-risk / localized:** keep the plan compact (files, ACs, tasks, checks).
    - **High-risk trigger** (ambiguity, architecture/contract changes, authz boundaries, stateful/concurrency/retry logic, cache/write-path invalidation, cross-module deps): explicitly capture shared contracts/interfaces, failure modes, and write/invalidation paths before task breakdown.
-4. **Dependency-ordered tasks:** smallest units independently verifiable, ordered by dependencies (fold scaffolding into the task that needs it).
+4. **Dependency-ordered synthesis:** Parent synthesizes 1 plan of smallest independently verifiable tasks tagged with disjoint `files` and `depends_on` (folding scaffolding into the task that needs it) so independent ready tasks can run concurrently.
 5. **Each task:** intent, touched files/contracts, dependencies, testable acceptance criteria (`AC1..ACn`), and exact verification command or probe. Resolve decisions upfront — no `TBD`, implicit placeholders, or "add error handling later".
 6. **Readiness Check:** confirm every AC is observable/testable & mapped 1:1 to a check, reusable existing code was checked, contradictions/missing requirements/incomplete dependencies are flagged and asked before coding, and design is the simplest sound fit (`architecture/simplest-correct`).
 7. **Stop.** Do not write product code unless the user also asked to implement.

@@ -63,7 +63,7 @@ Write descriptions against realistic user phrasing, not only against internal ta
 
 ### Concise instructions
 
-The main file is the procedure, not the encyclopedia. If a section is growing past what an agent needs on every invocation, move it to `references/`. Soft context caps checked by `scripts/measure-context.{ps1,sh} --strict`: `SKILL.md` ≤ `4,000 B` and YAML frontmatter ≤ `280 B`.
+The main file is the procedure, not the encyclopedia. If a section is growing past what an agent needs on every invocation, move it to `references/`. Soft context caps checked by `b3 context measure --strict`: `SKILL.md` ≤ `4,000 B` and YAML frontmatter ≤ `280 B`.
 
 ### Progressive disclosure
 

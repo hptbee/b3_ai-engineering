@@ -10,7 +10,7 @@ This document defines the building blocks of the system. It is definitional. Ope
 | **Host entrypoints (committed)** | Thin wrappers/manifests that activate canonical core without duplicating prose | `AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*.mdc`, `.agents/skills.json` |
 | **Documentation** | Explains the system; not configuration | `docs/`, `README.md` |
 | **Research** | Provenance; not production config | `research/` |
-| **Local activation links** | Gitignored host discovery links created by `adapters/sync-skills.{ps1,sh}` | `.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}`, `.codex/skills` |
+| **Local activation links** | Gitignored host discovery links created by `b3 sync` | `.cursor/{skills,commands,agents}`, `.agents/skills`, `.claude/{skills,agents}`, `.codex/skills` |
 
 B3 uses a **host-neutral canonical core** (`rules/`, `skills/`, `commands/`, `agents/`) mapped onto Cursor, Codex, Claude Code, and Antigravity via thin adapters. Decision: [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md) (supersedes `decision-009-cursor-native-layout.md`).
 
@@ -234,7 +234,7 @@ An adapter maps the canonical core (`rules/`, `skills/`, `commands/`, `agents/`)
 
 Example:
 
-> `adapters/sync-skills.{ps1,sh}` links `.cursor/{skills,commands,agents}`, `.agents/skills/<name>`, `.claude/{skills,agents}`, or verifies `.agents/skills.json`.
+> `b3 sync --host <cursor|codex|claude|antigravity>` links `.cursor/{skills,commands,agents}`, `.agents/skills/<name>`, `.claude/{skills,agents}`, or verifies `.agents/skills.json`.
 
 ## Eval
 

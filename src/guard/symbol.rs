@@ -516,6 +516,7 @@ pub fn run(
     let mut orphan_internal = Vec::new();
     let mut rem_checked = HashSet::new();
     let commit_prefix = format!("{target_commit_sha}:");
+    let mut rem_candidates: Vec<(&str, bool, &str)> = Vec::new();
 
     for (f, syms) in &removed_by_file {
         for (s_name, &is_exp) in syms {
@@ -545,37 +546,104 @@ pub fn run(
             if !rem_checked.insert(s_name.clone()) {
                 continue;
             }
+            rem_candidates.push((s_name.as_str(), in_same_file, f.as_str()));
+        }
+    }
 
-            let g_args: Vec<&str> = if !target_trim.is_empty() {
-                vec![
-                    "grep",
-                    "-w",
-                    "-F",
-                    "-l",
-                    "-e",
-                    s_name,
-                    &target_commit_sha,
-                    "--",
-                    ".",
-                    ":(exclude).b3",
-                    ":(exclude)*.md",
-                ]
-            } else {
-                vec![
-                    "grep",
-                    "--untracked",
-                    "-w",
-                    "-F",
-                    "-l",
-                    "-e",
-                    s_name,
-                    "--",
-                    ".",
-                    ":(exclude).b3",
-                    ":(exclude)*.md",
-                ]
-            };
-            let g_res = run_git(&repo_root, &g_args, &no_env, None)?;
+    let run_symbol_grep = |flag_mode: &str,
+                           syms: &[&str],
+                           scope_files: Option<&[String]>|
+     -> Result<crate::process::CmdOutput, B3Error> {
+        let literal_files: Vec<String> = scope_files
+            .map(|files| files.iter().map(|fp| format!(":(literal){fp}")).collect())
+            .unwrap_or_default();
+        let mut args: Vec<&str> = Vec::with_capacity(syms.len() * 2 + literal_files.len() + 13);
+        args.push("grep");
+        if target_trim.is_empty() {
+            args.push("--untracked");
+        }
+        args.push("-w");
+        args.push("-F");
+        args.push(flag_mode);
+        args.push("-z");
+        for &sym in syms {
+            args.push("-e");
+            args.push(sym);
+        }
+        if !target_trim.is_empty() {
+            args.push(&target_commit_sha);
+        }
+        args.push("--");
+        if scope_files.is_some() {
+            for lf in &literal_files {
+                args.push(lf.as_str());
+            }
+        } else {
+            args.extend([".", ":(exclude).b3", ":(exclude)*.md"]);
+        }
+        run_git(&repo_root, &args, &no_env, None)
+    };
+
+    let parse_grep_hit_files = |stdout: &[u8]| -> Vec<(String, String)> {
+        let mut hit_files: Vec<(String, String)> = Vec::new();
+        for raw_bytes in stdout.split(|&b| b == b'\0') {
+            if raw_bytes.is_empty() {
+                continue;
+            }
+            let raw_lossy = String::from_utf8_lossy(raw_bytes);
+            let mut raw_path = raw_lossy.as_ref();
+            if !target_trim.is_empty() {
+                raw_path = raw_path.strip_prefix(&commit_prefix).unwrap_or(raw_path);
+            }
+            if raw_path.is_empty() {
+                continue;
+            }
+            let np = normalize_path_value(raw_path);
+            if should_skip_symbol_file(&np, &ignored) {
+                continue;
+            }
+            if !hit_files.iter().any(|(r, _)| r == raw_path) {
+                hit_files.push((raw_path.to_string(), np));
+            }
+        }
+        hit_files
+    };
+
+    for chunk in rem_candidates.chunks(64) {
+        let syms: Vec<&str> = chunk.iter().map(|&(s, _, _)| s).collect();
+        let batch_res = run_symbol_grep("-l", &syms, None)?;
+        if batch_res.exit_code > 1 {
+            return Err(fail(
+                format!("SYMBOL_FAIL: git grep failed for '{}'", syms[0]),
+                1,
+            ));
+        }
+        if batch_res.exit_code != 0 {
+            continue;
+        }
+        let batch_hits = parse_grep_hit_files(&batch_res.stdout);
+        if batch_hits.is_empty() {
+            continue;
+        }
+        if chunk.len() == 1 {
+            let (s_name, in_same_file, f) = chunk[0];
+            let count = batch_hits
+                .iter()
+                .filter(|(_, np)| !(in_same_file && np.as_str() == f))
+                .count();
+            if count > 0 {
+                dangling_refs.push(format!("{s_name}({count}f)"));
+            }
+            continue;
+        }
+        let raw_scope: Vec<String> = batch_hits.iter().map(|(raw, _)| raw.clone()).collect();
+        let scoped = if raw_scope.len() <= 200 {
+            Some(raw_scope.as_slice())
+        } else {
+            None
+        };
+        for &(s_name, in_same_file, f) in chunk {
+            let g_res = run_symbol_grep("-l", &[s_name], scoped)?;
             if g_res.exit_code > 1 {
                 return Err(fail(
                     format!("SYMBOL_FAIL: git grep failed for '{s_name}'"),
@@ -583,33 +651,18 @@ pub fn run(
                 ));
             }
             if g_res.exit_code == 0 {
-                let mut hit_files = Vec::new();
-                for row in String::from_utf8_lossy(&g_res.stdout).lines() {
-                    let mut r_str = row.trim();
-                    if r_str.is_empty() {
-                        continue;
-                    }
-                    if !target_trim.is_empty() {
-                        r_str = r_str.strip_prefix(&commit_prefix).unwrap_or(r_str);
-                    }
-                    let np = normalize_path_value(r_str);
-                    if should_skip_symbol_file(&np, &ignored) {
-                        continue;
-                    }
-                    if in_same_file && &np == f {
-                        continue;
-                    }
-                    if !hit_files.iter().any(|x| x == &np) {
-                        hit_files.push(np);
-                    }
-                }
-                if !hit_files.is_empty() {
-                    dangling_refs.push(format!("{s_name}({}f)", hit_files.len()));
+                let count = parse_grep_hit_files(&g_res.stdout)
+                    .into_iter()
+                    .filter(|(_, np)| !(in_same_file && np.as_str() == f))
+                    .count();
+                if count > 0 {
+                    dangling_refs.push(format!("{s_name}({count}f)"));
                 }
             }
         }
     }
 
+    let mut added_candidates: Vec<(&str, &str)> = Vec::new();
     for (f, syms) in &added_by_file {
         if test_test_path(f) {
             continue;
@@ -618,36 +671,48 @@ pub fn run(
             if is_exp || removed_anywhere.contains(s_name) {
                 continue;
             }
-            let gn_args: Vec<&str> = if !target_trim.is_empty() {
-                vec![
-                    "grep",
-                    "-w",
-                    "-F",
-                    "-n",
-                    "-e",
-                    s_name,
-                    &target_commit_sha,
-                    "--",
-                    ".",
-                    ":(exclude).b3",
-                    ":(exclude)*.md",
-                ]
+            added_candidates.push((f.as_str(), s_name.as_str()));
+        }
+    }
+
+    for chunk in added_candidates.chunks(64) {
+        let scoped_storage: Vec<String>;
+        let scoped = if chunk.len() == 1 {
+            None
+        } else {
+            let syms: Vec<&str> = chunk.iter().map(|&(_, s)| s).collect();
+            let batch_res = run_symbol_grep("-l", &syms, None)?;
+            if batch_res.exit_code > 1 {
+                return Err(fail(
+                    format!("SYMBOL_FAIL: git grep -l failed for '{}'", syms[0]),
+                    1,
+                ));
+            }
+            if batch_res.exit_code != 0 {
+                for &(f, s_name) in chunk {
+                    orphan_internal.push(format!("{f}:{s_name}"));
+                }
+                continue;
+            }
+            scoped_storage = parse_grep_hit_files(&batch_res.stdout)
+                .into_iter()
+                .map(|(raw, _)| raw)
+                .collect();
+            if scoped_storage.is_empty() {
+                for &(f, s_name) in chunk {
+                    orphan_internal.push(format!("{f}:{s_name}"));
+                }
+                continue;
+            }
+            if scoped_storage.len() <= 200 {
+                Some(scoped_storage.as_slice())
             } else {
-                vec![
-                    "grep",
-                    "--untracked",
-                    "-w",
-                    "-F",
-                    "-n",
-                    "-e",
-                    s_name,
-                    "--",
-                    ".",
-                    ":(exclude).b3",
-                    ":(exclude)*.md",
-                ]
-            };
-            let gn_res = run_git(&repo_root, &gn_args, &no_env, None)?;
+                None
+            }
+        };
+
+        for &(f, s_name) in chunk {
+            let gn_res = run_symbol_grep("-n", &[s_name], scoped)?;
             if gn_res.exit_code > 1 {
                 return Err(fail(
                     format!("SYMBOL_FAIL: git grep -n failed for '{s_name}'"),
@@ -656,21 +721,19 @@ pub fn run(
             }
             let mut line_hits = 0usize;
             if gn_res.exit_code == 0 {
-                for row in String::from_utf8_lossy(&gn_res.stdout).lines() {
-                    let mut r_str = row.trim();
-                    if r_str.is_empty() {
-                        continue;
-                    }
-                    if !target_trim.is_empty() {
-                        r_str = r_str.strip_prefix(&commit_prefix).unwrap_or(r_str);
-                    }
-                    let Some(c_idx) = r_str.find(':') else {
+                for raw_row in gn_res.stdout.split(|&b| b == b'\n') {
+                    let Some(nul_idx) = raw_row.iter().position(|&b| b == b'\0') else {
                         continue;
                     };
-                    if c_idx < 1 {
+                    let raw_lossy = String::from_utf8_lossy(&raw_row[..nul_idx]);
+                    let mut raw_path = raw_lossy.as_ref();
+                    if !target_trim.is_empty() {
+                        raw_path = raw_path.strip_prefix(&commit_prefix).unwrap_or(raw_path);
+                    }
+                    if raw_path.is_empty() {
                         continue;
                     }
-                    let np = normalize_path_value(&r_str[..c_idx]);
+                    let np = normalize_path_value(raw_path);
                     if should_skip_symbol_file(&np, &ignored) {
                         continue;
                     }

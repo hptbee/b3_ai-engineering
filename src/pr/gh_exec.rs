@@ -1,7 +1,11 @@
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::fs::has_control_chars;
 use crate::process::run_command_timeout;
+
+static DEFAULT_GH_BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
+static DEFAULT_BASH_BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 fn is_valid_slug_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')
@@ -210,26 +214,32 @@ pub fn resolve_bash_binary(explicit_bash: &str) -> Option<PathBuf> {
         env_bash.trim()
     };
 
-    if !raw.is_empty() {
-        if has_control_chars(raw) {
-            return None;
-        }
-        if let Some(hit) = try_file_or_win_exts(raw) {
-            return Some(hit);
-        }
-        if cfg!(windows) && raw.starts_with('/') && !raw.starts_with("//") {
-            let bytes = raw.as_bytes();
-            if bytes.len() >= 3 && bytes[1].is_ascii_alphabetic() && bytes[2] == b'/' {
-                let drive = bytes[1] as char;
-                let rest = raw[3..].replace('/', "\\");
-                if let Some(hit) = try_file_or_win_exts(&format!("{drive}:\\{rest}")) {
-                    return Some(hit);
-                }
-            }
-        }
-        return None;
+    if raw.is_empty() {
+        return DEFAULT_BASH_BIN
+            .get_or_init(resolve_default_bash_binary)
+            .clone();
     }
 
+    if has_control_chars(raw) {
+        return None;
+    }
+    if let Some(hit) = try_file_or_win_exts(raw) {
+        return Some(hit);
+    }
+    if cfg!(windows) && raw.starts_with('/') && !raw.starts_with("//") {
+        let bytes = raw.as_bytes();
+        if bytes.len() >= 3 && bytes[1].is_ascii_alphabetic() && bytes[2] == b'/' {
+            let drive = bytes[1] as char;
+            let rest = raw[3..].replace('/', "\\");
+            if let Some(hit) = try_file_or_win_exts(&format!("{drive}:\\{rest}")) {
+                return Some(hit);
+            }
+        }
+    }
+    None
+}
+
+fn resolve_default_bash_binary() -> Option<PathBuf> {
     if cfg!(windows) {
         let mut cands = Vec::new();
         if let Ok(pf) = std::env::var("ProgramFiles") {
@@ -333,50 +343,71 @@ pub fn resolve_gh_binary(explicit_gh: &str) -> Option<PathBuf> {
     } else {
         env_gh.trim()
     };
+    if cand.is_empty() {
+        return DEFAULT_GH_BIN
+            .get_or_init(resolve_default_gh_binary)
+            .clone();
+    }
     if has_control_chars(cand) {
         return None;
     }
     let dirs = path_dirs_from_env();
-    if !cand.is_empty() {
-        let has_sep = cand.contains('/')
-            || cand.contains('\\')
-            || (cfg!(windows)
-                && cand.len() >= 2
-                && cand.as_bytes()[0].is_ascii_alphabetic()
-                && cand.as_bytes()[1] == b':');
-        if has_sep {
-            if let Some(hit) = try_file_or_win_exts(cand) {
-                return Some(hit);
-            }
-            if cfg!(windows) && cand.starts_with('/') && !cand.starts_with("//") {
-                if let Some(msys) = resolve_win_msys_candidate(cand) {
-                    return Some(msys);
-                }
-            }
-            return None;
+    let has_sep = cand.contains('/')
+        || cand.contains('\\')
+        || (cfg!(windows)
+            && cand.len() >= 2
+            && cand.as_bytes()[0].is_ascii_alphabetic()
+            && cand.as_bytes()[1] == b':');
+    if has_sep {
+        if let Some(hit) = try_file_or_win_exts(cand) {
+            return Some(hit);
         }
-        let leaf_has_ext = cand.rsplit_once('.').is_some_and(|(_, ext)| {
-            !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_alphanumeric())
-        });
-        if cfg!(windows) && !leaf_has_ext {
-            let names = [
-                format!("{cand}.exe"),
-                format!("{cand}.com"),
-                format!("{cand}.cmd"),
-                format!("{cand}.bat"),
-                cand.to_string(),
-            ];
-            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-            return find_first_in_path(&dirs, &refs);
+        if cfg!(windows) && cand.starts_with('/') && !cand.starts_with("//") {
+            if let Some(msys) = resolve_win_msys_candidate(cand) {
+                return Some(msys);
+            }
         }
-        return find_first_in_path(&dirs, &[cand]);
+        return None;
     }
+    let leaf_has_ext = cand
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_alphanumeric()));
+    if cfg!(windows) && !leaf_has_ext {
+        let names = [
+            format!("{cand}.exe"),
+            format!("{cand}.com"),
+            format!("{cand}.cmd"),
+            format!("{cand}.bat"),
+            cand.to_string(),
+        ];
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        return find_first_in_path(&dirs, &refs);
+    }
+    find_first_in_path(&dirs, &[cand])
+}
+
+fn resolve_default_gh_binary() -> Option<PathBuf> {
+    let dirs = path_dirs_from_env();
     let names: &[&str] = if cfg!(windows) {
         &["gh.exe", "gh.com", "gh.cmd", "gh.bat", "gh"]
     } else {
         &["gh"]
     };
     find_first_in_path(&dirs, names)
+}
+
+/// Returns `true` when `gh_bin` requires `bash` on Windows (extension is not `.exe`/`.com`/`.cmd`/`.bat`).
+pub fn needs_bash_for_gh(gh_bin: &Path) -> bool {
+    cfg!(windows)
+        && !gh_bin
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| {
+                matches!(
+                    e.to_ascii_lowercase().as_str(),
+                    "exe" | "com" | "cmd" | "bat"
+                )
+            })
 }
 
 #[derive(Debug, Clone)]

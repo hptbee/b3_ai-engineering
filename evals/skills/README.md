@@ -15,4 +15,4 @@ Foundation skills: 7 cases each (Track C). Synthesized domain skills: 6 cases ea
 
 Manual judge: read `description` + case `input`. Automated runner: **not implemented**.
 
-Validate: `./scripts/validate-evals.sh`
+Validate: `cargo test --test eval_contracts`

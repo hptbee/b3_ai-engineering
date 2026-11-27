@@ -6,13 +6,13 @@ use crate::adapters::common::{
     add_canonical_skills_with_bucket, assert_regular_dir_or_missing,
     assert_regular_file_or_missing, create_dir_link, file_sha256, get_canonical_markdown_names,
     get_skill_overlaps, is_reparse_link, normalize_abs_path_str, normalize_path_str,
-    path_exists_or_link, read_b3_manifest, remove_dir_tree_safely, remove_empty_regular_dir,
-    remove_link_only, resolve_b3_home_dir, resolve_user_home_dir, split_yaml_frontmatter,
-    test_link_target, text_sha256_lf, to_forward_path, uninstall_managed_file,
-    uninstall_managed_link, write_b3_manifest, write_utf8_no_bom_lf, B3Manifest,
+    path_exists_or_link, read_b3_manifest, remove_empty_regular_dir, remove_link_only,
+    resolve_b3_home_auto, resolve_user_home_dir, split_yaml_frontmatter, test_link_target,
+    text_sha256_lf, to_forward_path, uninstall_managed_file, uninstall_managed_link,
+    write_b3_manifest, write_utf8_no_bom_lf, B3Manifest,
 };
 use crate::error::{fail, B3Error};
-use crate::fs::sort_ordinal;
+use crate::fs::{remove_dir_tree_safely, sort_ordinal};
 
 fn check_cross_host_coexistence(user_home: &Path, skill_names: &[String], out: &mut Vec<String>) {
     for (sub_rel, sub_disp) in [
@@ -278,16 +278,7 @@ pub fn run(
         return Ok((out.join("\n"), 0));
     }
 
-    let fallback_b3 = if let Ok(env_h) = std::env::var("B3_HOME") {
-        if !env_h.trim().is_empty() {
-            PathBuf::from(env_h.trim())
-        } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        }
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    };
-    let b3_home = resolve_b3_home_dir(b3_home_raw, &fallback_b3)?;
+    let b3_home = resolve_b3_home_auto(b3_home_raw)?;
     let b3_home_forward = to_forward_path(&b3_home);
 
     let workflow_path = b3_home.join("workflows").join("ship.md");

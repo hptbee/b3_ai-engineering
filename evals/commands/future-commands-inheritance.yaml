@@ -1,0 +1,9 @@
+id: cmd-future-inheritance-001
+artifact: commands/README.md
+intent: Future commands inherit adaptive scheduling, isolation modes, and single-writer governance by referencing dispatch-naming.md instead of duplicating orchestration rules
+scenario: |
+  A new command is added under commands/ and adapters/command-skills/
+  It references workflows/references/dispatch-naming.md (and pr-feedback/SKILL.md or review-loop/strategy.md when applicable) rather than duplicating wave/isolation/PR-owner prose into command files or always-on rules
+expected_outcome: PASS
+failure_mode: duplicated-orchestration-rules-bloat-always-on-or-commands
+notes: Keeps always_on_total <= 15777 B while guaranteeing uniform orchestration semantics across future commands

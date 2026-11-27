@@ -5,11 +5,12 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use crate::fs::{
-    has_control_chars, is_reparse_or_symlink, next_tmp_suffix, resolve_unresolved_path,
-    sha256_bytes_hex,
+    has_control_chars, is_reparse_or_symlink, next_tmp_suffix, paths_equal_fs,
+    resolve_unresolved_path, sha256_bytes_hex,
 };
 use crate::guard::verify::format_utc_iso8601_now;
 use crate::json::{parse_json, JsonValue};
+use crate::process::{probe_pid_liveness, PidLiveness};
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
@@ -283,11 +284,7 @@ pub fn read_safe_input_file(
 }
 
 pub fn same_fs_path(a: &Path, b: &Path) -> bool {
-    if cfg!(windows) {
-        a.to_string_lossy().to_ascii_lowercase() == b.to_string_lossy().to_ascii_lowercase()
-    } else {
-        a == b
-    }
+    paths_equal_fs(&a.to_string_lossy(), &b.to_string_lossy(), cfg!(windows))
 }
 
 pub fn canonicalize_clean(p: &Path) -> std::io::Result<PathBuf> {
@@ -664,6 +661,26 @@ fn is_resolved_status(status: &str) -> bool {
     )
 }
 
+fn fallback_missing_op_id(record: &JsonValue, record_idx: usize) -> String {
+    let hash = sha256_bytes_hex(record.to_json_pretty().as_bytes());
+    format!("__missing_op_{record_idx}_{}", &hash[..8])
+}
+
+fn stamp_op_id(record: &JsonValue, op_id: &str) -> JsonValue {
+    match record {
+        JsonValue::Object(entries) => {
+            let mut out = entries.clone();
+            if let Some((_, val)) = out.iter_mut().find(|(k, _)| k == "op_id") {
+                *val = JsonValue::str(op_id);
+            } else {
+                out.push(("op_id".to_string(), JsonValue::str(op_id)));
+            }
+            JsonValue::Object(out)
+        }
+        other => other.clone(),
+    }
+}
+
 /// Returns all unresolved PENDING or reconciliation-required records for `(repo_full, pr_number)`.
 pub fn get_unresolved_pending_records(
     records: &[JsonValue],
@@ -671,7 +688,7 @@ pub fn get_unresolved_pending_records(
     pr_number: u64,
 ) -> Vec<JsonValue> {
     let mut by_op: Vec<(String, JsonValue)> = Vec::new();
-    for r in records {
+    for (idx, r) in records.iter().enumerate() {
         let r_repo = r
             .get("repo")
             .and_then(JsonValue::as_str)
@@ -680,11 +697,11 @@ pub fn get_unresolved_pending_records(
         if !r_repo.eq_ignore_ascii_case(repo_full) || r_pr != pr_number as i64 {
             continue;
         }
-        let op_id = r
+        let explicit_op_id = r
             .get("op_id")
             .and_then(JsonValue::as_str)
-            .unwrap_or("__legacy__")
-            .to_string();
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let status = r
             .get("status")
             .and_then(JsonValue::as_str)
@@ -694,14 +711,21 @@ pub fn get_unresolved_pending_records(
             .and_then(JsonValue::as_bool)
             .unwrap_or(false);
         if status == "PENDING" || recon_req {
-            if let Some(slot) = by_op.iter_mut().find(|(k, _)| *k == op_id) {
-                slot.1 = r.clone();
+            if let Some(op_id) = explicit_op_id {
+                if let Some(slot) = by_op.iter_mut().find(|(k, _)| *k == op_id) {
+                    slot.1 = r.clone();
+                } else {
+                    by_op.push((op_id.to_string(), r.clone()));
+                }
             } else {
-                by_op.push((op_id, r.clone()));
+                let synthetic_id = fallback_missing_op_id(r, idx);
+                by_op.push((synthetic_id.clone(), stamp_op_id(r, &synthetic_id)));
             }
         } else if is_resolved_status(status) {
-            if let Some(pos) = by_op.iter().position(|(k, _)| *k == op_id) {
-                by_op.remove(pos);
+            if let Some(op_id) = explicit_op_id {
+                if let Some(pos) = by_op.iter().position(|(k, _)| *k == op_id) {
+                    by_op.remove(pos);
+                }
             }
         }
     }
@@ -745,21 +769,11 @@ impl PidState {
 #[link(name = "kernel32")]
 extern "system" {
     fn GetComputerNameExW(name_type: u32, buffer: *mut u16, size: *mut u32) -> i32;
-    fn OpenProcess(
-        desired_access: u32,
-        inherit_handle: i32,
-        process_id: u32,
-    ) -> *mut core::ffi::c_void;
-    fn WaitForSingleObject(handle: *mut core::ffi::c_void, milliseconds: u32) -> u32;
-    fn GetExitCodeProcess(process: *mut core::ffi::c_void, exit_code: *mut u32) -> i32;
-    fn CloseHandle(object: *mut core::ffi::c_void) -> i32;
-    fn GetLastError() -> u32;
 }
 
 #[cfg(unix)]
 extern "C" {
     fn gethostname(name: *mut std::ffi::c_char, len: usize) -> i32;
-    fn kill(pid: i32, sig: i32) -> i32;
 }
 
 /// Returns the local DNS hostname matching `[Net.Dns]::GetHostName()` and Node's `os.hostname()`.
@@ -798,88 +812,10 @@ pub fn get_hostname() -> String {
 
 /// Probes whether `pid` on the local host is alive, confirmed dead, or indeterminate.
 pub fn is_pid_alive_same_host(pid: i64) -> PidState {
-    if pid <= 0 || pid > i32::MAX as i64 {
-        return PidState::Unknown;
-    }
-    #[cfg(windows)]
-    {
-        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-        const SYNCHRONIZE: u32 = 0x0010_0000;
-        const WAIT_OBJECT_0: u32 = 0;
-        const WAIT_TIMEOUT: u32 = 0x0000_0102;
-        const STILL_ACTIVE: u32 = 259;
-        const ERROR_ACCESS_DENIED: u32 = 5;
-        const ERROR_INVALID_PARAMETER: u32 = 87;
-
-        let pid_u32 = pid as u32;
-        // SAFETY: Win32 handle obtained via `OpenProcess` is always closed via `CloseHandle`.
-        unsafe {
-            let handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid_u32);
-            if !handle.is_null() {
-                let wait = WaitForSingleObject(handle, 0);
-                let res = if wait == WAIT_OBJECT_0 {
-                    PidState::Dead
-                } else if wait == WAIT_TIMEOUT {
-                    PidState::Alive
-                } else {
-                    let mut exit_code: u32 = 0;
-                    if GetExitCodeProcess(handle, &mut exit_code) != 0 {
-                        if exit_code == STILL_ACTIVE {
-                            PidState::Alive
-                        } else {
-                            PidState::Dead
-                        }
-                    } else {
-                        PidState::Unknown
-                    }
-                };
-                CloseHandle(handle);
-                return res;
-            }
-            let err = GetLastError();
-            if err == ERROR_INVALID_PARAMETER {
-                return PidState::Dead;
-            }
-            if err == ERROR_ACCESS_DENIED {
-                let h2 = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid_u32);
-                if h2.is_null() {
-                    let err2 = GetLastError();
-                    return match err2 {
-                        ERROR_ACCESS_DENIED => PidState::Alive,
-                        ERROR_INVALID_PARAMETER => PidState::Dead,
-                        _ => PidState::Unknown,
-                    };
-                }
-                let mut exit_code: u32 = 0;
-                let state = if GetExitCodeProcess(h2, &mut exit_code) != 0 {
-                    if exit_code == STILL_ACTIVE {
-                        PidState::Alive
-                    } else {
-                        PidState::Dead
-                    }
-                } else {
-                    PidState::Unknown
-                };
-                CloseHandle(h2);
-                return state;
-            }
-            PidState::Unknown
-        }
-    }
-    #[cfg(unix)]
-    {
-        const EPERM: i32 = 1;
-        const ESRCH: i32 = 3;
-        // SAFETY: signal 0 probes process existence without sending a signal.
-        let rc = unsafe { kill(pid as i32, 0) };
-        if rc == 0 {
-            return PidState::Alive;
-        }
-        match std::io::Error::last_os_error().raw_os_error() {
-            Some(ESRCH) => PidState::Dead,
-            Some(EPERM) => PidState::Alive,
-            _ => PidState::Unknown,
-        }
+    match probe_pid_liveness(pid) {
+        PidLiveness::Alive => PidState::Alive,
+        PidLiveness::Dead => PidState::Dead,
+        PidLiveness::Unknown => PidState::Unknown,
     }
 }
 
@@ -1170,4 +1106,68 @@ where
         token: lock_token,
     };
     f()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_rec(op_id: Option<&str>, status: &str, detail: &str) -> JsonValue {
+        let mut fields = vec![
+            ("repo".to_string(), JsonValue::str("acme/demo")),
+            ("pr".to_string(), JsonValue::num_u64(42)),
+            ("action".to_string(), JsonValue::str("reply")),
+            ("status".to_string(), JsonValue::str(status)),
+            ("detail".to_string(), JsonValue::str(detail)),
+        ];
+        if let Some(id) = op_id {
+            fields.push(("op_id".to_string(), JsonValue::str(id)));
+        }
+        JsonValue::obj(fields)
+    }
+
+    #[test]
+    fn unresolved_pending_missing_op_id_is_fail_closed_and_isolated() {
+        let p1 = mk_rec(None, "PENDING", "first");
+        let p2 = mk_rec(None, "PENDING", "second");
+        let p3 = mk_rec(Some("   "), "PENDING", "blank");
+        let r_ok = mk_rec(None, "PR_REPLY_OK", "resolved-no-id");
+        let r_conf = mk_rec(None, "RECONCILED_CONFIRMED", "reconciled-no-id");
+
+        let mut records = vec![p1, p2, p3, r_ok, r_conf];
+        let pending = get_unresolved_pending_records(&records, "acme/demo", 42);
+        assert_eq!(
+            pending.len(),
+            3,
+            "all missing/blank op_id pending records must survive unlabelled resolved entries"
+        );
+
+        let ids: Vec<String> = pending
+            .iter()
+            .map(|r| {
+                r.get("op_id")
+                    .and_then(JsonValue::as_str)
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert!(ids.iter().all(|id| id.starts_with("__missing_op_")));
+        assert_ne!(ids[0], ids[1]);
+        assert_ne!(ids[1], ids[2]);
+        assert_ne!(ids[0], ids[2]);
+
+        // Reconciling only the first synthetic op_id clears p1 while leaving p2 and p3 blocked.
+        records.push(mk_rec(
+            Some(&ids[0]),
+            "RECONCILED_CONFIRMED",
+            "reconciled-p1",
+        ));
+        let remaining = get_unresolved_pending_records(&records, "acme/demo", 42);
+        assert_eq!(remaining.len(), 2);
+        let rem_details: Vec<&str> = remaining
+            .iter()
+            .map(|r| r.get("detail").and_then(JsonValue::as_str).unwrap())
+            .collect();
+        assert_eq!(rem_details, vec!["second", "blank"]);
+    }
 }

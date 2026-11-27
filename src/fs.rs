@@ -577,11 +577,18 @@ pub fn split_csv_list_as_paths(csv: &str) -> Vec<String> {
 pub fn normalize_logical_path(raw: &str) -> Result<PathBuf, B3Error> {
     let cwd = std::env::current_dir()
         .map_err(|e| fail(format!("WORKTREE_FAIL: unable to get cwd: {e}"), 1))?;
-    let base = if let Ok(lpwd) = std::env::var("B3_LOGICAL_PWD") {
+    let logical_env = std::env::var("B3_LOGICAL_PWD")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("PWD").ok().filter(|s| !s.trim().is_empty()));
+    let base = if let Some(lpwd) = logical_env {
         let lp = PathBuf::from(lpwd.trim());
         if lp.is_absolute()
             && !is_reparse_or_symlink(&cwd)
-            && fs::canonicalize(&lp).ok() == fs::canonicalize(&cwd).ok()
+            && matches!(
+                (fs::canonicalize(&lp), fs::canonicalize(&cwd)),
+                (Ok(a), Ok(b)) if a == b
+            )
         {
             lp
         } else {
@@ -591,6 +598,38 @@ pub fn normalize_logical_path(raw: &str) -> Result<PathBuf, B3Error> {
         cwd
     };
     Ok(resolve_unresolved_path(&base, raw))
+}
+
+/// Compares two path strings using filesystem case sensitivity.
+pub fn paths_equal_fs(a: &str, b: &str, case_insensitive: bool) -> bool {
+    if case_insensitive {
+        a.eq_ignore_ascii_case(b)
+    } else {
+        a == b
+    }
+}
+
+/// Returns `true` if `s` is a lowercase 64-character hex SHA-256 digest.
+pub fn is_hex64_lower(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Returns `true` if `ts` matches `YYYY-MM-DDTHH:MM:SSZ`.
+pub fn valid_timestamp_utc(ts: &str) -> bool {
+    let b = ts.as_bytes();
+    b.len() == 20
+        && b[0..4].iter().all(|c| c.is_ascii_digit())
+        && b[4] == b'-'
+        && b[5..7].iter().all(|c| c.is_ascii_digit())
+        && b[7] == b'-'
+        && b[8..10].iter().all(|c| c.is_ascii_digit())
+        && b[10] == b'T'
+        && b[11..13].iter().all(|c| c.is_ascii_digit())
+        && b[13] == b':'
+        && b[14..16].iter().all(|c| c.is_ascii_digit())
+        && b[16] == b':'
+        && b[17..19].iter().all(|c| c.is_ascii_digit())
+        && b[19] == b'Z'
 }
 
 /// Returns `true` if `full` lies strictly inside `root`.
@@ -1310,6 +1349,64 @@ pub fn sha256_bytes_hex(data: &[u8]) -> String {
     hex
 }
 
+/// Computes lowercase hex SHA-1 digest of `data` (FIPS 180-4, pure `std`).
+pub fn sha1_bytes_hex(data: &[u8]) -> String {
+    let mut h: [u32; 5] = [
+        0x6745_2301,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
+    let bit_len = (data.len() as u64) * 8;
+    let mut padded = Vec::with_capacity((data.len() + 9).div_ceil(64) * 64);
+    padded.extend_from_slice(data);
+    padded.push(0x80);
+    while (padded.len() % 64) != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    for block in padded.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (i, chunk) in block.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = h;
+        for (i, &wi) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999u32),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1u32),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDCu32),
+                _ => (b ^ c ^ d, 0xCA62_C1D6u32),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(wi);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        for (acc, val) in h.iter_mut().zip([a, b, c, d, e]) {
+            *acc = acc.wrapping_add(val);
+        }
+    }
+
+    let mut hex = String::with_capacity(40);
+    for word in h {
+        hex.push_str(&format!("{word:08x}"));
+    }
+    hex
+}
+
 /// Expands existing Windows 8.3 short path segments (e.g. `RUNNER~1`) to their
 /// long names via `GetLongPathNameW` without resolving symlinks or NTFS junctions.
 #[cfg(windows)]
@@ -1351,13 +1448,9 @@ pub fn expand_windows_long_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(all(test, windows))]
-mod tests {
-    use super::expand_windows_long_path;
+pub(crate) fn to_short_path(path: &Path) -> Option<PathBuf> {
     use std::ffi::OsString;
-    use std::fs;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     extern "system" {
         fn GetShortPathNameW(
@@ -1367,23 +1460,44 @@ mod tests {
         ) -> u32;
     }
 
-    fn to_short_path(path: &Path) -> Option<PathBuf> {
-        let wide: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
-        if needed == 0 {
-            return None;
-        }
-        let mut buf = vec![0u16; needed as usize];
-        let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
-        if written == 0 || written >= needed {
-            return None;
-        }
-        Some(PathBuf::from(OsString::from_wide(&buf[..written as usize])))
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `wide` is NUL-terminated UTF-16; null buffer queries required length.
+    let needed = unsafe { GetShortPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        return None;
     }
+    let mut buf = vec![0u16; needed as usize];
+    // SAFETY: `wide` is NUL-terminated UTF-16 and `buf` has `needed` elements.
+    let written = unsafe { GetShortPathNameW(wide.as_ptr(), buf.as_mut_ptr(), needed) };
+    if written == 0 || written >= needed {
+        return None;
+    }
+    Some(PathBuf::from(OsString::from_wide(&buf[..written as usize])))
+}
+
+#[cfg(all(test, windows))]
+pub(crate) fn remove_link_only(link_path: &Path) {
+    let Ok(meta) = fs::symlink_metadata(link_path) else {
+        return;
+    };
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    if (meta.file_attributes() & FILE_ATTRIBUTE_DIRECTORY) != 0 {
+        let _ = fs::remove_dir(link_path);
+    } else {
+        let _ = fs::remove_file(link_path);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::{expand_windows_long_path, remove_link_only, to_short_path};
+    use std::fs;
+    use std::process::Command;
 
     #[test]
     fn expand_windows_long_path_expands_83_and_preserves_junctions() {
@@ -1434,9 +1548,57 @@ mod tests {
             );
         }
 
-        let _ = Command::new("cmd")
-            .args(["/d", "/c", "rmdir", &junction_dir.to_string_lossy()])
-            .status();
+        remove_link_only(&junction_dir);
+        let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::{find_reparse_in_path_hierarchy, normalize_logical_path};
+    use std::fs;
+
+    struct EnvRestore {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_logical_path_detects_pwd_symlink_without_b3_logical_pwd() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let root = std::env::temp_dir().join(format!("b3-fs-pwd-sym-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create temp dir");
+        let sym_cwd = root.join("sym_cwd");
+        std::os::unix::fs::symlink(&cwd, &sym_cwd).expect("create symlink");
+
+        let _g_b3 = EnvRestore {
+            key: "B3_LOGICAL_PWD",
+            prev: std::env::var_os("B3_LOGICAL_PWD"),
+        };
+        let _g_pwd = EnvRestore {
+            key: "PWD",
+            prev: std::env::var_os("PWD"),
+        };
+        std::env::remove_var("B3_LOGICAL_PWD");
+        std::env::set_var("PWD", &sym_cwd);
+
+        let resolved = normalize_logical_path(".").expect("normalize_logical_path");
+        assert_eq!(resolved, sym_cwd);
+        assert!(
+            find_reparse_in_path_hierarchy(&resolved).is_some(),
+            "expected symlinked PWD {resolved:?} to trigger reparse hierarchy detection"
+        );
+
         let _ = fs::remove_dir_all(&root);
     }
 }

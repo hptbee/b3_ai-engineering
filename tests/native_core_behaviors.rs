@@ -101,7 +101,7 @@ fn core_review_inventory_xxl_and_unit_cap() {
     assert_eq!(c, 0, "{out}");
     assert!(out.contains("size_class=XXL"), "{out}");
     assert!(out.contains("split_recommended=true"), "{out}");
-    assert!(out.contains("max_concurrency=4"), "{out}");
+    assert!(out.contains("max_concurrency=8"), "{out}");
     let unit_count = out.lines().filter(|l| l.starts_with("unit|")).count();
     assert!(
         unit_count >= 4,
@@ -900,4 +900,133 @@ fn core_precommit_adversarial_and_malformed_policy_guards() {
         "main",
     ]);
     assert_eq!(c, 1, "{out}");
+}
+
+#[test]
+fn core_review_inventory_subdivides_oversized_test_only_directory() {
+    let tmp = TempDirGuard::new("rev-inv-tests-only");
+    let repo = tmp.path.join("repo");
+    let base = init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    let body_2k: String = (0..2000)
+        .map(|i| format!("pub fn case_{i}() -> i32 {{ {i} }}\n"))
+        .collect();
+    for suite in ["alpha_suite.rs", "beta_suite.rs", "gamma_suite.rs"] {
+        let p = repo.join(format!("tests/{suite}"));
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(&p, &body_2k).unwrap();
+    }
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-m", "add three 2k test suites"]);
+
+    let (c, out, err) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base,
+    ]);
+    assert_eq!(c, 0, "expected partitioned inventory exit 0: {out}\n{err}");
+    assert!(out.contains("size_class=XXL"), "{out}");
+    let units: Vec<&str> = out.lines().filter(|l| l.starts_with("unit|")).collect();
+    assert!(units.len() >= 2, "expected >= 2 subdivided units: {out}");
+    for ul in &units {
+        let cols: Vec<&str> = ul.split('|').collect();
+        let lines_cnt: usize = cols[4].parse().expect("unit lines count");
+        assert!(lines_cnt <= 5000, "oversized unit emitted: {ul}");
+    }
+
+    let body_5100: String = (0..5100)
+        .map(|i| format!("pub fn giant_{i}() -> i32 {{ {i} }}\n"))
+        .collect();
+    fs::write(repo.join("tests/giant_suite.rs"), &body_5100).unwrap();
+    let (gc, gout, gerr) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base,
+    ]);
+    assert_eq!(
+        gc, 2,
+        "single >5000L test file must fail exit 2: {gout}\n{gerr}"
+    );
+    assert!(
+        gerr.contains("PARTITION_INCOMPLETE:") || gout.contains("PARTITION_INCOMPLETE:"),
+        "{gout}\n{gerr}"
+    );
+}
+
+#[test]
+fn core_symbol_check_batch_preserves_leading_space_and_special_filenames() {
+    let tmp = TempDirGuard::new("sym-batch-special-names");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(
+        &repo,
+        "src/api.rs",
+        "pub fn alpha_removed() {}\npub fn beta_removed() {}\n",
+        "add api",
+    );
+    commit_file(
+        &repo,
+        " caller.rs",
+        "fn call_a() { alpha_removed(); }\n",
+        "add leading-space caller",
+    );
+    let base_head = commit_file(
+        &repo,
+        "src/[id]/special caller.rs",
+        "fn call_b() { beta_removed(); }\n",
+        "add special caller",
+    );
+
+    fs::write(
+        repo.join("src/api.rs"),
+        "fn helper_used_fn() {}\nfn orphan_only_fn() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.join(" caller.rs"),
+        "fn call_a() { alpha_removed(); helper_used_fn(); }\n",
+    )
+    .unwrap();
+
+    let (c1, out1, err1) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_head,
+    ]);
+    assert_eq!(c1, 2, "working-tree symbol-check failed: {out1}\n{err1}");
+    assert!(out1.contains("alpha_removed(1f)"), "{out1}");
+    assert!(out1.contains("beta_removed(1f)"), "{out1}");
+    assert!(out1.contains("src/api.rs:orphan_only_fn"), "{out1}");
+    assert!(!out1.contains("helper_used_fn"), "{out1}");
+
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-m", "remove exports and add privs"]);
+
+    let (c2, out2, err2) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_head,
+        "--target-ref",
+        "HEAD",
+    ]);
+    assert_eq!(c2, 2, "commit-ref symbol-check failed: {out2}\n{err2}");
+    assert!(out2.contains("alpha_removed(1f)"), "{out2}");
+    assert!(out2.contains("beta_removed(1f)"), "{out2}");
+    assert!(out2.contains("src/api.rs:orphan_only_fn"), "{out2}");
+    assert!(!out2.contains("helper_used_fn"), "{out2}");
 }

@@ -1,0 +1,10 @@
+id: orch-stale-evidence-rejected-001
+artifact: workflows/references/context-routing.md
+intent: Stale verification receipts (VERIFY_STALE), stale context caches (CONTEXT_STALE), and HEAD drift are rejected deterministically
+scenario: |
+  A worker produces a b3-verify-v1 receipt or context-cache entry at an earlier tree/HEAD
+  Subsequent edits or HEAD movement cause b3 guard verify-check to exit 2 (VERIFY_STALE) or context-cache check to return CONTEXT_STALE (or check-wave --expected-base-sha exits 2 with WAVE_BASE_MISMATCH)
+  Parent rejects the stale evidence and re-runs verification/refresh instead of accepting stale PASS
+expected_outcome: PASS
+failure_mode: stale-verify-or-context-or-head-accepted-as-fresh
+notes: Enforces tree_hash/head_sha verification before commits, PR resolution, or review-loop PASS

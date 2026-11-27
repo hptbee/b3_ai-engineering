@@ -105,16 +105,14 @@ mod win_job {
         fn OpenThread(dw_desired_access: u32, b_inherit_handle: Bool, dw_thread_id: u32) -> Handle;
         fn ResumeThread(h_thread: Handle) -> u32;
         fn CloseHandle(h_object: Handle) -> Bool;
-        #[cfg(test)]
         fn OpenProcess(
             dw_desired_access: u32,
             b_inherit_handle: Bool,
             dw_process_id: u32,
         ) -> Handle;
-        #[cfg(test)]
         fn GetExitCodeProcess(h_process: Handle, lp_exit_code: *mut u32) -> Bool;
-        #[cfg(test)]
         fn WaitForSingleObject(h_handle: Handle, dw_milliseconds: u32) -> u32;
+        fn GetLastError() -> u32;
     }
 
     pub struct WinJobGuard {
@@ -232,57 +230,115 @@ mod win_job {
         }
     }
 
-    #[cfg(test)]
-    pub fn is_pid_alive(pid: u32) -> bool {
+    pub fn probe_pid_liveness(pid: i64) -> super::PidLiveness {
         const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
         const SYNCHRONIZE: u32 = 0x0010_0000;
-        const STILL_ACTIVE: u32 = 259;
+        const WAIT_OBJECT_0: u32 = 0;
         const WAIT_TIMEOUT: u32 = 0x0000_0102;
+        const STILL_ACTIVE: u32 = 259;
+        const ERROR_ACCESS_DENIED: u32 = 5;
+        const ERROR_INVALID_PARAMETER: u32 = 87;
 
-        if pid == 0 {
-            return false;
+        let Ok(pid_u32) = u32::try_from(pid) else {
+            return super::PidLiveness::Unknown;
+        };
+        if pid <= 0 || pid > i32::MAX as i64 {
+            return super::PidLiveness::Unknown;
         }
-        // SAFETY: `OpenProcess`, `GetExitCodeProcess`, `WaitForSingleObject`, and `CloseHandle` use valid handle/pointers.
+        // SAFETY: Win32 handle obtained via `OpenProcess` is always closed via `CloseHandle`.
         unsafe {
-            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
-            if h.is_null() {
-                return false;
+            let handle = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid_u32);
+            if !handle.is_null() {
+                let _guard = HandleCloser(handle);
+                let wait = WaitForSingleObject(handle, 0);
+                if wait == WAIT_OBJECT_0 {
+                    return super::PidLiveness::Dead;
+                }
+                if wait == WAIT_TIMEOUT {
+                    return super::PidLiveness::Alive;
+                }
+                let mut exit_code: u32 = 0;
+                if GetExitCodeProcess(handle, &mut exit_code) != 0 {
+                    return if exit_code == STILL_ACTIVE {
+                        super::PidLiveness::Alive
+                    } else {
+                        super::PidLiveness::Dead
+                    };
+                }
+                return super::PidLiveness::Unknown;
             }
-            let _guard = HandleCloser(h);
-            let mut exit_code: u32 = 0;
-            let ok_code = GetExitCodeProcess(h, &mut exit_code);
-            let wait = WaitForSingleObject(h, 0);
-            ok_code != 0 && exit_code == STILL_ACTIVE && wait == WAIT_TIMEOUT
+            let err = GetLastError();
+            if err == ERROR_INVALID_PARAMETER {
+                return super::PidLiveness::Dead;
+            }
+            if err == ERROR_ACCESS_DENIED {
+                let h2 = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid_u32);
+                if h2.is_null() {
+                    return match GetLastError() {
+                        ERROR_ACCESS_DENIED => super::PidLiveness::Alive,
+                        ERROR_INVALID_PARAMETER => super::PidLiveness::Dead,
+                        _ => super::PidLiveness::Unknown,
+                    };
+                }
+                let _guard2 = HandleCloser(h2);
+                let mut exit_code: u32 = 0;
+                if GetExitCodeProcess(h2, &mut exit_code) != 0 {
+                    return if exit_code == STILL_ACTIVE {
+                        super::PidLiveness::Alive
+                    } else {
+                        super::PidLiveness::Dead
+                    };
+                }
+                return super::PidLiveness::Unknown;
+            }
+            super::PidLiveness::Unknown
         }
     }
 }
 
-#[cfg(test)]
-pub(crate) fn is_pid_alive(pid: u32) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PidLiveness {
+    Alive,
+    Dead,
+    Unknown,
+}
+
+pub(crate) fn probe_pid_liveness(pid: i64) -> PidLiveness {
+    if pid <= 0 || pid > i32::MAX as i64 {
+        return PidLiveness::Unknown;
+    }
     #[cfg(windows)]
     {
-        win_job::is_pid_alive(pid)
+        win_job::probe_pid_liveness(pid)
     }
     #[cfg(unix)]
     {
+        const EPERM: i32 = 1;
+        const ESRCH: i32 = 3;
         extern "C" {
             fn kill(pid: i32, sig: i32) -> i32;
         }
-        if pid == 0 {
-            return false;
+        // SAFETY: Signal 0 probes process existence without delivering a signal.
+        let rc = unsafe { kill(pid as i32, 0) };
+        if rc == 0 {
+            return PidLiveness::Alive;
         }
-        let Ok(raw_pid) = i32::try_from(pid) else {
-            return false;
-        };
-        // SAFETY: Signal 0 checks process existence without delivering a signal.
-        let rc = unsafe { kill(raw_pid, 0) };
-        rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(ESRCH) => PidLiveness::Dead,
+            Some(EPERM) => PidLiveness::Alive,
+            _ => PidLiveness::Unknown,
+        }
     }
     #[cfg(not(any(windows, unix)))]
     {
         let _ = pid;
-        false
+        PidLiveness::Unknown
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn is_pid_alive(pid: u32) -> bool {
+    pid != 0 && matches!(probe_pid_liveness(i64::from(pid)), PidLiveness::Alive)
 }
 
 fn kill_process_tree(child: &mut Child, #[cfg(windows)] job: Option<&win_job::WinJobGuard>) {

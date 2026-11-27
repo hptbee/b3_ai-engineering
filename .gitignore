@@ -24,7 +24,7 @@ venv/
 .serena/
 
 # Host-neutral canonical core lives at rules/, skills/, commands/, agents/.
-# Local host activation links created by adapters/sync-skills.{ps1,sh}.
+# Local host activation links created by `b3 sync`.
 # Keep .cursor/rules/*.mdc and .agents/skills.json tracked; never commit
 # duplicate skill/command/agent trees.
 .cursor/skills

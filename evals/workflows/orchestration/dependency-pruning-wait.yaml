@@ -1,0 +1,10 @@
+id: orch-dependency-pruning-wait-001
+artifact: workflows/references/dispatch-naming.md
+intent: Dependent tasks wait only on their actual prerequisites and never wait on unrelated sibling branches
+scenario: |
+  T001 and T002 are independent roots; T003 depends_on [T001] only while T004 depends_on [T002]
+  T001 completes and verifies while T002 is still running
+  Parent starts T003 immediately instead of blocking T003 on T002
+expected_outcome: PASS
+failure_mode: false-dependency-wait-on-unrelated-tasks
+notes: Minimal dependency graph prunes transitive/unrelated waits so ready tasks depend strictly on actual prerequisites

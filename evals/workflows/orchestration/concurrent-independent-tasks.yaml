@@ -1,0 +1,9 @@
+id: orch-concurrent-independent-tasks-001
+artifact: workflows/references/dispatch-naming.md
+intent: Independent ready tasks with disjoint scopes dispatch concurrently via adaptive check-wave --partition
+scenario: |
+  Ready queue contains 6 independent tasks with disjoint owned_files and clean git tree
+  Parent runs b3 guard check-wave --partition (adaptive concurrency via --max-concurrency 1..64, default 4..=16) and dispatches all ready tasks concurrently in wave|1|PARALLEL
+expected_outcome: PASS
+failure_mode: artificial-serial-or-fixed-4-cap-bottleneck
+notes: Scales concurrency dynamically by independent work count and host capacity without arbitrary 3/4 hard limits

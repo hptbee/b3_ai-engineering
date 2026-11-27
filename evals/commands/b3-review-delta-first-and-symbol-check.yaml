@@ -6,4 +6,4 @@ scenario: |
   Skips diff-scope/symbol-check and dumps full raw diffs, unrelated files, and unverified self-reported test claims into context
 expected_outcome: FAIL
 failure_mode: unscoped-diff-dump-and-skipped-symbol-check
-notes: Scope (delta-first) enforces guard triage, contract/AC tracing, and b3-guard verify-check on receipts
+notes: Scope (delta-first) enforces guard triage, contract/AC tracing, and b3 guard verify-check on receipts

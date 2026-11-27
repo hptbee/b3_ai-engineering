@@ -1,0 +1,10 @@
+id: orch-continuous-unblocked-dispatch-001
+artifact: workflows/ship.md
+intent: Newly unblocked tasks release continuously as soon as prerequisites verify without waiting for unrelated wave barriers
+scenario: |
+  Wave 1 dispatches T001 (fast) and T002 (slow) concurrently; T003 depends only on T001
+  T001 finishes, passes mechanical-check and verify-run, while T002 is still in progress
+  Parent recomputes the ready queue and releases T003 immediately without waiting for T002 to finish
+expected_outcome: PASS
+failure_mode: coarse-wave-barrier-stalls-newly-unblocked-work
+notes: Retain barriers only when shared integration or single-writer commit ordering requires them

@@ -16,7 +16,11 @@ use crate::guard::scope::{
     collect_scope_data, eval_risk_for_subset, get_tshirt_size, normalize_size_class,
     test_contract_path, test_doc_or_asset_path,
 };
-use crate::guard::verify::{get_tree_fingerprint, test_verify_receipt};
+use crate::guard::verify::{
+    collect_tree_fingerprint_maps, hash_tree_fingerprint_maps, test_verify_receipt,
+    TreeFingerprintMaps,
+};
+use crate::guard::wave::resolve_concurrency;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerUnit {
@@ -68,61 +72,93 @@ pub(crate) struct LedgerCheckResult {
     pub ledger: ReviewLedger,
 }
 
-pub(crate) fn get_scope_paths_tree_hash(
-    root: &Path,
-    target_commit_sha: &str,
-    paths_arr: &[String],
-    ign_paths: &[String],
-) -> Result<String, B3Error> {
-    let mut clean = Vec::new();
-    for p in paths_arr {
-        let np = normalize_path_value(p);
-        if np.is_empty() || test_checkpoint_path(&np) {
-            continue;
+enum RepoTreeSnapshot {
+    WorkingTree(TreeFingerprintMaps),
+    Commit(Vec<(String, String)>),
+}
+
+impl RepoTreeSnapshot {
+    fn build(root: &Path, target_commit_sha: &str, ign_paths: &[String]) -> Result<Self, B3Error> {
+        if target_commit_sha.is_empty() {
+            let maps = collect_tree_fingerprint_maps(root, &[], ign_paths, "")?;
+            return Ok(Self::WorkingTree(maps));
         }
-        if !ign_paths.is_empty() && test_path_match(&np, ign_paths) {
-            continue;
+        let no_env: [(&str, &str); 0] = [];
+        let ls_res = run_git(
+            root,
+            &["ls-tree", "-r", "-z", "--full-tree", target_commit_sha],
+            &no_env,
+            None,
+        )?;
+        if ls_res.exit_code != 0 {
+            let detail = git_err_detail(&ls_res);
+            return Err(fail(
+                format!("GIT_ERROR: git ls-tree target paths failed: {detail}"),
+                1,
+            ));
         }
-        if !clean.iter().any(|x| x == &np) {
-            clean.push(np);
+        let mut entries = Vec::new();
+        for rec in ls_res.stdout.split(|&b| b == 0) {
+            if rec.is_empty() {
+                continue;
+            }
+            let line = std::str::from_utf8(rec)
+                .map_err(|_| fail("GIT_ERROR: unsupported_literal_git_path", 1))?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(tab) = trimmed.find('\t') {
+                let p = normalize_path_value(&trimmed[tab + 1..]);
+                if !p.is_empty() {
+                    entries.push((p, trimmed.to_string()));
+                }
+            }
         }
-    }
-    if clean.is_empty() {
-        return Ok("none".to_string());
-    }
-    let sorted = sort_ordinal(clean, false);
-    if target_commit_sha.is_empty() {
-        let fp = get_tree_fingerprint(root, &sorted, ign_paths, "")?;
-        return Ok(fp.tree_hash);
+        Ok(Self::Commit(entries))
     }
 
-    let mut ls_args = vec![
-        "ls-tree".to_string(),
-        "-r".to_string(),
-        target_commit_sha.to_string(),
-        "--".to_string(),
-    ];
-    ls_args.extend(sorted.iter().cloned());
-    let no_env: [(&str, &str); 0] = [];
-    let ls_res = run_git(root, &ls_args, &no_env, None)?;
-    if ls_res.exit_code != 0 {
-        let detail = git_err_detail(&ls_res);
-        return Err(fail(
-            format!("GIT_ERROR: git ls-tree target paths failed: {detail}"),
-            1,
-        ));
+    fn scope_paths_tree_hash(
+        &self,
+        root: &Path,
+        paths_arr: &[String],
+        ign_paths: &[String],
+    ) -> Result<String, B3Error> {
+        let mut clean = Vec::new();
+        for p in paths_arr {
+            let np = normalize_path_value(p);
+            if np.is_empty() || test_checkpoint_path(&np) {
+                continue;
+            }
+            if !ign_paths.is_empty() && test_path_match(&np, ign_paths) {
+                continue;
+            }
+            if !clean.iter().any(|x| x == &np) {
+                clean.push(np);
+            }
+        }
+        if clean.is_empty() {
+            return Ok("none".to_string());
+        }
+        let sorted = sort_ordinal(clean, false);
+        match self {
+            Self::WorkingTree(maps) => {
+                hash_tree_fingerprint_maps(root, &sorted.join(","), maps, Some(&sorted))
+            }
+            Self::Commit(entries) => {
+                let lines = entries
+                    .iter()
+                    .filter(|(p, _)| test_path_match(p, &sorted))
+                    .map(|(_, line)| line.clone());
+                let manifest = format!(
+                    "PATHS={}\n{}\n",
+                    sorted.join(","),
+                    sort_ordinal(lines, false).join("\n")
+                );
+                git_hash_text(root, &manifest, "GIT_ERROR", "git ls-tree hash failed")
+            }
+        }
     }
-    let lines: Vec<String> = String::from_utf8_lossy(&ls_res.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    let manifest = format!(
-        "PATHS={}\n{}\n",
-        sorted.join(","),
-        sort_ordinal(lines, false).join("\n")
-    );
-    git_hash_text(root, &manifest, "GIT_ERROR", "git ls-tree hash failed")
 }
 
 pub(crate) fn get_default_max_passes(size_class: &str, unit_count: usize) -> i64 {
@@ -820,6 +856,7 @@ pub(crate) fn invoke_review_ledger_check(
         .collect();
     let unit_count = ledger.units.len();
     let mut verified_receipts = Vec::new();
+    let tree_snap = RepoTreeSnapshot::build(root, &target_commit_sha, ign_paths)?;
 
     for u in &ledger.units {
         let uid = &u.unit_id;
@@ -914,8 +951,7 @@ pub(crate) fn invoke_review_ledger_check(
 
         let mut scope_paths = u_files.clone();
         scope_paths.extend(live_contracts.iter().cloned());
-        let cur_u_hash =
-            get_scope_paths_tree_hash(root, &target_commit_sha, &scope_paths, ign_paths)?;
+        let cur_u_hash = tree_snap.scope_paths_tree_hash(root, &scope_paths, ign_paths)?;
         if cur_u_hash != u.unit_tree_hash {
             return Err(fail(
                 format!("LEDGER_STALE: unit {uid} invalidated (files or shared contracts changed)"),
@@ -1005,7 +1041,7 @@ pub(crate) fn invoke_review_ledger_check(
         } else {
             &live_scope.review_files
         };
-        let cur_cu_hash = get_scope_paths_tree_hash(root, &target_commit_sha, cu_paths, ign_paths)?;
+        let cur_cu_hash = tree_snap.scope_paths_tree_hash(root, cu_paths, ign_paths)?;
         if cur_cu_hash != ledger.meta["cross_unit_tree_hash"] {
             return Err(fail("LEDGER_STALE: cross_unit invalidated", 2));
         }
@@ -1133,6 +1169,7 @@ pub fn run(
             1,
         ));
     }
+    let max_concurrency = resolve_concurrency(max_concurrency, "LEDGER_FAIL")?;
 
     if act == "normalize" && ledger_path.trim().is_empty() {
         if scope.trim().is_empty() {
@@ -1285,12 +1322,12 @@ pub fn run(
         };
 
         let init_chain = get_initial_pass_chain(&repo_root, &resolved_base)?;
+        let tree_snap = RepoTreeSnapshot::build(&repo_root, &target_commit_sha, &ignored)?;
         let mut unit_rows = Vec::with_capacity(inv.units.len());
         for u in &inv.units {
             let mut fp_paths = u.files.clone();
             fp_paths.extend(inv.contract_files.iter().cloned());
-            let u_hash =
-                get_scope_paths_tree_hash(&repo_root, &target_commit_sha, &fp_paths, &ignored)?;
+            let u_hash = tree_snap.scope_paths_tree_hash(&repo_root, &fp_paths, &ignored)?;
             unit_rows.push(LedgerUnit {
                 unit_id: u.unit_id.clone(),
                 group: u.group.clone(),
@@ -1315,7 +1352,7 @@ pub fn run(
             } else {
                 &inv.review_files
             };
-            get_scope_paths_tree_hash(&repo_root, &target_commit_sha, cross_paths, &ignored)?
+            tree_snap.scope_paths_tree_hash(&repo_root, cross_paths, &ignored)?
         } else {
             "none".to_string()
         };
@@ -1526,7 +1563,11 @@ pub fn run(
                     .split(',')
                     .filter(|s| !s.is_empty() && *s != "none")
                     .collect();
-                let sp_arr = split_csv_list(specialists);
+                let sp_arr: Vec<String> = split_csv_list(specialists)
+                    .into_iter()
+                    .map(|item| replace_run_chars(item.trim(), &['\r', '\n', '|'], ""))
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 if sp_arr
                     .iter()
                     .any(|ns_item| !old_sp_list.contains(&ns_item.as_str()))
@@ -1632,6 +1673,18 @@ pub fn run(
             live_scope_upd = Some(ls);
         }
 
+        let need_unit_hash = found_idx.is_some() && st_val == "REVIEWED";
+        let need_cu_hash = cu_val == "REVIEWED";
+        let upd_tree_snap = if need_unit_hash || need_cu_hash {
+            Some(RepoTreeSnapshot::build(
+                &repo_root,
+                &target_commit_sha,
+                &ignored,
+            )?)
+        } else {
+            None
+        };
+
         if let Some(idx) = found_idx {
             if st_val == "REVIEWED" {
                 let ls = live_scope_upd
@@ -1643,12 +1696,10 @@ pub fn run(
                     eval_risk_for_subset(&u_files, Some(&ls.file_signals), Some(&ls.file_lines));
                 let mut hash_paths = u_files.clone();
                 hash_paths.extend(live_contracts_upd.iter().cloned());
-                let u_hash = get_scope_paths_tree_hash(
-                    &repo_root,
-                    &target_commit_sha,
-                    &hash_paths,
-                    &ignored,
-                )?;
+                let u_hash = upd_tree_snap
+                    .as_ref()
+                    .expect("upd_tree_snap populated")
+                    .scope_paths_tree_hash(&repo_root, &hash_paths, &ignored)?;
                 let head_now = if !target_commit_sha.is_empty() {
                     target_commit_sha.clone()
                 } else {
@@ -1690,8 +1741,10 @@ pub fn run(
                     }
                     all_unit_files
                 };
-                let cu_hash =
-                    get_scope_paths_tree_hash(&repo_root, &target_commit_sha, &cu_paths, &ignored)?;
+                let cu_hash = upd_tree_snap
+                    .as_ref()
+                    .expect("upd_tree_snap populated")
+                    .scope_paths_tree_hash(&repo_root, &cu_paths, &ignored)?;
                 ledger
                     .meta
                     .insert("cross_unit_tree_hash".to_string(), cu_hash);

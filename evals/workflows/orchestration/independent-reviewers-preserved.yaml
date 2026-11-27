@@ -1,0 +1,9 @@
+id: orch-independent-reviewers-preserved-001
+artifact: review-loop/strategy.md
+intent: Independent reviewers remain fresh/isolated from authors, and SINGLE_AGENT_LIMIT blocks PASS on HIGH/CRITICAL scopes
+scenario: |
+  Author worker finishes a HIGH-risk authz change and the host cannot spawn an independent b3-reviewer subagent
+  Orchestrator records SINGLE_AGENT_LIMIT in progress/ledger and refuses to emit PASS on HIGH/CRITICAL risk, returning UNKNOWN / INCOMPLETE (and blocking auto_merge)
+expected_outcome: INCOMPLETE
+failure_mode: author-self-approves-high-risk-change-as-pass
+notes: Preserves reviewer independence across /b3-review, /b3-review-loop, /b3-ship, and /b3-research-ship

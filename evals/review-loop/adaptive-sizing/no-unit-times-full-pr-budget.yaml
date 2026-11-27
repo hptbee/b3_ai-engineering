@@ -7,4 +7,4 @@ scenario: |
   Total reviewer passes far above 12
 expected_outcome: FAIL
 failure_mode: budget-explosion
-notes: L/XL cap at 4 units (<=12 total passes); XXL uses dynamic cohesive units with <=4 concurrent workers and bounded iterations/budgets
+notes: L/XL cap at 4 units (<=12 total passes); XXL uses dynamic cohesive units with adaptive concurrent workers (--max-concurrency 1..64) and bounded iterations/budgets

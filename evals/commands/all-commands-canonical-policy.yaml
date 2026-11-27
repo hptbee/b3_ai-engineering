@@ -1,0 +1,9 @@
+id: cmd-all-canonical-policy-001
+artifact: commands/README.md
+intent: All 11 public commands and their command-skills adapters reference canonical dispatch-naming.md and native b3 commands with zero legacy wrappers
+scenario: |
+  Audit all 11 files in commands/b3-*.md and all 11 adapters/command-skills/b3-*/SKILL.md
+  Every command references dispatch-naming.md, uses native b3 guard / b3 pr --kebab-case commands, and contains zero .ps1/.sh wrapper or PascalCase flag references
+expected_outcome: PASS
+failure_mode: command-drifts-to-legacy-wrapper-or-diverges-from-dispatch-naming
+notes: Covers b3-plan, b3-implement, b3-debug, b3-review, b3-verify, b3-review-loop, b3-ship, b3-research-ship, b3-pr-resolve, b3-pr-reply, and b3-pr-comment

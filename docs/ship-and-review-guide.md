@@ -14,9 +14,9 @@ Core 7-step flow: `Preflight → Plan → [Scope → Build → Verify → Review
 ```mermaid
 flowchart TD
     Entry["Host Entrypoint (1-hop): Cursor / Codex / Claude / Antigravity"] --> Resolve{"Mode?"}
-    Resolve -->|"status / --all"| StatusOut["b3-guard resolve-run or list-runs (.b3/ship + .b3/autodev fallback)"]
+    Resolve -->|"status / --all"| StatusOut["b3 guard resolve-run or list-runs (.b3/ship)"]
     Resolve -->|"resume / unfinished run"| Resume["Scenario C: ship-resume.md (Git ancestry + verify-check)"]
-    Resolve -->|"New requirement / plan"| NewRun["b3-guard new-run (.b3/ship/runs/run_id + CURRENT)"]
+    Resolve -->|"New requirement / plan"| NewRun["b3 guard new-run (.b3/ship/runs/run_id + CURRENT)"]
 
     NewRun --> PreFlight["Preflight: initial_dirty_paths + DirtyDigests + baseline checks"]
     PreFlight --> Plan["Plan (master-plan.md): Invariants, AC1..ACn, Verbatim Shared Contracts"]
@@ -31,27 +31,27 @@ flowchart TD
     PreReview -->|"No (inline / notes)"| WaveCheck
 
     WaveCheck{"2+ ready tasks?"}
-    WaveCheck -->|"Yes"| GuardWave["b3-guard check-wave -Partition (WaveReads, ProtectedPaths, CheckDirtyScope, MaxConcurrency 1..4)"]
+    WaveCheck -->|"Yes"| GuardWave["b3 guard check-wave --partition (--wave-reads, --protected-paths, --check-dirty-scope, adaptive concurrency)"]
     GuardWave -->|"WAVE_OK / WAVE_PARTITIONED (wave N PARALLEL)"| IsoMode{"Select Isolation Mode"}
     IsoMode -->|"none / [] readers"| ReadWave["Mode 1: SHARED_READ_ONLY (parallel read-only workers in shared WT)"]
     IsoMode -->|"Disjoint low-risk writes"| SharedWave["Mode 2: SHARED_DISJOINT_WRITES (parallel disjoint writers in shared WT)"]
-    IsoMode -->|"High-risk / build side effects"| IsoWave["Mode 3: ISOLATED_WRITES (check-worktree -RequireIsolated -PeerRoots)"]
+    IsoMode -->|"High-risk / build side effects"| IsoWave["Mode 3: ISOLATED_WRITES (check-worktree --require-isolated --peer-roots)"]
     GuardWave -->|"WAVE_SEQUENTIAL / WAVE_BASE_MISMATCH"| SeqImpl["Mode 4: SEQUENTIAL (1 b3-impl-t00N subagent; save impl_agent)"]
     WaveCheck -->|"No (1 task)"| SeqImpl
 
     ReadWave --> Hub["Parent Hub Relay: merge discoveries & change_requests + integrate"]
     SharedWave --> Hub
     IsoWave --> Hub
-    SeqImpl --> TaskVerify["Verify: b3-guard verify-run (writes b3-verify-v1 evidence receipt)"]
+    SeqImpl --> TaskVerify["Verify: b3 guard verify-run (writes b3-verify-v1 evidence receipt)"]
     Hub --> TaskVerify
 
-    TaskVerify --> Mech["0-Token Guard: diff-scope + mechanical-check (WaveSpecs, WorkerChanges or WorkerRoots, ProtectedPaths, DirtyDigests) + symbol-check"]
+    TaskVerify --> Mech["0-Token Guard: diff-scope + mechanical-check (--wave-specs, --worker-changes/--worker-roots, --protected-paths, --dirty-digests) + symbol-check"]
     Mech -->|"Exit 2: VIOLATION / PARTIAL_ATTRIBUTION / Findings"| FixMech["Fix ownership, scope_creep, leftovers, obsoletes, or symbol findings"]
     FixMech --> Mech
     Mech -->|"MECHANICAL_OK"| ReviewTier["Review pass (inline+XS/S+LOW: 1 reviewer; else review-loop/strategy.md)"]
-    ReviewTier -->|"Blocking CONFIRMED"| LazySnap["Lazy b3-guard snapshot (pre_fix_object) -> Fix -> delta Review"]
+    ReviewTier -->|"Blocking CONFIRMED"| LazySnap["Lazy b3 guard snapshot (pre_fix_object) -> Fix -> delta Review"]
     LazySnap --> ReviewTier
-    ReviewTier -->|"Pass"| PreCommit["Commit (precommit -RequireVerifyReceipt + git commit + collapse approach)"]
+    ReviewTier -->|"Pass"| PreCommit["Commit (precommit --require-verify-receipt + git commit + collapse approach)"]
 
     PreCommit --> MoreTasks{"More ready tasks?"}
     MoreTasks -->|"Yes"| ReadyCheck
@@ -61,7 +61,7 @@ flowchart TD
     FinalVer --> MergeGate{"Governed PR / Research-Ship Gate?"}
     FinalChecksOnly --> MergeGate
     MergeGate -->|"No (standard /b3-ship)"| Outcome["Set run_status: PASS | FAIL | INCOMPLETE | BLOCKED"]
-    MergeGate -->|"Yes"| PolicyCheck["Provider-Neutral merge-policy-check (mode=local or optional -PrNumber b3-github-verify -> PR_READY / MERGE_AUTHORIZED / PROVIDER_UNAVAILABLE)"]
+    MergeGate -->|"Yes"| PolicyCheck["Provider-Neutral merge-policy-check (mode=local or optional --pr-number b3 pr verify -> PR_READY / MERGE_AUTHORIZED / PROVIDER_UNAVAILABLE)"]
     PolicyCheck --> Outcome
 ```
 
@@ -71,19 +71,19 @@ flowchart TD
 
 Subagent logical aliases are described in [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) and are only requested when the host supports custom spawn names. Host-returned IDs remain authoritative for resume.
 
-`check-wave -Partition` computes bounded `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). Subagents never talk directly to each other and never edit `read_only_deps`, `ProtectedPaths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `-WorkerChanges` or Git-proven `VERIFIED_PER_WORKER` via `-WorkerRoots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
+`b3 guard check-wave --partition` computes continuous `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). Subagents never talk directly to each other and never edit `read_only_deps`, `--protected-paths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `--worker-changes` or Git-proven `VERIFIED_PER_WORKER` via `--worker-roots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
 
 ```mermaid
 sequenceDiagram
     participant P as Parent Orchestrator
-    participant G as b3-guard CLI (0 tok)
+    participant G as b3 guard CLI (0 tok)
     participant W2 as b3-impl-t002 (logical alias)
     participant W3 as b3-impl-t003 (logical alias)
     participant R as Fresh Independent Reviewer
 
-    P->>G: check-wave -Partition (WaveSpecs, WaveReads, ProtectedPaths, CheckDirtyScope)
-    G-->>P: WAVE_OK or WAVE_PARTITIONED (wave 1 PARALLEL, MaxConcurrency 1..4)
-    Note over P,G: Choose SHARED_READ_ONLY, SHARED_DISJOINT_WRITES, or ISOLATED_WRITES (check-worktree -RequireIsolated -PeerRoots)
+    P->>G: check-wave --partition (--wave-specs, --wave-reads, --protected-paths, --check-dirty-scope)
+    G-->>P: WAVE_OK or WAVE_PARTITIONED (wave 1 PARALLEL, adaptive concurrency)
+    Note over P,G: Choose SHARED_READ_ONLY, SHARED_DISJOINT_WRITES, or ISOLATED_WRITES (check-worktree --require-isolated --peer-roots)
 
     par Launch T002
         P->>W2: Brief (owned paths + verbatim contract + scoped Verify)
@@ -95,7 +95,7 @@ sequenceDiagram
     W2-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
     W3-->>P: <=25 lines (files_changed, cmds, discoveries, change_requests)
 
-    P->>G: diff-scope + mechanical-check (WaveSpecs, WorkerChanges or WorkerRoots, ProtectedPaths, DirtyDigests)
+    P->>G: diff-scope + mechanical-check (--wave-specs, --worker-changes or --worker-roots, --protected-paths, --dirty-digests)
     G-->>P: MECHANICAL_OK (ownership_verification=CALLER_ATTRIBUTED or VERIFIED_PER_WORKER)
 
     P->>R: Independent review (base_sha, review_files, active findings only)
@@ -113,11 +113,11 @@ sequenceDiagram
     P->>R: Fresh Reviewer Pass 2 (delta_files + callers + residue)
     R-->>P: <=25 lines (Verdict: NO_BLOCKING_FINDINGS)
 
-    P->>G: precommit -RequireVerifyReceipt (T002 AllowedPaths) then commit T002
-    P->>G: precommit -RequireVerifyReceipt (T003 AllowedPaths) then commit T003
+    P->>G: precommit --require-verify-receipt (T002 allowed-paths) then commit T002
+    P->>G: precommit --require-verify-receipt (T003 allowed-paths) then commit T003
 
     opt Governed PR or /b3-research-ship merge gate
-        P->>G: merge-policy-check (trunk .b3/research-policy.json, mode=local or optional -PrNumber b3-github-verify)
+        P->>G: merge-policy-check (trunk .b3/research-policy.json, mode=local or optional --pr-number b3 pr verify)
         G-->>P: PR_READY / LOCAL_ELIGIBLE_ONLY / MERGE_AUTHORIZED / PROVIDER_UNAVAILABLE
     end
 ```
@@ -134,11 +134,11 @@ flowchart TD
     Scope -->|"EMPTY_DIFF"| Incomplete["UNKNOWN / INCOMPLETE"]
     Scope -->|"Exit 2: mechanical / symbol"| FixMech["Fix scope_creep / leftovers / obsoletes / dangling symbols"]
     FixMech --> Scope
-    Scope -->|"NOISE_ONLY"| NoiseTest["Verify: b3-guard verify-run / verify-check"]
+    Scope -->|"NOISE_ONLY"| NoiseTest["Verify: b3 guard verify-run / verify-check"]
     NoiseTest -->|"Green"| Pass["PASS (0 LLM review tokens)"]
     NoiseTest -->|"Red"| Fail["FAIL"]
 
-    Scope -->|"L / XL / XXL"| Hier["Hierarchical L0-L4 (review-inventory + L1 contracts + L2 <=4 conc units + L3 cross-unit + review-ledger check)"]
+    Scope -->|"L / XL / XXL"| Hier["Hierarchical L0-L4 (review-inventory + L1 contracts + L2 adaptive conc units + L3 cross-unit + review-ledger check)"]
     Hier --> Gate
     Scope -->|"XS / S / M"| Rev["Review: Fresh Independent Reviewer + Risk-Triggered Specialists (Iter 2+: delta_files + callers + residue; <= 25L; else SINGLE_AGENT_LIMIT)"]
     Rev --> Merge["Orchestrator merges & classifies findings (OPEN / FIXED / REJECTED / ACCEPTED / SPECULATIVE)"]
@@ -149,7 +149,7 @@ flowchart TD
     Breaker -->|"Same finding survives 2 rounds"| ResetSubagent["Tier 1: Brief/Subagent stuck -> rewrite brief or spawn fresh b3-fixer (drop impl_agent)"]
     Breaker -->|"Same bug_class 2 consecutive rounds"| Redesign["Tier 2: Design flaw -> stop patching, return to Scope / Design"]
     Breaker -->|"Flat/rising blockers or cap reached"| Stuck["STUCK / INCOMPLETE (or FAIL)"]
-    Breaker -->|"Converging"| Snap["Capture prev_sha (b3-guard snapshot) + update state.md"]
+    Breaker -->|"Converging"| Snap["Capture prev_sha (b3 guard snapshot) + update state.md"]
 
     ResetSubagent --> Snap
     Snap --> Fix["Fix: Resume impl_agent or dispatch standalone b3-fixer (bug-class sweep in scope + verify-run; <= 20 lines)"]
@@ -161,14 +161,14 @@ flowchart TD
 
 ## 4. Standalone `/b3-review` — 3-Mode Flow (Local, GitHub PR & Safe Posting)
 
-Standalone `/b3-review` ([`../commands/b3-review.md`](../commands/b3-review.md), [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md)) routes into 3 explicit modes, renders every chat report and GitHub PR summary with the shared [`../skills/engineering/code-review/references/review-template.md`](../skills/engineering/code-review/references/review-template.md) (`CRITICAL` | `HIGH` | `MEDIUM` | `LOW`), and delegates authorized `--post` publication to [`../skills/engineering/pr-feedback/SKILL.md`](../skills/engineering/pr-feedback/SKILL.md) + `scripts/b3-pr-github.{ps1,sh}` (`0` extra bytes on local reviews).
+Standalone `/b3-review` ([`../commands/b3-review.md`](../commands/b3-review.md), [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md)) routes into 3 explicit modes, renders every chat report and GitHub PR summary with the shared [`../skills/engineering/code-review/references/review-template.md`](../skills/engineering/code-review/references/review-template.md) (`CRITICAL` | `HIGH` | `MEDIUM` | `LOW`), and delegates authorized `--post` publication to [`../skills/engineering/pr-feedback/SKILL.md`](../skills/engineering/pr-feedback/SKILL.md) + `b3 pr` (`0` extra bytes on local reviews).
 
 ```mermaid
 flowchart TD
     Inv["/b3-review [target]"] --> Mode{"Target Mode?"}
 
-    Mode -->|"Local (default)"| AutoBase["b3-guard diff-scope (auto base: dirty WT -> HEAD; clean branch -> merge-base)"]
-    AutoBase --> LocalMech["b3-guard mechanical-check (+ symbol-check on refactors) + verify-check on receipts"]
+    Mode -->|"Local (default)"| AutoBase["b3 guard diff-scope (auto base: dirty WT -> HEAD; clean branch -> merge-base)"]
+    AutoBase --> LocalMech["b3 guard mechanical-check (+ symbol-check on refactors) + verify-check on receipts"]
     LocalMech --> LocalNoise{"size_class == NOISE_ONLY?"}
     LocalNoise -->|"Yes + green checks"| LocalPass["PASS (skip LLM review)"]
     LocalNoise -->|"No"| ReviewPass["1 Delta-First Review Pass (contracts, ACs, correctness, security, perf, residue, tests)"]
@@ -176,16 +176,16 @@ flowchart TD
     Mode -->|"GitHub PR (#id / URL)"| LoadRef["Open references/github-pr-review.md"]
     LoadRef --> PrMeta["gh pr view --json ... --jq ... (filtered context + ticket ACs + failed checks)"]
     PrMeta --> FilterNoise["Filter out lockfiles / minified / snapshots / generated"]
-    FilterNoise --> FetchDiff["Local clone: 2-step fetch base + PR head + b3-guard --target-ref FETCH_HEAD (+ symbol-check); Remote: gh api"]
+    FilterNoise --> FetchDiff["Local clone: 2-step fetch base + PR head + b3 guard --target-ref FETCH_HEAD (+ symbol-check); Remote: gh api"]
     FetchDiff --> ReviewPass
 
     ReviewPass --> ChatReport["Compact findings report in chat (CONFIRMED vs SPECULATIVE + checked/skipped dimensions)"]
     ChatReport --> PostGate{"User requested or authorized --post to GitHub PR?"}
     PostGate -->|"No"| Done["Done (read-only review)"]
-    PostGate -->|"Yes"| SignalGate["Delegate to pr-feedback + b3-pr-github comment (CONFIRMED findings only; COMMENT default)"]
+    PostGate -->|"Yes"| SignalGate["Delegate to pr-feedback + b3 pr comment (CONFIRMED findings only; COMMENT default)"]
     SignalGate --> PostType{"Publication mode?"}
-    PostType -->|"summary / both / --draft"| SummaryCmd["b3-pr-github comment (SHA-fresh review body via stdin JSON + remote object verification)"]
-    PostType -->|"inline"| InlineCmd["b3-pr-github comment (diff-hunk validated inline threads on head_sha)"]
+    PostType -->|"summary / both / --draft"| SummaryCmd["b3 pr comment (SHA-fresh review body via stdin JSON + remote object verification)"]
+    PostType -->|"inline"| InlineCmd["b3 pr comment (diff-hunk validated inline threads on head_sha)"]
 ```
 
 ---
@@ -207,10 +207,10 @@ flowchart LR
     StandaloneVer[".b3/ship/verify/*.verify (standalone /b3-verify receipts)"] -.->|"Excluded from diff-scope, tree_hash, and resolve-run"| Cur
     StandaloneRL[".b3/ship/review-loop/slug/state.md (standalone loop state)"] -.->|"Excluded from diff-scope, tree_hash, and resolve-run"| Cur
     PrFb["git-common-dir/b3/pr-feedback/ (canonical PR state & PID locks)"] -.->|"Shared across linked worktrees (.b3/pr-feedback/ is gitignored scratch only)"| Cur
-    Prune["b3-guard prune"] -.->|"Keeps newest 10 PASS; never deletes CURRENT or non-PASS"| RunDir
+    Prune["b3 guard prune"] -.->|"Keeps newest 10 PASS; never deletes CURRENT or non-PASS"| RunDir
 ```
 
-### Static Context Budgets (`scripts/measure-context.{ps1,sh} -Strict`)
+### Static Context Budgets (`b3 context measure --strict`)
 
 All byte caps are measured in **canonical LF UTF-8 bytes** (identical across Windows PowerShell and Git Bash / macOS / Linux):
 
@@ -244,7 +244,7 @@ The system separates **Deep reasoning**, **Standard execution**, **Fast surgical
 | **Deep / high-reasoning** | `Orchestrator` (`Plan`, `Scope`), hard debugging, `b3-reviewer`, `b3-architecture-reviewer`, `b3-security-reviewer`, `b3-performance-reviewer` | Preserves design quality, invariants, API contracts, and independent defect detection |
 | **Standard execution** | Complex multi-file implementation, shared contract integration, large refactors | Keeps state and invariants stable before verification and reduces costly retry loops |
 | **Fast execution** | Small-scope coding (`inline`/`notes`), surgical `b3-fixer` edits (pinned `file:line` + `bug_class`), routine tests, docs | Reduces cost and latency once scope and contracts are clear; escalates 1 tier on circuit breaker or repeated `verify-run` failures |
-| **Deterministic (0-token)** | `b3-guard` (`diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`check`, `check-wave -Partition`, `check-worktree`, `merge-policy-check`, `context-cache`, `precommit`), Git, lint, builds | Deterministic structural verification via CLI with zero token cost and zero hallucination |
+| **Deterministic (0-token)** | `b3 guard` (`diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`check`, `check-wave --partition`, `check-worktree`, `merge-policy-check`, `context-cache`, `precommit`), Git, lint, builds | Deterministic structural verification via CLI with zero token cost and zero hallucination |
 
 ---
 

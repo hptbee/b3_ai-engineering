@@ -2,9 +2,9 @@ id: research-ship-parallel-wave-001
 artifact: workflows/research-ship.md
 intent: Independent research units run in adaptive isolation modes (including empty-write SHARED_READ_ONLY readers) while catching mixed RW conflicts, protecting single-writer paths, and reconciling dirty/resume state
 scenario: |
-  True pure read-only SHARED_READ_ONLY verifiers with empty write scopes (U001=none;U002=[]) read overlapping sources via -WaveReads with zero worktrees or dummy writes -> check-wave -Partition returns WAVE_OK: disjoint (2 tasks, 0 paths) and wave|1|PARALLEL|agents=2; mixed reader/writer (W1=docs/out.md;R1=none reading docs/out.md) catches RW conflict (exit 2, conflicts=rw:docs/out.md(W1->R1)).
-  -ProtectedPaths blocks worker ownership of single-writer ledgers/manifests/authority paths (exit 1); pre-existing user_dirty paths in -IgnoreDirtyPaths isolate only overlapping units into blocked_tasks while continuing eligible units, and unexpected dirty files fail closed (exit 2).
+  True pure read-only SHARED_READ_ONLY verifiers with empty write scopes (U001=none;U002=[]) read overlapping sources via --wave-reads with zero worktrees or dummy writes -> check-wave --partition returns WAVE_OK: disjoint (2 tasks, 0 paths) and wave|1|PARALLEL|agents=2; mixed reader/writer (W1=docs/out.md;R1=none reading docs/out.md) catches RW conflict (exit 2, conflicts=rw:docs/out.md(W1->R1)).
+  --protected-paths blocks worker ownership of single-writer ledgers/manifests/authority paths (exit 1); pre-existing user_dirty paths in --ignore-dirty-paths isolate only overlapping units into blocked_tasks while continuing eligible units, and unexpected dirty files fail closed (exit 2).
   Resume reconciles extended progress.md Units fields (exec_mode, worker_root, base_sha, scope, integration, initial_dirty_paths, last_wave) via resolve-run and evidence-check without duplicating active workers.
 expected_outcome: PASS
 failure_mode: serial-bottleneck-or-unisolated-blocked-unit
-notes: Verifies empty-write SHARED_READ_ONLY no-worktree concurrency, mixed RW conflict detection, -ProtectedPaths single-writer guard, dirty-scope partitioning, and resume reconciliation
+notes: Verifies empty-write SHARED_READ_ONLY no-worktree concurrency, mixed RW conflict detection, --protected-paths single-writer guard, dirty-scope partitioning, and resume reconciliation

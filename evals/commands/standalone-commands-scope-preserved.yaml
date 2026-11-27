@@ -1,0 +1,9 @@
+id: cmd-standalone-scope-preserved-001
+artifact: commands/README.md
+intent: Standalone commands (b3-plan, b3-implement, b3-debug, b3-review, b3-verify) adopt adaptive orchestration without expanding beyond their intended scope
+scenario: |
+  User invokes standalone /b3-plan, /b3-implement, /b3-debug, /b3-review, or /b3-verify
+  Each command (and its adapters/command-skills wrapper) applies dispatch-naming.md for safe parallelism while preserving plan-only stops, single-hop non-escalation out of /b3-ship, 3-attempt debug escalation, single-pass review-template.md reporting, and verify-run/verify-check provenance
+expected_outcome: PASS
+failure_mode: standalone-command-loses-stop-boundary-or-escalates-to-ship
+notes: Verified in both commands/b3-*.md and adapters/command-skills/b3-*/SKILL.md

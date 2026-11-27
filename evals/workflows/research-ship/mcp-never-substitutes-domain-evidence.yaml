@@ -2,7 +2,7 @@ id: research-ship-mcp-never-substitutes-domain-evidence-001
 artifact: workflows/research-ship.md
 intent: Codebase MCP output in /b3-research-ship is restricted to repo-evidence and must never substitute for verified domain sources or governance gates
 scenario: |
-  During a /b3-research-ship campaign, an agent uses codebase-memory and serena to locate existing repository predicates and callers, then attempts to mark a domain claim VERIFIED and clear the Research Gate using only codebase symbol summaries without primary/secondary citations or b3-guard evidence-check.
+  During a /b3-research-ship campaign, an agent uses codebase-memory and serena to locate existing repository predicates and callers, then attempts to mark a domain claim VERIFIED and clear the Research Gate using only codebase symbol summaries without primary/secondary citations or b3 guard evidence-check.
 expected_outcome: FAIL
 failure_mode: codebase-mcp-substitutes-for-domain-evidence-or-editorial-gate
 notes: Codebase MCP output is strictly repo-evidence for exploration and Phase G implementation; never replaces evidence-check, Research Gate, or Editorial/Authority governance

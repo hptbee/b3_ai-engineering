@@ -2,9 +2,9 @@
 
 The governing principle of `b3-ai-engineering` is:
 
-> Maximum Engineering Quality × Minimum Necessary Context × Minimum Total Execution Cost per Verified Result
+> Maximum Engineering Quality × Maximum Safe Parallelism × Minimum Necessary Context × Minimum Total Cost per Verified Result
 
-Every workflow, skill, subagent dispatch, and optimization is evaluated against verified engineering outcomes per unit of total cost and context—never raw speed or unverified output.
+Every workflow, skill, subagent dispatch, and optimization is evaluated against verified engineering outcomes per unit of total cost and context—never raw speed, raw agent count, or unverified output.
 
 ## Precedence
 
@@ -36,14 +36,16 @@ Lower-ranked optimizations or preferences never override higher-ranked constrain
 
 ## Execution Principle
 
-> Parallel by default when independently safe and economically justified; sequential when dependencies, shared state, insufficient isolation, or overhead make parallel inappropriate.
+> Maximum safe parallelism, not maximum agent count: run inline when simple, parallel continuously across verified independent work, and sequential when dependencies, shared state, insufficient isolation, or overhead outweigh concurrency.
 
 In practice:
 
-- **Context minimization:** Load only the smallest relevant skill, diff/delta, or context packet rather than full-repo dumps.
-- **Total-cost awareness:** Account for orchestrator coordination, wave checks, retries, verification, independent review, and merge/integration—not just worker build time.
-- **Safe bounded parallelism:** Dispatch parallel workers only when tasks are dependency-free, write/read-disjoint, verified safe, and large enough to amortize orchestration overhead; fall back to sequential execution otherwise.
-- **Adaptive least-expensive-safe isolation:** Select the lightest mode that satisfies safety (`SHARED_READ_ONLY` for read-only work, `SHARED_DISJOINT_WRITES` in one worktree only when strictly disjoint and parent-validated, `ISOLATED_WRITES` via verified worktrees when risk or side effects require it, or `SEQUENTIAL` fallback) — never create worktrees for read-only agents or claim stronger isolation than the host enforces.
+- **Context minimization:** Load only the smallest relevant skill, diff/delta, or `<=25L` context packet rather than full-repo dumps.
+- **Total-cost awareness:** Account for orchestrator coordination, wave checks, retries, verification, independent review, and merge/integration—not just worker build time. Never spawn extra workers unless net throughput or quality justifies the overhead.
+- **Continuous dependency-aware dispatch:** Model multi-unit work as a minimal dependency graph; dispatch ready independent units right away and release newly unblocked dependents immediately once prerequisites verify, retaining barriers only for shared integration or commits.
+- **Adaptive concurrency:** Scale active workers dynamically by available independent work, context budget, host limits, CPU/memory/rate limits, and cost/throughput benefit rather than fixed `3`/`4` worker caps.
+- **4 isolation modes (least-expensive-safe):** Select the lightest safe mode (`SHARED_READ_ONLY` for read-only analysis/review without worktrees, `SHARED_DISJOINT_WRITES` in one worktree only when strictly disjoint and parent-validated, `ISOLATED_WRITES` via verified worktrees when risk or side effects require it, or `SEQUENTIAL` fallback) — never create worktrees for read-only agents or claim stronger isolation than the host enforces.
+- **Native-first `b3` CLI & canonical ownership:** Execute deterministic 0-token checks via native `b3` (`b3 guard`, `b3 pr`, `b3 sync`, `b3 install`, `b3 context measure`) and enforce single-source ownership: workers execute bounded units without nested spawning, while the parent orchestrator owns shared state, integration, commits, and external PR mutations.
 
 ## Operational Cross-Links
 

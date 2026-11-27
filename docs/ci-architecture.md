@@ -46,15 +46,13 @@ Measured sequentially in worktree `refactor/native-ci-optimization` (`cedf068`, 
 
 | Test Group | Classification | Canonical Owner | Kept in Scripts / Non-Rust? |
 | --- | --- | --- | --- |
-| `b3` deterministic core (`fingerprint`, `snapshot`, `precommit`, `diff-scope`, `review-inventory`, `review-ledger`, `check-wave`, `check-worktree`, `mechanical-check`, `symbol-check`, `context-cache`, `evidence-check`, `merge-policy-check`, `runs`, `verify-*`) | `DUPLICATE_EQUIVALENT` in PS/Bash scripts | `src/` unit tests + `tests/native_golden_parity.rs` + `tests/native_core_behaviors.rs` | No — migrated to Rust; scripts keep only wrapper-forwarding smoke |
+| `b3` deterministic core (`fingerprint`, `snapshot`, `precommit`, `diff-scope`, `review-inventory`, `review-ledger`, `check-wave`, `check-worktree`, `mechanical-check`, `symbol-check`, `context-cache`, `evidence-check`, `merge-policy-check`, `runs`, `verify-*`) | `UNIQUE_REQUIRED` | `src/` unit tests + `tests/native_core_behaviors.rs` + `tests/guard_security_and_behavior.rs` + `tests/native_golden_parity.rs` | No — all deterministic checks run natively via `cargo test` |
 | Legacy baseline 47-case JSON replay (`legacy_baseline_65eaaae.json`) | `INDEPENDENT_LEGACY_PARITY` | `tests/native_golden_parity.rs` | No |
-| `b3 pr` protocol, hunk, lock, idempotency, bidi sanitization, large OS pipes | `UNIQUE_REQUIRED` + `WRAPPER_COMPATIBILITY` | `src/pr/*` + `scripts/validate-pr-feedback.ps1` | Yes — `validate-pr-feedback.ps1` remains intact (already invokes `b3.exe pr` directly for Blocks 1–9) |
-| Windows PS wrapper arg forwarding, quoting, trailing `\`, exit codes, `B3_BIN` | `WRAPPER_COMPATIBILITY` | `tests/wrapper_forwarding_windows.rs` (focused) + thin script wrapper checks | Focused smoke only (~1–2 cases per wrapper) |
-| Unix Bash wrapper arg forwarding, `MSYS2_ARG_CONV_EXCL`, `cygpath` | `WRAPPER_COMPATIBILITY` | `tests/native_golden_parity.rs` (`unix_shell_wrapper_forwarding`) + `validate-merge-security.sh` | Focused dual-shell checks |
-| NTFS junctions, `core.filemode`/`autocrlf`, Win32 `CON .txt`/ADS, `Add-Type` fake `git.exe`, POSIX extensionless `gh` | `PLATFORM_SPECIFIC` | Windows PS/Bash platform suites + `src/fs.rs`/`src/adapters/common.rs` | Yes — kept in slimmed PS/Bash suites |
-| `bootstrap-b3.{ps1,sh}` SHA-256, in-use upgrade, rollback, lock, symlink/junction guards | `UNIQUE_REQUIRED` | `tests/bootstrap_lifecycle.rs` | No (already Rust-driven) |
-| Markdown/YAML/eval/context-budget contracts (`AGENTS.md`, `rules/`, `workflows/`, `skills/`, `evals/*.yaml`) | `UNIQUE_REQUIRED` | `measure-context` + `validate-evals.sh` + slimmed PS doc-contract checks | Yes — fast static checks |
-| Adversarial `merge-policy-check` + `b3-github-verify` dual-shell + mock-`gh` | `UNIQUE_REQUIRED` + `WRAPPER_COMPATIBILITY` | `validate-merge-security.sh` + Rust unit/integration tests | `validate-merge-security.sh` keeps dual-shell + mock-`gh` + `file://` remote |
+| `b3 pr` protocol, hunk, lock, idempotency, bidi sanitization, large OS pipes | `UNIQUE_REQUIRED` | `src/pr/*` + `tests/pr_feedback_lifecycle.rs` | No — migrated to native Rust |
+| Host adapters (`b3 sync`, `install`, `B3_HOME` discovery, model preferences, NTFS junctions, manifest tamper guards) | `UNIQUE_REQUIRED` + `PLATFORM_SPECIFIC` | `src/adapters/*` + `tests/adapters_and_hosts.rs` | No — migrated to native Rust |
+| `bootstrap-b3.{ps1,sh}` SHA-256, in-use upgrade, rollback, lock, symlink/junction guards | `UNIQUE_REQUIRED` | `tests/bootstrap_lifecycle.rs` | Sole zero-Rust bootstrapper tested end-to-end |
+| Markdown/YAML/eval/context-budget contracts (`AGENTS.md`, `rules/`, `workflows/`, `skills/`, `321` `evals/*.yaml`) | `UNIQUE_REQUIRED` | `b3 context measure --strict` + `tests/eval_contracts.rs` | No — native Rust fast gate |
+| Adversarial `merge-policy-check` + `b3 pr verify` + mock-`gh` | `UNIQUE_REQUIRED` | `tests/merge_policy_security.rs` | No — migrated to native Rust |
 
 ## 3. Target Dependency-Aware CI Architecture
 
@@ -62,43 +60,25 @@ Measured sequentially in worktree `refactor/native-ci-optimization` (`cedf068`, 
 fast-gate (ubuntu-latest, <2m)
   ├── cargo fmt --check
   ├── cargo clippy --all-targets -- -D warnings
-  ├── measure-context.sh --strict + validate-evals.sh
-  └── cargo test --lib
+  ├── cargo build --bin b3 + ./target/debug/b3 context measure --strict
+  └── cargo test --lib --test eval_contracts
          │
-         ├──► linux-verify (ubuntu-latest): cargo build --release + cargo test + validate-merge-security.sh
-         ├──► macos-verify (macos-latest):  cargo build --release + cargo test + validate-merge-security.sh
-         └──► windows-build (windows-latest): cargo build --release + cargo test + upload b3.exe
-                   │
-                   ├──► windows-suites [shard: security]   (validate-merge-security.sh w/ B3_BIN)
-                   └──► windows-suites [shard: behavioral] (slimmed PS wrapper/platform/doc suites w/ B3_BIN)
-         │
-         ▼
-ci-gate (if: always()) — requires every upstream job result == 'success' (never passes on skip/cancel/fail)
+         └──► verify [ubuntu-latest, macos-latest, windows-latest]
+                ├── cargo build --release
+                ├── native b3 smoke (--version, context measure --strict, sync, fingerprint)
+                └── cargo test (unit + 8 native integration suites, 0 PS/Bash wrapper loops)
+                       │
+                       ▼
+              ci-gate (if: always()) — requires fast-gate == 'success' && verify == 'success'
 ```
 
 ### Controls
 - `concurrency`: cancels superseded PR/branch runs immediately.
-- `timeout-minutes`: explicit per-job timeouts (`fast-gate: 10`, `linux/macos-verify: 15`, `windows-build: 15`, `windows-suites: 15`).
-- `release.yml`: runs on tags `v*.*.*`, `workflow_dispatch`, or PRs touching Rust/bootstrap/release files (skipped on docs/script-only PRs).
-- **Local Preflight**: Run `.\scripts\ci-preflight.ps1` (Windows) or `./scripts/ci-preflight.sh` (Unix) before pushing.
+- `actions/cache@v4`: caches Cargo registry/git DB and `target` cleanly per OS and toolchain `1.100.0`.
+- `timeout-minutes`: explicit per-job timeouts (`fast-gate: 10`, `verify: 15`, `ci-gate: 5`).
+- `release.yml`: runs on tags `v*.*.*`, `workflow_dispatch`, or PRs touching Rust/bootstrap/release files (skipped on docs-only PRs).
+- **Local Preflight**: Run `.\scripts\ci-preflight.ps1` (Windows) or `./scripts/ci-preflight.sh` (Unix) before pushing (`-Fast`/`--fast` runs `--lib --test eval_contracts`).
 
-## 4. Measured Before / After Comparison (Local Windows)
+## 4. Measured Migration & Consolidation Summary
 
-| Suite / Metric | Before | After | Improvement |
-| --- | --- | --- | --- |
-| `validate-ship-behavior.ps1` | 389.23s | 39.11s | -90.0% |
-| `validate-tshirt-hierarchical.ps1` | 350.41s | 5.79s | -98.3% |
-| `validate-research-ship.ps1` | 164.87s | 5.34s | -96.8% |
-| `validate-context-routing.ps1` | 115.71s | 3.07s | -97.3% |
-| `validate-standalone-commands.ps1` | 52.73s | 3.28s | -93.8% |
-| `validate-pr-feedback.ps1` | 31.49s | 28.82s | -8.5% |
-| `validate-antigravity-global.ps1` | 33.93s | 27.88s | -17.8% |
-| `validate-cursor-global.ps1` | 23.49s | 19.88s | -15.4% |
-| `validate-model-preferences.ps1` | 7.79s | 7.17s | -8.0% |
-| `smoke-ship-product.ps1` | 6.64s | 6.25s | -5.9% |
-| `measure-context.ps1 -Strict` | 0.17s | 0.16s | -5.9% |
-| **PS Behavioral Suites Total** | **1,176.36s (19.6m)** | **146.75s (2.4m)** | **-87.5%** |
-| `cargo test` (incl. new `native_core_behaviors`) | 97.36s | 64.85s | -33.4% |
-| `wrapper_forwarding_windows` (`cargo test`) | 32.40s | 5.60s | -82.7% |
-| **Total Local (`cargo test` + PS suites)** | **1,273.72s (21.2m)** | **211.60s (3.5m)** | **-83.4%** |
-| Fast feedback (`ci-preflight.ps1 -Fast`) | — | ~17s | <2m gate |
+All `9` legacy compatibility wrapper pairs (`18` files) and `14` legacy `.ps1`/`.sh`/wrapper test harnesses were retired and consolidated into `8` native cross-platform Rust integration test suites (`eval_contracts`, `guard_security_and_behavior`, `merge_policy_security`, `pr_feedback_lifecycle`, `adapters_and_hosts`, `native_core_behaviors`, `native_golden_parity`, `bootstrap_lifecycle`), eliminating duplicate PowerShell/Bash test loops across CI.

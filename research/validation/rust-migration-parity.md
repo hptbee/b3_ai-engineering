@@ -14,10 +14,10 @@
 
 | Label | Meaning & Scope |
 | --- | --- |
-| `INDEPENDENT_LEGACY_PARITY` | Executed side-by-side against immutable `65eaaae` legacy PowerShell/Node oracle and native `target/release/b3.exe` on identical isolated temp fixtures: **42 / 47** cases matched identically in exit code, normalized stdout, and on-disk artifacts. |
-| `INTENTIONAL_BEHAVIOR_CHANGE` | Executed side-by-side against `65eaaae` oracle and `target/release/b3.exe`, with an intentional, documented delta (**5 / 47** cases). |
-| `NATIVE_CONTRACT_VERIFIED` | Cross-platform golden contract assertions encoded in `tests/native_golden_parity.rs` comparing live `b3` output against `legacy_baseline_65eaaae.json` (unified `cargo test` run by coordinator in Step 2 and CI matrix). |
-| `WRAPPER_FORWARDING_VERIFIED` | Thin wrapper dispatch checks in [`tests/wrapper_forwarding_windows.rs`](../../tests/wrapper_forwarding_windows.rs) and `unix_shell_wrapper_forwarding` in `tests/native_golden_parity.rs`. **Never** counted as independent differential testing (both shells invoke `b3`). |
+| `INDEPENDENT_LEGACY_PARITY` | Executed side-by-side against immutable `65eaaae` legacy PowerShell/Node oracle and native `target/release/b3.exe` on identical isolated temp fixtures: **40 / 47** cases matched identically in exit code, normalized stdout, and on-disk artifacts. |
+| `INTENTIONAL_BEHAVIOR_CHANGE` | Executed side-by-side against `65eaaae` oracle and `target/release/b3.exe`, with an intentional, documented delta (**7 / 47** cases). |
+| `NATIVE_CONTRACT_VERIFIED` | Cross-platform golden contract assertions encoded in `tests/native_golden_parity.rs` comparing live `b3` output against `legacy_baseline_65eaaae.json`, plus native Rust integration suites [`tests/pr_feedback_lifecycle.rs`](../../tests/pr_feedback_lifecycle.rs) and [`tests/adapters_and_hosts.rs`](../../tests/adapters_and_hosts.rs) retiring legacy validation scripts and shell wrappers. |
+| `WRAPPER_FORWARDING_VERIFIED` | Thin PowerShell wrapper dispatch checks in [`tests/wrapper_forwarding_windows.rs`](../../tests/wrapper_forwarding_windows.rs) (legacy Unix shell wrappers such as `measure-context.sh` / `b3-guard.sh` retired). **Never** counted as independent differential testing (both shells invoke `b3`). |
 | `NOT_VERIFIED` | Live external GitHub PR API mutations (PR feedback exercised against isolated mock `gh` `.cmd` fixture); native Linux/macOS binary execution pending CI matrix. |
 
 ## Normalization Rules
@@ -36,13 +36,13 @@ Only genuinely nondeterministic per-run values were normalized during differenti
 | 1 | Tree & task fingerprints | 4 | 3 | 1 |
 | 2 | Verification receipts | 6 | 6 | 0 |
 | 3 | Review ledger | 4 | 4 | 0 |
-| 4 | Worktree & wave ownership | 6 | 6 | 0 |
+| 4 | Worktree & wave ownership | 6 | 5 | 1 |
 | 5 | Merge eligibility | 4 | 3 | 1 |
 | 6 | Protected & secret paths | 5 | 3 | 2 |
 | 7 | Context cache & evidence freshness | 6 | 6 | 0 |
 | 8 | PR feedback state, locking & idempotency | 9 | 8 | 1 |
-| 9 | Installer ownership | 3 | 3 | 0 |
-| 10 | Exit codes, normalized outputs & artifacts | All 47 | 42 | 5 |
+| 9 | Installer ownership | 3 | 2 | 1 |
+| 10 | Exit codes, normalized outputs & artifacts | All 47 | 40 | 7 |
 
 ## Full Per-Case Differential Comparison Table
 
@@ -66,7 +66,7 @@ Only genuinely nondeterministic per-run values were normalized during differenti
 | 4. Worktree/Wave | `check_worktree_peer_overlap_blocked` | `INDEPENDENT_LEGACY_PARITY` | `2` | `2` | Exact | `none` | Rejects overlapping peer root (`parent_root_reused_or_nested`) |
 | 4. Worktree/Wave | `check_wave_disjoint` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `none` | Disjoint wave specs emit `WAVE_OK: disjoint (3 tasks, 2 paths)` |
 | 4. Worktree/Wave | `check_wave_partition` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `none` | `--partition --max-concurrency 2` splits into 2 waves (`WAVE_PARTITIONED`) |
-| 4. Worktree/Wave | `check_wave_sequential` | `INDEPENDENT_LEGACY_PARITY` | `2` | `2` | Exact | `none` | Conflicting tasks emit `WAVE_SEQUENTIAL` with exit 2 |
+| 4. Worktree/Wave | `check_wave_sequential` | `INTENTIONAL_BEHAVIOR_CHANGE` | `2` | `2` | Intentional delta | `none` | Adaptive concurrency defaults `max_concurrency` to `4..=16` vs legacy `3`; `--max-concurrency 3` matches byte-for-byte |
 | 4. Worktree/Wave | `check_freshness_fresh` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `none` | Matching base SHA emits `FRESH` |
 | 5. Merge Policy | `merge_policy_local_authorized` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `none` | Authorizes local merge with valid receipt + independent ledger |
 | 5. Merge Policy | `merge_policy_caller_ci_pass_without_receipt_blocked` | `INDEPENDENT_LEGACY_PARITY` | `1` | `1` | Exact | `none` | Blocks caller-reported `CI=PASS` without verify receipt |
@@ -92,7 +92,7 @@ Only genuinely nondeterministic per-run values were normalized during differenti
 | 8. PR Feedback | `pr_lock_live_blocked` | `INDEPENDENT_LEGACY_PARITY` | `2` | `2` | Exact | `none` | Live lock PID blocks concurrent PR mutation (`PR_CONCURRENT_LOCK`) |
 | 8. PR Feedback | `pr_lock_dead_reclaimed` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `none` | Dead-PID lock on same host is reclaimed and write succeeds |
 | 8. PR Feedback | `pr_verify_zero_node` | `INTENTIONAL_BEHAVIOR_CHANGE` | `2` | `1` | Intentional delta | `none` | Wave 6/8: `b3 pr verify` runs natively with zero Node.js dependency |
-| 9. Installers | `install_product_cursor` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `.b3/home`, `.cursor/commands/b3-ship.md`, `.gitignore` | Product pointer, managed command, and `.gitignore` match |
+| 9. Installers | `install_product_cursor` | `INTENTIONAL_BEHAVIOR_CHANGE` | `0` | `0` | Intentional delta | `.b3/home`, `.cursor/commands/b3-ship.md`, `.gitignore` | Native CLI emits `via b3 install global --host cursor` instead of legacy `adapters/install-global.ps1 -HostName cursor` hint |
 | 9. Installers | `install_product_codex` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `.b3/home`, `.agents/skills`, `.gitignore` | Product pointer, flat `.agents/skills` junctions, and `.gitignore` match |
 | 9. Installers | `sync_skills_antigravity_verify_only` | `INDEPENDENT_LEGACY_PARITY` | `0` | `0` | Exact | `.agents/skills.json` + skill index | `verify ok` validates flat index and manifest |
 
@@ -102,3 +102,5 @@ Only genuinely nondeterministic per-run values were normalized during differenti
 2. **`merge_policy_protected_unicode_space_bracket_add` & `merge_policy_protected_rename_out`**: Both legacy and Rust block protected Unicode/space/bracket paths (`releases/v1 [draft] café/...`) with exit `1`. On redirected Windows pipes, PowerShell 5.1 `[Console]::Out` emits ANSI/OEM bytes decoded as `caf`, whereas Rust `b3.exe` always writes valid UTF-8 (`café`).
 3. **`pr_verify_zero_node`**: Legacy `scripts/b3-github-verify.ps1` exits `2` (`GH_VERIFY_UNAVAILABLE: node_runtime_unavailable`) when `node` is absent from `PATH`. Native `b3 pr verify` has zero Node.js dependency and invokes `gh` directly (`GH_VERIFY_ERROR: pr_number_mismatch` against minimal `{}` stub, exit `1`).
 4. **`merge_policy_inprocess_pr_verify`**: Legacy `b3-guard.ps1 merge-policy-check` shelled out to `b3-github-verify.ps1` -> `node` (failing `PROVIDER_UNAVAILABLE: github_verification_failed(node_runtime_unavailable)` without Node.js). Wave 8 `b3 guard merge-policy-check` invokes `crate::pr::verify::run` in-process without Node.js or external helper scripts (`MERGE_BLOCKED: github_verification_failed(pr_number_mismatch)`, exit `1`).
+5. **`check_wave_sequential`**: Legacy `b3-guard.ps1 check-wave` defaulted omitted `--max-concurrency` to `3`. Native `b3 guard check-wave` uses `default_adaptive_concurrency()` (`4..=16` clamped CPU cores) when omitted, while explicit `--max-concurrency 3` matches the normalized legacy baseline byte-for-byte.
+6. **`install_product_cursor`**: Native `b3 install product --host cursor` updates the user-level Cursor skills hint from `via adapters/install-global.ps1 -HostName cursor` to `via b3 install global --host cursor` as legacy shell/PS wrappers (`measure-context.sh`, `b3-guard.sh`, etc.) are retired in favor of native Rust test suites (`tests/pr_feedback_lifecycle.rs`, `tests/adapters_and_hosts.rs`).

@@ -717,15 +717,10 @@ pub fn new_working_tree_oid(
     Ok(tree_sha)
 }
 
-/// Resolves `--git-dir` (or another `--git-*` rev-parse flag) to a normalized slash path.
-pub fn get_canonical_git_path(dir: &Path, rev_flag: &str) -> Option<String> {
-    let no_env: [(&str, &str); 0] = [];
-    let res = run_git(dir, &["rev-parse", rev_flag], &no_env, None).ok()?;
-    let gd = String::from_utf8_lossy(&res.stdout).trim().to_string();
-    if res.exit_code != 0 || gd.is_empty() {
-        return None;
-    }
-    let resolved = resolve_unresolved_path(dir, &gd);
+/// Normalizes a Git-resolved path against `base`, expanding Windows 8.3 short names
+/// and macOS `/var`/`/tmp` `/private` prefixes.
+pub fn normalize_resolved_git_path(base: &Path, raw_path: &str) -> String {
+    let resolved = resolve_unresolved_path(base, raw_path);
     let resolved = crate::fs::expand_windows_long_path(&resolved);
     let norm = normalize_path_value(&resolved.to_string_lossy());
     #[cfg(target_os = "macos")]
@@ -735,10 +730,21 @@ pub fn get_canonical_git_path(dir: &Path, rev_flag: &str) -> Option<String> {
             || norm == "/tmp"
             || norm.starts_with("/tmp/")
         {
-            return Some(format!("/private{norm}"));
+            return format!("/private{norm}");
         }
     }
-    Some(norm)
+    norm
+}
+
+/// Resolves `--git-dir` (or another `--git-*` rev-parse flag) to a normalized slash path.
+pub fn get_canonical_git_path(dir: &Path, rev_flag: &str) -> Option<String> {
+    let no_env: [(&str, &str); 0] = [];
+    let res = run_git(dir, &["rev-parse", rev_flag], &no_env, None).ok()?;
+    let gd = String::from_utf8_lossy(&res.stdout).trim().to_string();
+    if res.exit_code != 0 || gd.is_empty() {
+        return None;
+    }
+    Some(normalize_resolved_git_path(dir, &gd))
 }
 
 /// Resolves the active `.git` directory for `root`.
@@ -752,9 +758,9 @@ pub fn get_resolved_git_dir(root: &Path) -> Option<PathBuf> {
     Some(resolve_unresolved_path(root, &gd))
 }
 
-/// Checks for in-progress merge, rebase, cherry-pick, revert, or bisect operations.
-pub fn test_git_mid_operation(root: &Path) -> Option<&'static str> {
-    let git_dir = get_resolved_git_dir(root)?;
+/// Checks an already-resolved `.git` directory for in-progress merge, rebase,
+/// cherry-pick, revert, or bisect operations without spawning `git`.
+pub fn test_git_dir_mid_operation(git_dir: &Path) -> Option<&'static str> {
     [
         "MERGE_HEAD",
         "REBASE_HEAD",
@@ -768,28 +774,24 @@ pub fn test_git_mid_operation(root: &Path) -> Option<&'static str> {
     .find(|&marker| git_dir.join(marker).exists())
 }
 
-/// Computes canonical Git blob OID for UTF-8 `text` via `git hash-object -t blob --stdin`.
+/// Checks for in-progress merge, rebase, cherry-pick, revert, or bisect operations.
+pub fn test_git_mid_operation(root: &Path) -> Option<&'static str> {
+    let git_dir = get_resolved_git_dir(root)?;
+    test_git_dir_mid_operation(&git_dir)
+}
+
+/// Computes canonical Git blob OID for UTF-8 `text` in-process (`SHA1("blob <len>\0" + text)`).
 pub fn git_hash_text(
-    root: &Path,
+    _root: &Path,
     text: &str,
-    fail_prefix: &str,
-    fail_desc: &str,
+    _fail_prefix: &str,
+    _fail_desc: &str,
 ) -> Result<String, B3Error> {
-    let no_env: [(&str, &str); 0] = [];
-    let res = run_git(
-        root,
-        &["hash-object", "-t", "blob", "--stdin"],
-        &no_env,
-        Some(text.as_bytes()),
-    )?;
-    let sha = String::from_utf8_lossy(&res.stdout).trim().to_string();
-    if res.exit_code != 0 || !is_hex40(&sha) {
-        return Err(fail(
-            format!("{fail_prefix}: {fail_desc}: {}", git_err_detail(&res)),
-            1,
-        ));
-    }
-    Ok(sha)
+    let header = format!("blob {}\0", text.len());
+    let mut buf = Vec::with_capacity(header.len() + text.len());
+    buf.extend_from_slice(header.as_bytes());
+    buf.extend_from_slice(text.as_bytes());
+    Ok(crate::fs::sha1_bytes_hex(&buf))
 }
 
 /// Returns `true` if `s` is a lowercase 40-character hex SHA-1 OID.
@@ -1001,5 +1003,36 @@ trait OsStrExtHelper {
 impl OsStrExtHelper for OsStr {
     fn to_os_os_string_or_lossy(&self) -> OsString {
         self.to_os_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_hash_text_matches_git_hash_object_bit_for_bit() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let no_env: [(&str, &str); 0] = [];
+        let big_8k = "a".repeat(8192);
+        let cases = [
+            "",
+            "hello world\n",
+            big_8k.as_str(),
+            "こんにちは🦀\r\nline2",
+        ];
+        for text in cases {
+            let ours = git_hash_text(&cwd, text, "TEST", "hash").expect("git_hash_text");
+            let git_out = run_git(
+                &cwd,
+                &["hash-object", "-t", "blob", "--stdin"],
+                &no_env,
+                Some(text.as_bytes()),
+            )
+            .expect("git hash-object");
+            assert_eq!(git_out.exit_code, 0);
+            let expected = String::from_utf8_lossy(&git_out.stdout).trim().to_string();
+            assert_eq!(ours, expected, "mismatch for len={}", text.len());
+        }
     }
 }

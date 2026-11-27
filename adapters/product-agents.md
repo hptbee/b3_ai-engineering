@@ -12,7 +12,7 @@ Resolve `B3_HOME` in order; stop at the first dir containing `workflows/ship.md`
 
 | Need | Location |
 | --- | --- |
-| Skills | `.agents/skills/<name>/SKILL.md` (Codex/AGY), `.claude/skills/<name>/SKILL.md` (Claude), `~/.cursor/skills/<name>/SKILL.md` (Cursor global via `adapters/cursor/install-global.{ps1,sh}`). Source: `{B3_HOME}/skills` (no link edits). |
+| Skills | `.agents/skills/<name>/SKILL.md` (Codex/AGY), `.claude/skills/<name>/SKILL.md` (Claude), `~/.cursor/skills/<name>/SKILL.md` (Cursor global via `b3 install cursor`). Source: `{B3_HOME}/skills` (no link edits). |
 | Rules / Workflows / Review / Roles | `{B3_HOME}/rules/*.md`, `{B3_HOME}/workflows/`, `{B3_HOME}/review-loop/`, `{B3_HOME}/agents/` (or `.claude/agents/`). |
 | Cursor commands / Checkpoints | `.cursor/commands/` (from `{B3_HOME}/commands/`); checkpoints in `.b3/ship/` and `.b3/research-ship/` (gitignored). |
 
