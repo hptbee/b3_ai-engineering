@@ -1,0 +1,10 @@
+id: orch-concurrency-slot-saturation-001
+artifact: workflows/references/dispatch-naming.md
+intent: Continuous admission respects max_concurrency minus active worker count and queues excess ready tasks by critical-path priority
+scenario: |
+  max_concurrency is 2 and worker E is currently active (available_slots=1) when A completes and unlocks priority-ordered ready tasks B, C, and D
+  Parent runs b3 guard check-wave --partition --max-concurrency 2 --wave-specs "B=src/b.rs;C=src/c.rs;D=src/d.rs" --active-specs "E=src/e.rs"
+  check-wave emits admitted_tasks=B (wave|1|SEQUENTIAL|agents=1|tasks=B|reason=bounded_concurrency) and deferred_tasks=C,D without oversubscribing concurrency slots
+expected_outcome: PASS
+failure_mode: incremental-dispatch-ignores-in-flight-workers-and-exceeds-max-concurrency
+notes: Admission acts strictly on wave|1| admitted_tasks bounded by available_slots = max(0, max_concurrency - active_count)

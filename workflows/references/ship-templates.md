@@ -40,7 +40,7 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Plan changes
 ```
 
-**Rules:** never recycle `id` (`T001`…); `status` ∈ `pending|in_progress|completed|blocked|incomplete`; 1 commit/task; hotspots in `T001`; scope change → bump `version` + log `Plan changes` (never weaken ACs → `BLOCKED`).
+**Rules:** never recycle `id` (`T001`…); `status` ∈ `pending|in_progress|completed|blocked|incomplete`; `depends_on` = hard verified-output deps only (`integration` ∈ `pending|output_ready|integrated`); 1 commit/task; hotspots in `T001`; scope change → bump `version` + log `Plan changes` (never weaken ACs → `BLOCKED`).
 
 ## 2. Progress & inline approach (`{RUN_DIR}/progress.md`)
 
@@ -116,5 +116,5 @@ Schemas for [`../ship.md`](../ship.md). Active `{RUN_DIR}` = `.b3/ship/runs/<run
 ## Architecture
 ```
 
-**Risk-Adaptive (`detailed`):** fill if triggered (`n/a` else): `failure_matrix`, `write_paths:` (`>=2` stores + invalidation), `io_budget:` (loops). `b3 guard fingerprint` (`task_spec_fingerprint` + `approach_at_sha`) is required on multi-task, resume/handoff, or `notes`/`detailed` tasks (optional for 1-task single-turn `inline` work).
-**Context Packet:** stable prefix (role + contract + `approach/T00N.md` or `progress.md` `### T00N` when `inline`, omitting `## Inspected`) + volatile suffix (`delta_files`, findings, receipt); never dump files/logs.
+**Risk-Adaptive (`detailed`):** fill when triggered (`n/a` else): `failure_matrix`, `write_paths:` (`>=2` stores + invalidation), `io_budget:` (loops). `b3 guard fingerprint` (`task_spec_fingerprint` + `approach_at_sha`) required on multi-task, resume/handoff, or `notes`/`detailed` (optional on 1-task 1-turn `inline`).
+**Context Packet:** stable prefix (role + contract + `approach/T00N.md` or `### T00N` minus `## Inspected`) + volatile suffix (`delta_files`, findings, receipt); never dump files/logs.

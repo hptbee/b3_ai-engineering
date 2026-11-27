@@ -29,6 +29,8 @@ Schemas for [`../research-ship.md`](../research-ship.md). Active `{RUN_DIR}` = `
 ## Limitations
 ```
 
+`integration` ∈ `pending|output_ready|integrated` (`output_ready` after artifact/`evidence-check` or shared-WT verify; `integrated` in Parent for `ISOLATED_WRITES`).
+
 ## 2. Research Plan (`{RUN_DIR}/research-plan.md`)
 
 For 1-unit queries, inline these fields in `progress.md`:
@@ -45,7 +47,7 @@ For 1-unit queries, inline these fields in `progress.md`:
 - missing_evidence: <gaps>
 - required_sources: <primary/secondary/repo paths>
 - schools_or_domains: <applicable schools/domains>
-- depends_on: []
+- depends_on: [] # hard verified-output prerequisites only
 - owned_files: <disjoint output paths>
 - acceptance_criteria:
   - AC1: <verifiable source/code outcome>

@@ -1,0 +1,10 @@
+id: orch-resume-mid-wave-active-workers-001
+artifact: workflows/references/ship-resume.md
+intent: Resume or context compaction mid-wave reconciles active workers without duplicate dispatch and preserves valid verification receipts
+scenario: |
+  Run resumes after compaction with A verified (output_ready/integrated), E still active (impl_agent recorded), and B, C, D pending
+  Parent reconciles progress.md against Git and verify-check, keeps E's active execution without re-dispatching E (check-wave rejects duplicate active TaskIds with WAVE_FAIL), and invalidates only stale state
+  Parent runs check-wave --partition with --active-specs E (and --verified-dirty-paths when A is uncommitted in shared WT) to admit eligible tasks among B, C, and D
+expected_outcome: PASS
+failure_mode: resume-redispatches-active-task-or-discards-valid-peer-progress
+notes: Resume treats progress.md as claims verified against Git, verify-check, check-freshness, and active impl_agent state

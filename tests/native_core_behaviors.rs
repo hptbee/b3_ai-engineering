@@ -1487,3 +1487,398 @@ fn core_scoped_verify_and_ledger_pass_log_resist_env_and_counter_tampering() {
     assert_eq!(upd_c, 1, "{upd_all}");
     assert!(upd_all.contains("LEDGER_CORRUPT:"), "{upd_all}");
 }
+
+#[test]
+fn incremental_isolated_worktree_integration_with_worker_bases_succeeds() {
+    let tmp = TempDirGuard::new("inc-wt-worker-bases");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(&repo, "src/a.txt", "a-v0\n", "seed a");
+    commit_file(&repo, "src/b.txt", "b-v0\n", "seed b");
+    let sha_0 = commit_file(&repo, "src/e.txt", "e-v0\n", "seed e at sha_0");
+
+    let wt_a = tmp.path.join("wt-a");
+    let wt_e = tmp.path.join("wt-e");
+    let wt_a_s = wt_a.to_str().unwrap();
+    let wt_e_s = wt_e.to_str().unwrap();
+    git_in(&repo, &["worktree", "add", "-b", "wt-a", wt_a_s, &sha_0]);
+    git_in(&repo, &["worktree", "add", "-b", "wt-e", wt_e_s, &sha_0]);
+
+    // Validate both linked isolated worktrees against Parent and each other
+    let (ca, out_a, err_a) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        wt_a_s,
+        "--require-isolated",
+        "--expected-root",
+        r,
+        "--expected-base-sha",
+        &sha_0,
+        "--peer-roots",
+        wt_e_s,
+    ]);
+    assert_eq!(ca, 0, "{out_a}\n{err_a}");
+    assert!(out_a.contains("WORKTREE_OK"), "{out_a}");
+
+    let (ce, out_e, err_e) = run_b3(&[
+        "guard",
+        "check-worktree",
+        "--repo-root",
+        wt_e_s,
+        "--require-isolated",
+        "--expected-root",
+        r,
+        "--expected-base-sha",
+        &sha_0,
+        "--peer-roots",
+        wt_a_s,
+    ]);
+    assert_eq!(ce, 0, "{out_e}\n{err_e}");
+    assert!(out_e.contains("WORKTREE_OK"), "{out_e}");
+
+    // Worker A edits wt_a/src/a.txt while Worker E concurrently edits wt_e/src/e.txt
+    fs::write(wt_a.join("src/a.txt"), "a-v1-worker-A\n").unwrap();
+    fs::write(wt_e.join("src/e.txt"), "e-v1-worker-E\n").unwrap();
+
+    // TASK_VERIFIED != DEPENDENCY_OUTPUT_AVAILABLE: before Parent integrates wt_a, Parent is still at sha_0
+    let (pre_c, pre_out, pre_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &sha_0,
+        "--allowed-paths",
+        "src/a.txt",
+        "--wave-specs",
+        "A=src/a.txt",
+        "--worker-roots",
+        &format!("A={wt_a_s}"),
+    ]);
+    assert_eq!(pre_c, 2, "{pre_out}\n{pre_err}");
+    assert!(
+        pre_out.contains("ownership_verification=VIOLATION"),
+        "{pre_out}"
+    );
+    assert!(
+        pre_out.contains("src/a.txt(A->content_mismatch)"),
+        "{pre_out}"
+    );
+
+    // Parent integrates A from wt_a into Parent and commits sha_A to unlock dependent B; wt_e stays at sha_0
+    fs::write(repo.join("src/a.txt"), "a-v1-worker-A\n").unwrap();
+    let (int_a_c, int_a_out, int_a_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &sha_0,
+        "--allowed-paths",
+        "src/a.txt",
+        "--wave-specs",
+        "A=src/a.txt",
+        "--worker-roots",
+        &format!("A={wt_a_s}"),
+    ]);
+    assert_eq!(int_a_c, 0, "{int_a_out}\n{int_a_err}");
+    assert!(
+        int_a_out.contains("ownership_verification=VERIFIED_PER_WORKER"),
+        "{int_a_out}"
+    );
+
+    git_in(&repo, &["add", "src/a.txt"]);
+    git_in(&repo, &["commit", "-m", "integrate A"]);
+    let sha_a = git_in(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(git_in(&wt_e, &["rev-parse", "HEAD"]), sha_0);
+
+    // Later, Parent copies E's output into Parent (now at sha_A)
+    fs::write(repo.join("src/e.txt"), "e-v1-worker-E\n").unwrap();
+
+    // WITHOUT --worker-bases, --base-sha sha_A is not an ancestor of wt_e (still at sha_0) -> exit 2
+    let (no_wb_c, no_wb_out, no_wb_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &sha_a,
+        "--allowed-paths",
+        "src/e.txt",
+        "--wave-specs",
+        "E=src/e.txt",
+        "--worker-roots",
+        &format!("E={wt_e_s}"),
+    ]);
+    let no_wb_all = format!("{no_wb_out}\n{no_wb_err}");
+    assert_eq!(no_wb_c, 2, "{no_wb_all}");
+    assert!(
+        no_wb_all.contains("WORKTREE_UNSAFE: base_not_ancestor_of_worker"),
+        "{no_wb_all}"
+    );
+
+    // WITH --worker-bases E=<sha_0>, disjoint intervening commit sha_0..sha_A succeeds cleanly -> exit 0
+    let (wb_c, wb_out, wb_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &sha_a,
+        "--allowed-paths",
+        "src/e.txt",
+        "--wave-specs",
+        "E=src/e.txt",
+        "--worker-roots",
+        &format!("E={wt_e_s}"),
+        "--worker-bases",
+        &format!("E={sha_0}"),
+    ]);
+    assert_eq!(wb_c, 0, "{wb_out}\n{wb_err}");
+    assert!(
+        wb_out.contains("ownership_verification=VERIFIED_PER_WORKER"),
+        "{wb_out}"
+    );
+    assert!(wb_out.contains("ownership_violations=none"), "{wb_out}");
+}
+
+#[test]
+fn incremental_isolated_worktree_worker_bases_detects_stale_base_conflict_and_bad_args() {
+    let tmp = TempDirGuard::new("inc-wt-stale-conflict");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(&repo, "src/a.txt", "a-v0\n", "seed a");
+    let sha_0 = commit_file(&repo, "src/e.txt", "e-v0\n", "seed e at sha_0");
+
+    let wt_e = tmp.path.join("wt-e");
+    let wt_e_s = wt_e.to_str().unwrap();
+    git_in(&repo, &["worktree", "add", "-b", "wt-e", wt_e_s, &sha_0]);
+    fs::write(wt_e.join("src/e.txt"), "e-v1-worker-E\n").unwrap();
+
+    // Intervening commit sha_0..sha_A on Parent ALSO modifies src/e.txt
+    fs::write(repo.join("src/a.txt"), "a-v1-parent\n").unwrap();
+    fs::write(repo.join("src/e.txt"), "e-intervening-parent\n").unwrap();
+    git_in(&repo, &["add", "src/a.txt", "src/e.txt"]);
+    git_in(
+        &repo,
+        &["commit", "-m", "intervening commit touching e.txt"],
+    );
+    let sha_a = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    // Even if Parent overwrites src/e.txt with wt_e's content, stale_base_conflict MUST fail closed (exit 2)
+    fs::write(repo.join("src/e.txt"), "e-v1-worker-E\n").unwrap();
+    let (sc_c, sc_out, sc_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &sha_a,
+        "--allowed-paths",
+        "src/e.txt",
+        "--wave-specs",
+        "E=src/e.txt",
+        "--worker-roots",
+        &format!("E={wt_e_s}"),
+        "--worker-bases",
+        &format!("E={sha_0}"),
+    ]);
+    assert_eq!(sc_c, 2, "{sc_out}\n{sc_err}");
+    assert!(
+        sc_out.contains("ownership_verification=VIOLATION"),
+        "{sc_out}"
+    );
+    assert!(
+        sc_out.contains("src/e.txt(E->stale_base_conflict)"),
+        "{sc_out}"
+    );
+
+    // --worker-bases without --worker-roots MUST fail closed with exit 1
+    let (bad_c, bad_out, bad_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &sha_a,
+        "--allowed-paths",
+        "src/e.txt",
+        "--wave-specs",
+        "E=src/e.txt",
+        "--worker-bases",
+        &format!("E={sha_0}"),
+    ]);
+    let bad_all = format!("{bad_out}\n{bad_err}");
+    assert_eq!(bad_c, 1, "{bad_all}");
+    assert!(
+        bad_all.contains("MECHANICAL_FAIL: -WorkerBases requires -WorkerRoots"),
+        "{bad_all}"
+    );
+
+    // Divergent worker_base (ancestor of wt_e HEAD, but NOT ancestor of Parent sha_A) -> exit 2
+    let sha_div = commit_file(&wt_e, "src/e.txt", "e-diverged-branch\n", "divergent wt-e");
+    let (na_c, na_out, na_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &sha_a,
+        "--allowed-paths",
+        "src/e.txt",
+        "--wave-specs",
+        "E=src/e.txt",
+        "--worker-roots",
+        &format!("E={wt_e_s}"),
+        "--worker-bases",
+        &format!("E={sha_div}"),
+    ]);
+    let na_all = format!("{na_out}\n{na_err}");
+    assert_eq!(na_c, 2, "{na_all}");
+    assert!(
+        na_all.contains("worker_base_not_ancestor_of_parent"),
+        "{na_all}"
+    );
+}
+
+#[test]
+fn mid_wave_resume_preserves_fresh_receipts_and_invalidates_only_stale_approaches() {
+    let tmp = TempDirGuard::new("mid-wave-resume");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(&repo, "src/a.txt", "a-v0\n", "seed a");
+    commit_file(&repo, "src/b.txt", "b-v0\n", "seed b");
+    commit_file(&repo, "src/c.txt", "c-v0\n", "seed c");
+    let sha_0 = commit_file(&repo, "src/e.txt", "e-v0\n", "seed e at sha_0");
+
+    // Task A modifies src/a.txt and records scoped verification receipt a.verify
+    fs::write(repo.join("src/a.txt"), "a-v1-verified\n").unwrap();
+    let a_receipt = ".b3/ship/runs/r1/a.verify";
+    let (vr_c, vr_out, vr_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "A",
+        "--verify-cmd",
+        "echo ok",
+        "--receipt-path",
+        a_receipt,
+        "--relevant-paths",
+        "src/a.txt",
+    ]);
+    assert_eq!(vr_c, 0, "{vr_out}\n{vr_err}");
+
+    // Task E is active mid-wave and modifies src/e.txt (uncommitted)
+    fs::write(repo.join("src/e.txt"), "e-v1-in-flight\n").unwrap();
+
+    // 1. Resume check on A's receipt stays VERIFY_VALID despite E's uncommitted edit in src/e.txt
+    let (vc_c, vc_out, vc_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        a_receipt,
+        "--expected-cmd",
+        "echo ok",
+        "--relevant-paths",
+        "src/a.txt",
+    ]);
+    assert_eq!(vc_c, 0, "{vc_out}\n{vc_err}");
+    assert!(vc_out.contains("VERIFY_VALID"), "{vc_out}");
+
+    // 2. Task C (approach at sha_0, watching src/c.txt) stays FRESH when ignoring A & E's wave edits
+    let (fc_c, fc_out, fc_err) = run_b3(&[
+        "guard",
+        "check-freshness",
+        "--repo-root",
+        r,
+        "--approach-at-sha",
+        &sha_0,
+        "--task-base-sha",
+        &sha_0,
+        "--watched-paths",
+        "src/c.txt",
+        "--owned-files",
+        "src/c.txt",
+        "--ignore-dirty-paths",
+        "src/a.txt,src/e.txt",
+    ]);
+    assert_eq!(fc_c, 0, "{fc_out}\n{fc_err}");
+    assert!(fc_out.contains("FRESH"), "{fc_out}");
+
+    // 3. Task B (approach at sha_0, watching src/a.txt,src/b.txt) is STALE because src/a.txt changed since sha_0
+    let (fb_c, fb_out, fb_err) = run_b3(&[
+        "guard",
+        "check-freshness",
+        "--repo-root",
+        r,
+        "--approach-at-sha",
+        &sha_0,
+        "--task-base-sha",
+        &sha_0,
+        "--watched-paths",
+        "src/a.txt,src/b.txt",
+        "--owned-files",
+        "src/b.txt",
+        "--ignore-dirty-paths",
+        "src/e.txt",
+    ]);
+    let fb_all = format!("{fb_out}\n{fb_err}");
+    assert_eq!(fb_c, 2, "{fb_all}");
+    assert!(fb_all.contains("STALE"), "{fb_all}");
+    assert!(fb_all.contains("src/a.txt"), "{fb_all}");
+
+    // Even after A commits (sha_0 -> sha_A) while E remains dirty, C stays FRESH and B stays STALE
+    git_in(&repo, &["add", "src/a.txt"]);
+    git_in(&repo, &["commit", "-m", "commit A"]);
+
+    let (fc2_c, fc2_out, fc2_err) = run_b3(&[
+        "guard",
+        "check-freshness",
+        "--repo-root",
+        r,
+        "--approach-at-sha",
+        &sha_0,
+        "--task-base-sha",
+        &sha_0,
+        "--watched-paths",
+        "src/c.txt",
+        "--owned-files",
+        "src/c.txt",
+        "--ignore-dirty-paths",
+        "src/e.txt",
+    ]);
+    assert_eq!(fc2_c, 0, "{fc2_out}\n{fc2_err}");
+    assert!(fc2_out.contains("FRESH"), "{fc2_out}");
+
+    let (fb2_c, fb2_out, fb2_err) = run_b3(&[
+        "guard",
+        "check-freshness",
+        "--repo-root",
+        r,
+        "--approach-at-sha",
+        &sha_0,
+        "--task-base-sha",
+        &sha_0,
+        "--watched-paths",
+        "src/a.txt,src/b.txt",
+        "--owned-files",
+        "src/b.txt",
+        "--ignore-dirty-paths",
+        "src/e.txt",
+    ]);
+    let fb2_all = format!("{fb2_out}\n{fb2_err}");
+    assert_eq!(fb2_c, 2, "{fb2_all}");
+    assert!(fb2_all.contains("STALE"), "{fb2_all}");
+    assert!(fb2_all.contains("src/a.txt"), "{fb2_all}");
+}
