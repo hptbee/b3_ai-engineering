@@ -11,10 +11,11 @@ use crate::fs::{
     test_wave_path_contained, test_wave_path_overlap, test_worktree_root_overlap, WaveOverlap,
 };
 use crate::git::{
-    git_err_detail, is_hex40, merge_base_is_ancestor, new_working_tree_oid,
+    assert_valid_git_rev, git_err_detail, is_hex40, merge_base_is_ancestor, new_working_tree_oid,
     resolve_scope_target_and_base, run_git, run_git_paths_z, test_git_dir_mid_operation,
     test_git_mid_operation, test_repo_case_insensitive, GitZMode,
 };
+use crate::guard::push_unique_str;
 use crate::guard::scope::find_destructive_sql;
 use crate::guard::verify::{
     get_submodule_entry_identity, get_symlink_blob_oid, git_hash_object_file,
@@ -249,6 +250,7 @@ pub fn run(
     wave_specs_raw: &str,
     worker_changes_raw: &str,
     worker_roots_raw: &str,
+    worker_bases_raw: &str,
     protected_paths_raw: &str,
     dirty_digests_raw: &str,
     has_dirty_digests_arg: bool,
@@ -260,8 +262,15 @@ pub fn run(
     let has_wave_specs = !wave_specs_raw.trim().is_empty();
     let has_worker_changes = !worker_changes_raw.trim().is_empty();
     let has_worker_roots = !worker_roots_raw.trim().is_empty();
+    let has_worker_bases = !worker_bases_raw.trim().is_empty();
     let has_protected_arg = !protected_paths_raw.trim().is_empty();
 
+    if has_worker_bases && !has_worker_roots {
+        return Err(fail(
+            "MECHANICAL_FAIL: -WorkerBases requires -WorkerRoots",
+            1,
+        ));
+    }
     if has_worker_changes && has_worker_roots {
         return Err(fail(
             "MECHANICAL_FAIL: cannot specify both -WorkerChanges and -WorkerRoots",
@@ -398,6 +407,7 @@ pub fn run(
     let mut wc_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut wr_order: Vec<String> = Vec::new();
     let mut wr_map: HashMap<String, String> = HashMap::new();
+    let mut wb_map: HashMap<String, String> = HashMap::new();
 
     if has_wave_specs {
         let ws_parsed = convert_to_wave_task_map(
@@ -530,6 +540,67 @@ pub fn run(
             }
             if wr_order.is_empty() {
                 return Err(fail("MECHANICAL_FAIL: no tasks in -WorkerRoots", 1));
+            }
+            if has_worker_bases {
+                if has_control_chars(worker_bases_raw) {
+                    return Err(fail("MECHANICAL_FAIL: invalid -WorkerBases", 1));
+                }
+                for wb_entry in worker_bases_raw.split(';') {
+                    let wb_trim = wb_entry.trim();
+                    if wb_trim.is_empty() {
+                        continue;
+                    }
+                    let Some(eq_idx) = wb_trim.find('=') else {
+                        return Err(fail(
+                            format!(
+                                "MECHANICAL_FAIL: invalid -WorkerBases entry '{wb_trim}' (expected TaskId=sha)"
+                            ),
+                            1,
+                        ));
+                    };
+                    let tid = wb_trim[..eq_idx].trim().to_string();
+                    let sha_raw = wb_trim[eq_idx + 1..].trim();
+                    if tid.is_empty() || !is_valid_task_id(&tid) {
+                        return Err(fail(
+                            format!("MECHANICAL_FAIL: invalid task id '{tid}' in -WorkerBases"),
+                            1,
+                        ));
+                    }
+                    if wb_map.contains_key(&tid) {
+                        return Err(fail(
+                            format!("MECHANICAL_FAIL: duplicate task '{tid}' in -WorkerBases"),
+                            1,
+                        ));
+                    }
+                    if !wr_map.contains_key(&tid) {
+                        return Err(fail(
+                            format!(
+                                "MECHANICAL_FAIL: -WorkerBases task '{tid}' missing from -WorkerRoots"
+                            ),
+                            1,
+                        ));
+                    }
+                    if sha_raw.len() != 40 || !sha_raw.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        return Err(fail(
+                            format!(
+                                "MECHANICAL_FAIL: -WorkerBases invalid 40-hex SHA for task '{tid}'"
+                            ),
+                            1,
+                        ));
+                    }
+                    let sha_lower = sha_raw.to_ascii_lowercase();
+                    let resolved_wb = assert_valid_git_rev(
+                        &repo_root,
+                        &sha_lower,
+                        "commit",
+                        "MECHANICAL_FAIL",
+                        "-WorkerBases",
+                    )?;
+                    wb_map.insert(tid, resolved_wb);
+                }
+                if wb_map.is_empty() {
+                    return Err(fail("MECHANICAL_FAIL: no tasks in -WorkerBases", 1));
+                }
             }
         }
         ws_order = ws_parsed.order;
@@ -1296,8 +1367,57 @@ pub fn run(
                 let mut seen_wt_tops = vec![parent_top_norm.clone()];
 
                 for tid in &wr_order {
+                    let w_base = wb_map
+                        .get(tid)
+                        .map(|s| s.as_str())
+                        .unwrap_or(&resolved_base);
                     let wt_raw = &wr_map[tid];
                     if wt_raw.is_empty() {
+                        if w_base != resolved_base {
+                            if !merge_base_is_ancestor(
+                                &repo_root,
+                                w_base,
+                                &resolved_base,
+                                "WORKTREE_UNSAFE",
+                            )
+                            .unwrap_or(false)
+                            {
+                                return Err(fail(
+                                    format!(
+                                        "WORKTREE_UNSAFE: worker_base_not_ancestor_of_parent(task={tid},worker_base={w_base},parent_base={resolved_base})"
+                                    ),
+                                    2,
+                                ));
+                            }
+                            let intervening = run_git_paths_z(
+                                &repo_root,
+                                &[
+                                    "diff",
+                                    "--no-ext-diff",
+                                    "--no-renames",
+                                    "--name-only",
+                                    "-z",
+                                    w_base,
+                                    &resolved_base,
+                                    "--",
+                                ],
+                                GitZMode::Names,
+                                "MECHANICAL_FAIL",
+                                &no_env,
+                            )?;
+                            let tid_owned = &ws_map[tid];
+                            for ip in intervening {
+                                if !ip.is_empty()
+                                    && !test_checkpoint_path(&ip)
+                                    && test_ownership_path_match(&ip, tid_owned, case_insensitive)
+                                {
+                                    push_unique_str(
+                                        &mut ov_violations,
+                                        format!("{ip}({tid}->stale_base_conflict)"),
+                                    );
+                                }
+                            }
+                        }
                         continue;
                     }
                     let w_id = resolve_safe_worktree_identity(
@@ -1352,18 +1472,29 @@ pub fn run(
                     seen_wt_tops.push(w_id.top_norm.clone());
 
                     let w_top_path = Path::new(&w_id.top_norm);
-                    if !merge_base_is_ancestor(
-                        w_top_path,
-                        &resolved_base,
-                        &w_id.head,
-                        "WORKTREE_UNSAFE",
-                    )
-                    .unwrap_or(false)
+                    if !merge_base_is_ancestor(w_top_path, w_base, &w_id.head, "WORKTREE_UNSAFE")
+                        .unwrap_or(false)
                     {
                         return Err(fail(
                             format!(
-                                "WORKTREE_UNSAFE: base_not_ancestor_of_worker(task={tid},base={resolved_base},head={})",
+                                "WORKTREE_UNSAFE: base_not_ancestor_of_worker(task={tid},base={w_base},head={})",
                                 w_id.head
+                            ),
+                            2,
+                        ));
+                    }
+                    if w_base != resolved_base
+                        && !merge_base_is_ancestor(
+                            &repo_root,
+                            w_base,
+                            &resolved_base,
+                            "WORKTREE_UNSAFE",
+                        )
+                        .unwrap_or(false)
+                    {
+                        return Err(fail(
+                            format!(
+                                "WORKTREE_UNSAFE: worker_base_not_ancestor_of_parent(task={tid},worker_base={w_base},parent_base={resolved_base})"
                             ),
                             2,
                         ));
@@ -1377,7 +1508,7 @@ pub fn run(
                             "--no-renames",
                             "--name-only",
                             "-z",
-                            &resolved_base,
+                            w_base,
                             "--",
                         ],
                         GitZMode::Names,
@@ -1393,7 +1524,7 @@ pub fn run(
                             "--no-renames",
                             "--name-only",
                             "-z",
-                            &resolved_base,
+                            w_base,
                             "--",
                         ],
                         GitZMode::Names,
@@ -1453,6 +1584,40 @@ pub fn run(
                             || wt_state != root_state
                         {
                             ov_violations.push(format!("{wp}({tid}->content_mismatch)"));
+                        }
+                    }
+
+                    if w_base != resolved_base {
+                        let intervening = run_git_paths_z(
+                            &repo_root,
+                            &[
+                                "diff",
+                                "--no-ext-diff",
+                                "--no-renames",
+                                "--name-only",
+                                "-z",
+                                w_base,
+                                &resolved_base,
+                                "--",
+                            ],
+                            GitZMode::Names,
+                            "MECHANICAL_FAIL",
+                            &no_env,
+                        )?;
+                        for ip in intervening {
+                            if ip.is_empty() || test_checkpoint_path(&ip) {
+                                continue;
+                            }
+                            if test_ownership_path_match(&ip, tid_owned, case_insensitive)
+                                || w_changed
+                                    .iter()
+                                    .any(|wp| paths_equal_fs(wp, &ip, case_insensitive))
+                            {
+                                push_unique_str(
+                                    &mut ov_violations,
+                                    format!("{ip}({tid}->stale_base_conflict)"),
+                                );
+                            }
                         }
                     }
                 }
@@ -1572,4 +1737,176 @@ pub fn run(
     };
     lines.push(term.to_string());
     Ok((lines.join("\n"), code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run;
+    use crate::git::run_git;
+    use std::fs;
+    use std::path::Path;
+
+    fn git_ok(root: &Path, args: &[&str]) -> String {
+        let no_env: [(&str, &str); 0] = [];
+        let res = run_git(root, args, &no_env, None).expect("run_git");
+        assert_eq!(
+            res.exit_code,
+            0,
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&res.stderr)
+        );
+        String::from_utf8_lossy(&res.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn worker_bases_validation_and_incremental_integration() {
+        let tmp = std::env::temp_dir().join(format!(
+            "b3-mech-wb-test-{}-{}",
+            std::process::id(),
+            crate::fs::next_tmp_suffix()
+        ));
+        let parent = tmp.join("parent");
+        let wt_e = tmp.join("wt-e");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(parent.join("src")).expect("mkdir");
+        fs::write(parent.join("src/a.rs"), "pub fn a() -> i32 { 1 }\n").expect("write a");
+        fs::write(parent.join("src/e.rs"), "pub fn e() -> i32 { 1 }\n").expect("write e");
+
+        git_ok(&parent, &["init"]);
+        git_ok(&parent, &["config", "user.email", "t@example.com"]);
+        git_ok(&parent, &["config", "user.name", "Test"]);
+        git_ok(&parent, &["add", "."]);
+        git_ok(&parent, &["commit", "-m", "sha_0"]);
+        let sha_0 = git_ok(&parent, &["rev-parse", "HEAD"]);
+
+        let parent_str = parent.to_string_lossy().into_owned();
+        let wt_e_str = wt_e.to_string_lossy().into_owned();
+        git_ok(&parent, &["worktree", "add", "--detach", &wt_e_str, &sha_0]);
+
+        // Validation: -WorkerBases requires -WorkerRoots
+        let err_no_wr = run(
+            &parent_str,
+            &sha_0,
+            "",
+            "src/e.rs",
+            "",
+            "",
+            false,
+            "E=src/e.rs",
+            "",
+            "",
+            &format!("E={sha_0}"),
+            "",
+            "",
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err_no_wr.code, 1);
+        assert_eq!(
+            err_no_wr.message,
+            "MECHANICAL_FAIL: -WorkerBases requires -WorkerRoots"
+        );
+
+        // Validation: invalid 40-hex SHA
+        let err_hex = run(
+            &parent_str,
+            &sha_0,
+            "",
+            "src/e.rs",
+            "",
+            "",
+            false,
+            "E=src/e.rs",
+            "",
+            &format!("E={wt_e_str}"),
+            "E=shortsha",
+            "",
+            "",
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(err_hex.code, 1);
+        assert_eq!(
+            err_hex.message,
+            "MECHANICAL_FAIL: -WorkerBases invalid 40-hex SHA for task 'E'"
+        );
+
+        // Worker A integrates into Parent (HEAD -> sha_a) while wt-e stays on sha_0
+        fs::write(parent.join("src/a.rs"), "pub fn a() -> i32 { 2 }\n").expect("update a");
+        git_ok(&parent, &["add", "src/a.rs"]);
+        git_ok(&parent, &["commit", "-m", "sha_a"]);
+        let sha_a = git_ok(&parent, &["rev-parse", "HEAD"]);
+
+        // Worker E edits src/e.rs in wt-e (still based on sha_0), staged into Parent WT
+        fs::write(wt_e.join("src/e.rs"), "pub fn e() -> i32 { 42 }\n").expect("update wt-e");
+        fs::write(parent.join("src/e.rs"), "pub fn e() -> i32 { 42 }\n").expect("apply e");
+
+        let (out_ok, code_ok) = run(
+            &parent_str,
+            &sha_a,
+            "",
+            "src/e.rs",
+            "",
+            "",
+            false,
+            "E=src/e.rs",
+            "",
+            &format!("E={wt_e_str}"),
+            &format!("E={sha_0}"),
+            "",
+            "",
+            false,
+        )
+        .expect("incremental mechanical-check");
+        assert_eq!(code_ok, 0, "out={out_ok}");
+        assert!(
+            out_ok.contains("ownership_verification=VERIFIED_PER_WORKER"),
+            "out={out_ok}"
+        );
+        assert!(out_ok.contains("MECHANICAL_OK"), "out={out_ok}");
+
+        // Now simulate intervening commit in Parent touching E's owned file (sha_a -> sha_conflict)
+        fs::write(parent.join("src/e.rs"), "pub fn e() -> i32 { 99 }\n").expect("intervene e");
+        git_ok(&parent, &["add", "src/e.rs"]);
+        git_ok(&parent, &["commit", "-m", "intervening_e"]);
+        let sha_conflict = git_ok(&parent, &["rev-parse", "HEAD"]);
+        fs::write(parent.join("src/e.rs"), "pub fn e() -> i32 { 42 }\n").expect("reapply e");
+
+        let (out_stale, code_stale) = run(
+            &parent_str,
+            &sha_conflict,
+            "",
+            "src/e.rs",
+            "",
+            "",
+            false,
+            "E=src/e.rs",
+            "",
+            &format!("E={wt_e_str}"),
+            &format!("E={sha_0}"),
+            "",
+            "",
+            false,
+        )
+        .expect("stale base mechanical-check");
+        assert_eq!(code_stale, 2, "out={out_stale}");
+        assert!(
+            out_stale.contains("ownership_verification=VIOLATION"),
+            "out={out_stale}"
+        );
+        assert!(
+            out_stale.contains("src/e.rs(E->stale_base_conflict)"),
+            "out={out_stale}"
+        );
+
+        let no_env: [(&str, &str); 0] = [];
+        let _ = run_git(
+            &parent,
+            &["worktree", "remove", "--force", &wt_e_str],
+            &no_env,
+            None,
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
 }

@@ -1,0 +1,10 @@
+id: orch-abcde-continuous-release-001
+artifact: workflows/references/dispatch-naming.md
+intent: Newly unblocked tasks B, C, and D evaluate and dispatch immediately once prerequisite A verifies while long-running peer E stays active
+scenario: |
+  Roots A (short prerequisite) and E (long independent task) start concurrently; B, C, and D each declare depends_on [A] with disjoint scopes from active E
+  A finishes, passes scoped verification, and reaches output_ready in the shared worktree while E continues running
+  Parent immediately runs b3 guard check-wave --partition --wave-specs B,C,D --active-specs E --verified-dirty-paths <A_files> --check-dirty-scope and dispatches admitted_tasks B, C, and D into available_slots without waiting for E or committing underneath active E
+expected_outcome: PASS
+failure_mode: wave-barrier-stalls-unlocked-dependents-behind-unrelated-active-worker
+notes: Waves are incremental dispatch batches rather than completion barriers; shared-WT commits wait for a quiescent window while --verified-dirty-paths unblocks dependents immediately

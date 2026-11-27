@@ -2,9 +2,9 @@ id: orch-partial-worker-failure-isolation-001
 artifact: workflows/references/dispatch-naming.md
 intent: Failed or missing peer workers never block, discard, or git-reset unrelated valid verified worker edits
 scenario: |
-  Wave 1 launches T001 (src/a.ts) and T002 (src/b.ts); T001 completes cleanly while T002 fails or omits its report
-  Parent runs mechanical-check --wave-specs/--worker-changes, which flags PARTIAL_ATTRIBUTION (T002(missing_worker)) without discarding T001
-  Parent preserves T001's valid verified work, isolates T002 for retry/escalation, and never runs git reset across the shared tree
+  Wave 1 launches T001 (src/a.ts), T002 (src/b.ts), and long-running T003 (src/c.ts); T001 completes cleanly while T002 fails or omits its report and T003 continues running
+  Parent runs mechanical-check --wave-specs/--worker-changes on completed work, which flags PARTIAL_ATTRIBUTION (T002(missing_worker)) without discarding T001 or interrupting active T003
+  Parent preserves T001's valid verified work, isolates T002 (failed/blocked) for retry/escalation, keeps active T003 running undisturbed, and never runs git reset across the shared tree
 expected_outcome: PASS
 failure_mode: partial-failure-resets-valid-peer-work-or-hides-missing-worker
 notes: Partial worker failures isolate only the affected unit while preserving verified peer edits and honest attribution

@@ -1,0 +1,10 @@
+id: orch-task-decomposition-shared-prereq-001
+artifact: skills/engineering/planning/SKILL.md
+intent: Multi-area plans extract compact shared contracts early, separate hard depends_on from conflict/integration constraints, and right-size tasks for continuous parallelism
+scenario: |
+  A feature spans a shared domain contract plus three independent subsystem implementations and an independent migration audit
+  Planner extracts the small shared contract into early prerequisite A so subsystem tasks B, C, and D declare hard depends_on [A] while independent E starts immediately alongside A
+  Task specs separate hard output dependencies (depends_on) from file RW conflicts and single-writer integration gates while avoiding both monolithic blockers and tiny overhead-dominated slices
+expected_outcome: PASS
+failure_mode: monolithic-prerequisite-or-inflated-depends-on-serializes-independent-work
+notes: Critical-path decomposition maximizes verified throughput without artificial sequential chains or micro-task coordination overhead

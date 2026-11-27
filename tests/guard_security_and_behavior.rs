@@ -4873,3 +4873,610 @@ fn symbol_check_literal_pathspec_handles_bracketed_route_paths() {
     assert!(out.contains("src/[id]/page.tsx:orphanInternalOne"), "{out}");
     assert!(out.contains("src/[id]/page.tsx:orphanInternalTwo"), "{out}");
 }
+
+#[test]
+fn continuous_wave_abcde_release_with_active_and_verified_dirty_scope() {
+    let tmp = TempDirGuard::new("cont-wave-abcde");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    for name in ["a", "b", "c", "d", "e"] {
+        write_lf(
+            &repo.join(format!("src/{name}.rs")),
+            &format!("pub fn {name}() {{}}\n"),
+        );
+    }
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed abcde"]);
+
+    // A + E started; A finished & verified src/a.rs while E is still active editing src/e.rs
+    write_lf(&repo.join("src/a.rs"), "pub fn a() -> i32 { 42 }\n");
+    write_lf(&repo.join("src/e.rs"), "pub fn e() -> i32 { 99 }\n");
+
+    let (c, out, err) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "4",
+        "--wave-specs",
+        "B=src/b.rs;C=src/c.rs;D=src/d.rs",
+        "--wave-reads",
+        "B=src/a.rs;C=src/a.rs;D=src/a.rs",
+        "--active-specs",
+        "E=src/e.rs",
+        "--verified-dirty-paths",
+        "src/a.rs",
+        "--check-dirty-scope",
+    ]);
+    assert_eq!(c, 0, "expected B,C,D parallel release: {out}\n{err}");
+    assert!(out.contains("dirty_scope=clean\n"), "{out}");
+    assert!(out.contains("unexpected_dirty=none\n"), "{out}");
+    assert!(out.contains("active_tasks=E\n"), "{out}");
+    assert!(out.contains("active_count=1\n"), "{out}");
+    assert!(out.contains("available_slots=3\n"), "{out}");
+    assert!(out.contains("active_dirty=src/e.rs\n"), "{out}");
+    assert!(out.contains("verified_dirty=src/a.rs\n"), "{out}");
+    assert!(out.contains("admitted_tasks=B,C,D\n"), "{out}");
+    assert!(out.contains("deferred_tasks=none\n"), "{out}");
+    assert!(
+        out.contains("wave|1|PARALLEL|agents=3|tasks=B,C,D|reason=independent_ready_tasks\n"),
+        "{out}"
+    );
+
+    // Candidate X trying to WRITE verified-uncommitted src/a.rs is deferred while B,C proceed
+    let (cx, out_x, err_x) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "4",
+        "--wave-specs",
+        "X=src/a.rs;B=src/b.rs;C=src/c.rs",
+        "--active-specs",
+        "E=src/e.rs",
+        "--verified-dirty-paths",
+        "src/a.rs",
+        "--check-dirty-scope",
+    ]);
+    assert_eq!(
+        cx, 0,
+        "expected X deferred and B,C admitted: {out_x}\n{err_x}"
+    );
+    assert!(
+        out_x.contains("conflicts=verified_uncommitted:src/a.rs(X)\n"),
+        "{out_x}"
+    );
+    assert!(out_x.contains("admitted_tasks=B,C\n"), "{out_x}");
+    assert!(out_x.contains("deferred_tasks=X\n"), "{out_x}");
+
+    // Undeclared dirty file src/rogue.rs fails closed with WAVE_BASE_MISMATCH
+    write_lf(&repo.join("src/rogue.rs"), "pub fn rogue() {}\n");
+    let (cr, out_r, err_r) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "4",
+        "--wave-specs",
+        "B=src/b.rs;C=src/c.rs;D=src/d.rs",
+        "--active-specs",
+        "E=src/e.rs",
+        "--verified-dirty-paths",
+        "src/a.rs",
+        "--check-dirty-scope",
+    ]);
+    assert_eq!(
+        cr, 2,
+        "expected fail-closed unexpected_dirty: {out_r}\n{err_r}"
+    );
+    assert!(out_r.contains("dirty_scope=unexpected\n"), "{out_r}");
+    assert!(out_r.contains("unexpected_dirty=src/rogue.rs\n"), "{out_r}");
+    assert!(out_r.contains("admitted_tasks=none\n"), "{out_r}");
+    assert!(
+        out_r.contains("WAVE_BASE_MISMATCH: unexpected_dirty(src/rogue.rs)"),
+        "{out_r}"
+    );
+}
+
+#[test]
+fn continuous_wave_cross_wave_write_conflict_defers_only_conflicting_task() {
+    let tmp = TempDirGuard::new("cont-wave-ww");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    write_lf(&repo.join("src/shared.rs"), "pub fn shared() {}\n");
+    write_lf(&repo.join("src/c.rs"), "pub fn c() {}\n");
+    write_lf(&repo.join("src/d.rs"), "pub fn d() {}\n");
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed ww"]);
+
+    // Active E writes src/shared.rs; B conflicts while C,D are admitted in parallel
+    let (c, out, err) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "4",
+        "--wave-specs",
+        "B=src/shared.rs;C=src/c.rs;D=src/d.rs",
+        "--active-specs",
+        "E=src/shared.rs",
+    ]);
+    assert_eq!(c, 0, "expected partial admission C,D: {out}\n{err}");
+    assert!(
+        out.contains("conflicts=active:src/shared.rs(E,B)\n"),
+        "{out}"
+    );
+    assert!(out.contains("admitted_tasks=C,D\n"), "{out}");
+    assert!(out.contains("deferred_tasks=B\n"), "{out}");
+    assert!(
+        out.contains("wave|1|PARALLEL|agents=2|tasks=C,D|reason=independent_ready_tasks"),
+        "{out}"
+    );
+
+    // When ALL candidates conflict with active E -> exit 2 active_worker_conflict
+    let (ca, out_a, err_a) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "4",
+        "--wave-specs",
+        "B=src/shared.rs",
+        "--active-specs",
+        "E=src/shared.rs",
+    ]);
+    assert_eq!(ca, 2, "expected all-conflicting exit 2: {out_a}\n{err_a}");
+    assert!(
+        out_a.contains("conflicts=active:src/shared.rs(E,B)\n"),
+        "{out_a}"
+    );
+    assert!(out_a.contains("admitted_tasks=none\n"), "{out_a}");
+    assert!(out_a.contains("deferred_tasks=B\n"), "{out_a}");
+    assert!(
+        out_a.contains("WAVE_SEQUENTIAL: waves=0 max_parallel=0 reason=active_worker_conflict"),
+        "{out_a}"
+    );
+}
+
+#[test]
+fn continuous_wave_cross_wave_read_write_conflicts_both_directions() {
+    let tmp = TempDirGuard::new("cont-wave-rw");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    for name in ["contract", "e", "b", "c", "d"] {
+        write_lf(
+            &repo.join(format!("src/{name}.rs")),
+            &format!("pub fn {name}() {{}}\n"),
+        );
+    }
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed rw"]);
+
+    // Case 3a: Active E reads src/contract.rs; candidate B writes it while C,D are disjoint
+    let (c_a, out_a, err_a) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "4",
+        "--wave-specs",
+        "B=src/contract.rs;C=src/c.rs;D=src/d.rs",
+        "--active-specs",
+        "E=src/e.rs",
+        "--active-reads",
+        "E=src/contract.rs",
+    ]);
+    assert_eq!(c_a, 0, "expected B->E active_rw deferral: {out_a}\n{err_a}");
+    assert!(
+        out_a.contains("conflicts=active_rw:src/contract.rs(B->E)\n"),
+        "{out_a}"
+    );
+    assert!(out_a.contains("admitted_tasks=C,D\n"), "{out_a}");
+    assert!(out_a.contains("deferred_tasks=B\n"), "{out_a}");
+    assert!(
+        out_a.contains("wave|1|PARALLEL|agents=2|tasks=C,D|reason=independent_ready_tasks\n"),
+        "{out_a}"
+    );
+
+    // Case 3b: Active E writes src/contract.rs; candidate B reads it while C,D are disjoint
+    let (c_b, out_b, err_b) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "4",
+        "--wave-specs",
+        "B=src/b.rs;C=src/c.rs;D=src/d.rs",
+        "--wave-reads",
+        "B=src/contract.rs",
+        "--active-specs",
+        "E=src/contract.rs",
+    ]);
+    assert_eq!(c_b, 0, "expected E->B active_rw deferral: {out_b}\n{err_b}");
+    assert!(
+        out_b.contains("conflicts=active_rw:src/contract.rs(E->B)\n"),
+        "{out_b}"
+    );
+    assert!(out_b.contains("admitted_tasks=C,D\n"), "{out_b}");
+    assert!(out_b.contains("deferred_tasks=B\n"), "{out_b}");
+    assert!(
+        out_b.contains("wave|1|PARALLEL|agents=2|tasks=C,D|reason=independent_ready_tasks\n"),
+        "{out_b}"
+    );
+}
+
+#[test]
+fn continuous_wave_concurrency_slot_saturation_bounds_admission() {
+    let tmp = TempDirGuard::new("cont-wave-slots");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    for name in ["a", "b", "c", "d", "e"] {
+        write_lf(
+            &repo.join(format!("src/{name}.rs")),
+            &format!("pub fn {name}() {{}}\n"),
+        );
+    }
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed slots"]);
+
+    // Case 4a: --max-concurrency 2 while E is active -> available_slots=1 admits B and defers C,D
+    let (c_1, out_1, err_1) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "2",
+        "--wave-specs",
+        "B=src/b.rs;C=src/c.rs;D=src/d.rs",
+        "--active-specs",
+        "E=src/e.rs",
+    ]);
+    assert_eq!(
+        c_1, 0,
+        "expected 1-slot bounded admission: {out_1}\n{err_1}"
+    );
+    assert!(out_1.contains("available_slots=1\n"), "{out_1}");
+    assert!(out_1.contains("admitted_tasks=B\n"), "{out_1}");
+    assert!(out_1.contains("deferred_tasks=C,D\n"), "{out_1}");
+    assert!(
+        out_1.contains("wave|1|SEQUENTIAL|agents=1|tasks=B|reason=bounded_concurrency\n"),
+        "{out_1}"
+    );
+    assert!(
+        out_1.contains("WAVE_PARTITIONED: waves=2 max_parallel=2"),
+        "{out_1}"
+    );
+
+    // 2 ready tasks with available_slots=1 + active blocker on C -> concurrency_cap sequential terminal line
+    let (c_cap, out_cap, err_cap) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "2",
+        "--wave-specs",
+        "B=src/b.rs;C=src/c.rs",
+        "--wave-reads",
+        "C=src/b.rs",
+        "--active-specs",
+        "E=src/e.rs",
+    ]);
+    assert_eq!(
+        c_cap, 0,
+        "expected concurrency_cap terminal: {out_cap}\n{err_cap}"
+    );
+    assert!(out_cap.contains("available_slots=1\n"), "{out_cap}");
+    assert!(out_cap.contains("admitted_tasks=B\n"), "{out_cap}");
+    assert!(out_cap.contains("deferred_tasks=C\n"), "{out_cap}");
+    assert!(
+        out_cap.contains("WAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=concurrency_cap"),
+        "{out_cap}"
+    );
+
+    // Case 4b: --max-concurrency 2 while A and E are both active -> available_slots=0 saturated
+    let (c_0, out_0, err_0) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "2",
+        "--wave-specs",
+        "B=src/b.rs;C=src/c.rs;D=src/d.rs",
+        "--active-specs",
+        "A=src/a.rs;E=src/e.rs",
+    ]);
+    assert_eq!(c_0, 2, "expected saturated exit 2: {out_0}\n{err_0}");
+    assert!(out_0.contains("active_tasks=A,E\n"), "{out_0}");
+    assert!(out_0.contains("active_count=2\n"), "{out_0}");
+    assert!(out_0.contains("available_slots=0\n"), "{out_0}");
+    assert!(out_0.contains("admitted_tasks=none\n"), "{out_0}");
+    assert!(out_0.contains("deferred_tasks=B,C,D\n"), "{out_0}");
+    assert!(
+        out_0.contains("WAVE_SEQUENTIAL: waves=0 max_parallel=0 reason=concurrency_saturated"),
+        "{out_0}"
+    );
+}
+
+#[test]
+fn continuous_wave_duplicate_active_rejection_partial_failure_and_single_slot_fallback() {
+    let tmp = TempDirGuard::new("cont-wave-dup-part-seq");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    for name in ["b", "c", "d", "e"] {
+        write_lf(
+            &repo.join(format!("src/{name}.rs")),
+            &format!("pub fn {name}() {{}}\n"),
+        );
+    }
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed dup-part-seq"]);
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    // Duplicate active task ID in --wave-specs and --active-specs -> exit 1 WAVE_FAIL
+    let (c_dup, _, err_dup) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--wave-specs",
+        "E=src/e.rs;B=src/b.rs",
+        "--active-specs",
+        "E=src/e.rs",
+    ]);
+    assert_eq!(c_dup, 1, "expected duplicate active task error: {err_dup}");
+    assert!(
+        err_dup.contains("WAVE_FAIL: duplicate active task 'E'"),
+        "{err_dup}"
+    );
+
+    // --active-reads without --active-specs -> exit 1 WAVE_FAIL
+    let (c_ar, _, err_ar) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--wave-specs",
+        "B=src/b.rs",
+        "--active-reads",
+        "E=src/e.rs",
+    ]);
+    assert_eq!(c_ar, 1, "expected --active-reads error: {err_ar}");
+    assert!(
+        err_ar.contains("WAVE_FAIL: --active-reads requires --active-specs"),
+        "{err_ar}"
+    );
+
+    // Partial failure attribution: D edits src/d.rs while C failed/omitted -> PARTIAL_ATTRIBUTION
+    write_lf(&repo.join("src/d.rs"), "pub fn d() -> i32 { 7 }\n");
+    let (c_mc, out_mc, err_mc) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &head,
+        "--allowed-paths",
+        "src/c.rs,src/d.rs",
+        "--wave-specs",
+        "C=src/c.rs;D=src/d.rs",
+        "--worker-changes",
+        "D=src/d.rs",
+    ]);
+    assert_eq!(
+        c_mc, 2,
+        "expected PARTIAL_ATTRIBUTION exit 2: {out_mc}\n{err_mc}"
+    );
+    assert!(
+        out_mc.contains("ownership_verification=PARTIAL_ATTRIBUTION\n"),
+        "{out_mc}"
+    );
+    assert!(
+        out_mc.contains("ownership_violations=C(missing_worker)\n"),
+        "{out_mc}"
+    );
+    assert!(out_mc.contains("MECHANICAL_FINDINGS"), "{out_mc}");
+    assert_eq!(
+        fs::read_to_string(repo.join("src/d.rs")).unwrap(),
+        "pub fn d() -> i32 { 7 }\n"
+    );
+
+    // Single-slot sequential fallback (--max-concurrency 1 with no active tasks and B,C,D ready)
+    let (c_seq, out_seq, err_seq) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "1",
+        "--wave-specs",
+        "B=src/b.rs;C=src/c.rs;D=src/d.rs",
+    ]);
+    assert_eq!(
+        c_seq, 0,
+        "expected single-slot sequential waves: {out_seq}\n{err_seq}"
+    );
+    assert!(
+        out_seq.contains("wave|1|SEQUENTIAL|agents=1|tasks=B|reason=bounded_concurrency\n"),
+        "{out_seq}"
+    );
+    assert!(
+        out_seq.contains("wave|2|SEQUENTIAL|agents=1|tasks=C|reason=bounded_concurrency\n"),
+        "{out_seq}"
+    );
+    assert!(
+        out_seq.contains("wave|3|SEQUENTIAL|agents=1|tasks=D|reason=bounded_concurrency\n"),
+        "{out_seq}"
+    );
+    assert!(
+        out_seq.contains("WAVE_SEQUENTIAL: waves=3 max_parallel=1 reason=bounded_concurrency"),
+        "{out_seq}"
+    );
+
+    // Regression guards for ARCH-001/002, SEC-01/02/03, F1/F2/F3:
+    // 1. Reject '.' root in --active-specs and --active-reads (even without --partition)
+    let (c_dot_as, _, err_dot_as) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--wave-specs",
+        "B=src/b.rs",
+        "--active-specs",
+        "E=.",
+    ]);
+    assert_eq!(
+        c_dot_as, 1,
+        "expected '.' rejection in --active-specs: {err_dot_as}"
+    );
+    assert!(err_dot_as.contains("WAVE_FAIL:"), "{err_dot_as}");
+
+    let (c_dot_ar, _, err_dot_ar) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--wave-specs",
+        "B=src/b.rs",
+        "--active-specs",
+        "E=src/e.rs",
+        "--active-reads",
+        "E=.",
+    ]);
+    assert_eq!(
+        c_dot_ar, 1,
+        "expected '.' rejection in --active-reads: {err_dot_ar}"
+    );
+    assert!(err_dot_ar.contains("WAVE_FAIL:"), "{err_dot_ar}");
+
+    // 2. Allow .b3/* read-only paths in --active-reads (parity with --wave-reads for research-ship Phase E)
+    fs::remove_file(repo.join("src/d.rs")).ok();
+    git_in(&repo, &["checkout", "--", "src/d.rs"]);
+    let (c_b3_ar, out_b3_ar, err_b3_ar) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--wave-specs",
+        "V2=none",
+        "--wave-reads",
+        "V2=.b3/research-ship/runs/r1/evidence-index.md",
+        "--active-specs",
+        "V1=none",
+        "--active-reads",
+        "V1=.b3/research-ship/runs/r1/evidence-index.md",
+    ]);
+    assert_eq!(
+        c_b3_ar, 0,
+        "--active-reads must allow .b3/* read deps: {out_b3_ar}\n{err_b3_ar}"
+    );
+    assert!(out_b3_ar.contains("admitted_tasks=V2\n"), "{out_b3_ar}");
+
+    // 3. --verified-dirty-paths auto-runs dirty-scope check even without --check-dirty-scope,
+    //    and nested protected paths (e.g. src/.gitmodules) inside directory scopes stay UNEXPECTED_DIRTY
+    write_lf(&repo.join("src/b.rs"), "pub fn b() -> i32 { 1 }\n");
+    write_lf(&repo.join("src/rogue.rs"), "pub fn rogue() {}\n");
+    let (c_auto_dirty, out_auto_dirty, err_auto_dirty) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--wave-specs",
+        "C=src/c.rs",
+        "--verified-dirty-paths",
+        "src/b.rs",
+    ]);
+    assert_eq!(
+        c_auto_dirty, 2,
+        "omitting --check-dirty-scope with --verified-dirty-paths must still catch rogue dirty: {out_auto_dirty}\n{err_auto_dirty}"
+    );
+    assert!(
+        format!("{out_auto_dirty}\n{err_auto_dirty}").contains("unexpected_dirty(src/rogue.rs)"),
+        "{out_auto_dirty}\n{err_auto_dirty}"
+    );
+    fs::remove_file(repo.join("src/rogue.rs")).unwrap();
+
+    write_lf(&repo.join("src/.gitmodules"), "[submodule \"x\"]\n");
+    let (c_nested_prot, out_nested_prot, err_nested_prot) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--wave-specs",
+        "D=docs/guide.md",
+        "--active-specs",
+        "E=src",
+        "--check-dirty-scope",
+    ]);
+    assert_eq!(
+        c_nested_prot, 2,
+        "nested protected dirty file inside directory scope must fail closed: {out_nested_prot}\n{err_nested_prot}"
+    );
+    assert!(
+        format!("{out_nested_prot}\n{err_nested_prot}")
+            .contains("unexpected_dirty(src/.gitmodules)"),
+        "{out_nested_prot}\n{err_nested_prot}"
+    );
+    fs::remove_file(repo.join("src/.gitmodules")).unwrap();
+    git_in(&repo, &["checkout", "--", "src/b.rs"]);
+
+    // 4. F3: when available_slots == 1 and sibling candidate is active_blocked (eligible_now.len() == 1),
+    //    wave|1|SEQUENTIAL reports reason=active_worker_conflict rather than vacuous bounded_concurrency
+    let (c_f3, out_f3, err_f3) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r,
+        "--partition",
+        "--max-concurrency",
+        "2",
+        "--wave-specs",
+        "B=src/b.rs;C=src/e.rs",
+        "--active-specs",
+        "E=src/e.rs",
+    ]);
+    assert_eq!(
+        c_f3, 0,
+        "expected B admitted and C active-deferred: {out_f3}\n{err_f3}"
+    );
+    assert!(
+        out_f3.contains("wave|1|SEQUENTIAL|agents=1|tasks=B|reason=active_worker_conflict\n"),
+        "{out_f3}"
+    );
+}

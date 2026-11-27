@@ -220,6 +220,9 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                     protected_paths,
                     check_dirty_scope,
                     ignore_dirty_paths,
+                    active_specs,
+                    active_reads,
+                    verified_dirty_paths,
                 } => {
                     return guard::wave::run(
                         &repo_root,
@@ -231,6 +234,9 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                         &protected_paths,
                         check_dirty_scope,
                         &ignore_dirty_paths,
+                        &active_specs,
+                        &active_reads,
+                        &verified_dirty_paths,
                     );
                 }
                 GuardSubcommand::SymbolCheck {
@@ -272,6 +278,7 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                     wave_specs,
                     worker_changes,
                     worker_roots,
+                    worker_bases,
                     protected_paths,
                     dirty_digests,
                     has_dirty_digests,
@@ -287,6 +294,7 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
                         &wave_specs,
                         &worker_changes,
                         &worker_roots,
+                        &worker_bases,
                         &protected_paths,
                         &dirty_digests,
                         has_dirty_digests,

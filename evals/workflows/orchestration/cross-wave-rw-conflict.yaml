@@ -1,0 +1,10 @@
+id: orch-cross-wave-rw-conflict-001
+artifact: workflows/references/dispatch-naming.md
+intent: Active-worker read/write conflict checking defers newly ready tasks whose reads or writes overlap an active worker's writes or reads
+scenario: |
+  Active worker E reads or writes src/contract.rs while A completes and unlocks B (touching or reading src/contract.rs), C (src/c.rs), and D (src/d.rs)
+  Parent runs b3 guard check-wave --partition with --wave-specs/--wave-reads and --active-specs/--active-reads
+  check-wave flags active_rw on src/contract.rs, defers B (deferred_tasks=B), and safely admits C and D (admitted_tasks=C,D)
+expected_outcome: PASS
+failure_mode: mid-flight-read-write-race-corrupts-active-reader-or-writer-assumptions
+notes: Bidirectional active_rw admission prevents newly released writers from mutating files read by active workers and vice versa
