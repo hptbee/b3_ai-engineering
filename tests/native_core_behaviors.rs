@@ -1319,3 +1319,171 @@ fn core_mechanical_and_symbol_advisory_vs_confirmed_blockers() {
         "{sbout}"
     );
 }
+
+#[test]
+fn core_scoped_verify_and_ledger_pass_log_resist_env_and_counter_tampering() {
+    let tmp = TempDirGuard::new("f39-reg");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(
+        &repo,
+        "Cargo.toml",
+        "[package]\nname=\"demo\"\nversion=\"0.1.0\"\n",
+        "manifest",
+    );
+    commit_file(&repo, "src/app.rs", "pub fn val() -> i32 { 1 }\n", "app");
+    let base = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    // F39-01: Scoped verify receipt -> edit -> stage -> verify-check & precommit MUST reject even under GIT_LITERAL_PATHSPECS=1
+    let receipt_rel = ".b3/ship/verify/scoped.verify";
+    let (vrc, _, vrerr) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T1",
+        "--relevant-paths",
+        "src/app.rs",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        "echo ok",
+    ]);
+    assert_eq!(vrc, 0, "verify-run failed: {vrerr}");
+
+    fs::write(repo.join("src/app.rs"), "pub fn val() -> i32 { 999 }\n").unwrap();
+    git_in(&repo, &["add", "src/app.rs"]);
+
+    let bin = common::b3_bin();
+    let vc_out = std::process::Command::new(bin)
+        .args([
+            "guard",
+            "verify-check",
+            "--repo-root",
+            r,
+            "--receipt-path",
+            receipt_rel,
+            "--expected-cmd",
+            "echo ok",
+            "--relevant-paths",
+            "src/app.rs",
+        ])
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .env("GIT_NOGLOB_PATHSPECS", "1")
+        .output()
+        .expect("run verify-check under GIT_LITERAL_PATHSPECS=1");
+    assert_eq!(
+        vc_out.status.code(),
+        Some(2),
+        "verify-check under GIT_LITERAL_PATHSPECS=1 must return 2 (VERIFY_STALE): stdout={} stderr={}",
+        String::from_utf8_lossy(&vc_out.stdout),
+        String::from_utf8_lossy(&vc_out.stderr)
+    );
+
+    let pc_out = std::process::Command::new(bin)
+        .args([
+            "guard",
+            "precommit",
+            "--repo-root",
+            r,
+            "--allowed-paths",
+            "src/app.rs",
+            "--require-verify-receipt",
+            receipt_rel,
+            "--expected-cmd",
+            "echo ok",
+            "--relevant-paths",
+            "src/app.rs",
+        ])
+        .env("GIT_LITERAL_PATHSPECS", "1")
+        .env("GIT_NOGLOB_PATHSPECS", "1")
+        .output()
+        .expect("run precommit under GIT_LITERAL_PATHSPECS=1");
+    assert_eq!(
+        pc_out.status.code(),
+        Some(1),
+        "precommit under GIT_LITERAL_PATHSPECS=1 must reject stale scoped receipt: stdout={} stderr={}",
+        String::from_utf8_lossy(&pc_out.stdout),
+        String::from_utf8_lossy(&pc_out.stderr)
+    );
+
+    // F39-03: 4 REVIEWED updates -> passes_used=4 -> tamper header passes_used=1 -> check & update must reject LEDGER_CORRUPT
+    let ledger_rel = ".b3/ship/review-loop/f39-ledger.md";
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r,
+            "--action",
+            "init",
+            "--ledger-path",
+            ledger_rel,
+            "--base-sha",
+            &base,
+            "--max-passes",
+            "5",
+            "--review-independence",
+            "INDEPENDENT",
+        ])
+        .0,
+        0
+    );
+    for _ in 0..4 {
+        let (uc, _, uerr) = run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r,
+            "--action",
+            "update",
+            "--ledger-path",
+            ledger_rel,
+            "--unit-id",
+            "U01",
+            "--status",
+            "REVIEWED",
+        ]);
+        assert_eq!(uc, 0, "ledger update failed: {uerr}");
+    }
+    let ledger_full = repo.join(ledger_rel);
+    let raw_ledger = fs::read_to_string(&ledger_full).unwrap();
+    assert!(raw_ledger.contains("passes_used=4"), "{raw_ledger}");
+    let tampered_ledger = raw_ledger.replacen("passes_used=4", "passes_used=1", 1);
+    fs::write(&ledger_full, tampered_ledger).unwrap();
+
+    let (chk_c, chk_out, chk_err) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r,
+        "--action",
+        "check",
+        "--ledger-path",
+        ledger_rel,
+    ]);
+    let chk_all = format!("{chk_out}\n{chk_err}");
+    assert_eq!(chk_c, 1, "{chk_all}");
+    assert!(chk_all.contains("LEDGER_CORRUPT:"), "{chk_all}");
+
+    let (upd_c, upd_out, upd_err) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r,
+        "--action",
+        "update",
+        "--ledger-path",
+        ledger_rel,
+        "--unit-id",
+        "U01",
+        "--status",
+        "REVIEWED",
+    ]);
+    let upd_all = format!("{upd_out}\n{upd_err}");
+    assert_eq!(upd_c, 1, "{upd_all}");
+    assert!(upd_all.contains("LEDGER_CORRUPT:"), "{upd_all}");
+}

@@ -38,4 +38,4 @@ Experience includes, among other work:
 - Do not assume a .NET or Azure default in portable skills.
 - When a recommendation comes from this background, label it personal.
 
-Reusable lessons from real projects belong in this store with the same metadata. Taste belongs in `profiles/`. Promotion to a rule requires evaluation and human approval (`docs/system-lifecycle.md`).
+Reusable lessons from real projects belong in this store with the same metadata. Taste belongs in `knowledge/personal/` today (`profiles/` is uncreated). Promotion to a rule requires evaluation and human approval (`docs/system-lifecycle.md`).

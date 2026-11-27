@@ -2,5 +2,5 @@ id: skill-pr-feedback-positive-002
 artifact: skills/engineering/pr-feedback/SKILL.md
 intent: Route targeted PR comment replies and verified review publication to pr-feedback without resolving threads or editing code
 input: "Reply to the general comment on PR #18 with a permalink and publish our verified B3 review findings in draft mode first."
-expected_bucket: positive
+expected_bucket: should-trigger
 notes: Should activate pr-feedback reply and comment modes, include permalink on general comments, validate inline hunks if used, and honor --draft gate without mutating GitHub.

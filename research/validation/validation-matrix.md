@@ -1,5 +1,7 @@
 # Validation matrix v1
 
+> **Historical provenance note:** Point-in-time v1 validation matrix (2026-09-07) covering the initial 23 synthesized skills prior to `pr-feedback`, `/b3-ship`, and `/b3-research-ship`. Retained intact as historical provenance.
+
 Tasks are short, realistic prompts. Expected skill is the **primary** method. Secondary skills may be valid composition, not automatic failure.
 
 | ID | Area | Prompt (minimal context) | Expected primary | Near-miss / must stay quiet |

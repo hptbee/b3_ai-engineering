@@ -67,7 +67,7 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 
 ## What not to promote
 
-- Personal preference (stays in `profiles/` or `knowledge/personal/`)
+- Personal preference (stays in `knowledge/personal/`; `profiles/` is uncreated)
 - Project-only or employer convention
 - Host-specific tricks (adapter residue, not core)
 - Unverified volatile claims

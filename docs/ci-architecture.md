@@ -2,7 +2,7 @@
 
 > Canonical reference for B3's dependency-aware CI pipeline, test deduplication ownership matrix, and local preflight verification.
 
-## 1. Baseline Profiling (Before Optimization)
+## 1. Historical Pre-Rust Baseline (PR #34 / cedf068)
 
 ### GitHub Actions Baseline
 
@@ -51,10 +51,10 @@ Measured sequentially in worktree `refactor/native-ci-optimization` (`cedf068`, 
 | `b3 pr` protocol, hunk, lock, idempotency, bidi sanitization, large OS pipes | `UNIQUE_REQUIRED` | `src/pr/*` + `tests/pr_feedback_lifecycle.rs` | No — migrated to native Rust |
 | Host adapters (`b3 sync`, `install`, `B3_HOME` discovery, model preferences, NTFS junctions, manifest tamper guards) | `UNIQUE_REQUIRED` + `PLATFORM_SPECIFIC` | `src/adapters/*` + `tests/adapters_and_hosts.rs` | No — migrated to native Rust |
 | `bootstrap-b3.{ps1,sh}` SHA-256, in-use upgrade, rollback, lock, symlink/junction guards | `UNIQUE_REQUIRED` | `tests/bootstrap_lifecycle.rs` | Sole zero-Rust bootstrapper tested end-to-end |
-| Markdown/YAML/eval/context-budget contracts (`AGENTS.md`, `rules/`, `workflows/`, `skills/`, `321` `evals/*.yaml`) | `UNIQUE_REQUIRED` | `b3 context measure --strict` + `tests/eval_contracts.rs` | No — native Rust fast gate |
+| Markdown/YAML/eval/context-budget contracts (`AGENTS.md`, `rules/`, `workflows/`, `skills/`, [`evals/README.md`](../evals/README.md) `evals/*.yaml`) | `UNIQUE_REQUIRED` | `b3 context measure --strict` + `tests/eval_contracts.rs` | No — native Rust fast gate |
 | Adversarial `merge-policy-check` + `b3 pr verify` + mock-`gh` | `UNIQUE_REQUIRED` | `tests/merge_policy_security.rs` | No — migrated to native Rust |
 
-## 3. Target Dependency-Aware CI Architecture
+## 3. Current Dependency-Aware CI Architecture
 
 ```text
 fast-gate (ubuntu-latest, <2m)

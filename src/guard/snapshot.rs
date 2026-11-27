@@ -4,7 +4,7 @@ use crate::error::{fail, B3Error};
 use crate::fs::normalize_repo_root;
 use crate::git::{assert_valid_git_rev, git_err_detail, is_hex40, new_working_tree_oid, run_git};
 
-/// Resolves `HEAD` or creates a detached snapshot commit excluding `.b3/{ship,research-ship,autodev}`
+/// Resolves `HEAD` or creates a detached snapshot commit excluding `.b3/{ship,research-ship}`
 /// checkpoint trees when the working tree differs from `HEAD^{tree}`.
 pub(crate) fn resolve_or_create_snapshot_sha(
     repo_root: &Path,

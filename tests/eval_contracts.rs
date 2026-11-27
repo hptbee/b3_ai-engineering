@@ -679,6 +679,20 @@ fn always_on_context_budget_and_no_forbidden_routing_leaks() {
             "{} frontmatter leaked forbidden context-routing/MCP keyword",
             rel_slash(&root, &sf)
         );
+        for line in fm.lines() {
+            if let Some(val) = line.strip_prefix("description:") {
+                let v = val.trim();
+                let quoted = (v.starts_with('"') && v.ends_with('"'))
+                    || (v.starts_with('\'') && v.ends_with('\''))
+                    || v == ">"
+                    || v == "|";
+                assert!(
+                    quoted || !v.contains(": "),
+                    "{} frontmatter description YAML must quote values containing ': '",
+                    rel_slash(&root, &sf)
+                );
+            }
+        }
     }
 }
 
@@ -747,6 +761,21 @@ fn commands_and_command_skills_canonical_contracts() {
                 raw.contains("dispatch-naming.md"),
                 "{label} {name} must reference dispatch-naming.md"
             );
+            if let Some(fm) = extract_skill_frontmatter(&raw) {
+                for line in fm.lines() {
+                    if let Some(val) = line.strip_prefix("description:") {
+                        let v = val.trim();
+                        let quoted = (v.starts_with('"') && v.ends_with('"'))
+                            || (v.starts_with('\'') && v.ends_with('\''))
+                            || v == ">"
+                            || v == "|";
+                        assert!(
+                            quoted || !v.contains(": "),
+                            "{label} {name} description YAML must quote values containing ': '"
+                        );
+                    }
+                }
+            }
         }
     }
 

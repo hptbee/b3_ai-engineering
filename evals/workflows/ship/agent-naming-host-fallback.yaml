@@ -4,7 +4,7 @@ intent: Stable B3 logical aliases must not compromise dispatch or resume when th
 scenario: |
   T002 and T003 are ready for independent implementation. A host accepting custom names receives b3-impl-t002 and b3-impl-t003, and the orchestrator saves the distinct returned agent IDs.
   A second host rejects custom Role/name fields. The orchestrator dispatches without them, records its host-generated IDs, resumes by returned ID, and preserves independent reviewer isolation.
-  A host length limit must not cause non-deterministic collisions or block dispatch; historical worker terminology and .b3/autodev/ legacy paths stay untouched.
+  A host length limit must not cause non-deterministic collisions or block dispatch; historical worker terminology stays untouched.
 expected_outcome: PASS
 failure_mode: naming-policy-blocks-dispatch-or-resume-uses-alias-as-id
 notes: A behavioral scenario; runtime host-specific name capabilities still need live validation

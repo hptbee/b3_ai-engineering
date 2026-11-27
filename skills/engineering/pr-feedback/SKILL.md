@@ -1,6 +1,6 @@
 ---
 name: pr-feedback
-description: PR feedback lifecycle: resolve threads, reply to comments, or publish verified reviews (b3-pr-resolve, b3-pr-reply, b3-pr-comment, b3-review --post). Not for standalone review or merge.
+description: "PR feedback lifecycle: resolve threads, reply to comments, or publish verified reviews (b3-pr-resolve, b3-pr-reply, b3-pr-comment, b3-review --post). Not for standalone review or merge."
 ---
 
 # PR Feedback Lifecycle

@@ -14,6 +14,6 @@ Hard rule: canonical skills, commands, agents, and rules live in host-neutral ro
 
 Hard rule: host-only metadata and activation wrappers (`.cursor/rules/*.mdc`, `CLAUDE.md`, `.agents/skills.json`, hooks, MCP, local discovery links, plugin generators) belong in thin host entrypoints or `adapters/`. Adapters may map, link, or generate; they may not fork meaning.
 
-Strong guideline: prefer Markdown, `SKILL.md`, YAML frontmatter, and plain shell/Node/Python scripts.
+Strong guideline: prefer Markdown, `SKILL.md`, YAML frontmatter, plain shell/Node/Python scripts, and the native `b3` CLI for deterministic core checks.
 
 Strong guideline: if a skill cannot be followed without a specific host feature, the skill is not ready — extract the portable method, then adapt.

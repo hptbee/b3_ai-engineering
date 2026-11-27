@@ -17,7 +17,7 @@
 | `INDEPENDENT_LEGACY_PARITY` | Executed side-by-side against immutable `65eaaae` legacy PowerShell/Node oracle and native `target/release/b3.exe` on identical isolated temp fixtures: **40 / 47** cases matched identically in exit code, normalized stdout, and on-disk artifacts. |
 | `INTENTIONAL_BEHAVIOR_CHANGE` | Executed side-by-side against `65eaaae` oracle and `target/release/b3.exe`, with an intentional, documented delta (**7 / 47** cases). |
 | `NATIVE_CONTRACT_VERIFIED` | Cross-platform golden contract assertions encoded in `tests/native_golden_parity.rs` comparing live `b3` output against `legacy_baseline_65eaaae.json`, plus native Rust integration suites [`tests/pr_feedback_lifecycle.rs`](../../tests/pr_feedback_lifecycle.rs) and [`tests/adapters_and_hosts.rs`](../../tests/adapters_and_hosts.rs) retiring legacy validation scripts and shell wrappers. |
-| `WRAPPER_FORWARDING_VERIFIED` | Thin PowerShell wrapper dispatch checks in [`tests/wrapper_forwarding_windows.rs`](../../tests/wrapper_forwarding_windows.rs) (legacy Unix shell wrappers such as `measure-context.sh` / `b3-guard.sh` retired). **Never** counted as independent differential testing (both shells invoke `b3`). |
+| `WRAPPER_FORWARDING_VERIFIED` | Thin PowerShell wrapper dispatch checks in `tests/wrapper_forwarding_windows.rs` (retired wrapper test; see [`docs/ci-architecture.md`](../../docs/ci-architecture.md); legacy Unix shell wrappers such as `measure-context.sh` / `b3-guard.sh` retired). **Never** counted as independent differential testing (both shells invoke `b3`). |
 | `NOT_VERIFIED` | Live external GitHub PR API mutations (PR feedback exercised against isolated mock `gh` `.cmd` fixture); native Linux/macOS binary execution pending CI matrix. |
 
 ## Normalization Rules

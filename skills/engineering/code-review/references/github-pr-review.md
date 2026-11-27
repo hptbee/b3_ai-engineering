@@ -34,7 +34,7 @@ Reference for [`../SKILL.md`](../SKILL.md). Load **only** when reviewing a GitHu
      ```
    - **Outside local clone:** fetch diffs for non-noise `review_files` only via `gh api`:
      ```sh
-     gh api --paginate repos/{owner}/{repo}/pulls/<id>/files --jq '.[] | select(.filename | test("(^|/)(package-lock\\.json|pnpm-lock\\.yaml|yarn\\.lock|bun\\.lockb|packages\\.lock\\.json|Cargo\\.lock|poetry\\.lock)$|\\.(min\\.(js|css)|snap|Designer\\.cs|g\\.cs|map)$") | not) | {filename, status, patch}'
+     gh api --paginate repos/{owner}/{repo}/pulls/<id>/files --jq '.[] | select(.filename | test("(^|/)(package-lock\\.json|pnpm-lock\\.yaml|yarn\\.lock|bun\\.lockb|packages\\.lock\\.json|Cargo\\.lock|poetry\\.lock)$|\\.(min\\.(js|css)|snap|map)$") | not) | {filename, status, patch}'
      ```
 
 ## 2. Posting review / comments to GitHub PR

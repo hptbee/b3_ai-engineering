@@ -2047,7 +2047,7 @@ fn run_canonical_verify_check(
             let snippet = truncate_chars(&sanitize_untrusted_text(out.trim()), 260);
             return Err(err_blocked_before_write(
                 "PR_VERIFY_REQUIRED",
-                format!("Canonical b3-guard verify-check failed (exit {code}): {snippet}"),
+                format!("Canonical b3 guard verify-check failed (exit {code}): {snippet}"),
                 Vec::new(),
             ));
         }
@@ -2056,7 +2056,7 @@ fn run_canonical_verify_check(
             return Err(err_blocked_before_write(
                 "PR_VERIFY_REQUIRED",
                 format!(
-                    "Canonical b3-guard verify-check failed (exit {}): {snippet}",
+                    "Canonical b3 guard verify-check failed (exit {}): {snippet}",
                     e.code
                 ),
                 Vec::new(),

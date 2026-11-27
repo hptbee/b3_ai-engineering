@@ -31,7 +31,7 @@ The **performance** dimension is always in the general review (light). An extra 
 
 The **simplification / implementation residue** dimension answers: *given the final implementation and current requirements, is all of this code still necessary?* It identifies code whose original reason for existing disappeared or whose responsibility is now duplicated elsewhere. Only `CONFIRMED REDUNDANCY` or evidenced `CONFIRMED` overengineering (requiring a concrete simpler alternative that meets all security, correctness, portability, compatibility, and verified performance requirements — never LOC alone) becomes a fix requirement; `SPECULATIVE` items stay non-blocking, `INTENTIONAL COMPLEXITY` is accepted/preserved, and `UNKNOWN` is never converted into deletion. Local-diff simplification belongs to `code-review`/`b3-reviewer`; system-shape architecture belongs to `simplest-correct`/`b3-architecture-reviewer`. Later loop passes pay special attention to residue introduced by earlier fix passes.
 
-Adaptive path: `XS`/`S`/`M` = this loop on the full PR. `L`/`XL` = bounded cohesive review **units** (`<= 4` units), and `XXL` = dynamic cohesive review **units**; all three (`L`/`XL`/`XXL`) use adaptive concurrency (`dispatch-naming.md`), a mandatory fail-closed coverage ledger, and a **cross-cutting** review (`sizing.md`, [`hierarchical.md`](hierarchical.md)). Size governs partitioning; **Risk** (`LOW|MEDIUM|HIGH|CRITICAL`, never inferred from LOC alone) governs specialist dispatch and verification depth.
+Adaptive path: `XS`/`S`/`M` = this loop on the full PR. `L`/`XL`/`XXL` = cohesive review **units** (bounded on `L`/`XL`, dynamic on `XXL`) with adaptive concurrency, a mandatory fail-closed coverage ledger, and a **cross-cutting** review (see [`sizing.md`](sizing.md) and [`hierarchical.md`](hierarchical.md)). Size governs partitioning; **Risk** (`LOW|MEDIUM|HIGH|CRITICAL`, never inferred from LOC alone) governs specialist dispatch and verification depth.
 
 ## Outcomes
 
@@ -186,7 +186,7 @@ Any of these → stop, escalate, or mark **INCOMPLETE** — not success.
 
 ### Iteration & resource limits
 
-Default **`MAX_ITERATIONS = 5`** for a full-PR (`XS`/`S`/`M`) scope. `L`/`XL` PRs are bounded to **`<= 4`** cohesive units, **3** iter/unit, **2** for cross-cutting, and a **12** cap on total reviewer passes; `XXL` uses dynamic cohesive units with adaptive concurrency, bounded per-unit iterations (**3**), default **24** `max_passes` (configurable via positive integer), monotonic tamper-evident `passes_used` accounting, and a mandatory fail-closed coverage ledger (`review-loop/strategy.md`, [`hierarchical.md`](hierarchical.md)). Resource/cost budgets are stopping/escalation controls — never permission to skip required units, risk checks, or verification.
+Default **`MAX_ITERATIONS = 5`** for a full-PR (`XS`/`S`/`M`) scope. `L`/`XL`/`XXL` PRs use bounded per-unit/cross-cutting iteration limits, monotonic tamper-evident `passes_used` / `max_passes` budgets (configurable via positive integer on `XXL`), and a mandatory fail-closed coverage ledger (see [`sizing.md`](sizing.md) and [`hierarchical.md`](hierarchical.md)). Resource/cost budgets are stopping/escalation controls — never permission to skip required units, risk checks, or verification.
 
 When a budget or iteration maximum is reached:
 
@@ -214,7 +214,7 @@ Runtime IDs (`R001`…) and `OPEN`/`FIXED`/`REJECTED`/`ACCEPTED`/`VERIFIED`/`SPE
 
 ## Independence
 
-Implementation and review should not be the same unchecked voice. Three core slots: orchestrator (emits `PASS`|`FAIL`|`STUCK`|`INCOMPLETE`|`BLOCKED` alone), reviewer (fresh, read-only, no edits), fixer (edits + verify, no loop outcome). Risk-triggered specialists: `b3-security-reviewer`, `b3-architecture-reviewer`, and `b3-performance-reviewer`. When a host lacks subagent isolation, perform an explicit hat-change and record `review_independence: SINGLE_AGENT_LIMIT` in the stop report. Hosts may assign different models in optional user/project `models.md` or host agent config (`models.md`) — not in this spec.
+Implementation and review should not be the same unchecked voice. Role boundaries for the three core slots (orchestrator, reviewer, fixer) and optional host model assignments live in [`models.md`](models.md); risk-triggered specialists are `b3-security-reviewer`, `b3-architecture-reviewer`, and `b3-performance-reviewer`. When a host lacks subagent isolation, perform an explicit hat-change and record `review_independence: SINGLE_AGENT_LIMIT` in the stop report.
 
 ## Verification inside the loop
 

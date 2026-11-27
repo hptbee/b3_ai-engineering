@@ -2,6 +2,6 @@ id: skill-pr-feedback-negative-001
 artifact: skills/engineering/pr-feedback/SKILL.md
 intent: Local branch or staged diff review with no PR feedback interaction must not activate pr-feedback
 input: "Run a single code review pass on my staged changes in src/auth.ts before I commit locally."
-expected_bucket: negative
+expected_bucket: should-not-trigger
 preferred_skill: code-review
 notes: Local pre-commit diff review has no PR threads, comments, or remote publication; route to code-review instead of pr-feedback.

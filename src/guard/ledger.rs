@@ -41,7 +41,6 @@ pub(crate) struct LedgerUnit {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct VerifiedReceiptRecord {
     pub unit_id: String,
     pub receipt_path: String,
@@ -50,16 +49,24 @@ pub(crate) struct VerifiedReceiptRecord {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct PassLogEntry {
+    pub seq: i64,
+    pub scope: String,
+    pub kind: String,
+    pub delta: i64,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ReviewLedger {
     pub meta: HashMap<String, String>,
     pub units: Vec<LedgerUnit>,
+    pub pass_entries: Vec<PassLogEntry>,
     pub verified_receipts: Vec<VerifiedReceiptRecord>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerCheckResult {
     pub message: String,
-    #[allow(dead_code)]
     pub ledger: ReviewLedger,
 }
 
@@ -178,7 +185,8 @@ pub(crate) fn get_size_rank(size_class: &str) -> i32 {
 
 fn test_waiver_attempt(rationale: &str) -> bool {
     let t = rationale.trim();
-    t.len() >= 7 && t[..7].eq_ignore_ascii_case("WAIVER:")
+    t.get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("WAIVER:"))
 }
 
 fn has_explicit_skip_rationale(raw: &str) -> bool {
@@ -238,6 +246,15 @@ fn serialize_review_ledger(ledger: &ReviewLedger) -> String {
             u.files_csv
         ));
     }
+    if !ledger.pass_entries.is_empty() {
+        out.push_str("\n## Pass Log\n");
+        for p in &ledger.pass_entries {
+            out.push_str(&format!(
+                "pass|{}|{}|{}|{}\n",
+                p.seq, p.scope, p.kind, p.delta
+            ));
+        }
+    }
     out
 }
 
@@ -253,6 +270,8 @@ fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
         .map_err(|e| fail(format!("LEDGER_FAIL: failed reading ledger: {e}"), 1))?;
     let mut meta: HashMap<String, String> = HashMap::new();
     let mut units: Vec<LedgerUnit> = Vec::new();
+    let mut pass_entries: Vec<PassLogEntry> = Vec::new();
+    let mut legacy_pass_deltas: Vec<i64> = Vec::new();
 
     for raw_ln in raw.lines() {
         let ln = raw_ln.trim();
@@ -302,6 +321,32 @@ fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
             continue;
         }
         if ln.starts_with("pass|") {
+            let cols: Vec<&str> = ln.split('|').collect();
+            if cols.len() == 5 {
+                let Ok(seq) = cols[1].parse::<i64>() else {
+                    return Err(fail("LEDGER_CORRUPT: invalid pass log seq", 1));
+                };
+                let Ok(delta) = cols[4].parse::<i64>() else {
+                    return Err(fail("LEDGER_CORRUPT: invalid pass log delta", 1));
+                };
+                if seq <= 0 || delta < 0 {
+                    return Err(fail("LEDGER_CORRUPT: invalid pass log bounds", 1));
+                }
+                pass_entries.push(PassLogEntry {
+                    seq,
+                    scope: cols[2].to_string(),
+                    kind: cols[3].to_string(),
+                    delta,
+                });
+            } else if cols.len() == 7 {
+                if let Ok(delta) = cols[4].parse::<i64>() {
+                    if delta >= 0 {
+                        legacy_pass_deltas.push(delta);
+                    }
+                }
+            } else {
+                return Err(fail("LEDGER_CORRUPT: malformed pass log row", 1));
+            }
             continue;
         }
         let Some(eq) = ln.find('=') else {
@@ -428,9 +473,27 @@ fn parse_review_ledger(full_path: &Path) -> Result<ReviewLedger, B3Error> {
         return Err(fail("LEDGER_CORRUPT: unit_count mismatch", 1));
     }
 
+    let used_p_hdr: i64 = meta["passes_used"].parse().unwrap_or(0);
+    let logged_passes: i64 = if !pass_entries.is_empty() {
+        pass_entries.iter().map(|p| p.delta).sum()
+    } else if meta.contains_key("pass_chain") {
+        legacy_pass_deltas.iter().sum()
+    } else {
+        0
+    };
+    if used_p_hdr < logged_passes {
+        return Err(fail(
+            format!(
+                "LEDGER_CORRUPT: passes_used ({used_p_hdr}) below pass log total ({logged_passes})"
+            ),
+            1,
+        ));
+    }
+
     Ok(ReviewLedger {
         meta,
         units,
+        pass_entries,
         verified_receipts: Vec::new(),
     })
 }
@@ -950,7 +1013,10 @@ fn rewrite_legacy_size_line(ln: &str, changes: &mut usize) -> String {
     while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
         pos += 1;
     }
-    if ln.len() < pos + 10 || !ln[pos..pos + 10].eq_ignore_ascii_case("size_class") {
+    if !ln
+        .get(pos..pos + 10)
+        .is_some_and(|k| k.eq_ignore_ascii_case("size_class"))
+    {
         return ln.to_string();
     }
     pos += 10;
@@ -1240,6 +1306,7 @@ pub fn run(
         let ledger = ReviewLedger {
             meta,
             units: unit_rows,
+            pass_entries: Vec::new(),
             verified_receipts: Vec::new(),
         };
         write_atomic_lf(&ledger_full, &serialize_review_ledger(&ledger))?;
@@ -1578,6 +1645,31 @@ pub fn run(
         ledger
             .meta
             .insert("passes_used".to_string(), new_passes.to_string());
+        if new_passes > cur_passes {
+            let delta = new_passes - cur_passes;
+            let scope_lbl = if let Some(idx) = found_idx {
+                ledger.units[idx].unit_id.clone()
+            } else if !cu_val.is_empty() {
+                "cross_unit".to_string()
+            } else {
+                "manual".to_string()
+            };
+            let kind_lbl = if found_idx.is_some() && !st_val.is_empty() {
+                format!("unit:{st_val}")
+            } else if !cu_val.is_empty() {
+                format!("cross_unit:{cu_val}")
+            } else if added_new_spec {
+                "unit:specialists".to_string()
+            } else {
+                "explicit_passes".to_string()
+            };
+            ledger.pass_entries.push(PassLogEntry {
+                seq: new_passes,
+                scope: scope_lbl,
+                kind: kind_lbl,
+                delta,
+            });
+        }
 
         if let Some(mp) = max_passes {
             ledger.meta.insert("max_passes".to_string(), mp.to_string());

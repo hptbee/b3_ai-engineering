@@ -1,6 +1,6 @@
 id: ship-hosts-001
 artifact: workflows/ship.md
-intent: Cursor, Codex, and Claude select one procedure and do not each carry a copy
+intent: Cursor, Codex, Claude, and Antigravity select one procedure and do not each carry a copy
 scenario: |
   Cursor entry is commands/b3-ship.md
   Skill-based hosts (Codex, Claude Code, Antigravity) route via adapters/command-skills/b3-ship/SKILL.md directly to workflows/ship.md

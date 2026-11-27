@@ -63,7 +63,7 @@ Write descriptions against realistic user phrasing, not only against internal ta
 
 ### Concise instructions
 
-The main file is the procedure, not the encyclopedia. If a section is growing past what an agent needs on every invocation, move it to `references/`. Soft context caps checked by `b3 context measure --strict`: `SKILL.md` ≤ `4,000 B` and YAML frontmatter ≤ `280 B`.
+The main file is the procedure, not the encyclopedia. If a section is growing past what an agent needs on every invocation, move it to `references/`. Static context caps enforced by `b3 context measure --strict` (fails CI with `exit 1` on violation): `SKILL.md` ≤ `4,000 B` and YAML frontmatter ≤ `280 B`.
 
 ### Progressive disclosure
 
@@ -96,7 +96,7 @@ Prefer pointing at official docs or `knowledge/` entries over restating them. Ea
 
 ### Scripts
 
-Scripts are for mechanical work the model should not improvise. They must be host-agnostic when possible (plain shell, Node, or Python). Adapters may wrap them; they must not be the only way to apply the skill.
+Scripts are for mechanical work the model should not improvise. Deterministic core checks execute via the native Rust `b3` CLI (`b3 guard`, `b3 pr`, `b3 context`, `b3 sync`, `b3 install`); skill-local helpers must be host-agnostic when possible (plain shell, Node, or Python). Adapters may wrap them; they must not be the only way to apply the skill.
 
 ### Examples
 

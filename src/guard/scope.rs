@@ -154,7 +154,7 @@ fn has_dir_or_leaf_prefix(low: &str, keys: &[&str]) -> bool {
         if parts.peek().is_none() {
             if let Some(dot_idx) = seg.find('.') {
                 let prefix = &seg[..dot_idx];
-                // Matches `[^/]*\.` in `b3-guard.ps1:2044` for auth_security keywords.
+                // Matches `[^/]*\.` in `b3 guard` for auth_security keywords.
                 if keys.iter().any(|k| prefix.starts_with(k)) {
                     return true;
                 }
