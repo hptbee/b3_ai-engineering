@@ -1,6 +1,6 @@
 ---
 name: b3-implement
-description: Explicit command wrapper ($b3-implement, /b3-implement, b3-implement) to execute one specified change or plan via problem-solving skill. Not for plan-only or /b3-ship.
+description: "Execute one specified change or plan via problem-solving skill ($b3-implement, /b3-implement). Not for plan-only or /b3-ship."
 ---
 
 # b3-implement

@@ -1,6 +1,6 @@
 ---
 name: b3-ship
-description: Run the full B3 autonomous lifecycle until PASS, FAIL, INCOMPLETE, or BLOCKED ($b3-ship, /b3-ship, b3-ship, ship lifecycle, resume, status). Not for plan-only, single implement, debug, single review, or review-loop-only.
+description: "Full autonomous lifecycle until PASS, FAIL, INCOMPLETE, or BLOCKED ($b3-ship, /b3-ship, resume, status). Not for standalone commands."
 ---
 
 # b3-ship

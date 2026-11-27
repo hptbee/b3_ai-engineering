@@ -1,0 +1,9 @@
+id: cmd-b3-audit-incomplete-coverage-001
+artifact: skills/engineering/code-review/references/baseline-audit.md
+intent: Baseline audit reports missing or inaccessible targets and partial subsystem coverage honestly as UNKNOWN / INCOMPLETE rather than PASS
+scenario: |
+  User requests /b3-audit on a missing directory or a large repository where one subsystem is blocked or skipped
+  Audit outputs UNKNOWN / INCOMPLETE for the missing or uninspected areas, continues independent subsystems when another blocks, and never claims the whole repository is clean from a subset
+expected_outcome: PASS
+failure_mode: partial-or-missing-audit-reports-repo-clean-pass
+notes: Enforces review-independence disclosure (SINGLE_AGENT_LIMIT / UNKNOWN) when isolated subagents are unavailable

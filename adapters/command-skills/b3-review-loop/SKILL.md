@@ -1,6 +1,6 @@
 ---
 name: b3-review-loop
-description: Run the autonomous independent review loop to completion (quality gate, non-convergence, or iteration limit). Use for iterative review-and-fix, $b3-review-loop, /b3-review-loop, or b3-review-loop. Not for a single review pass.
+description: "Autonomous independent review-and-fix loop to completion: gate, stuck, or cap ($b3-review-loop, /b3-review-loop). Not for single-pass /b3-review."
 ---
 
 # b3-review-loop

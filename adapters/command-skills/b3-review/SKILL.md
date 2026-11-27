@@ -1,6 +1,6 @@
 ---
 name: b3-review
-description: Explicit command wrapper ($b3-review, /b3-review, b3-review) for one evidence-based review pass via code-review skill. Not for iterative $b3-review-loop.
+description: "Single-pass evidence-based review of a diff or PR via code-review skill ($b3-review, /b3-review). Not for baseline /b3-audit or /b3-review-loop."
 ---
 
 # b3-review
