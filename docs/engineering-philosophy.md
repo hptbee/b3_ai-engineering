@@ -4,7 +4,9 @@ The governing principle of `b3-ai-engineering` is:
 
 > Maximum Engineering Quality × Maximum Safe Parallelism × Minimum Necessary Context × Minimum Total Cost per Verified Result
 
-Every workflow, skill, subagent dispatch, and optimization is evaluated against verified engineering outcomes per unit of total cost and context—never raw speed, raw agent count, or unverified output.
+> Simple by design, safe by default, fast enough, optimized by evidence.
+
+Every workflow, skill, subagent dispatch, and optimization is evaluated against verified engineering outcomes per unit of total cost and context—never raw speed, raw agent count, or unverified output. B3 may accept reasonable performance trade-offs to achieve better correctness, safety, verified quality, simplicity, maintainability, context efficiency, or lower total execution cost; however, performance must remain practical, responsive, and proportionate to the value delivered.
 
 **Product north star:** Make the coding agents developers already use complete real tasks with less total token/context spend, fewer retries, and less manual correction. Current daily usage spans Cursor, Codex, and Antigravity, with host-neutral adapters including Claude Code; the architecture stays portable for additional coding-agent CLIs. Native Rust checks provide deterministic execution but do not constitute a standalone AI model/agent runtime. See the [canonical roadmap](roadmap.md).
 
@@ -35,6 +37,55 @@ Lower-ranked optimizations or preferences never override higher-ranked constrain
 8. Parallel execution is an optimization, not a quality requirement.
 9. Host-neutral architecture must be preserved.
 10. Prefer the simplest correct solution over unnecessary abstractions.
+
+## Performance Proportionality
+
+Governing principles for balancing quality, simplicity, total cost, and runtime responsiveness (subject to [`precedence.md`](precedence.md)):
+
+### 1. Performance Proportionality
+- Performance is an essential engineering constraint, not the ultimate objective.
+- Reasonable performance trade-offs are acceptable when they deliver demonstrable engineering value.
+- Never sacrifice essential correctness, security, verification integrity, or independent review solely for speed.
+- Never use safety or correctness to justify unnecessary complexity or excessive latency.
+- Significant performance regressions require measurement and explicit justification.
+- Frequent execution paths must remain lightweight and responsive.
+- Expensive operations must be conditional, risk-driven, and proportionate to the task.
+
+### 2. Simplicity First
+- Prefer the simplest correct solution with acceptable performance.
+- Remove unnecessary components rather than optimize unnecessary components.
+- Eliminate redundant guards, computation, configuration, abstractions, orchestration, context loading, and compatibility layers when their removal preserves required contracts.
+- Do not introduce permanent infrastructure for hypothetical future requirements.
+- Every additional layer must justify its implementation, maintenance, context, and runtime costs.
+
+### 3. Total Cost Optimization
+Evaluate optimizations against the complete lifecycle:
+- Engineering quality and verified completion.
+- Total token and context consumption.
+- Execution latency and throughput.
+- Agent dispatch and coordination overhead.
+- Verification and review costs.
+- Retries and human intervention.
+- Implementation and maintenance complexity.
+
+A locally faster operation is not necessarily a better solution if it increases total cost or reduces verified quality.
+
+### 4. Evidence-Based Performance
+- Measure relevant performance before claiming improvements.
+- Evaluate hot paths separately from infrequent operations.
+- Preserve existing validated performance budgets.
+- Do not invent universal latency thresholds or arbitrary percentage targets.
+- Use representative workloads and comparable environments.
+- Report unavailable measurements as `UNKNOWN`.
+- Reject unnecessary or disproportionate performance degradation.
+
+### 5. Decision Rule
+When evaluating an existing or proposed component:
+- `KEEP` when it protects a necessary invariant or delivers demonstrated value.
+- `SIMPLIFY` when equivalent outcomes can be achieved with less complexity.
+- `MERGE` when responsibilities genuinely overlap.
+- `MAKE CONDITIONAL` when the cost is justified only for particular risks or workloads.
+- `REMOVE` when the component is redundant, unused, speculative, or costs more than the value it delivers.
 
 ## Execution Principle
 

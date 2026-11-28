@@ -40,7 +40,7 @@ This skill (`b3-architecture-reviewer`) is **system shape**: extra services, lay
 5. **DDD/CQRS/events/microservices:** allow when requirements match (multiple writers, independent scale, separate failure domains) — not as prestige.
 6. **Record the tradeoff** if skipping a richer pattern.
 
-Personal taste (Clean Architecture everywhere) never beats project requirements or this principle as a strong guideline.
+Personal taste (Clean Architecture everywhere) never beats project requirements or this principle as a strong guideline. Total-cost & performance proportionality: `docs/engineering-philosophy.md`.
 
 ## Verification
 
