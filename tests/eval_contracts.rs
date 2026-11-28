@@ -1834,12 +1834,16 @@ fn hook_integration_canonical_contract_and_no_duplication() {
         .expect("read dispatch-naming.md");
     assert!(disp.contains("hook-integration.md"));
 
-    let config_ex = fs::read_to_string(root.join("config/config.example.toml"))
-        .expect("read config.example.toml");
-    let (parsed_enabled, parsed_mode) = b3::config::parse_hooks_config_from_toml(&config_ex)
-        .expect("parse config.example.toml hooks");
-    assert_eq!(parsed_enabled, Some(true));
-    assert_eq!(parsed_mode, Some(b3::config::HookMode::Enforce));
+    let ex_path = root.join("config/config.example.toml");
+    let config_ex = fs::read_to_string(&ex_path).expect("read config.example.toml");
+    let (parsed_hooks, parsed_warnings) =
+        b3::config::resolve_hooks_config_from_paths(Some(&ex_path), None, None);
+    assert!(
+        parsed_warnings.is_empty(),
+        "unexpected warnings parsing config.example.toml: {parsed_warnings:?}"
+    );
+    assert!(parsed_hooks.enabled);
+    assert_eq!(parsed_hooks.mode, b3::config::HookMode::Enforce);
     assert!(
         config_ex.contains("clarification_gate = true")
             && config_ex.contains("understanding_threshold = 96"),

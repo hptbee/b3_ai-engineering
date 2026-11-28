@@ -7,7 +7,7 @@ use crate::adapters::common::{
     assert_regular_dir_or_missing, assert_regular_file_or_missing, normalize_abs_path_str,
     resolve_user_home_dir,
 };
-use crate::config::{resolve_hooks_config_from_paths, resolve_personal_config_path};
+use crate::config::resolve_hooks_config_from_paths;
 use crate::error::{fail, B3Error};
 use crate::fs::{
     has_control_chars, is_reparse_or_symlink, next_tmp_suffix, resolve_unresolved_path,
@@ -1378,8 +1378,9 @@ pub(crate) fn status_hooks(
             .map(|p| PathBuf::from(normalize_abs_path_str(&p))),
     };
     let project_pref = proj.as_deref().map(|p| p.join(".b3").join("config.toml"));
-    let global_pref = resolve_personal_config_path(Some(&home))
-        .unwrap_or_else(|_| home.join(".b3").join("config.toml"));
+    let mut pre_warnings = Vec::new();
+    let global_pref =
+        crate::config::resolve_personal_config_path_with_fallback(Some(&home), &mut pre_warnings);
     let (cfg, warnings) =
         resolve_hooks_config_from_paths(project_pref.as_deref(), Some(&global_pref), None);
 
@@ -1388,6 +1389,13 @@ pub(crate) fn status_hooks(
         cfg.enabled,
         cfg.mode.as_str()
     )];
+    for w in pre_warnings {
+        if w.starts_with("HOOK_CONFIG_WARN:") {
+            lines.push(w);
+        } else {
+            lines.push(format!("HOOK_CONFIG_WARN: {w}"));
+        }
+    }
     lines.extend(warnings);
     if let Some(ref p) = proj {
         for &jh in ALL_JSON_HOSTS {

@@ -1755,3 +1755,107 @@ fn hooks_config_precedence_and_env_override() {
             .iter()
             .any(|x| x.as_str().is_some_and(|s| s.contains("B3_HOOK_MODE")))));
 }
+
+#[test]
+fn personal_init_ignores_untrusted_product_template_and_set_bounds_file_size() {
+    let tmp = TempDirGuard::new("cfg-r01-r03");
+    let repo = tmp.path.join("untrusted-repo");
+    let home = tmp.path.join("home");
+    fs::create_dir_all(repo.join("config")).unwrap();
+    fs::create_dir_all(&home).unwrap();
+
+    // Poison product repository template with disabled hooks
+    write_lf(
+        &repo.join("config/config.example.toml"),
+        "[hooks]\nenabled = false\nmode = \"off\"\n",
+    );
+
+    let r_str = repo.to_str().unwrap();
+    let h_str = home.to_str().unwrap();
+
+    // 1. `b3 config init --scope personal` inside product repo MUST ignore untrusted product template
+    let (c_init, out_init, err_init) = run_cfg(
+        &[
+            "config",
+            "init",
+            "--scope",
+            "personal",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[("B3_CONFIG_PERSONAL", "")],
+    );
+    assert_eq!(c_init, 0, "{out_init}\n{err_init}");
+    let pers_path = home.join(".b3/config.toml");
+    let pers_raw = fs::read_to_string(&pers_path).unwrap();
+    assert!(
+        pers_raw.lines().any(|l| l.trim() == "enabled = true")
+            && pers_raw.lines().any(|l| l.trim() == "mode = \"enforce\""),
+        "personal init must use trusted embedded template, got:\n{pers_raw}"
+    );
+    assert!(
+        !pers_raw.lines().any(|l| l.trim() == "mode = \"off\"")
+            && !pers_raw.lines().any(|l| l.trim() == "enabled = false"),
+        "personal init leaked untrusted product mode=off:\n{pers_raw}"
+    );
+
+    // 2. `b3 config set --scope personal` on fresh home must also ignore untrusted product template
+    let home2 = tmp.path.join("home2");
+    fs::create_dir_all(&home2).unwrap();
+    let (c_set, out_set, err_set) = run_cfg(
+        &[
+            "config",
+            "set",
+            "models.routing",
+            "fixed",
+            "--scope",
+            "personal",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            home2.to_str().unwrap(),
+        ],
+        None,
+        &[("B3_CONFIG_PERSONAL", "")],
+    );
+    assert_eq!(c_set, 0, "{out_set}\n{err_set}");
+    let pers2_raw = fs::read_to_string(home2.join(".b3/config.toml")).unwrap();
+    assert!(
+        pers2_raw.lines().any(|l| l.trim() == "enabled = true")
+            && pers2_raw.lines().any(|l| l.trim() == "mode = \"enforce\"")
+            && !pers2_raw.lines().any(|l| l.trim() == "mode = \"off\""),
+        "personal set must use trusted embedded template, got:\n{pers2_raw}"
+    );
+
+    // 3. `b3 config set` rejects oversized (>256 KiB) existing config fail-closed without reading/rewriting
+    let oversized = format!(
+        "# pad\n{}\n[models]\nrouting = \"native\"\n",
+        "# ".repeat(140_000)
+    );
+    write_lf(&pers_path, &oversized);
+    let (c_big, out_big, err_big) = run_cfg(
+        &[
+            "config",
+            "set",
+            "models.routing",
+            "fixed",
+            "--scope",
+            "personal",
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[("B3_CONFIG_PERSONAL", "")],
+    );
+    assert_ne!(
+        c_big, 0,
+        "oversized config set must fail: {out_big}\n{err_big}"
+    );
+    assert!(
+        out_big.contains("exceeds max size") || err_big.contains("exceeds max size"),
+        "expected bounded size error: out={out_big}\nerr={err_big}"
+    );
+}

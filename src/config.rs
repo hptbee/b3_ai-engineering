@@ -545,12 +545,45 @@ pub fn resolve_personal_config_path(user_home: Option<&Path>) -> Result<PathBuf,
         .join("config.toml"))
 }
 
+pub fn resolve_personal_config_path_with_fallback(
+    user_home: Option<&Path>,
+    warnings: &mut Vec<String>,
+) -> PathBuf {
+    match resolve_personal_config_path(user_home) {
+        Ok(p) => p,
+        Err(msg) => {
+            warnings.push(msg);
+            resolve_user_home_for_config(user_home)
+                .join(".b3")
+                .join("config.toml")
+        }
+    }
+}
+
 fn path_has_reparse(path: &Path) -> bool {
     if let Ok(cwd) = std::env::current_dir() {
         has_reparse_in_path_steps(&cwd, path)
     } else {
         is_reparse_or_symlink(path) || find_reparse_in_path_hierarchy(path).is_some()
     }
+}
+
+fn read_file_bounded(path: &Path, max_bytes: usize, label: &str) -> Result<String, String> {
+    let meta = fs::symlink_metadata(path)
+        .map_err(|e| format!("cannot stat {label} ({}): {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!(
+            "ignoring {label} at {} (not a regular file)",
+            path.display()
+        ));
+    }
+    if meta.len() > max_bytes as u64 {
+        return Err(format!(
+            "ignoring {label} at {} (exceeds max size of {max_bytes} bytes)",
+            path.display()
+        ));
+    }
+    fs::read_to_string(path).map_err(|e| format!("cannot read {label} ({}): {e}", path.display()))
 }
 
 fn read_toml_if_safe(path: &Path, label: &str) -> Option<Result<TomlDocument, String>> {
@@ -563,31 +596,17 @@ fn read_toml_if_safe(path: &Path, label: &str) -> Option<Result<TomlDocument, St
             path.display()
         )));
     }
-    let Ok(meta) = fs::symlink_metadata(path) else {
+    if fs::symlink_metadata(path).is_err() {
         return None;
+    }
+    let raw = match read_file_bounded(path, MAX_TOML_BYTES, label) {
+        Ok(s) => s,
+        Err(e) => return Some(Err(e)),
     };
-    if !meta.is_file() {
-        return Some(Err(format!(
-            "ignoring {label} at {} (not a regular file)",
-            path.display()
-        )));
-    }
-    if meta.len() > MAX_TOML_BYTES as u64 {
-        return Some(Err(format!(
-            "ignoring {label} at {} (exceeds max size of {MAX_TOML_BYTES} bytes)",
-            path.display()
-        )));
-    }
-    match fs::read_to_string(path) {
-        Ok(raw) => match parse_toml_strict(&raw) {
-            Ok(doc) => Some(Ok(doc)),
-            Err(e) => Some(Err(format!(
-                "invalid TOML in {label} ({}): {e}",
-                path.display()
-            ))),
-        },
+    match parse_toml_strict(&raw) {
+        Ok(doc) => Some(Ok(doc)),
         Err(e) => Some(Err(format!(
-            "cannot read {label} ({}): {e}",
+            "invalid TOML in {label} ({}): {e}",
             path.display()
         ))),
     }
@@ -632,45 +651,28 @@ fn apply_hooks_table(
     }
 }
 
-/// Strictly parses `[hooks]` keys (`enabled`, `mode`) from canonical TOML config text.
-pub fn parse_hooks_config_from_toml(
-    raw: &str,
-) -> Result<(Option<bool>, Option<HookMode>), B3Error> {
-    let doc = parse_toml_strict(raw)
-        .map_err(|e| fail(format!("HOOK_CONFIG_INVALID: invalid TOML: {e}"), 1))?;
-    let Some(tbl) = doc.tables.get("hooks") else {
-        return Ok((None, None));
-    };
-    let mut enabled = None;
-    let mut mode = None;
-    for (k, v) in tbl {
-        match k.as_str() {
-            "enabled" => {
-                enabled = Some(v.as_bool().ok_or_else(|| {
-                    fail(
-                        "HOOK_CONFIG_INVALID: hooks.enabled must be boolean".to_string(),
-                        1,
-                    )
-                })?);
-            }
-            "mode" => {
-                let s = v.as_str().ok_or_else(|| {
-                    fail(
-                        "HOOK_CONFIG_INVALID: hooks.mode must be string".to_string(),
-                        1,
-                    )
-                })?;
-                mode = Some(HookMode::parse(s)?);
-            }
-            other => {
-                return Err(fail(
-                    format!("HOOK_CONFIG_INVALID: unknown key hooks.{other}"),
-                    1,
-                ));
+fn apply_hook_mode_env(
+    hooks: &mut HooksConfig,
+    mut sources: Option<&mut BTreeMap<String, ConfigSource>>,
+    warnings: &mut Vec<String>,
+) {
+    if let Ok(val) = std::env::var("B3_HOOK_MODE") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            if has_control_chars(trimmed) {
+                warnings.push("B3_HOOK_MODE: ignoring value with control characters".to_string());
+            } else if let Ok(mode) = HookMode::parse(trimmed) {
+                hooks.mode = mode;
+                hooks.enabled = mode != HookMode::Off;
+                if let Some(ref mut s) = sources {
+                    s.insert("hooks.mode".to_string(), ConfigSource::Env);
+                    s.insert("hooks.enabled".to_string(), ConfigSource::Env);
+                }
+            } else {
+                warnings.push(format!("B3_HOOK_MODE: invalid hooks.mode='{trimmed}'"));
             }
         }
     }
-    Ok((enabled, mode))
 }
 
 /// Fast hot-path `[hooks]` resolver (0 Git calls, bounded TOML reads) using canonical config rules.
@@ -700,19 +702,7 @@ pub fn resolve_hooks_config_from_paths(
         }
     }
 
-    if let Ok(val) = std::env::var("B3_HOOK_MODE") {
-        let trimmed = val.trim();
-        if !trimmed.is_empty() {
-            if has_control_chars(trimmed) {
-                warnings.push("B3_HOOK_MODE: ignoring value with control characters".to_string());
-            } else if let Ok(mode) = HookMode::parse(trimmed) {
-                hooks.mode = mode;
-                hooks.enabled = mode != HookMode::Off;
-            } else {
-                warnings.push(format!("B3_HOOK_MODE: invalid hooks.mode='{trimmed}'"));
-            }
-        }
-    }
+    apply_hook_mode_env(&mut hooks, None, &mut warnings);
 
     if let Some(mode) = cli_mode {
         hooks.mode = mode;
@@ -1112,15 +1102,7 @@ pub fn resolve_config(
     let mut warnings = Vec::new();
     let mut files_read = 0usize;
 
-    let personal_path = match resolve_personal_config_path(user_home) {
-        Ok(p) => p,
-        Err(msg) => {
-            warnings.push(msg);
-            resolve_user_home_for_config(user_home)
-                .join(".b3")
-                .join("config.toml")
-        }
-    };
+    let personal_path = resolve_personal_config_path_with_fallback(user_home, &mut warnings);
 
     if let Some(res) = read_toml_if_safe(&personal_path, "personal config") {
         files_read += 1;
@@ -1181,21 +1163,7 @@ pub fn resolve_config(
         }
     }
 
-    if let Ok(val) = std::env::var("B3_HOOK_MODE") {
-        let trimmed = val.trim();
-        if !trimmed.is_empty() {
-            if has_control_chars(trimmed) {
-                warnings.push("B3_HOOK_MODE: ignoring value with control characters".to_string());
-            } else if let Ok(mode) = HookMode::parse(trimmed) {
-                cfg.hooks.mode = mode;
-                cfg.hooks.enabled = mode != HookMode::Off;
-                sources.insert("hooks.mode".to_string(), ConfigSource::Env);
-                sources.insert("hooks.enabled".to_string(), ConfigSource::Env);
-            } else {
-                warnings.push(format!("B3_HOOK_MODE: invalid hooks.mode='{trimmed}'"));
-            }
-        }
-    }
+    apply_hook_mode_env(&mut cfg.hooks, Some(&mut sources), &mut warnings);
 
     for (k, v) in invocation_overrides {
         apply_string_override(
@@ -1975,13 +1943,15 @@ fn toml_val_to_json(val: &TomlValue) -> JsonValue {
     }
 }
 
-fn load_config_template(repo_root: Option<&Path>) -> String {
-    if let Some(root) = repo_root {
-        let p = root.join("config").join("config.example.toml");
-        if p.is_file() && !path_has_reparse(&p) {
-            if let Ok(raw) = fs::read_to_string(&p) {
-                return raw.replace("\r\n", "\n");
-            }
+fn load_personal_config_template() -> String {
+    DEFAULT_CONFIG_TEMPLATE.replace("\r\n", "\n")
+}
+
+fn load_project_config_template(repo_root: &Path) -> String {
+    let p = repo_root.join("config").join("config.example.toml");
+    if p.is_file() && !path_has_reparse(&p) {
+        if let Ok(raw) = read_file_bounded(&p, MAX_TOML_BYTES, "config template") {
+            return raw.replace("\r\n", "\n");
         }
     }
     DEFAULT_CONFIG_TEMPLATE.replace("\r\n", "\n")
@@ -2339,14 +2309,10 @@ pub fn run_config_cli(
                 ));
             }
             let existing = if target_path.is_file() {
-                fs::read_to_string(&target_path).map_err(|e| {
-                    fail(
-                        format!("CONFIG_FAIL: cannot read {}: {e}", target_path.display()),
-                        1,
-                    )
-                })?
+                read_file_bounded(&target_path, MAX_TOML_BYTES, "config file")
+                    .map_err(|e| fail(format!("CONFIG_FAIL: {e}"), 1))?
             } else if target_scope == "personal" {
-                load_config_template(repo_root.as_deref())
+                load_personal_config_template()
             } else {
                 "# Project-local B3 preference overrides (Git-ignored)\n".to_string()
             };
@@ -2530,7 +2496,7 @@ pub fn run_config_cli(
                     if dry_run {
                         return Ok((format!("dry-run: would initialize {}", dest.display()), 0));
                     }
-                    let tpl = load_config_template(repo_root.as_deref());
+                    let tpl = load_personal_config_template();
                     write_config_new_safe(&dest, &tpl, force)?;
                     Ok((format!("initialized: {}", dest.display()), 0))
                 }
@@ -2557,7 +2523,7 @@ pub fn run_config_cli(
                     if dry_run {
                         return Ok((format!("dry-run: would initialize {}", dest.display()), 0));
                     }
-                    let tpl = load_config_template(Some(root));
+                    let tpl = load_project_config_template(root);
                     write_config_new_safe(&dest, &tpl, force)?;
                     Ok((format!("initialized: {}", dest.display()), 0))
                 }

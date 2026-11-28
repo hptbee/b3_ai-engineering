@@ -3,10 +3,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::common::{normalize_abs_path_str, resolve_user_home_dir};
-use crate::config::{
-    resolve_hooks_config_from_paths, resolve_personal_config_path, HookMode,
-    HooksConfig as HookConfig,
-};
+use crate::config::{resolve_hooks_config_from_paths, HookMode, HooksConfig as HookConfig};
 use crate::error::{fail, B3Error};
 use crate::fs::{
     find_reparse_in_path_hierarchy, has_control_chars, is_reparse_or_symlink,
@@ -158,22 +155,20 @@ fn resolve_cfg_for_root(
     mode_ov: Option<HookMode>,
 ) -> (HookConfig, Vec<String>) {
     let project_pref = root.map(|(r, is_explicit)| resolve_project_pref_path(r, is_explicit));
-    match resolve_personal_config_path(None) {
-        Ok(global_pref) => {
-            resolve_hooks_config_from_paths(project_pref.as_deref(), Some(&global_pref), mode_ov)
-        }
-        Err(msg) => {
-            let (cfg, mut warnings) =
-                resolve_hooks_config_from_paths(project_pref.as_deref(), None, mode_ov);
-            let prefixed_msg = if msg.starts_with("HOOK_CONFIG_WARN:") {
-                msg
-            } else {
-                format!("HOOK_CONFIG_WARN: {msg}")
-            };
-            warnings.insert(0, prefixed_msg);
-            (cfg, warnings)
-        }
+    let mut pre_warnings = Vec::new();
+    let global_pref =
+        crate::config::resolve_personal_config_path_with_fallback(None, &mut pre_warnings);
+    let (cfg, mut warnings) =
+        resolve_hooks_config_from_paths(project_pref.as_deref(), Some(&global_pref), mode_ov);
+    for msg in pre_warnings.into_iter().rev() {
+        let prefixed = if msg.starts_with("HOOK_CONFIG_WARN:") {
+            msg
+        } else {
+            format!("HOOK_CONFIG_WARN: {msg}")
+        };
+        warnings.insert(0, prefixed);
     }
+    (cfg, warnings)
 }
 
 fn mode_outcome_for_error(mode: HookMode, message: &str) -> HookOutcome {

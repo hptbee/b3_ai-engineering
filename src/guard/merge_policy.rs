@@ -1227,18 +1227,36 @@ fn resolve_policy_in_tree(
     Ok(Some((POLICY_TOML_REL, content)))
 }
 
+fn show_git_blob_bounded(root: &Path, spec: &str) -> Result<Option<String>, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    let size_res = run_git(root, &["cat-file", "-s", spec], &no_env, None)?;
+    if size_res.exit_code != 0 {
+        return Ok(None);
+    }
+    let size = String::from_utf8_lossy(&size_res.stdout)
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_toml", 1))?;
+    if size > crate::toml_lite::MAX_TOML_BYTES as u64 {
+        return Err(fail("MERGE_BLOCKED: invalid_policy_toml", 1));
+    }
+    let res = run_git(root, &["show", spec], &no_env, None)?;
+    if res.exit_code != 0 {
+        return Ok(None);
+    }
+    if res.stdout.len() > crate::toml_lite::MAX_TOML_BYTES {
+        return Err(fail("MERGE_BLOCKED: invalid_policy_toml", 1));
+    }
+    Ok(Some(String::from_utf8_lossy(&res.stdout).into_owned()))
+}
+
 fn show_commit_file(
     root: &Path,
     commit_sha: &str,
     rel_path: &str,
 ) -> Result<Option<String>, B3Error> {
     let spec = format!("{commit_sha}:{rel_path}");
-    let no_env: [(&str, &str); 0] = [];
-    let res = run_git(root, &["show", &spec], &no_env, None)?;
-    if res.exit_code != 0 {
-        return Ok(None);
-    }
-    Ok(Some(String::from_utf8_lossy(&res.stdout).into_owned()))
+    show_git_blob_bounded(root, &spec)
 }
 
 fn map_policy_parse_err(e: B3Error, post_merge: bool) -> B3Error {
@@ -3255,12 +3273,10 @@ fn check_policy_staged_in_index(repo_root: &Path) -> Result<Option<&'static str>
 }
 
 fn show_staged_policy_file(repo_root: &Path, rel_path: &str) -> Result<Option<String>, B3Error> {
-    let no_env: [(&str, &str); 0] = [];
     for stage in ["0", "2", "3"] {
         let spec = format!(":{stage}:{rel_path}");
-        let res = run_git(repo_root, &["show", &spec], &no_env, None)?;
-        if res.exit_code == 0 {
-            return Ok(Some(String::from_utf8_lossy(&res.stdout).into_owned()));
+        if let Some(txt) = show_git_blob_bounded(repo_root, &spec)? {
+            return Ok(Some(txt));
         }
     }
     Ok(None)

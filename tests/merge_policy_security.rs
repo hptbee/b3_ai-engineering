@@ -3216,4 +3216,26 @@ fn policy_toml_risk_ceilings_dual_conflict_invalid_and_tamper_guards() {
         errm_t.contains("LEDGER_STALE") || errm_t.contains("risk_exceeds_policy"),
         "{errm_t}"
     );
+
+    // 6. R03: Oversized (>256 KiB) `.b3/policy.toml` fails closed at git/file read boundary (`invalid_policy_toml`)
+    let r_big_pol = tmp.path.join("r-big-policy");
+    clone_seeded_git_repo(&r_big_pol);
+    let oversized_pol = format!(
+        "auto_merge = \"disabled\"\n{}\n",
+        "# padding\n".repeat(30_000)
+    );
+    write_lf(&r_big_pol.join(".b3/policy.toml"), &oversized_pol);
+    git_in(&r_big_pol, &["add", "."]);
+    git_in(&r_big_pol, &["commit", "-qm", "oversized policy"]);
+    let (c_bp, out_bp, err_bp) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r_big_pol.to_str().unwrap(),
+    ]);
+    assert_eq!(c_bp, 1, "{out_bp}\n{err_bp}");
+    assert!(
+        err_bp.contains("MERGE_BLOCKED: invalid_policy_toml"),
+        "oversized policy.toml must fail closed: {err_bp}"
+    );
 }

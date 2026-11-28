@@ -1803,3 +1803,71 @@ fn clone_seeded_git_repo_for_toml(dest: &Path) {
     git_in(dest, &["add", "README.md"]);
     git_in(dest, &["commit", "-m", "init"]);
 }
+
+#[test]
+fn unsafe_personal_env_falls_back_consistently_across_config_and_hooks() {
+    let tmp = TempDirGuard::new("hook-r02-fallback");
+    let home = tmp.path.join("home");
+    let repo = tmp.path.join("repo");
+    fs::create_dir_all(home.join(".b3")).unwrap();
+    clone_seeded_git_repo_for_toml(&repo);
+    write_lf(
+        &home.join(".b3/config.toml"),
+        "[hooks]\nenabled = true\nmode = \"audit\"\n",
+    );
+
+    let r_str = repo.to_str().unwrap();
+    let h_str = home.to_str().unwrap();
+    let unsafe_env = "\\\\server\\share\\bad.toml";
+
+    // 1. `b3 config show` warns and falls back to `~/.b3/config.toml` (`audit`)
+    let (c_cfg, out_cfg, err_cfg) = run_b3_env(
+        &[
+            "config",
+            "show",
+            "--json",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[("B3_CONFIG_PERSONAL", unsafe_env)],
+        &["B3_HOOK_MODE"],
+    );
+    assert_eq!(c_cfg, 0, "{out_cfg}\n{err_cfg}");
+    assert!(
+        out_cfg.contains("ignoring unsafe B3_CONFIG_PERSONAL")
+            && out_cfg.contains("\"hooks.mode\": \"audit\""),
+        "config show did not fall back as expected:\n{out_cfg}"
+    );
+
+    // 2. `b3 hook run` with the same environment falls back identically to `~/.b3/config.toml` (`audit`, exit 0 advisory on `.env` write) and emits `HOOK_CONFIG_WARN:`
+    let payload_env = serde_json_like_cursor_write(r_str, ".env");
+    let (c_hk, out_hk, err_hk) = run_hook_stdin(
+        "cursor",
+        Some("preToolUse"),
+        Some(r_str),
+        None,
+        None,
+        &payload_env,
+        &[
+            ("HOME", h_str),
+            ("USERPROFILE", h_str),
+            ("B3_CONFIG_PERSONAL", unsafe_env),
+        ],
+    );
+    assert_eq!(
+        c_hk, 0,
+        "audit mode fallback must not block .env write: out={out_hk} err={err_hk}"
+    );
+    assert!(
+        err_hk.contains("HOOK_CONFIG_WARN:")
+            && err_hk.contains("ignoring unsafe B3_CONFIG_PERSONAL"),
+        "expected HOOK_CONFIG_WARN on hook fallback: {err_hk}"
+    );
+    assert!(
+        out_hk.contains("[audit]") || err_hk.contains("[audit]"),
+        "expected [audit] advisory from ~/.b3/config.toml fallback: out={out_hk} err={err_hk}"
+    );
+}

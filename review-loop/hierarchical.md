@@ -2,13 +2,17 @@
 
 Load **only** when `size_class` is `L`, `XL`, or `XXL` (never on `always-on` or `XS`/`S`/`M` runs). Reuses `b3-*` roles, `b3 guard`, and `strategy.md`'s conditional `context-routing.md` rules (pass 1L `context_hint:` per unit, default `context_hint: tools=native cache=none`; never paste).
 
-## Workflow & Budgets by Large Tier
+## Resolved Config, Defaults & Safety Ceilings
+
+- **Resolved config (authoritative):** AI Orchestrator MUST consume the `size_class`, units, and limits emitted by `b3 guard review-inventory` / `b3 guard review-ledger` (resolved from `config.toml` `[review]`, `[review.sizing]`, `[parallel]`) instead of recomputing T-shirt thresholds manually.
+- **Built-in defaults (when unset):** `L` (`<50f, <2000L`), `XL` (`<=100f, <=5000L`), `XXL` (`>100f or >5000L`); `review.max_files_per_unit=100`, `review.max_loc_per_unit=5000`; `max_passes` (`XS/S/M`: `review.max_iterations` def `5`, `L/XL`: `12`, `XXL`: `24`).
+- **Mandatory safety ceilings (non-overridable):** `L`/`XL` coalesced `<= 4` units, `3` iter/unit, `PARTITION_INCOMPLETE` fail-closed, monotonic `passes_used` / immutable `max_passes`, `CRITICAL` no-waiver, `SINGLE_AGENT_LIMIT` blocked on `HIGH`/`CRITICAL`.
 
 | Tier | Partitioning | Unit cap | Concurrency | Budget rule |
 | --- | --- | --- | --- | --- |
-| `L` (`<50f, <2000L`) | Bounded cohesive units (coalesced `<= 4` units) | 3 iter/unit | Adaptive (`dispatch-naming.md`) | Default monotonic `max_passes=12`; recommend split if multi-feature |
-| `XL` (`<=100f, <=5000L`) | Bounded cohesive units (coalesced `<= 4` units) | 3 iter/unit | Adaptive (`dispatch-naming.md`) | Default monotonic `max_passes=12`; deeper contract + cross-unit review |
-| `XXL` (`>100f or >5000L`, 5k–30k+ LOC) | **Dynamic** cohesive units (`>5000L` buckets subdivided by dir/contracts/feature/imports; fail `PARTITION_INCOMPLETE` if impossible) | 3 iter/unit | Adaptive (`--max-concurrency 1..64`) | Default monotonic `max_passes=24` (positive `--max-passes N` override; stop `INCOMPLETE` on exhaustion, never skip units) |
+| `L` | Bounded cohesive units (coalesced `<= 4` units) | 3 iter/unit | Adaptive (`dispatch-naming.md`) | Monotonic `max_passes` (`12` def); recommend split if multi-feature |
+| `XL` | Bounded cohesive units (coalesced `<= 4` units) | 3 iter/unit | Adaptive (`dispatch-naming.md`) | Monotonic `max_passes` (`12` def); deeper contract + cross-unit review |
+| `XXL` | **Dynamic** cohesive units (oversized buckets subdivided by dir/contracts/feature/imports; fail `PARTITION_INCOMPLETE` if impossible) | 3 iter/unit | Adaptive (`parallel.max_concurrency` `1..64`) | Monotonic `max_passes` (`24` def or `--max-passes N`; stop `INCOMPLETE` on exhaustion, never skip units) |
 
 ## Five Hierarchical Levels (`XXL` & Multi-Unit `L`/`XL`)
 
