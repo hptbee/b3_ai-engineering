@@ -1094,7 +1094,7 @@ fn f06_user_hook_chaining_args_stdin_exit7_and_nonexec_preservation() {
     assert_eq!(hook_ctl("install", "git", r, None, &[]).0, 0);
 
     let shim_stdin = format!(
-        "refs/heads/main {} refs/heads/main {}\n",
+        "refs/heads/feat/shim-test {} refs/heads/feat/shim-test {}\n",
         "a".repeat(40),
         "0".repeat(40)
     );
@@ -1112,7 +1112,7 @@ fn f06_user_hook_chaining_args_stdin_exit7_and_nonexec_preservation() {
     );
     assert!(fs::read_to_string(&cap_file)
         .unwrap()
-        .contains("origin|https://example.local/repo.git|1|refs/heads/main"));
+        .contains("origin|https://example.local/repo.git|1|refs/heads/feat/shim-test"));
 
     git_in(&repo, &["checkout", "-b", "feat/f06"]);
     write_lf(&repo.join("src/f06.txt"), "hi\n");
@@ -1167,4 +1167,420 @@ fn f06_user_hook_chaining_args_stdin_exit7_and_nonexec_preservation() {
             0o644
         );
     }
+}
+
+#[test]
+fn r02_remote_policy_authority_scenarios() {
+    let tmp = TempDirGuard::new("hook-r02-auth");
+
+    // 1 & 2. Remote adds policy after last local fetch; local lacks policy & remote tracking ref is stale.
+    let (local_stale, bare_stale) = setup_remote_repo(&tmp, "stale-remote", false);
+    let admin = tmp.path.join("stale-admin");
+    assert!(Command::new("git")
+        .args([
+            "clone",
+            bare_stale.to_str().unwrap(),
+            admin.to_str().unwrap()
+        ])
+        .output()
+        .expect("clone admin")
+        .status
+        .success());
+    git_in(&admin, &["config", "user.email", "t@example.com"]);
+    git_in(&admin, &["config", "user.name", "Test"]);
+    write_lf(
+        &admin.join(".b3/research-policy.json"),
+        r#"{"auto_merge":"disabled","protected_paths":["locked/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+    );
+    git_in(&admin, &["add", ".b3/research-policy.json"]);
+    git_in(&admin, &["commit", "-m", "remote adds policy"]);
+    git_in(&admin, &["push", "origin", "main"]);
+
+    // Pushing to main from stale local repo is blocked via remote_oid mismatch (never claims policy absent).
+    write_lf(&local_stale.join("src/local.txt"), "local\n");
+    git_in(&local_stale, &["add", "src/local.txt"]);
+    git_in(&local_stale, &["commit", "-m", "local main diverged"]);
+    let (c_st, _, err_st) = git_iso_status(
+        &tmp,
+        &local_stale,
+        &["push", "origin", "HEAD:refs/heads/main"],
+    );
+    assert!(
+        c_st != 0 && err_st.contains("stale_remote_target_ref(main)"),
+        "expected stale_remote_target_ref: {err_st}"
+    );
+    // Ordinary feature branch push works cleanly without remote network calls.
+    git_in(&local_stale, &["checkout", "-b", "feat/local"]);
+    write_lf(&local_stale.join("src/ok.txt"), "ok\n");
+    git_in(&local_stale, &["add", "src/ok.txt"]);
+    git_in(&local_stale, &["commit", "-m", "feat"]);
+    assert_eq!(
+        git_iso_status(&tmp, &local_stale, &["push", "origin", "feat/local"]).0,
+        0
+    );
+
+    // 3, 4, 5, 6. Missing tracking refs, non-origin remote, pushUrl mismatch, direct URL push.
+    let (multi, bare_origin) = setup_remote_repo(&tmp, "multi", true);
+    let bare_up = tmp.path.join("multi-upstream.git");
+    fs::create_dir_all(&bare_up).unwrap();
+    assert!(Command::new("git")
+        .args(["init", "--bare"])
+        .arg(&bare_up)
+        .output()
+        .unwrap()
+        .status
+        .success());
+    git_in(&bare_up, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
+    let up_seed = tmp.path.join("up-seed");
+    let _ = init_fresh_git_repo(&up_seed);
+    git_in(&up_seed, &["branch", "-M", "trunk"]);
+    write_lf(
+        &up_seed.join(".b3/research-policy.json"),
+        r#"{"auto_merge":"disabled","protected_paths":["sec/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+    );
+    git_in(&up_seed, &["add", ".b3/research-policy.json"]);
+    git_in(&up_seed, &["commit", "-m", "trunk policy"]);
+    git_in(
+        &up_seed,
+        &["remote", "add", "upstream", bare_up.to_str().unwrap()],
+    );
+    git_in(&up_seed, &["push", "-u", "upstream", "trunk"]);
+
+    // Plain repo without local policy pushing to unfetched remote / mismatched pushUrl / direct URL:
+    let (probe, bare_probe) = setup_remote_repo(&tmp, "probe", false);
+    let alt_bare = tmp.path.join("alt-bare.git");
+    assert!(Command::new("git")
+        .args([
+            "clone",
+            "--bare",
+            bare_probe.to_str().unwrap(),
+            alt_bare.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
+        .status
+        .success());
+
+    git_in(
+        &probe,
+        &["remote", "add", "unfetched", alt_bare.to_str().unwrap()],
+    );
+    git_in(&probe, &["checkout", "-b", "feat/adv"]);
+    write_lf(&probe.join("src/adv.txt"), "hi\n");
+    git_in(&probe, &["add", "src/adv.txt"]);
+    git_in(&probe, &["commit", "-m", "adv"]);
+
+    // Missing tracking refs on feature push -> Advisory exit 0; pushing existing main -> Blocked
+    let (c_uf_feat, _, err_uf_feat) =
+        git_iso_status(&tmp, &probe, &["push", "unfetched", "feat/adv"]);
+    assert!(
+        c_uf_feat == 0 && err_uf_feat.contains("UNKNOWN(missing_remote_tracking_refs)"),
+        "expected missing_remote_tracking_refs advisory: {err_uf_feat}"
+    );
+    let (c_uf_main, _, err_uf_main) = git_iso_status(
+        &tmp,
+        &probe,
+        &["push", "unfetched", "feat/adv:refs/heads/main"],
+    );
+    assert!(
+        c_uf_main != 0 && err_uf_main.contains("unknown_remote_authority"),
+        "{err_uf_main}"
+    );
+
+    // Direct URL push -> Advisory on feature, Blocked on existing main & main deletion
+    let (c_dir_feat, _, err_dir_feat) = git_iso_status(
+        &tmp,
+        &probe,
+        &["push", bare_probe.to_str().unwrap(), "feat/adv"],
+    );
+    assert!(
+        c_dir_feat == 0 && err_dir_feat.contains("UNKNOWN(direct_url_push)"),
+        "{err_dir_feat}"
+    );
+    let (c_dir_del, _, err_dir_del) = git_iso_status(
+        &tmp,
+        &probe,
+        &["push", bare_probe.to_str().unwrap(), ":refs/heads/main"],
+    );
+    assert!(
+        c_dir_del != 0 && err_dir_del.contains("unknown_remote_authority"),
+        "{err_dir_del}"
+    );
+
+    // Push URL differs from fetch URL
+    git_in(
+        &probe,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            alt_bare.to_str().unwrap(),
+        ],
+    );
+    let (c_pu_feat, _, err_pu_feat) = git_iso_status(
+        &tmp,
+        &probe,
+        &["push", "origin", "feat/adv:refs/heads/feat/pu-mismatch"],
+    );
+    assert!(
+        c_pu_feat == 0 && err_pu_feat.contains("UNKNOWN(push_url_differs_from_fetch_url)"),
+        "{err_pu_feat}"
+    );
+    let (c_pu_main, _, err_pu_main) =
+        git_iso_status(&tmp, &probe, &["push", "origin", ":refs/heads/main"]);
+    assert!(
+        c_pu_main != 0 && err_pu_main.contains("unknown_remote_authority"),
+        "{err_pu_main}"
+    );
+
+    // 7. Non-origin remote & non-main/master default branch (`trunk`), even when remote HEAD unset
+    let (trunk_repo, _) = setup_remote_repo(&tmp, "trunk-only", false);
+    git_in(
+        &trunk_repo,
+        &["remote", "add", "upstream", bare_up.to_str().unwrap()],
+    );
+    git_in(&trunk_repo, &["fetch", "upstream"]);
+    git_in(
+        &trunk_repo,
+        &["checkout", "-b", "feat/up-sec", "upstream/trunk"],
+    );
+    write_lf(&trunk_repo.join("sec/key.txt"), "sec\n");
+    git_in(&trunk_repo, &["add", "sec/key.txt"]);
+    git_in(&trunk_repo, &["commit", "-m", "touch sec"]);
+    let (c_up_sec, _, err_up_sec) =
+        git_iso_status(&tmp, &trunk_repo, &["push", "upstream", "feat/up-sec"]);
+    assert!(
+        c_up_sec != 0 && err_up_sec.contains("protected_paths=sec/key.txt"),
+        "expected sec/ protected path block on upstream/trunk: {err_up_sec}"
+    );
+    git_in(
+        &trunk_repo,
+        &["checkout", "-b", "feat/up-clean", "upstream/trunk"],
+    );
+    write_lf(&trunk_repo.join("src/clean.txt"), "ok\n");
+    git_in(&trunk_repo, &["add", "src/clean.txt"]);
+    git_in(&trunk_repo, &["commit", "-m", "clean up"]);
+    let (c_up_dir, _, err_up_dir) = git_iso_status(
+        &tmp,
+        &trunk_repo,
+        &["push", "upstream", "feat/up-clean:refs/heads/trunk"],
+    );
+    assert!(
+        c_up_dir != 0 && err_up_dir.contains("direct_push_blocked"),
+        "{err_up_dir}"
+    );
+
+    // 8 & R03 pre-merge-commit: multi-ref push + actual staged merge index check + octopus MERGE_HEAD
+    git_in(&multi, &["checkout", "-b", "feat/m1", "origin/main"]);
+    write_lf(&multi.join("src/m1.txt"), "m1\n");
+    git_in(&multi, &["add", "src/m1.txt"]);
+    git_in(&multi, &["commit", "-m", "m1"]);
+    let (c_mr, _, err_mr) = git_iso_status(
+        &tmp,
+        &multi,
+        &["push", "origin", "feat/m1", "feat/m1:refs/heads/main"],
+    );
+    assert!(
+        c_mr != 0 && err_mr.contains("direct_push_blocked"),
+        "{err_mr}"
+    );
+    let _ = bare_origin;
+
+    git_in(&multi, &["checkout", "--detach", "origin/main"]);
+    git_in(&multi, &["merge", "--no-commit", "--no-ff", "feat/m1"]);
+    write_lf(&multi.join("locked/staged-merge.txt"), "bad\n");
+    git_in(&multi, &["add", "locked/staged-merge.txt"]);
+    let (c_stg, _, err_stg) = run_hook_stdin(
+        "git",
+        Some("pre-merge-commit"),
+        Some(multi.to_str().unwrap()),
+        None,
+        None,
+        "",
+        &[],
+    );
+    assert!(
+        c_stg == 1 && err_stg.contains("protected_paths=locked/staged-merge.txt"),
+        "pre-merge-commit must check staged merge result: {err_stg}"
+    );
+
+    // Octopus MERGE_HEAD rejected on governed branch
+    let head_sha = git_in(&multi, &["rev-parse", "HEAD"]).trim().to_string();
+    let m1_sha = git_in(&multi, &["rev-parse", "feat/m1"]).trim().to_string();
+    let mh_path = PathBuf::from(git_in(&multi, &["rev-parse", "--git-path", "MERGE_HEAD"]).trim());
+    let mh_abs = if mh_path.is_absolute() {
+        mh_path
+    } else {
+        multi.join(mh_path)
+    };
+    write_lf(&mh_abs, &format!("{m1_sha}\n{head_sha}\n"));
+    let _ = git_iso_status(
+        &tmp,
+        &multi,
+        &["reset", "HEAD", "--", "locked/staged-merge.txt"],
+    );
+    let _ = fs::remove_file(multi.join("locked/staged-merge.txt"));
+    let (c_oct, _, err_oct) = run_hook_stdin(
+        "git",
+        Some("pre-merge-commit"),
+        Some(multi.to_str().unwrap()),
+        None,
+        None,
+        "",
+        &[],
+    );
+    assert!(
+        c_oct != 0
+            && (err_oct.contains("unsupported_octopus_merge")
+                || err_oct.contains("auto_merge=disabled")),
+        "{err_oct}"
+    );
+    let _ = git_iso_status(&tmp, &multi, &["merge", "--abort"]);
+
+    // F1/F2: Direct URL push in governed repo still enforces canonical origin policy + emits UNKNOWN advisory on clean feature push
+    git_in(&multi, &["checkout", "-b", "feat/url-prot", "origin/main"]);
+    write_lf(&multi.join("locked/url-bypass.txt"), "bypass\n");
+    git_in(&multi, &["add", "locked/url-bypass.txt"]);
+    git_in(&multi, &["commit", "-m", "url prot"]);
+    let (c_up_bad, _, err_up_bad) = git_iso_status(
+        &tmp,
+        &multi,
+        &["push", bare_origin.to_str().unwrap(), "feat/url-prot"],
+    );
+    assert!(
+        c_up_bad != 0 && err_up_bad.contains("protected_paths=locked/url-bypass.txt"),
+        "F1 direct URL push must enforce origin protected_paths: {err_up_bad}"
+    );
+    let (c_up_ok, _, err_up_ok) = git_iso_status(
+        &tmp,
+        &multi,
+        &["push", bare_origin.to_str().unwrap(), "feat/m1"],
+    );
+    assert!(
+        c_up_ok == 0 && err_up_ok.contains("UNKNOWN(direct_url_push)"),
+        "clean feature direct URL push emits advisory: {err_up_ok}"
+    );
+
+    // F4: pre-merge-commit resolves non-origin remote non-main default branch (`upstream/trunk`)
+    git_in(&trunk_repo, &["checkout", "--detach", "upstream/trunk"]);
+    let (c_tr_m, _, err_tr_m) = git_iso_status(
+        &tmp,
+        &trunk_repo,
+        &["merge", "--no-commit", "--no-ff", "feat/up-sec"],
+    );
+    if c_tr_m == 0 {
+        let (c_pm_tr, _, err_pm_tr) = run_hook_stdin(
+            "git",
+            Some("pre-merge-commit"),
+            Some(trunk_repo.to_str().unwrap()),
+            None,
+            None,
+            "",
+            &[],
+        );
+        assert!(
+            c_pm_tr != 0
+                && (err_pm_tr.contains("protected_paths=sec/key.txt")
+                    || err_pm_tr.contains("auto_merge=disabled")),
+            "F4 pre-merge-commit must enforce upstream/trunk policy: {err_pm_tr}"
+        );
+    } else {
+        assert!(
+            err_tr_m.contains("protected_paths=sec/key.txt")
+                || err_tr_m.contains("auto_merge=disabled"),
+            "{err_tr_m}"
+        );
+    }
+}
+
+#[test]
+fn r04_and_section6_subdir_discovery_lossless_shim_and_precommit() {
+    let tmp = TempDirGuard::new("hook-sec6");
+    let (repo, _bare) = setup_remote_repo(&tmp, "sec6", false);
+    let r = repo.to_str().unwrap();
+    let nested = repo.join("src/nested");
+    fs::create_dir_all(&nested).unwrap();
+
+    // 1. Subdirectory cwd + omitted --repo-root + malformed JSON honors audit / off / enforce
+    write_lf(
+        &repo.join(".b3/models.md"),
+        "```yaml\nhooks:\n  enabled: true\n  mode: audit\n```\n",
+    );
+    let (c_aud, _, err_aud) =
+        run_hook_stdin("cursor", None, None, None, Some(&nested), "{not-json", &[]);
+    assert!(c_aud == 0 && err_aud.contains("[audit]"), "{err_aud}");
+
+    write_lf(
+        &repo.join(".b3/models.md"),
+        "```yaml\nhooks:\n  enabled: false\n  mode: enforce\n```\n",
+    );
+    let (c_off, _, err_off) =
+        run_hook_stdin("cursor", None, None, None, Some(&nested), "{not-json", &[]);
+    assert_eq!((c_off, err_off.as_str()), (0, ""));
+
+    write_lf(
+        &repo.join(".b3/models.md"),
+        "```yaml\nhooks:\n  enabled: true\n  mode: enforce\n```\n",
+    );
+    let (c_enf, out_enf, _) =
+        run_hook_stdin("cursor", None, None, None, Some(&nested), "{not-json", &[]);
+    assert!(
+        c_enf == 2 && out_enf.contains(r#""permission":"deny""#),
+        "{out_enf}"
+    );
+
+    // 2. Lossless pre-push stdin forwarding preserves trailing newlines to .b3-user
+    assert_eq!(hook_ctl("uninstall", "git", r, None, &[]).0, 0);
+    let cap = tmp.path.join("stdin-bytes.len");
+    let cap_sh = cap.to_string_lossy().replace('\\', "/");
+    let hooks_dir = repo.join(".git/hooks");
+    let pp_path = hooks_dir.join("pre-push");
+    let user_pp = format!("#!/bin/sh\nwc -c < /dev/stdin > '{cap_sh}'\nexit 0\n");
+    write_lf(&pp_path, &user_pp);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pp_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert_eq!(hook_ctl("install", "git", r, None, &[]).0, 0);
+    let exact_stdin = format!(
+        "refs/heads/feat/x {} refs/heads/feat/x {}\n\n",
+        "a".repeat(40),
+        "0".repeat(40)
+    );
+    let pp_sh = pp_path.to_string_lossy().replace('\\', "/");
+    let (c_pp, _, err_pp) = run_cmd_stdin(
+        sh_program(),
+        &[&pp_sh, "origin", "https://example.local/repo.git"],
+        Some(&repo),
+        &exact_stdin,
+        &[("B3_HOOK_ACTIVE", "")],
+    );
+    assert_eq!(c_pp, 0, "err={err_pp}");
+    let byte_len: usize = fs::read_to_string(&cap).unwrap().trim().parse().unwrap();
+    assert_eq!(byte_len, exact_stdin.len());
+
+    // 3. BeforeCommit allows filenames containing ',' cleanly & blocks .env even with B3_ALLOWED_PATHS=.env
+    write_lf(&repo.join("src/a,b.txt"), "comma file\n");
+    git_in(&repo, &["add", "src/a,b.txt"]);
+    assert_eq!(
+        run_hook_stdin("git", Some("pre-commit"), Some(r), None, None, "", &[]).0,
+        0
+    );
+    write_lf(&repo.join(".env"), "SECRET=1\n");
+    git_in(&repo, &["add", "-f", ".env"]);
+    let (c_sec, _, err_sec) = run_hook_stdin(
+        "git",
+        Some("pre-commit"),
+        Some(r),
+        None,
+        None,
+        "",
+        &[("B3_ALLOWED_PATHS", "src/a,b.txt,.env")],
+    );
+    assert!(
+        c_sec != 0 && err_sec.contains("secret path staged"),
+        "B3_ALLOWED_PATHS must never whitelist .env: {err_sec}"
+    );
 }

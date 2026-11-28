@@ -3,11 +3,11 @@ use crate::fs::has_control_chars;
 use crate::json::{parse_json, JsonValue};
 
 /// Maximum accepted raw hook JSON payload size (1 MiB).
-pub const MAX_HOOK_PAYLOAD_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_HOOK_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 /// Supported hook host identifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostId {
+pub(crate) enum HostId {
     Cursor,
     Claude,
     Codex,
@@ -17,7 +17,7 @@ pub enum HostId {
 
 impl HostId {
     /// Parses a host identifier string (`cursor`, `claude`, `codex`, `antigravity`, `git`).
-    pub fn parse(raw: &str) -> Result<Self, B3Error> {
+    pub(crate) fn parse(raw: &str) -> Result<Self, B3Error> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "cursor" => Ok(Self::Cursor),
             "claude" | "claude-code" | "claude_code" => Ok(Self::Claude),
@@ -30,22 +30,11 @@ impl HostId {
             )),
         }
     }
-
-    /// Returns the canonical lowercase host identifier.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Cursor => "cursor",
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-            Self::Antigravity => "antigravity",
-            Self::Git => "git",
-        }
-    }
 }
 
 /// Host-neutral normalized hook event category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EventKind {
+pub(crate) enum EventKind {
     SessionStart,
     BeforeFileWrite,
     AfterFileWrite,
@@ -62,7 +51,7 @@ pub enum EventKind {
 
 impl EventKind {
     /// Returns a stable string representation of the normalized event kind.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::SessionStart => "session_start",
             Self::BeforeFileWrite => "before_file_write",
@@ -85,17 +74,16 @@ impl EventKind {
 /// Intentionally omits raw prompts (`lastUserInput`, `prompt`), credentials, env secrets,
 /// and conversation transcripts.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NormalizedEvent {
-    pub host: HostId,
-    pub event: EventKind,
-    pub raw_event_name: String,
-    pub project_root: Option<String>,
-    pub cwd: Option<String>,
-    pub affected_paths: Vec<String>,
-    pub command: Option<String>,
-    pub continuation_active: bool,
-    pub git_args: Vec<String>,
-    pub git_stdin: String,
+pub(crate) struct NormalizedEvent {
+    pub(crate) event: EventKind,
+    pub(crate) raw_event_name: String,
+    pub(crate) project_root: Option<String>,
+    pub(crate) cwd: Option<String>,
+    pub(crate) affected_paths: Vec<String>,
+    pub(crate) command: Option<String>,
+    pub(crate) continuation_active: bool,
+    pub(crate) git_args: Vec<String>,
+    pub(crate) git_stdin: String,
 }
 
 fn has_non_ws_control_char(s: &str) -> bool {
@@ -444,7 +432,6 @@ fn normalize_git_event(
     if payload_raw.trim().is_empty() {
         let raw_event_name = resolve_event_hint(event_hint)?;
         return Ok(NormalizedEvent {
-            host: HostId::Git,
             event: classify_git_event(&raw_event_name),
             raw_event_name,
             project_root: safe_default_cwd.clone(),
@@ -461,13 +448,6 @@ fn normalize_git_event(
         let payload = parse_json_object(payload_raw)?;
         let raw_event_name =
             resolve_raw_event_name(&payload, &["hook_event_name", "event", "hook"], event_hint)?;
-        let mut affected_paths = Vec::new();
-        collect_paths_from_array(&mut affected_paths, payload.get("paths"), "paths")?;
-        collect_paths_from_array(
-            &mut affected_paths,
-            payload.get("staged_files"),
-            "staged_files",
-        )?;
         let cwd = opt_safe_str(&payload, "cwd")?.or_else(|| safe_default_cwd.clone());
         let project_root =
             first_opt_safe_str(&payload, &["project_root", "repo_root"])?.or(safe_default_cwd);
@@ -476,12 +456,11 @@ fn normalize_git_event(
             None => String::new(),
         };
         return Ok(NormalizedEvent {
-            host: HostId::Git,
             event: classify_git_event(&raw_event_name),
             raw_event_name,
             project_root,
             cwd,
-            affected_paths,
+            affected_paths: Vec::new(),
             command: None,
             continuation_active: false,
             git_args: Vec::new(),
@@ -492,7 +471,6 @@ fn normalize_git_event(
     validate_non_ws_text(payload_raw, "git_stdin")?;
     let raw_event_name = resolve_event_hint(event_hint)?;
     Ok(NormalizedEvent {
-        host: HostId::Git,
         event: classify_git_event(&raw_event_name),
         raw_event_name,
         project_root: safe_default_cwd.clone(),
@@ -545,7 +523,7 @@ fn collect_standard_tool_paths(
 }
 
 /// Normalizes a host-specific hook payload into a sanitized, host-neutral `NormalizedEvent`.
-pub fn normalize_event(
+pub(crate) fn normalize_event(
     host: HostId,
     event_hint: Option<&str>,
     payload_raw: &str,
@@ -660,7 +638,6 @@ pub fn normalize_event(
     };
 
     Ok(NormalizedEvent {
-        host,
         event,
         raw_event_name,
         project_root,
@@ -678,13 +655,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_id_parse_and_as_str() {
+    fn host_id_parse() {
         assert_eq!(HostId::parse("cursor").unwrap(), HostId::Cursor);
         assert_eq!(HostId::parse("Claude-Code").unwrap(), HostId::Claude);
         assert_eq!(HostId::parse("codex").unwrap(), HostId::Codex);
         assert_eq!(HostId::parse("agy").unwrap(), HostId::Antigravity);
         assert_eq!(HostId::parse("git").unwrap(), HostId::Git);
-        assert_eq!(HostId::Antigravity.as_str(), "antigravity");
         assert!(HostId::parse("unknown").is_err());
     }
 
@@ -832,7 +808,7 @@ mod tests {
         let json_payload = r#"{"hook":"pre-push","staged_files":["a.rs"],"project_root":"/repo","git_stdin":"refs/heads/main 1111 refs/heads/main 2222\n"}"#;
         let ev_json = normalize_event(HostId::Git, None, json_payload, None).unwrap();
         assert_eq!(ev_json.event, EventKind::BeforePush);
-        assert_eq!(ev_json.affected_paths, vec!["a.rs"]);
+        assert!(ev_json.affected_paths.is_empty());
         assert_eq!(ev_json.project_root.as_deref(), Some("/repo"));
         assert_eq!(
             ev_json.git_stdin,

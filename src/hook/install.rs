@@ -34,7 +34,7 @@ fn err(msg: impl Into<String>) -> B3Error {
 
 /// Target host for `b3 hook install` / `uninstall` / `verify`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookHostTarget {
+pub(crate) enum HookHostTarget {
     Cursor,
     Claude,
     Codex,
@@ -45,7 +45,7 @@ pub enum HookHostTarget {
 
 impl HookHostTarget {
     /// Parses a host target (`cursor`, `claude`, `codex`, `antigravity`, `git`, `all`).
-    pub fn parse(raw: &str) -> Result<Self, B3Error> {
+    pub(crate) fn parse(raw: &str) -> Result<Self, B3Error> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "cursor" => Ok(Self::Cursor),
             "claude" | "claude-code" | "claude_code" => Ok(Self::Claude),
@@ -58,29 +58,18 @@ impl HookHostTarget {
             ))),
         }
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Cursor => "cursor",
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-            Self::Antigravity => "antigravity",
-            Self::Git => "git",
-            Self::All => "all",
-        }
-    }
 }
 
 /// Installation scope for hooks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HookScope {
+pub(crate) enum HookScope {
     Project,
     Global,
 }
 
 impl HookScope {
     /// Parses a hook scope (`project` or `global`).
-    pub fn parse(raw: &str) -> Result<Self, B3Error> {
+    pub(crate) fn parse(raw: &str) -> Result<Self, B3Error> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "project" | "local" => Ok(Self::Project),
             "global" | "user" => Ok(Self::Global),
@@ -90,7 +79,7 @@ impl HookScope {
         }
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Project => "project",
             Self::Global => "global",
@@ -960,29 +949,61 @@ fn build_git_hook_shim(hook_name: &str, b3_bin: &str, repo_root: &Path) -> Strin
         b3_bin.to_string()
     };
     let root_sh = normalize_abs_path_str(repo_root).replace('\\', "/");
-    format!(
-        "#!/bin/sh\n{GIT_HOOK_MARKER} v2 ({hook_name})\n\
-         B3_BIN={}\nDEFAULT_REPO_ROOT={}\n\
-         REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || true)\"\n\
-         [ -n \"$REPO_ROOT\" ] || REPO_ROOT=\"$DEFAULT_REPO_ROOT\"\n\
-         HAS_STDIN=0\nSTDIN_DATA=\"\"\n\
-         if [ ! -t 0 ]; then\n  HAS_STDIN=1\n  STDIN_DATA=\"$(cat)\"\nfi\n\
-         run_with_stdin() {{\n\
-           if [ \"$HAS_STDIN\" -eq 1 ]; then\n\
-             if [ -n \"$STDIN_DATA\" ]; then\n      printf '%s\\n' \"$STDIN_DATA\" | \"$@\"\n    else\n      \"$@\" </dev/null\n    fi\n\
-           else\n    \"$@\"\n  fi\n}}\n\
-         if [ \"${{B3_HOOK_ACTIVE:-}}\" != \"1\" ] && [ \"${{B3_HOOK_ACTIVE:-}}\" != \"true\" ]; then\n\
-           if [ \"$HAS_STDIN\" -eq 1 ]; then\n\
-             run_with_stdin \"$B3_BIN\" hook run --host git --event {hook_name} --repo-root \"$REPO_ROOT\" -- \"$@\"\n\
-           else\n\
-             \"$B3_BIN\" hook run --host git --event {hook_name} --repo-root \"$REPO_ROOT\" -- \"$@\" </dev/null\n\
-           fi\n  rc=$?\n  [ \"$rc\" -eq 0 ] || exit \"$rc\"\nfi\n\
-         USER_HOOK=\"$(dirname \"$0\")/\"{}\n\
-         if [ -x \"$USER_HOOK\" ]; then\n  run_with_stdin env B3_HOOK_ACTIVE=1 \"$USER_HOOK\" \"$@\"\n  exit $?\nfi\nexit 0\n",
-        sh_single_quote(&bin_sh),
-        sh_single_quote(&root_sh),
-        sh_single_quote(&format!("{hook_name}.b3-user")),
-    )
+    let bin_q = sh_single_quote(&bin_sh);
+    let root_q = sh_single_quote(&root_sh);
+    let user_hook_q = sh_single_quote(&format!("{hook_name}.b3-user"));
+
+    if hook_name == "pre-push" {
+        format!(
+            "#!/bin/sh\n{GIT_HOOK_MARKER} v3 ({hook_name})\n\
+             B3_BIN={bin_q}\nDEFAULT_REPO_ROOT={root_q}\n\
+             REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || true)\"\n\
+             [ -n \"$REPO_ROOT\" ] || REPO_ROOT=\"$DEFAULT_REPO_ROOT\"\n\
+             USER_HOOK=\"$(dirname \"$0\")/\"{user_hook_q}\n\
+             NEED_B3=0\n\
+             if [ \"${{B3_HOOK_ACTIVE:-}}\" != \"1\" ] && [ \"${{B3_HOOK_ACTIVE:-}}\" != \"true\" ]; then\n  NEED_B3=1\nfi\n\
+             HAS_USER=0\n\
+             [ -x \"$USER_HOOK\" ] && HAS_USER=1\n\
+             if [ \"$NEED_B3\" -eq 1 ] && [ \"$HAS_USER\" -eq 0 ]; then\n\
+               \"$B3_BIN\" hook run --host git --event pre-push --repo-root \"$REPO_ROOT\" -- \"$@\"\n\
+               exit $?\n\
+             fi\n\
+             if [ \"$NEED_B3\" -eq 0 ] && [ \"$HAS_USER\" -eq 1 ]; then\n\
+               env B3_HOOK_ACTIVE=1 \"$USER_HOOK\" \"$@\"\n\
+               exit $?\n\
+             fi\n\
+             if [ \"$NEED_B3\" -eq 1 ] && [ \"$HAS_USER\" -eq 1 ]; then\n\
+               TMP_DIR=\"${{TMPDIR:-/tmp}}\"\n\
+               TMP_STDIN=\"$(mktemp \"${{TMP_DIR%/}}/b3-pre-push-stdin.XXXXXX\")\" || exit 1\n\
+               trap 'rm -f \"$TMP_STDIN\"' EXIT INT TERM HUP\n\
+               cat > \"$TMP_STDIN\" || exit 1\n\
+               \"$B3_BIN\" hook run --host git --event pre-push --repo-root \"$REPO_ROOT\" -- \"$@\" < \"$TMP_STDIN\"\n\
+               rc=$?\n\
+               if [ \"$rc\" -ne 0 ]; then\n    exit \"$rc\"\n  fi\n\
+               env B3_HOOK_ACTIVE=1 \"$USER_HOOK\" \"$@\" < \"$TMP_STDIN\"\n\
+               exit $?\n\
+             fi\n\
+             exit 0\n"
+        )
+    } else {
+        format!(
+            "#!/bin/sh\n{GIT_HOOK_MARKER} v3 ({hook_name})\n\
+             B3_BIN={bin_q}\nDEFAULT_REPO_ROOT={root_q}\n\
+             REPO_ROOT=\"$(git rev-parse --show-toplevel 2>/dev/null || true)\"\n\
+             [ -n \"$REPO_ROOT\" ] || REPO_ROOT=\"$DEFAULT_REPO_ROOT\"\n\
+             if [ \"${{B3_HOOK_ACTIVE:-}}\" != \"1\" ] && [ \"${{B3_HOOK_ACTIVE:-}}\" != \"true\" ]; then\n\
+               \"$B3_BIN\" hook run --host git --event {hook_name} --repo-root \"$REPO_ROOT\" -- \"$@\" </dev/null\n\
+               rc=$?\n\
+               [ \"$rc\" -eq 0 ] || exit \"$rc\"\n\
+             fi\n\
+             USER_HOOK=\"$(dirname \"$0\")/\"{user_hook_q}\n\
+             if [ -x \"$USER_HOOK\" ]; then\n\
+               env B3_HOOK_ACTIVE=1 \"$USER_HOOK\" \"$@\"\n\
+               exit $?\n\
+             fi\n\
+             exit 0\n"
+        )
+    }
 }
 
 fn set_executable_if_unix(path: &Path) -> Result<(), B3Error> {
@@ -1050,6 +1071,9 @@ fn install_git_hooks(
             let existing_str = String::from_utf8_lossy(&existing_bytes);
             if existing_str.contains(GIT_HOOK_MARKER) {
                 if existing_str == shim_text {
+                    if !dry_run {
+                        set_executable_if_unix(&hook_path)?;
+                    }
                     details.push(format!("{hook_name}=unchanged"));
                     continue;
                 }
@@ -1265,7 +1289,7 @@ fn reject_global_git(host: HookHostTarget, scope: HookScope) -> Result<(), B3Err
 }
 
 /// Installs B3 native guard hooks for `host` and `scope`.
-pub fn install_hooks(
+pub(crate) fn install_hooks(
     host: HookHostTarget,
     scope: HookScope,
     repo_root: Option<&Path>,
@@ -1292,7 +1316,7 @@ pub fn install_hooks(
 }
 
 /// Uninstalls B3-managed hooks for `host` and `scope` while preserving user hooks and keys.
-pub fn uninstall_hooks(
+pub(crate) fn uninstall_hooks(
     host: HookHostTarget,
     scope: HookScope,
     repo_root: Option<&Path>,
@@ -1316,7 +1340,7 @@ pub fn uninstall_hooks(
 }
 
 /// Verifies that B3 native guard hooks are installed and valid for `host` and `scope`.
-pub fn verify_hooks(
+pub(crate) fn verify_hooks(
     host: HookHostTarget,
     scope: HookScope,
     repo_root: Option<&Path>,
@@ -1344,7 +1368,7 @@ pub fn verify_hooks(
 }
 
 /// Reports effective hook configuration and installation status across project and global scopes.
-pub fn status_hooks(
+pub(crate) fn status_hooks(
     repo_root: Option<&Path>,
     user_home: Option<&Path>,
 ) -> Result<(String, i32), B3Error> {
@@ -1573,7 +1597,7 @@ mod tests {
     }
 
     #[test]
-    fn git_hooks_shim_v2_preserves_perms_and_forwards_stdin_and_args() {
+    fn git_hooks_shim_v3_preserves_perms_and_forwards_stdin_and_args() {
         let _lock = lock_hook_env();
         let (repo, home) = (temp_dir("git_hooks"), temp_dir("git_home"));
         git_ok(&repo, &["init"]);
@@ -1633,17 +1657,70 @@ mod tests {
         let shim = fs::read_to_string(&precommit_path).unwrap();
         assert!(
             !shim.contains('\r')
-                && shim.contains("# b3-native-guard-hook v2 (pre-commit)")
+                && shim.contains("# b3-native-guard-hook v3 (pre-commit)")
                 && !shim.contains("sh \"$USER_HOOK\"")
+                && !shim.contains("STDIN_DATA")
+                && !shim.contains("printf")
         );
-        assert!(shim.contains("run_with_stdin \"$B3_BIN\" hook run --host git --event pre-commit --repo-root \"$REPO_ROOT\" -- \"$@\""));
-        assert!(shim.contains("run_with_stdin env B3_HOOK_ACTIVE=1 \"$USER_HOOK\" \"$@\""));
+        assert!(shim.contains("\"$B3_BIN\" hook run --host git --event pre-commit --repo-root \"$REPO_ROOT\" -- \"$@\" </dev/null"));
+        assert!(shim.contains("env B3_HOOK_ACTIVE=1 \"$USER_HOOK\" \"$@\""));
         assert!(fs::read_to_string(hooks_dir.join("pre-merge-commit"))
             .unwrap()
-            .contains("v2 (pre-merge-commit)"));
+            .contains("v3 (pre-merge-commit)"));
 
-        // Conflict requires --force; uninstall restores .b3-user with original perms
+        let prepush_shim = fs::read_to_string(hooks_dir.join("pre-push")).unwrap();
+        assert!(
+            !prepush_shim.contains('\r')
+                && prepush_shim.contains("# b3-native-guard-hook v3 (pre-push)")
+                && !prepush_shim.contains("STDIN_DATA")
+                && !prepush_shim.contains("printf")
+        );
+        assert!(prepush_shim.contains(
+            "TMP_STDIN=\"$(mktemp \"${TMP_DIR%/}/b3-pre-push-stdin.XXXXXX\")\" || exit 1"
+        ));
+        assert!(prepush_shim.contains("cat > \"$TMP_STDIN\" || exit 1"));
+        assert!(prepush_shim.contains("\"$B3_BIN\" hook run --host git --event pre-push --repo-root \"$REPO_ROOT\" -- \"$@\" < \"$TMP_STDIN\""));
+        assert!(
+            prepush_shim.contains("env B3_HOOK_ACTIVE=1 \"$USER_HOOK\" \"$@\" < \"$TMP_STDIN\"")
+        );
+
+        // Uninstall restores original .b3-user with 0o644 perms
+        assert_eq!(
+            uninst(HookHostTarget::Git, HookScope::Project, Some(&repo), &home),
+            0
+        );
+        assert!(
+            !backup_path.exists()
+                && fs::read_to_string(&precommit_path).unwrap() == "#!/bin/sh\necho user\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&precommit_path).unwrap().permissions().mode() & 0o777,
+                0o644
+            );
+        }
+
+        // Re-install, then overwrite with a conflicting hook (0o644): non-force fails, --force backs up and uninstall restores 0o644
+        assert_eq!(
+            inst(
+                HookHostTarget::Git,
+                HookScope::Project,
+                Some(&repo),
+                &home,
+                "b3",
+                false
+            )
+            .1,
+            0
+        );
         fs::write(&precommit_path, "#!/bin/sh\necho diff\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&precommit_path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
         assert!(install_hooks(
             HookHostTarget::Git,
             HookScope::Project,

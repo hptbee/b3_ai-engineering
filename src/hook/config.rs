@@ -17,7 +17,7 @@ pub enum HookMode {
 
 impl HookMode {
     /// Strictly parses `enforce`, `audit`, or `off`.
-    pub fn parse(raw: &str) -> Result<Self, B3Error> {
+    pub(crate) fn parse(raw: &str) -> Result<Self, B3Error> {
         match raw.trim() {
             "enforce" => Ok(Self::Enforce),
             "audit" => Ok(Self::Audit),
@@ -27,7 +27,7 @@ impl HookMode {
     }
 
     /// Returns the canonical lowercase string form of the mode.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Enforce => "enforce",
             Self::Audit => "audit",
@@ -38,9 +38,9 @@ impl HookMode {
 
 /// Effective resolved hook configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HookConfig {
-    pub enabled: bool,
-    pub mode: HookMode,
+pub(crate) struct HookConfig {
+    pub(crate) enabled: bool,
+    pub(crate) mode: HookMode,
 }
 
 impl Default for HookConfig {
@@ -54,7 +54,7 @@ impl Default for HookConfig {
 
 impl HookConfig {
     /// Returns the effective mode taking `enabled` into account.
-    pub fn effective_mode(self) -> HookMode {
+    pub(crate) fn effective_mode(self) -> HookMode {
         if self.enabled {
             self.mode
         } else {
@@ -72,7 +72,7 @@ pub struct HookConfigOverride {
 
 /// Returns the default personal/global preferences path (`B3_MODELS_PERSONAL` if set and valid,
 /// otherwise `<user_home>/.b3/models.md`).
-pub fn default_global_preferences_path(user_home: Option<&Path>) -> PathBuf {
+pub(crate) fn default_global_preferences_path(user_home: Option<&Path>) -> PathBuf {
     if let Ok(val) = std::env::var("B3_MODELS_PERSONAL") {
         let trimmed = val.trim();
         if !trimmed.is_empty() && !has_control_chars(trimmed) {
@@ -85,7 +85,7 @@ pub fn default_global_preferences_path(user_home: Option<&Path>) -> PathBuf {
 }
 
 /// Returns `<project_root>/.b3/models.md`.
-pub fn default_project_preferences_path(project_root: &Path) -> PathBuf {
+pub(crate) fn default_project_preferences_path(project_root: &Path) -> PathBuf {
     project_root.join(".b3").join("models.md")
 }
 
@@ -325,7 +325,7 @@ fn apply_override(cfg: &mut HookConfig, ov: HookConfigOverride) {
 /// Resolves effective hook preferences according to precedence:
 /// `cli_override > B3_HOOK_MODE env > project > global > defaults`,
 /// falling back gracefully with warnings on malformed files or invalid env values.
-pub fn resolve_hook_config(
+pub(crate) fn resolve_hook_config(
     project_path: Option<&Path>,
     global_path: Option<&Path>,
     cli_override: Option<HookConfigOverride>,
@@ -577,5 +577,49 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn coexists_with_models_and_planning_sections() {
+        let single_yaml = r#"# Preferences
+```yaml
+models:
+  main: auto
+  b3-reviewer: claude-sonnet-4
+planning:
+  clarification_gate: true
+  understanding_threshold: 96
+hooks:
+  enabled: true
+  mode: audit
+```
+"#;
+        assert_eq!(
+            parse_hook_config_from_markdown(single_yaml).unwrap(),
+            Some(HookConfigOverride {
+                enabled: Some(true),
+                mode: Some(HookMode::Audit),
+            })
+        );
+
+        let hooks_before_planning = r#"
+```yaml
+hooks:
+  enabled: true
+  mode: audit
+planning:
+  clarification_gate: true
+  understanding_threshold: 96
+models:
+  planning: auto
+```
+"#;
+        assert_eq!(
+            parse_hook_config_from_markdown(hooks_before_planning).unwrap(),
+            Some(HookConfigOverride {
+                enabled: Some(true),
+                mode: Some(HookMode::Audit),
+            })
+        );
     }
 }

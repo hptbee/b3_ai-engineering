@@ -2,14 +2,13 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::common::normalize_abs_path_str;
+use crate::adapters::common::{normalize_abs_path_str, resolve_user_home_dir};
 use crate::error::{fail, B3Error};
 use crate::fs::{
     find_reparse_in_path_hierarchy, has_control_chars, is_reparse_or_symlink, normalize_path_value,
     resolve_safe_repo_write_path, resolve_unresolved_path, split_path_csv_checked,
     test_checkpoint_path, test_path_match, test_secret_path,
 };
-use crate::git::{run_git_paths_z, GitZMode};
 use crate::guard::{merge_policy, precommit, verify::test_verify_receipt};
 use crate::hook::config::{
     default_global_preferences_path, default_project_preferences_path, resolve_hook_config,
@@ -122,11 +121,37 @@ fn read_hook_stdin_bounded() -> Result<String, B3Error> {
         .map_err(|e| fail(format!("HOOK_INVALID_UTF8: invalid UTF-8 on stdin: {e}"), 1))
 }
 
+fn resolve_project_pref_path(raw_dir: &str, is_explicit_repo: bool) -> PathBuf {
+    let dir = resolve_lexical_root(raw_dir);
+    if is_explicit_repo {
+        return default_project_preferences_path(&dir);
+    }
+    let home_cmp = norm_cmp_path(&resolve_user_home_dir(None));
+    let tmp_cmp = norm_cmp_path(&std::env::temp_dir());
+    let mut cur = Some(dir.as_path());
+    while let Some(c) = cur {
+        let c_cmp = norm_cmp_path(c);
+        if c.parent().is_none() || c_cmp == home_cmp || c_cmp == tmp_cmp || is_reparse_or_symlink(c)
+        {
+            break;
+        }
+        let pref = default_project_preferences_path(c);
+        if pref.is_file() {
+            return pref;
+        }
+        if c.join(".git").exists() {
+            return pref;
+        }
+        cur = c.parent();
+    }
+    default_project_preferences_path(&dir)
+}
+
 fn resolve_cfg_for_root(
-    root: Option<&str>,
+    root: Option<(&str, bool)>,
     mode_ov: Option<HookMode>,
 ) -> (HookConfig, Vec<String>) {
-    let project_pref = root.map(|r| default_project_preferences_path(&resolve_lexical_root(r)));
+    let project_pref = root.map(|(r, is_explicit)| resolve_project_pref_path(r, is_explicit));
     let global_pref = default_global_preferences_path(None);
     let cli_ov = mode_ov.map(|m| HookConfigOverride {
         enabled: None,
@@ -149,7 +174,7 @@ fn mode_outcome_for_error(mode: HookMode, message: &str) -> HookOutcome {
 
 /// CLI entrypoint for `b3 hook run` with early mode resolution (F05),
 /// bounded stdin reading, and host-protocol formatting.
-pub fn run_hook_cli(
+pub(crate) fn run_hook_cli(
     host_raw: &str,
     event_hint: Option<&str>,
     repo_root_raw: Option<&str>,
@@ -169,7 +194,8 @@ pub fn run_hook_cli(
 }
 
 /// Evaluates an in-memory hook payload and returns both `HostResponse` and `HookOutcome`.
-pub fn run_hook(
+#[cfg(test)]
+fn run_hook(
     host_raw: &str,
     event_hint: Option<&str>,
     repo_root_raw: Option<&str>,
@@ -227,7 +253,8 @@ fn run_hook_internal(
         .ok()
         .map(|p| p.to_string_lossy().into_owned());
     let early_root = explicit_repo.or(cwd_fallback.as_deref());
-    let (early_cfg, early_warnings) = resolve_cfg_for_root(early_root, mode_ov);
+    let (early_cfg, early_warnings) =
+        resolve_cfg_for_root(early_root.map(|r| (r, explicit_repo.is_some())), mode_ov);
 
     if explicit_repo.is_some() && early_cfg.effective_mode() == HookMode::Off {
         let resp = format_response(host, raw_ev_hint, kind_hint, &HookOutcome::Allow);
@@ -282,7 +309,7 @@ fn run_hook_internal(
     let (cfg, warnings) = if same_root {
         (early_cfg, early_warnings)
     } else {
-        resolve_cfg_for_root(ev_root, mode_ov)
+        resolve_cfg_for_root(ev_root.map(|r| (r, false)), mode_ov)
     };
 
     if cfg.effective_mode() == HookMode::Off {
@@ -315,7 +342,8 @@ fn append_warnings_to_stderr(resp: &mut HostResponse, warnings: &[String], mode:
 }
 
 /// Evaluates a normalized hook event against `cfg` without host-specific serialization.
-pub fn dispatch_event(event: &NormalizedEvent, cfg: &HookConfig) -> HookOutcome {
+#[cfg(test)]
+fn dispatch_event(event: &NormalizedEvent, cfg: &HookConfig) -> HookOutcome {
     if is_hook_recursion_active() || cfg.effective_mode() == HookMode::Off {
         return HookOutcome::Allow;
     }
@@ -445,7 +473,6 @@ fn find_linked_worktree_root(
 fn check_resolved_target(
     full: &Path,
     rel: &str,
-    protected_env: &[String],
     worker_allowed: Option<&[String]>,
 ) -> Option<String> {
     if is_reparse_or_symlink(full) {
@@ -466,11 +493,6 @@ fn check_resolved_target(
     }
     if test_secret_path(rel) {
         return Some(format!("HOOK_BLOCKED: protected secret path: {rel}"));
-    }
-    if !protected_env.is_empty() && test_path_match(rel, protected_env) {
-        return Some(format!(
-            "HOOK_BLOCKED: protected path (B3_PROTECTED_PATHS): {rel}"
-        ));
     }
     if let Some(allowed) = worker_allowed {
         if !test_path_match(rel, allowed) {
@@ -504,10 +526,6 @@ fn eval_before_file_write(event: &NormalizedEvent) -> HookOutcome {
     }
 
     let main_reparse_anc = find_reparse_in_path_hierarchy(&root);
-    let protected_env = match parse_optional_env_paths("B3_PROTECTED_PATHS") {
-        Ok(v) => v.unwrap_or_default(),
-        Err(e) => return HookOutcome::Deny { message: e.message },
-    };
     let worker_allowed = match parse_optional_env_paths("B3_WORKER_ALLOWED_PATHS") {
         Ok(v) => v,
         Err(e) => return HookOutcome::Deny { message: e.message },
@@ -517,9 +535,7 @@ fn eval_before_file_write(event: &NormalizedEvent) -> HookOutcome {
 
     for raw_path in &event.affected_paths {
         if let Some((full, rel)) = resolve_safe_repo_write_path(&root, raw_path) {
-            if let Some(msg) =
-                check_resolved_target(&full, &rel, &protected_env, worker_allowed.as_deref())
-            {
+            if let Some(msg) = check_resolved_target(&full, &rel, worker_allowed.as_deref()) {
                 return HookOutcome::Deny { message: msg };
             }
             continue;
@@ -532,9 +548,7 @@ fn eval_before_file_write(event: &NormalizedEvent) -> HookOutcome {
             raw_path,
         ) {
             if let Some((full, rel)) = resolve_safe_repo_write_path(&wt_root, raw_path) {
-                if let Some(msg) =
-                    check_resolved_target(&full, &rel, &protected_env, worker_allowed.as_deref())
-                {
+                if let Some(msg) = check_resolved_target(&full, &rel, worker_allowed.as_deref()) {
                     return HookOutcome::Deny { message: msg };
                 }
                 continue;
@@ -609,6 +623,10 @@ fn tokenize_shell_segments(cmd: &str) -> Vec<Vec<String>> {
                     prev_redir = false;
                 }
                 '\n' | ';' | '(' | ')' => {
+                    flush_seg(&mut cur_tok, &mut in_tok, &mut cur_seg, &mut segments);
+                    prev_redir = false;
+                }
+                '{' | '}' if !in_tok => {
                     flush_seg(&mut cur_tok, &mut in_tok, &mut cur_seg, &mut segments);
                     prev_redir = false;
                 }
@@ -885,11 +903,15 @@ fn eval_git_command(subcmd: &str, args: &[String], project_root: Option<&Path>) 
     None
 }
 
-fn sets_hook_active_env(mut seg: &[String]) -> bool {
+fn is_protected_hook_env_name(name: &str) -> bool {
+    matches!(name, "B3_HOOK_ACTIVE" | "B3_HOOK_MODE")
+}
+
+fn sets_protected_hook_env(mut seg: &[String]) -> bool {
     loop {
         while let Some(first) = seg.first() {
             if let Some((k, _)) = first.split_once('=') {
-                if k == "B3_HOOK_ACTIVE" {
+                if is_protected_hook_env_name(k) {
                     return true;
                 }
                 if is_env_assignment(first) {
@@ -925,7 +947,7 @@ fn sets_hook_active_env(mut seg: &[String]) -> bool {
                         break;
                     }
                     if let Some((k, _)) = a.split_once('=') {
-                        if k == "B3_HOOK_ACTIVE" {
+                        if is_protected_hook_env_name(k) {
                             return true;
                         }
                         if is_env_assignment(a) {
@@ -944,9 +966,9 @@ fn sets_hook_active_env(mut seg: &[String]) -> bool {
             }
             "export" => {
                 return seg[1..].iter().any(|a| {
-                    a == "B3_HOOK_ACTIVE"
+                    is_protected_hook_env_name(a)
                         || a.split_once('=')
-                            .is_some_and(|(k, _)| k == "B3_HOOK_ACTIVE")
+                            .is_some_and(|(k, _)| is_protected_hook_env_name(k))
                 });
             }
             _ => return false,
@@ -960,9 +982,9 @@ fn eval_before_command(event: &NormalizedEvent) -> HookOutcome {
     };
     let project_root = resolve_event_project_root(event);
     for seg in &tokenize_shell_segments(cmd_raw) {
-        if sets_hook_active_env(seg) {
+        if sets_protected_hook_env(seg) {
             return HookOutcome::Deny {
-                message: "HOOK_BLOCKED: setting B3_HOOK_ACTIVE in shell commands is blocked"
+                message: "HOOK_BLOCKED: setting B3_HOOK_ACTIVE or B3_HOOK_MODE in shell commands is blocked"
                     .to_string(),
             };
         }
@@ -987,62 +1009,10 @@ fn eval_before_commit(event: &NormalizedEvent) -> HookOutcome {
         };
     };
     let root_str = root.to_string_lossy().into_owned();
-    let hook_env: [(&str, &str); 1] = [("B3_HOOK_ACTIVE", "1")];
     let receipt = env_nonempty("B3_VERIFY_RECEIPT").unwrap_or_default();
-    let ignore_dirty = env_nonempty("B3_IGNORE_DIRTY_PATHS").unwrap_or_default();
+    let allowed = env_nonempty("B3_ALLOWED_PATHS");
 
-    let (allowed_paths, pre_staged) =
-        if let Some(explicit_allowed) = env_nonempty("B3_ALLOWED_PATHS") {
-            (explicit_allowed, None)
-        } else {
-            let staged = match run_git_paths_z(
-                &root,
-                &[
-                    "diff",
-                    "--no-ext-diff",
-                    "--no-renames",
-                    "--cached",
-                    "--name-only",
-                    "-z",
-                    "--",
-                ],
-                GitZMode::Names,
-                "PRECOMMIT_FAIL",
-                &hook_env,
-            ) {
-                Ok(s) => s,
-                Err(e) => return HookOutcome::Deny { message: e.message },
-            };
-            let allowed = if staged.is_empty() {
-                String::new()
-            } else {
-                let safe_staged: Vec<String> = staged
-                    .iter()
-                    .filter(|p| {
-                        !test_checkpoint_path(p)
-                            && !test_secret_path(p)
-                            && !p.contains([',', '*', '?', ':'])
-                    })
-                    .cloned()
-                    .collect();
-                if safe_staged.is_empty() {
-                    "__b3_no_allowed_paths__".to_string()
-                } else {
-                    safe_staged.join(",")
-                }
-            };
-            (allowed, Some(staged))
-        };
-
-    match precommit::run_with_pre_staged(
-        &root_str,
-        &allowed_paths,
-        &receipt,
-        &ignore_dirty,
-        "",
-        "",
-        pre_staged,
-    ) {
+    match precommit::run_for_hook(&root_str, allowed.as_deref(), &receipt) {
         Ok(_) => HookOutcome::Allow,
         Err(e) => HookOutcome::Deny { message: e.message },
     }
@@ -1070,7 +1040,8 @@ fn eval_before_push_or_merge(event: &NormalizedEvent) -> HookOutcome {
         &ledger_path,
         &receipt_path,
     ) {
-        Ok(()) => HookOutcome::Allow,
+        Ok(None) => HookOutcome::Allow,
+        Ok(Some(message)) => HookOutcome::Advisory { message },
         Err(e) => HookOutcome::Deny { message: e.message },
     }
 }
@@ -1079,10 +1050,7 @@ fn check_receipt_freshness_advisory(root: &Path, edited_paths: Option<&[String]>
     let Some(receipt_path) = env_nonempty("B3_VERIFY_RECEIPT") else {
         return HookOutcome::Allow;
     };
-    let ignored = env_nonempty("B3_IGNORE_DIRTY_PATHS")
-        .and_then(|csv| split_path_csv_checked(&csv, "HOOK_ADVISORY", true, None).ok())
-        .unwrap_or_default();
-    let vr = test_verify_receipt(root, &receipt_path, &ignored, "", "", "");
+    let vr = test_verify_receipt(root, &receipt_path, &[], "", "", "");
     if vr.code != 0 {
         return HookOutcome::Advisory {
             message: format!(
@@ -1194,11 +1162,9 @@ mod tests {
         EnvGuard::new(&[
             ("B3_HOOK_ACTIVE", None),
             ("B3_HOOK_MODE", None),
-            ("B3_PROTECTED_PATHS", None),
             ("B3_WORKER_ALLOWED_PATHS", None),
             ("B3_ALLOWED_PATHS", None),
             ("B3_VERIFY_RECEIPT", None),
-            ("B3_IGNORE_DIRTY_PATHS", None),
             ("B3_LEDGER_PATH", None),
             ("B3_MODELS_PERSONAL", None),
         ])
@@ -1212,7 +1178,6 @@ mod tests {
 
     fn make_write_event(root: Option<&str>, paths: &[&str]) -> NormalizedEvent {
         NormalizedEvent {
-            host: HostId::Cursor,
             event: EventKind::BeforeFileWrite,
             raw_event_name: "preToolUse".to_string(),
             project_root: root.map(str::to_string),
@@ -1227,7 +1192,6 @@ mod tests {
 
     fn make_cmd_event(root: Option<&str>, cmd: &str) -> NormalizedEvent {
         NormalizedEvent {
-            host: HostId::Cursor,
             event: EventKind::BeforeCommand,
             raw_event_name: "beforeShellExecution".to_string(),
             project_root: root.map(str::to_string),
@@ -1333,16 +1297,9 @@ mod tests {
             HookOutcome::Allow
         );
 
-        // B3_PROTECTED_PATHS and B3_WORKER_ALLOWED_PATHS
+        // B3_WORKER_ALLOWED_PATHS
         {
-            let _g = EnvGuard::new(&[
-                ("B3_PROTECTED_PATHS", Some("Cargo.lock")),
-                ("B3_WORKER_ALLOWED_PATHS", Some("src/hook")),
-            ]);
-            assert!(matches!(
-                dispatch_event(&make_write_event(Some(&root_str), &["Cargo.lock"]), &cfg),
-                HookOutcome::Deny { .. }
-            ));
+            let _g = EnvGuard::new(&[("B3_WORKER_ALLOWED_PATHS", Some("src/hook"))]);
             assert!(matches!(
                 dispatch_event(&make_write_event(Some(&root_str), &["src/lib.rs"]), &cfg),
                 HookOutcome::Deny { .. }
@@ -1439,8 +1396,13 @@ mod tests {
             "git add .",
             "git add .b3/ship/runs/r1",
             "B3_HOOK_ACTIVE=1 git commit -m x",
+            "{ B3_HOOK_ACTIVE=1 git commit -m x; }",
             "env B3_HOOK_ACTIVE=1 git push origin main",
             "export B3_HOOK_ACTIVE=1",
+            "B3_HOOK_MODE=off git commit -m x",
+            "{ B3_HOOK_MODE=off git status; }",
+            "env B3_HOOK_MODE=audit git push origin main",
+            "export B3_HOOK_MODE=off",
         ] {
             assert!(
                 matches!(
@@ -1457,8 +1419,11 @@ mod tests {
             "git commit -m \"allow --no-verify in text\"",
             "git add src/hook/dispatch.rs",
             "echo 'git push --force'",
+            "echo ${B3_HOOK_ACTIVE}",
             "echo B3_HOOK_ACTIVE=1",
+            "echo B3_HOOK_MODE=off",
             "git grep B3_HOOK_ACTIVE=1",
+            "git grep B3_HOOK_MODE=off",
             "# git reset --hard",
             "gh pr merge 42",
         ] {
@@ -1602,5 +1567,53 @@ mod tests {
                 && !resp_adv.stderr.is_empty()
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upward_repo_discovery_respects_git_boundary() {
+        let _lock = lock_hook_env();
+        let _env = clear_hook_env();
+        let base = temp_dir("upward_disc");
+        let missing_personal = base.join("no_personal.md").to_string_lossy().into_owned();
+        let _pers = EnvGuard::new(&[("B3_MODELS_PERSONAL", Some(&missing_personal))]);
+
+        let outer = base.join("outer");
+        let sub = outer.join("a/b");
+        fs::create_dir_all(outer.join(".git")).unwrap();
+        fs::create_dir_all(outer.join(".b3")).unwrap();
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(
+            outer.join(".b3/models.md"),
+            "```yaml\nhooks:\n  enabled: true\n  mode: audit\n```\n",
+        )
+        .unwrap();
+
+        let sub_str = sub.to_string_lossy().into_owned();
+        assert_eq!(
+            norm_cmp_path(&resolve_project_pref_path(&sub_str, false)),
+            norm_cmp_path(&outer.join(".b3/models.md"))
+        );
+        assert_eq!(
+            norm_cmp_path(&resolve_project_pref_path(&sub_str, true)),
+            norm_cmp_path(&sub.join(".b3/models.md"))
+        );
+        let (cfg, warnings) = resolve_cfg_for_root(Some((&sub_str, false)), None);
+        assert!(warnings.is_empty());
+        assert_eq!(cfg.effective_mode(), HookMode::Audit);
+
+        // Nested repo with its own .git must stop at inner .git and not walk into outer .b3/models.md
+        let nested = outer.join("nested");
+        let nested_sub = nested.join("src");
+        fs::create_dir_all(nested.join(".git")).unwrap();
+        fs::create_dir_all(&nested_sub).unwrap();
+        let nested_sub_str = nested_sub.to_string_lossy().into_owned();
+        assert_eq!(
+            norm_cmp_path(&resolve_project_pref_path(&nested_sub_str, false)),
+            norm_cmp_path(&nested.join(".b3/models.md"))
+        );
+        let (nested_cfg, _) = resolve_cfg_for_root(Some((&nested_sub_str, false)), None);
+        assert_eq!(nested_cfg.effective_mode(), HookMode::Enforce);
+
+        let _ = fs::remove_dir_all(&base);
     }
 }

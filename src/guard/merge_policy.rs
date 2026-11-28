@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    has_control_chars, is_reparse_or_symlink, normalize_repo_root, sort_ordinal,
-    split_csv_list_as_paths, split_path_csv_checked, test_checkpoint_path,
+    has_control_chars, is_reparse_or_symlink, normalize_repo_root, resolve_unresolved_path,
+    sort_ordinal, split_csv_list_as_paths, split_path_csv_checked, test_checkpoint_path,
     test_contained_repo_path,
 };
 use crate::git::{
@@ -698,6 +698,103 @@ fn test_branch_pattern_match(branch_name: &str, patterns: &[String]) -> bool {
         .iter()
         .filter(|pat| !pat.is_empty())
         .any(|pat| match_wildcard_glob(pat, branch_name))
+}
+
+fn is_governed_target_branch(
+    branch: &str,
+    trunk_branch: &str,
+    allowed_target_branches: &[String],
+) -> bool {
+    (!trunk_branch.is_empty() && branch == trunk_branch)
+        || (!allowed_target_branches.is_empty()
+            && test_branch_pattern_match(branch, allowed_target_branches))
+        || (trunk_branch.is_empty() && matches!(branch, "main" | "master"))
+}
+
+fn enforce_policy_and_protected_paths(
+    changed_paths: &[String],
+    policy_protected_arr: &[String],
+    pol_violation_reason: &str,
+    auth_pol_protected: &[String],
+    allow_protected: bool,
+    require_nonempty_when_protected: bool,
+    case_insensitive: bool,
+) -> Result<(), B3Error> {
+    for cp in changed_paths {
+        if !cp.is_empty()
+            && test_protected_path_match_ci(cp, policy_protected_arr, case_insensitive)
+        {
+            return Err(fail(format!("MERGE_BLOCKED: {pol_violation_reason}"), 1));
+        }
+    }
+    if !auth_pol_protected.is_empty() && !allow_protected {
+        if changed_paths.is_empty() {
+            if require_nonempty_when_protected {
+                return Err(fail("MERGE_BLOCKED: missing_changed_paths", 1));
+            }
+            return Ok(());
+        }
+        let mut prot_hits = Vec::new();
+        for cp in changed_paths {
+            if !cp.is_empty()
+                && test_protected_path_match_ci(cp, auth_pol_protected, case_insensitive)
+            {
+                push_unique_str(&mut prot_hits, cp.clone());
+            }
+        }
+        if !prot_hits.is_empty() {
+            return Err(fail(
+                format!(
+                    "MERGE_BLOCKED: protected_paths={}",
+                    sort_ordinal(prot_hits, false).join(",")
+                ),
+                1,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn assert_target_branch_preserved_policy(
+    repo_root: &Path,
+    auth_sha: &str,
+    target_base_sha: &str,
+    policy_protected_arr: &[String],
+    case_insensitive: bool,
+) -> Result<(), B3Error> {
+    if target_base_sha == auth_sha {
+        return Ok(());
+    }
+    let (mb_rc, mb_sha) = merge_base_sha(repo_root, auth_sha, target_base_sha)?;
+    if mb_rc != 0 || !is_hex40(&mb_sha) {
+        return Err(fail(
+            "MERGE_BLOCKED: target_branch_unrelated_to_authority",
+            1,
+        ));
+    }
+    let no_env: [(&str, &str); 0] = [];
+    let t_pol_paths = run_git_paths_z(
+        repo_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--name-status",
+            "-z",
+            &format!("{mb_sha}..{target_base_sha}"),
+            "--",
+        ],
+        GitZMode::NameStatus,
+        "MERGE_BLOCKED",
+        &no_env,
+    )?;
+    for tp in t_pol_paths {
+        if !tp.is_empty()
+            && test_protected_path_match_ci(&tp, policy_protected_arr, case_insensitive)
+        {
+            return Err(fail("MERGE_BLOCKED: target_branch_modified_policy", 1));
+        }
+    }
+    Ok(())
 }
 
 fn resolve_explicit_github_verify_adapter(err_prefix: &str) -> Result<Option<PathBuf>, B3Error> {
@@ -1874,28 +1971,15 @@ pub fn run(
         }
     }
 
-    if !pol_protected_paths.is_empty() && !allow_protected && !local_pre_changed.is_empty() {
-        let mut prot_hits = Vec::new();
-        for cp in &local_pre_changed {
-            if test_protected_path_match_ci(cp, &pol_protected_paths, mp_case_insensitive) {
-                push_unique_str(&mut prot_hits, cp.clone());
-            }
-        }
-        if !prot_hits.is_empty() {
-            return Err(fail(
-                format!(
-                    "MERGE_BLOCKED: protected_paths={}",
-                    sort_ordinal(prot_hits, false).join(",")
-                ),
-                1,
-            ));
-        }
-    }
-    for cp in &changed_arr {
-        if test_protected_path_match_ci(cp, &policy_protected_arr, mp_case_insensitive) {
-            return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
-        }
-    }
+    enforce_policy_and_protected_paths(
+        &local_pre_changed,
+        &policy_protected_arr,
+        "policy_modified_in_pr",
+        &pol_protected_paths,
+        allow_protected,
+        false,
+        mp_case_insensitive,
+    )?;
 
     if blocking_findings > 0 {
         return Err(fail(
@@ -2061,34 +2145,13 @@ pub fn run(
         };
 
         if gh_base_ref != gh_auth_ref {
-            let (mb_rc, mb_auth_sha) = merge_base_sha(&repo_root, gh_auth_sha, resolved_base_sha)?;
-            if mb_rc != 0 || !is_hex40(&mb_auth_sha) {
-                return Err(fail(
-                    "MERGE_BLOCKED: target_branch_unrelated_to_authority",
-                    1,
-                ));
-            }
-            let t_pol_paths = run_git_paths_z(
+            assert_target_branch_preserved_policy(
                 &repo_root,
-                &[
-                    "diff",
-                    "--no-ext-diff",
-                    "--name-status",
-                    "-z",
-                    &format!("{mb_auth_sha}..{resolved_base_sha}"),
-                    "--",
-                ],
-                GitZMode::NameStatus,
-                "MERGE_BLOCKED",
-                &no_env,
+                gh_auth_sha,
+                resolved_base_sha,
+                &policy_protected_arr,
+                mp_case_insensitive,
             )?;
-            for tp in t_pol_paths {
-                if !tp.is_empty()
-                    && test_protected_path_match_ci(&tp, &policy_protected_arr, mp_case_insensitive)
-                {
-                    return Err(fail("MERGE_BLOCKED: target_branch_modified_policy", 1));
-                }
-            }
         }
 
         assert_merge_dirty_worktree_clean(
@@ -2125,32 +2188,15 @@ pub fn run(
             }
         }
 
-        for cp in &all_changed {
-            if test_protected_path_match_ci(cp, &policy_protected_arr, mp_case_insensitive) {
-                return Err(fail(format!("MERGE_BLOCKED: {gh_pol_violation_reason}"), 1));
-            }
-        }
-        if !auth_pol.protected_paths.is_empty() && !auth_pol.allow_protected {
-            if all_changed.is_empty() {
-                return Err(fail("MERGE_BLOCKED: missing_changed_paths", 1));
-            }
-            let mut prot_hits = Vec::new();
-            for cp in &all_changed {
-                if test_protected_path_match_ci(cp, &auth_pol.protected_paths, mp_case_insensitive)
-                {
-                    push_unique_str(&mut prot_hits, cp.clone());
-                }
-            }
-            if !prot_hits.is_empty() {
-                return Err(fail(
-                    format!(
-                        "MERGE_BLOCKED: protected_paths={}",
-                        sort_ordinal(prot_hits, false).join(",")
-                    ),
-                    1,
-                ));
-            }
-        }
+        enforce_policy_and_protected_paths(
+            &all_changed,
+            &policy_protected_arr,
+            gh_pol_violation_reason,
+            &auth_pol.protected_paths,
+            auth_pol.allow_protected,
+            true,
+            mp_case_insensitive,
+        )?;
         if !auth_pol.allowed_target_branches.is_empty()
             && !test_branch_pattern_match(gh_base_ref, &auth_pol.allowed_target_branches)
         {
@@ -2411,36 +2457,13 @@ pub fn run(
         ));
     }
 
-    if resolved_base_sha != eff_auth_sha {
-        let (mb_rc, mb_sha) = merge_base_sha(&repo_root, &eff_auth_sha, &resolved_base_sha)?;
-        if mb_rc != 0 || !is_hex40(&mb_sha) {
-            return Err(fail(
-                "MERGE_BLOCKED: target_branch_unrelated_to_authority",
-                1,
-            ));
-        }
-        let t_pol_loc = run_git_paths_z(
-            &repo_root,
-            &[
-                "diff",
-                "--no-ext-diff",
-                "--name-status",
-                "-z",
-                &format!("{mb_sha}..{resolved_base_sha}"),
-                "--",
-            ],
-            GitZMode::NameStatus,
-            "MERGE_BLOCKED",
-            &no_env,
-        )?;
-        for tp in t_pol_loc {
-            if !tp.is_empty()
-                && test_protected_path_match_ci(&tp, &policy_protected_arr, mp_case_insensitive)
-            {
-                return Err(fail("MERGE_BLOCKED: target_branch_modified_policy", 1));
-            }
-        }
-    }
+    assert_target_branch_preserved_policy(
+        &repo_root,
+        &eff_auth_sha,
+        &resolved_base_sha,
+        &policy_protected_arr,
+        mp_case_insensitive,
+    )?;
 
     let mut all_changed_loc = changed_arr;
     let c_diff_loc = run_git_paths_z(
@@ -2463,32 +2486,15 @@ pub fn run(
         }
     }
 
-    for cp in &all_changed_loc {
-        if test_protected_path_match_ci(cp, &policy_protected_arr, mp_case_insensitive) {
-            return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
-        }
-    }
-    if !auth_loc_pol.protected_paths.is_empty() && !auth_loc_pol.allow_protected {
-        if all_changed_loc.is_empty() {
-            return Err(fail("MERGE_BLOCKED: missing_changed_paths", 1));
-        }
-        let mut prot_hits = Vec::new();
-        for cp in &all_changed_loc {
-            if test_protected_path_match_ci(cp, &auth_loc_pol.protected_paths, mp_case_insensitive)
-            {
-                push_unique_str(&mut prot_hits, cp.clone());
-            }
-        }
-        if !prot_hits.is_empty() {
-            return Err(fail(
-                format!(
-                    "MERGE_BLOCKED: protected_paths={}",
-                    sort_ordinal(prot_hits, false).join(",")
-                ),
-                1,
-            ));
-        }
-    }
+    enforce_policy_and_protected_paths(
+        &all_changed_loc,
+        &policy_protected_arr,
+        "policy_modified_in_pr",
+        &auth_loc_pol.protected_paths,
+        auth_loc_pol.allow_protected,
+        true,
+        mp_case_insensitive,
+    )?;
 
     let led_loc_obj =
         invoke_merge_ledger_gate(&repo_root, ledger_path, &resolved_base_sha, &live_head_sha)?;
@@ -2593,11 +2599,11 @@ pub fn run(
 
 /// Parsed ref update line from Git's `pre-push` hook standard input.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrePushRefUpdate {
-    pub local_ref: String,
-    pub local_oid: String,
-    pub remote_ref: String,
-    pub remote_oid: String,
+struct PrePushRefUpdate {
+    local_ref: String,
+    local_oid: String,
+    remote_ref: String,
+    remote_oid: String,
 }
 
 fn is_valid_git_oid_hex(s: &str) -> bool {
@@ -2613,7 +2619,7 @@ fn is_invalid_pre_push_ref_token(s: &str) -> bool {
 }
 
 /// Parses Git's `pre-push` hook stdin lines (`<local-ref> <local-oid> <remote-ref> <remote-oid>`).
-pub fn parse_pre_push_stdin(raw: &str) -> Result<Vec<PrePushRefUpdate>, B3Error> {
+fn parse_pre_push_stdin(raw: &str) -> Result<Vec<PrePushRefUpdate>, B3Error> {
     if raw
         .chars()
         .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
@@ -2676,145 +2682,613 @@ fn verify_hook_target_ledger_and_ci(
     )
 }
 
-fn is_safe_remote_token(s: &str) -> bool {
-    !s.is_empty()
-        && !s.starts_with('-')
-        && !s.contains("..")
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+enum HookPolicyAuthority {
+    EstablishedPolicy,
+    LocalAbsentOnly,
+    UnknownRemoteAuthority(String),
 }
 
-fn check_policy_absent_batch(
+enum RemoteTrackingResolution {
+    Trunk(TrunkAuthority),
+    Unknown(String),
+}
+
+fn is_zero_oid(oid: &str) -> bool {
+    oid.bytes().all(|b| b == b'0')
+}
+
+fn normalize_remote_url_cmp(raw: &str) -> String {
+    let mut s = raw.trim().replace('\\', "/");
+    while s.len() > 1 && s.ends_with('/') {
+        s.pop();
+    }
+    #[cfg(windows)]
+    {
+        let bytes = s.as_bytes();
+        if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+            let mut chars: Vec<char> = s.chars().collect();
+            chars[0] = chars[0].to_ascii_lowercase();
+            return chars.into_iter().collect();
+        }
+    }
+    s
+}
+
+fn check_remote_push_destination(
     repo_root: &Path,
-    is_push: bool,
+    remotes: &[String],
     git_args: &[String],
-    updates: &[PrePushRefUpdate],
-) -> Result<bool, B3Error> {
-    let mut specs: Vec<String> = Vec::new();
-    let mut push_spec = |rev: &str| {
-        let q = format!("{rev}:.b3/research-policy.json");
-        if !specs.iter().any(|existing| existing == &q) {
-            specs.push(q);
-        }
-    };
-    if is_push {
-        if let Some(rem) = git_args.first().map(|s| s.trim()) {
-            if is_safe_remote_token(rem) {
-                for br in ["HEAD", "main", "master"] {
-                    push_spec(&format!("refs/remotes/{rem}/{br}"));
-                }
+) -> Result<Result<String, String>, B3Error> {
+    if git_args.is_empty() {
+        return Ok(Err("missing_push_destination".to_string()));
+    }
+    let rem = git_args[0].trim();
+    if rem.is_empty() || rem.starts_with('-') || !remotes.iter().any(|r| r == rem) {
+        return Ok(Err("direct_url_push".to_string()));
+    }
+    let no_env: [(&str, &str); 0] = [];
+    let fetch_res = run_git(repo_root, &["remote", "get-url", rem], &no_env, None)?;
+    let fetch_url = String::from_utf8_lossy(&fetch_res.stdout)
+        .trim()
+        .to_string();
+    if fetch_res.exit_code != 0 || fetch_url.is_empty() {
+        return Ok(Err("missing_remote_url".to_string()));
+    }
+    let fetch_norm = normalize_remote_url_cmp(&fetch_url);
+
+    let push_res = run_git(
+        repo_root,
+        &["remote", "get-url", "--all", "--push", rem],
+        &no_env,
+        None,
+    )?;
+    if push_res.exit_code == 0 {
+        for line in String::from_utf8_lossy(&push_res.stdout).lines() {
+            let p_trim = line.trim();
+            if !p_trim.is_empty() && normalize_remote_url_cmp(p_trim) != fetch_norm {
+                return Ok(Err("push_url_differs_from_fetch_url".to_string()));
             }
         }
-    }
-    for r in [
-        "refs/remotes/origin/HEAD",
-        "refs/remotes/origin/main",
-        "refs/remotes/origin/master",
-        "refs/heads/main",
-        "refs/heads/master",
-        "HEAD",
-    ] {
-        push_spec(r);
-    }
-    if is_push {
-        for upd in updates {
-            let is_delete = upd.local_ref == "(delete)" || upd.local_oid.chars().all(|c| c == '0');
-            if !is_delete {
-                push_spec(&upd.local_oid);
-            }
-        }
-    } else {
-        push_spec("MERGE_HEAD");
     }
 
-    let query_input = format!("{}\n", specs.join("\n"));
+    if let Some(arg_url) = git_args.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if normalize_remote_url_cmp(arg_url) != fetch_norm {
+            return Ok(Err("push_url_differs_from_fetch_url".to_string()));
+        }
+    }
+
+    Ok(Ok(rem.to_string()))
+}
+
+fn resolve_remote_tracking_authority(
+    repo_root: &Path,
+    rem: &str,
+) -> Result<RemoteTrackingResolution, B3Error> {
     let no_env: [(&str, &str); 0] = [];
-    let res = run_git(
+    let prefix = format!("refs/remotes/{rem}/");
+    let head_sym = format!("{prefix}HEAD");
+    let oh_sym = run_git(repo_root, &["symbolic-ref", "-q", &head_sym], &no_env, None)?;
+    let oh_full = String::from_utf8_lossy(&oh_sym.stdout).trim().to_string();
+    if oh_sym.exit_code == 0 && oh_full.starts_with(&prefix) {
+        if let Some(sha) = rev_parse_commit(repo_root, &oh_full)? {
+            let branch = oh_full[prefix.len()..].to_string();
+            return Ok(RemoteTrackingResolution::Trunk(TrunkAuthority {
+                sym_full: oh_full,
+                branch,
+                sha,
+            }));
+        }
+    }
+
+    let f_res = run_git(
+        repo_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname)%09%(objecttype)%09%(objectname)",
+            &prefix,
+        ],
+        &no_env,
+        None,
+    )?;
+    if f_res.exit_code != 0 {
+        return Ok(RemoteTrackingResolution::Unknown(
+            "missing_remote_tracking_refs".to_string(),
+        ));
+    }
+
+    let mut tracking_refs: Vec<TrunkAuthority> = Vec::new();
+    for line in String::from_utf8_lossy(&f_res.stdout).lines() {
+        let ln = line.strip_suffix('\r').unwrap_or(line);
+        if ln.is_empty() {
+            continue;
+        }
+        let mut parts = ln.split('\t');
+        let (Some(refname), Some(obj_type), Some(oid)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if refname == head_sym || !refname.starts_with(&prefix) {
+            continue;
+        }
+        let branch = refname[prefix.len()..].to_string();
+        if branch.is_empty() {
+            continue;
+        }
+        let commit_sha = if obj_type == "commit" && is_valid_git_oid_hex(oid) {
+            Some(oid.to_string())
+        } else {
+            rev_parse_commit(repo_root, refname)?
+        };
+        if let Some(sha) = commit_sha {
+            tracking_refs.push(TrunkAuthority {
+                sym_full: refname.to_string(),
+                branch,
+                sha,
+            });
+        }
+    }
+
+    if tracking_refs.is_empty() {
+        return Ok(RemoteTrackingResolution::Unknown(
+            "missing_remote_tracking_refs".to_string(),
+        ));
+    }
+
+    let specs: Vec<String> = tracking_refs
+        .iter()
+        .map(|t| format!("{}:.b3/research-policy.json", t.sha))
+        .collect();
+    let query_input = format!("{}\n", specs.join("\n"));
+    let batch_res = run_git(
         repo_root,
         &["cat-file", "--batch-check"],
         &no_env,
         Some(query_input.as_bytes()),
     )?;
+    let mut policy_refs: Vec<(&TrunkAuthority, String)> = Vec::new();
+    if batch_res.exit_code == 0 {
+        let out = String::from_utf8_lossy(&batch_res.stdout);
+        for (t, line) in tracking_refs.iter().zip(out.lines()) {
+            let ln = line.strip_suffix('\r').unwrap_or(line).trim();
+            let toks: Vec<&str> = ln.split_ascii_whitespace().collect();
+            if toks.len() == 3
+                && toks[1] == "blob"
+                && is_valid_git_oid_hex(toks[0])
+                && check_policy_blob_in_tree(repo_root, &t.sha)?
+            {
+                policy_refs.push((t, toks[0].to_string()));
+            }
+        }
+    }
+
+    for cand in ["main", "master"] {
+        if let Some(found) = tracking_refs.iter().find(|t| t.branch == cand) {
+            return Ok(RemoteTrackingResolution::Trunk(TrunkAuthority {
+                sym_full: found.sym_full.clone(),
+                branch: found.branch.clone(),
+                sha: found.sha.clone(),
+            }));
+        }
+    }
+
+    if !policy_refs.is_empty() {
+        let first_blob = &policy_refs[0].1;
+        if policy_refs.iter().all(|(_, b)| b == first_blob) {
+            let chosen = ["trunk", "develop", "development"]
+                .iter()
+                .find_map(|pref| policy_refs.iter().find(|(t, _)| t.branch == *pref))
+                .map(|(t, _)| *t)
+                .unwrap_or_else(|| {
+                    policy_refs
+                        .iter()
+                        .min_by(|(a, _), (b, _)| a.branch.cmp(&b.branch))
+                        .expect("non-empty policy_refs")
+                        .0
+                });
+            return Ok(RemoteTrackingResolution::Trunk(TrunkAuthority {
+                sym_full: chosen.sym_full.clone(),
+                branch: chosen.branch.clone(),
+                sha: chosen.sha.clone(),
+            }));
+        }
+        return Err(fail("MERGE_BLOCKED: ambiguous_policy_authority", 1));
+    }
+
+    Ok(RemoteTrackingResolution::Unknown(
+        "unconfigured_remote_head".to_string(),
+    ))
+}
+
+fn read_merge_head_commits(repo_root: &Path) -> Result<Vec<String>, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    let res = run_git(
+        repo_root,
+        &["rev-parse", "--git-path", "MERGE_HEAD"],
+        &no_env,
+        None,
+    )?;
+    if res.exit_code != 0 {
+        return Ok(Vec::new());
+    }
+    let raw_rel = String::from_utf8_lossy(&res.stdout).trim().to_string();
+    if raw_rel.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mh_path = resolve_unresolved_path(repo_root, &raw_rel);
+    if !mh_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let body = std::fs::read_to_string(&mh_path)
+        .map_err(|_| fail("MERGE_BLOCKED: invalid_merge_head", 1))?;
+    let mut commits = Vec::new();
+    for line in body.lines() {
+        let tok = line.trim();
+        if tok.is_empty() {
+            continue;
+        }
+        if tok.starts_with('-') || !is_valid_git_oid_hex(tok) {
+            return Err(fail("MERGE_BLOCKED: invalid_merge_head", 1));
+        }
+        let Some(sha) = rev_parse_commit(repo_root, tok)? else {
+            return Err(fail("MERGE_BLOCKED: invalid_merge_head", 1));
+        };
+        push_unique_str(&mut commits, sha);
+    }
+    Ok(commits)
+}
+
+fn check_policy_staged_in_index(repo_root: &Path) -> Result<bool, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    let res = run_git(
+        repo_root,
+        &["ls-files", "--stage", "--", ".b3/research-policy.json"],
+        &no_env,
+        None,
+    )?;
     if res.exit_code != 0 {
         return Ok(false);
     }
     let out = String::from_utf8_lossy(&res.stdout);
-    let lines: Vec<&str> = out
-        .split(['\n', '\r'])
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-    Ok(lines.len() == specs.len() && lines.iter().all(|l| l.ends_with(" missing")))
+    for line in out.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((meta, path)) = trimmed.split_once('\t') else {
+            continue;
+        };
+        if path != ".b3/research-policy.json" {
+            continue;
+        }
+        let parts: Vec<&str> = meta.split_whitespace().collect();
+        if parts.len() == 3
+            && matches!(parts[0], "100644" | "100755")
+            && is_valid_git_oid_hex(parts[1])
+            && matches!(parts[2], "0" | "1" | "2" | "3")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn show_staged_policy_file(repo_root: &Path) -> Result<Option<String>, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    for spec in [
+        ":0:.b3/research-policy.json",
+        ":2:.b3/research-policy.json",
+        ":3:.b3/research-policy.json",
+    ] {
+        let res = run_git(repo_root, &["show", spec], &no_env, None)?;
+        if res.exit_code == 0 {
+            return Ok(Some(String::from_utf8_lossy(&res.stdout).into_owned()));
+        }
+    }
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_hook_policy_config(
+    repo_root: &Path,
+    trunk_sha: &str,
+    trunk_has_policy: bool,
+    remote_obj_policy_sha: Option<&str>,
+    wt_pol_path: Option<&Path>,
+    staged_has_policy: bool,
+    head_sha: &str,
+    head_has_policy: bool,
+    first_candidate_policy_sha: Option<&str>,
+) -> Result<MergePolicyConfig, B3Error> {
+    let no_env: [(&str, &str); 0] = [];
+    if trunk_has_policy {
+        let Some(a_txt) = show_commit_file(repo_root, trunk_sha, ".b3/research-policy.json")?
+        else {
+            return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
+        };
+        let parsed = parse_merge_policy_json_text(&a_txt)?;
+        let wt_pol_status = run_git_paths_z(
+            repo_root,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--",
+                ".b3/research-policy.json",
+            ],
+            GitZMode::Status,
+            "MERGE_BLOCKED",
+            &no_env,
+        )?;
+        if !wt_pol_status.is_empty() {
+            return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
+        }
+        return Ok(parsed);
+    }
+    if let Some(rem_pol_sha) = remote_obj_policy_sha {
+        let Some(r_txt) = show_commit_file(repo_root, rem_pol_sha, ".b3/research-policy.json")?
+        else {
+            return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
+        };
+        return parse_merge_policy_json_text(&r_txt);
+    }
+    if !trunk_sha.is_empty() {
+        return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
+    }
+    let mut commit_pol_sha = None;
+    if head_has_policy {
+        let wt_pol_status = run_git_paths_z(
+            repo_root,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--",
+                ".b3/research-policy.json",
+            ],
+            GitZMode::Status,
+            "MERGE_BLOCKED",
+            &no_env,
+        )?;
+        if !wt_pol_status.is_empty() {
+            return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
+        }
+        commit_pol_sha = Some(head_sha);
+    }
+    let unmerged_pol = if commit_pol_sha.is_some() || first_candidate_policy_sha.is_some() {
+        let c_sha = commit_pol_sha
+            .or(first_candidate_policy_sha)
+            .expect("checked above");
+        let Some(c_txt) = show_commit_file(repo_root, c_sha, ".b3/research-policy.json")? else {
+            return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
+        };
+        parse_merge_policy_json_text(&c_txt)?
+    } else if let Some(wt_path) = wt_pol_path {
+        let wt_txt = std::fs::read_to_string(wt_path)
+            .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?;
+        parse_merge_policy_json_text(&wt_txt)?
+    } else if staged_has_policy {
+        let Some(s_txt) = show_staged_policy_file(repo_root)? else {
+            return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
+        };
+        parse_merge_policy_json_text(&s_txt)?
+    } else {
+        return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
+    };
+    if unmerged_pol.auto_merge == "authorized" {
+        return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
+    }
+    Ok(unmerged_pol)
+}
+
+fn validate_hook_candidate_commit(
+    repo_root: &Path,
+    policy_base_sha: &str,
+    require_policy_blob: bool,
+    commit_sha: &str,
+    policy_protected_arr: &[String],
+    auth_pol: &MergePolicyConfig,
+    case_insensitive: bool,
+) -> Result<(), B3Error> {
+    if commit_sha == policy_base_sha {
+        return Ok(());
+    }
+    if require_policy_blob && !check_policy_blob_in_tree(repo_root, commit_sha)? {
+        return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
+    }
+    let no_env: [(&str, &str); 0] = [];
+    let diff_paths: Vec<String> = if policy_base_sha.is_empty() {
+        run_git_paths_z(
+            repo_root,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                "--root",
+                "-z",
+                commit_sha,
+                "--",
+            ],
+            GitZMode::Names,
+            "MERGE_BLOCKED",
+            &no_env,
+        )?
+    } else {
+        diff_against_base_or_tree(repo_root, policy_base_sha, commit_sha)?
+    }
+    .into_iter()
+    .filter(|p| !p.is_empty() && !test_checkpoint_path(p))
+    .collect();
+    enforce_policy_and_protected_paths(
+        &diff_paths,
+        if policy_base_sha.is_empty() {
+            &[]
+        } else {
+            policy_protected_arr
+        },
+        "policy_modified_in_pr",
+        &auth_pol.protected_paths,
+        auth_pol.allow_protected,
+        false,
+        case_insensitive,
+    )
+}
+
+fn resolve_fallback_hook_trunk_authority(
+    repo_root: &Path,
+    remotes: &[String],
+    skip_remote: Option<&str>,
+) -> Result<Option<TrunkAuthority>, B3Error> {
+    let mut non_policy: Option<TrunkAuthority> = None;
+    let has_origin = remotes.iter().any(|r| r == "origin");
+    let ordered: Vec<&str> = if has_origin {
+        std::iter::once("origin")
+            .chain(
+                remotes
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|r| *r != "origin"),
+            )
+            .collect()
+    } else {
+        remotes.iter().map(String::as_str).collect()
+    };
+
+    for rem in ordered {
+        if skip_remote == Some(rem) {
+            continue;
+        }
+        if let RemoteTrackingResolution::Trunk(t) =
+            resolve_remote_tracking_authority(repo_root, rem)?
+        {
+            if check_policy_blob_in_tree(repo_root, &t.sha)? {
+                return Ok(Some(t));
+            }
+            if non_policy.is_none() {
+                non_policy = Some(t);
+            }
+        }
+    }
+    if let Ok(local_t) = get_canonical_trunk_authority(repo_root, false, true) {
+        if !local_t.sha.is_empty() && check_policy_blob_in_tree(repo_root, &local_t.sha)? {
+            return Ok(Some(local_t));
+        }
+        if non_policy.is_none() && !local_t.sha.is_empty() {
+            non_policy = Some(local_t);
+        }
+    }
+    Ok(non_policy)
 }
 
 /// Validates Git `pre-push` (`is_push == true`) or `pre-merge-commit` (`is_push == false`)
 /// against canonical trunk authority and `.b3/research-policy.json`.
-pub fn check_git_hook_operation(
+///
+/// Returns `Ok(None)` for clean allow, `Ok(Some(advisory))` for non-blocking advisory
+/// warnings emitted to stderr, and `Err(B3Error)` for blocked operations.
+pub(crate) fn check_git_hook_operation(
     repo_root_raw: &str,
     is_push: bool,
     git_args: &[String],
     git_stdin: &str,
     ledger_path: &str,
     receipt_path: &str,
-) -> Result<(), B3Error> {
+) -> Result<Option<String>, B3Error> {
     let repo_root = normalize_repo_root(repo_root_raw)?;
-    let updates = if is_push {
-        parse_pre_push_stdin(git_stdin)?
-    } else {
-        Vec::new()
-    };
-    if is_push && updates.is_empty() && !git_args.is_empty() {
-        return Ok(());
-    }
-
+    let no_env: [(&str, &str); 0] = [];
+    let remotes = list_remotes(&repo_root)?;
     let wt_pol_path = resolve_default_policy_path(&repo_root)?;
     let wt_has_policy = wt_pol_path.is_some();
-    if !wt_has_policy && check_policy_absent_batch(&repo_root, is_push, git_args, &updates)? {
-        return Ok(());
-    }
+    let live_head_sha = rev_parse_commit(&repo_root, "HEAD")?.unwrap_or_default();
+    let head_has_policy =
+        !live_head_sha.is_empty() && check_policy_blob_in_tree(&repo_root, &live_head_sha)?;
+    let policy_protected_arr = vec![".b3/research-policy.json".to_string()];
 
-    let remotes = list_remotes(&repo_root)?;
-    let has_origin = remotes.iter().any(|r| r == "origin");
-
-    let mut trunk = TrunkAuthority {
-        sym_full: String::new(),
-        branch: String::new(),
-        sha: String::new(),
-    };
     if is_push {
-        if let Some(remote_arg) = git_args.first().map(|s| s.trim()) {
-            if !remote_arg.is_empty()
-                && !remote_arg.starts_with('-')
-                && remotes.iter().any(|r| r == remote_arg)
-            {
-                if let Some(rem_trunk) = get_remote_trunk_authority(&repo_root, remote_arg)? {
-                    trunk = rem_trunk;
+        let updates = parse_pre_push_stdin(git_stdin)?;
+        if updates.is_empty() {
+            if !git_args.is_empty() {
+                return Ok(None);
+            }
+            return Err(fail("MERGE_BLOCKED: missing_pre_push_refs", 1));
+        }
+
+        let mut trunk = TrunkAuthority {
+            sym_full: String::new(),
+            branch: String::new(),
+            sha: String::new(),
+        };
+        let mut unknown_reason: Option<String> = None;
+        let mut target_remote_name: Option<String> = None;
+
+        match check_remote_push_destination(&repo_root, &remotes, git_args)? {
+            Ok(rem) => {
+                target_remote_name = Some(rem.clone());
+                match resolve_remote_tracking_authority(&repo_root, &rem)? {
+                    RemoteTrackingResolution::Trunk(t) => trunk = t,
+                    RemoteTrackingResolution::Unknown(reason) => {
+                        unknown_reason = Some(reason);
+                        if let Some(fb) =
+                            resolve_fallback_hook_trunk_authority(&repo_root, &remotes, Some(&rem))?
+                        {
+                            if check_policy_blob_in_tree(&repo_root, &fb.sha)? {
+                                trunk = fb;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(reason) => {
+                unknown_reason = Some(reason);
+                if let Some(fb) = resolve_fallback_hook_trunk_authority(&repo_root, &remotes, None)?
+                {
+                    if check_policy_blob_in_tree(&repo_root, &fb.sha)? {
+                        trunk = fb;
+                    }
                 }
             }
         }
-    }
-    if trunk.sha.is_empty() {
-        trunk = get_canonical_trunk_authority(&repo_root, has_origin, true)?;
-    }
 
-    let trunk_has_policy =
-        !trunk.sha.is_empty() && check_policy_blob_in_tree(&repo_root, &trunk.sha)?;
+        let trunk_has_policy =
+            !trunk.sha.is_empty() && check_policy_blob_in_tree(&repo_root, &trunk.sha)?;
 
-    let live_head_sha = rev_parse_commit(&repo_root, "HEAD")?.unwrap_or_default();
-    let head_has_policy = !live_head_sha.is_empty()
-        && if live_head_sha == trunk.sha {
-            trunk_has_policy
-        } else {
-            check_policy_blob_in_tree(&repo_root, &live_head_sha)?
-        };
+        let mut unfetched_refs: HashSet<String> = HashSet::new();
+        let mut stale_tracking_refs: HashSet<String> = HashSet::new();
+        let mut remote_obj_policy_sha: Option<String> = None;
 
-    let mut push_commits: Vec<Option<String>> = Vec::with_capacity(updates.len());
-    let mut merge_head_sha = String::new();
-    let mut first_candidate_policy_sha: Option<String> = None;
-    let mut any_candidate_has_policy = false;
+        let mut push_commits: Vec<Option<String>> = Vec::with_capacity(updates.len());
+        let mut first_candidate_policy_sha: Option<String> = None;
+        let mut any_candidate_has_policy = false;
 
-    if is_push {
         for upd in &updates {
-            let is_delete = upd.local_ref == "(delete)" || upd.local_oid.chars().all(|c| c == '0');
+            if let Some(br) = upd.remote_ref.strip_prefix("refs/heads/") {
+                if !is_zero_oid(&upd.remote_oid) {
+                    match rev_parse_commit(&repo_root, &upd.remote_oid)? {
+                        None => {
+                            unfetched_refs.insert(br.to_string());
+                        }
+                        Some(rem_c_sha) => {
+                            if let Some(ref rem_name) = target_remote_name {
+                                if let Some(track_sha) = rev_parse_commit(
+                                    &repo_root,
+                                    &format!("refs/remotes/{rem_name}/{br}"),
+                                )? {
+                                    if track_sha != rem_c_sha {
+                                        stale_tracking_refs.insert(br.to_string());
+                                    }
+                                }
+                            }
+                            if !trunk_has_policy
+                                && remote_obj_policy_sha.is_none()
+                                && check_policy_blob_in_tree(&repo_root, &rem_c_sha)?
+                            {
+                                remote_obj_policy_sha = Some(rem_c_sha);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let is_delete = upd.local_ref == "(delete)" || is_zero_oid(&upd.local_oid);
             if is_delete {
                 push_commits.push(None);
                 continue;
@@ -2837,202 +3311,317 @@ pub fn check_git_hook_operation(
             }
             push_commits.push(c_opt);
         }
-    } else {
-        merge_head_sha = rev_parse_commit(&repo_root, "MERGE_HEAD")?.unwrap_or_default();
-        if !merge_head_sha.is_empty() && check_policy_blob_in_tree(&repo_root, &merge_head_sha)? {
-            any_candidate_has_policy = true;
-            first_candidate_policy_sha = Some(merge_head_sha.clone());
-        }
-    }
 
-    if !trunk_has_policy && !wt_has_policy && !head_has_policy && !any_candidate_has_policy {
-        return Ok(());
-    }
+        let has_any_local_policy = wt_has_policy || head_has_policy || any_candidate_has_policy;
 
-    let mp_ci = test_repo_case_insensitive(&repo_root);
-
-    let no_env: [(&str, &str); 0] = [];
-    let policy_protected_arr = vec![".b3/research-policy.json".to_string()];
-
-    let auth_pol = if trunk_has_policy {
-        let Some(a_txt) = show_commit_file(&repo_root, &trunk.sha, ".b3/research-policy.json")?
-        else {
-            return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
-        };
-        let parsed = parse_merge_policy_json_text(&a_txt)?;
-        let wt_pol_status = run_git_paths_z(
-            &repo_root,
-            &[
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--",
-                ".b3/research-policy.json",
-            ],
-            GitZMode::Status,
-            "MERGE_BLOCKED",
-            &no_env,
-        )?;
-        if !wt_pol_status.is_empty() {
-            return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
-        }
-        parsed
-    } else if !trunk.sha.is_empty() {
-        return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
-    } else if let Some(ref wt_path) = wt_pol_path {
-        let wt_txt = std::fs::read_to_string(wt_path)
-            .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?;
-        let wt_pol = parse_merge_policy_json_text(&wt_txt)?;
-        if wt_pol.auto_merge == "authorized" {
-            return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
-        }
-        wt_pol
-    } else {
-        let commit_pol_sha = if head_has_policy {
-            Some(live_head_sha.clone())
-        } else {
-            first_candidate_policy_sha
-        };
-        if let Some(c_sha) = commit_pol_sha {
-            let Some(c_txt) = show_commit_file(&repo_root, &c_sha, ".b3/research-policy.json")?
-            else {
-                return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
-            };
-            let c_pol = parse_merge_policy_json_text(&c_txt)?;
-            if c_pol.auto_merge == "authorized" {
+        let authority = if trunk_has_policy || remote_obj_policy_sha.is_some() {
+            HookPolicyAuthority::EstablishedPolicy
+        } else if has_any_local_policy {
+            if !trunk.sha.is_empty() {
                 return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
             }
-            c_pol
+            HookPolicyAuthority::EstablishedPolicy
+        } else if let Some(ref reason) = unknown_reason {
+            HookPolicyAuthority::UnknownRemoteAuthority(reason.clone())
         } else {
-            MergePolicyConfig {
-                auto_merge: "disabled".to_string(),
-                allow_protected: false,
-                require_ci: true,
-                require_review: true,
-                protected_paths: Vec::new(),
-                allowed_target_branches: Vec::new(),
-            }
-        }
-    };
+            HookPolicyAuthority::LocalAbsentOnly
+        };
 
-    let validate_candidate_commit = |commit_sha: &str| -> Result<(), B3Error> {
-        if trunk.sha.is_empty() || commit_sha == trunk.sha {
-            return Ok(());
-        }
-        if trunk_has_policy && !check_policy_blob_in_tree(&repo_root, commit_sha)? {
-            return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
-        }
-        let diff_paths = diff_against_base_or_tree(&repo_root, &trunk.sha, commit_sha)?;
-        for dp in &diff_paths {
-            if !dp.is_empty() && test_protected_path_match_ci(dp, &policy_protected_arr, mp_ci) {
-                return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
-            }
-        }
-        if !auth_pol.protected_paths.is_empty() && !auth_pol.allow_protected {
-            let mut prot_hits = Vec::new();
-            for dp in &diff_paths {
-                if !dp.is_empty()
-                    && !test_checkpoint_path(dp)
-                    && test_protected_path_match_ci(dp, &auth_pol.protected_paths, mp_ci)
-                {
-                    push_unique_str(&mut prot_hits, dp.clone());
-                }
-            }
-            if !prot_hits.is_empty() {
-                return Err(fail(
-                    format!(
-                        "MERGE_BLOCKED: protected_paths={}",
-                        sort_ordinal(prot_hits, false).join(",")
-                    ),
-                    1,
-                ));
-            }
-        }
-        Ok(())
-    };
-
-    let is_governed_target_branch = |branch: &str| -> bool {
-        (!trunk.branch.is_empty() && branch == trunk.branch)
-            || (!auth_pol.allowed_target_branches.is_empty()
-                && test_branch_pattern_match(branch, &auth_pol.allowed_target_branches))
-            || (trunk.branch.is_empty() && matches!(branch, "main" | "master"))
-    };
-
-    if is_push {
-        if updates.is_empty() {
-            return Err(fail("MERGE_BLOCKED: missing_pre_push_refs", 1));
-        }
-        for (upd, commit_opt) in updates.iter().zip(push_commits) {
-            let is_delete = upd.local_ref == "(delete)" || upd.local_oid.chars().all(|c| c == '0');
-            if is_delete {
-                if let Some(br) = upd.remote_ref.strip_prefix("refs/heads/") {
-                    if is_governed_target_branch(br) {
-                        return Err(fail(
-                            format!("MERGE_BLOCKED: protected_target_deletion({br})"),
-                            1,
-                        ));
+        return match authority {
+            HookPolicyAuthority::UnknownRemoteAuthority(reason) => {
+                let strict_dest = matches!(
+                    reason.as_str(),
+                    "direct_url_push"
+                        | "push_url_differs_from_fetch_url"
+                        | "missing_push_destination"
+                );
+                let mut saw_branch_push = false;
+                for upd in &updates {
+                    let is_delete = upd.local_ref == "(delete)" || is_zero_oid(&upd.local_oid);
+                    if let Some(br) = upd.remote_ref.strip_prefix("refs/heads/") {
+                        if is_delete {
+                            if matches!(br, "main" | "master") {
+                                return Err(fail(
+                                    format!(
+                                        "MERGE_BLOCKED: unknown_remote_authority(reason={reason},op=delete,branch={br})"
+                                    ),
+                                    1,
+                                ));
+                            }
+                        } else {
+                            if matches!(br, "main" | "master")
+                                && (strict_dest || !is_zero_oid(&upd.remote_oid))
+                            {
+                                return Err(fail(
+                                    format!(
+                                        "MERGE_BLOCKED: unknown_remote_authority(reason={reason},branch={br})"
+                                    ),
+                                    1,
+                                ));
+                            }
+                            saw_branch_push = true;
+                        }
                     }
                 }
-                continue;
-            }
-
-            if let Some(ref c_sha) = commit_opt {
-                validate_candidate_commit(c_sha)?;
-            }
-
-            if let Some(rem_branch) = upd.remote_ref.strip_prefix("refs/heads/") {
-                if is_governed_target_branch(rem_branch) {
-                    let Some(c_sha) = commit_opt else {
-                        return Err(fail("MERGE_BLOCKED: non_commit_push_to_governed_branch", 1));
-                    };
-                    if auth_pol.auto_merge != "authorized" {
-                        return Err(fail(
-                            format!(
-                                "PR_READY: direct_push_blocked(branch={rem_branch},auto_merge=disabled)"
-                            ),
-                            2,
-                        ));
-                    }
-                    assert_merge_dirty_worktree_clean(
-                        &repo_root,
-                        &policy_protected_arr,
-                        mp_ci,
-                        "policy_modified_in_pr",
-                    )?;
-                    let remote_base_opt = if upd.remote_oid.chars().all(|c| c == '0') {
-                        None
-                    } else {
-                        rev_parse_commit(&repo_root, &upd.remote_oid)?
-                    };
-                    let base_for_gate = remote_base_opt.unwrap_or_else(|| trunk.sha.clone());
-                    verify_hook_target_ledger_and_ci(
-                        &repo_root,
-                        &base_for_gate,
-                        &c_sha,
-                        ledger_path,
-                        receipt_path,
-                        auth_pol.require_ci,
-                    )?;
-                    if !remotes.is_empty() {
-                        return Err(fail(
-                            format!(
-                                "LOCAL_ELIGIBLE_ONLY: remote_pr_verification_required(branch={rem_branch})"
-                            ),
-                            2,
-                        ));
-                    }
+                if saw_branch_push {
+                    Ok(Some(format!(
+                        "HOOK_ADVISORY: remote_policy_authority=UNKNOWN({reason}); local pre-push cannot verify remote trunk policy — deferring remote governance to canonical merge-policy-check"
+                    )))
+                } else {
+                    Ok(None)
                 }
             }
-        }
-        return Ok(());
+            HookPolicyAuthority::LocalAbsentOnly => {
+                for upd in &updates {
+                    if let Some(br) = upd.remote_ref.strip_prefix("refs/heads/") {
+                        if is_governed_target_branch(br, &trunk.branch, &[])
+                            && !is_zero_oid(&upd.remote_oid)
+                            && (unfetched_refs.contains(br) || stale_tracking_refs.contains(br))
+                        {
+                            return Err(fail(
+                                format!("MERGE_BLOCKED: stale_remote_target_ref({br})"),
+                                1,
+                            ));
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            HookPolicyAuthority::EstablishedPolicy => {
+                let mp_ci = test_repo_case_insensitive(&repo_root);
+                let auth_pol = load_hook_policy_config(
+                    &repo_root,
+                    &trunk.sha,
+                    trunk_has_policy,
+                    remote_obj_policy_sha.as_deref(),
+                    wt_pol_path.as_deref(),
+                    false,
+                    &live_head_sha,
+                    head_has_policy,
+                    first_candidate_policy_sha.as_deref(),
+                )?;
+                let policy_base_sha = if !trunk.sha.is_empty() {
+                    trunk.sha.as_str()
+                } else if let Some(ref rem_pol_sha) = remote_obj_policy_sha {
+                    rem_pol_sha.as_str()
+                } else if head_has_policy {
+                    live_head_sha.as_str()
+                } else {
+                    ""
+                };
+                let require_pol_blob =
+                    trunk_has_policy || remote_obj_policy_sha.is_some() || head_has_policy;
+
+                let mut saw_branch_push = false;
+                for (upd, commit_opt) in updates.iter().zip(push_commits) {
+                    let is_delete = upd.local_ref == "(delete)" || is_zero_oid(&upd.local_oid);
+                    if is_delete {
+                        if let Some(br) = upd.remote_ref.strip_prefix("refs/heads/") {
+                            if is_governed_target_branch(
+                                br,
+                                &trunk.branch,
+                                &auth_pol.allowed_target_branches,
+                            ) {
+                                return Err(fail(
+                                    format!("MERGE_BLOCKED: protected_target_deletion({br})"),
+                                    1,
+                                ));
+                            }
+                        }
+                        continue;
+                    }
+
+                    if let Some(ref c_sha) = commit_opt {
+                        validate_hook_candidate_commit(
+                            &repo_root,
+                            policy_base_sha,
+                            require_pol_blob,
+                            c_sha,
+                            &policy_protected_arr,
+                            &auth_pol,
+                            mp_ci,
+                        )?;
+                    }
+
+                    if let Some(rem_branch) = upd.remote_ref.strip_prefix("refs/heads/") {
+                        saw_branch_push = true;
+                        if is_governed_target_branch(
+                            rem_branch,
+                            &trunk.branch,
+                            &auth_pol.allowed_target_branches,
+                        ) {
+                            let Some(c_sha) = commit_opt else {
+                                return Err(fail(
+                                    "MERGE_BLOCKED: non_commit_push_to_governed_branch",
+                                    1,
+                                ));
+                            };
+                            if unfetched_refs.contains(rem_branch)
+                                || stale_tracking_refs.contains(rem_branch)
+                            {
+                                return Err(fail(
+                                    format!("MERGE_BLOCKED: stale_remote_target_ref({rem_branch})"),
+                                    1,
+                                ));
+                            }
+                            if auth_pol.auto_merge != "authorized" {
+                                return Err(fail(
+                                    format!(
+                                        "PR_READY: direct_push_blocked(branch={rem_branch},auto_merge=disabled)"
+                                    ),
+                                    2,
+                                ));
+                            }
+                            assert_merge_dirty_worktree_clean(
+                                &repo_root,
+                                &policy_protected_arr,
+                                mp_ci,
+                                "policy_modified_in_pr",
+                            )?;
+                            let remote_base_opt = if is_zero_oid(&upd.remote_oid) {
+                                None
+                            } else {
+                                rev_parse_commit(&repo_root, &upd.remote_oid)?
+                            };
+                            let base_for_gate =
+                                remote_base_opt.unwrap_or_else(|| trunk.sha.clone());
+                            verify_hook_target_ledger_and_ci(
+                                &repo_root,
+                                &base_for_gate,
+                                &c_sha,
+                                ledger_path,
+                                receipt_path,
+                                auth_pol.require_ci,
+                            )?;
+                            if !remotes.is_empty() {
+                                return Err(fail(
+                                    format!(
+                                        "LOCAL_ELIGIBLE_ONLY: remote_pr_verification_required(branch={rem_branch})"
+                                    ),
+                                    2,
+                                ));
+                            }
+                        }
+                    }
+                }
+                if let (true, Some(reason)) = (saw_branch_push, unknown_reason) {
+                    Ok(Some(format!(
+                        "HOOK_ADVISORY: remote_policy_authority=UNKNOWN({reason}); validated local policy only — deferring remote governance to canonical merge-policy-check"
+                    )))
+                } else {
+                    Ok(None)
+                }
+            }
+        };
     }
 
     // pre-merge-commit
-    if !live_head_sha.is_empty() {
-        validate_candidate_commit(&live_head_sha)?;
+    let trunk = resolve_fallback_hook_trunk_authority(&repo_root, &remotes, None)?.unwrap_or(
+        TrunkAuthority {
+            sym_full: String::new(),
+            branch: String::new(),
+            sha: String::new(),
+        },
+    );
+    let trunk_has_policy =
+        !trunk.sha.is_empty() && check_policy_blob_in_tree(&repo_root, &trunk.sha)?;
+    let merge_heads = read_merge_head_commits(&repo_root)?;
+    let staged_has_policy = check_policy_staged_in_index(&repo_root)?;
+
+    let mut first_candidate_policy_sha: Option<String> = None;
+    let mut any_candidate_has_policy = false;
+    for mh in &merge_heads {
+        let has_pol = if mh == &trunk.sha {
+            trunk_has_policy
+        } else if mh == &live_head_sha {
+            head_has_policy
+        } else {
+            check_policy_blob_in_tree(&repo_root, mh)?
+        };
+        if has_pol {
+            any_candidate_has_policy = true;
+            if first_candidate_policy_sha.is_none() {
+                first_candidate_policy_sha = Some(mh.clone());
+            }
+        }
     }
-    if !merge_head_sha.is_empty() {
-        validate_candidate_commit(&merge_head_sha)?;
+
+    if !trunk_has_policy
+        && !wt_has_policy
+        && !head_has_policy
+        && !any_candidate_has_policy
+        && !staged_has_policy
+    {
+        return Ok(None);
+    }
+
+    let mp_ci = test_repo_case_insensitive(&repo_root);
+    let auth_pol = load_hook_policy_config(
+        &repo_root,
+        &trunk.sha,
+        trunk_has_policy,
+        None,
+        wt_pol_path.as_deref(),
+        staged_has_policy,
+        &live_head_sha,
+        head_has_policy,
+        first_candidate_policy_sha.as_deref(),
+    )?;
+
+    if !live_head_sha.is_empty() {
+        validate_hook_candidate_commit(
+            &repo_root,
+            &trunk.sha,
+            trunk_has_policy,
+            &live_head_sha,
+            &policy_protected_arr,
+            &auth_pol,
+            mp_ci,
+        )?;
+    }
+    for mh in &merge_heads {
+        validate_hook_candidate_commit(
+            &repo_root,
+            &trunk.sha,
+            trunk_has_policy,
+            mh,
+            &policy_protected_arr,
+            &auth_pol,
+            mp_ci,
+        )?;
+    }
+
+    if !trunk.sha.is_empty() {
+        if trunk_has_policy && !staged_has_policy {
+            return Err(fail("MERGE_BLOCKED: policy_modified_in_pr", 1));
+        }
+        let staged_diff: Vec<String> = run_git_paths_z(
+            &repo_root,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--cached",
+                "--name-status",
+                "-z",
+                &trunk.sha,
+                "--",
+            ],
+            GitZMode::NameStatus,
+            "MERGE_BLOCKED",
+            &no_env,
+        )?
+        .into_iter()
+        .filter(|p| !p.is_empty() && !test_checkpoint_path(p))
+        .collect();
+        enforce_policy_and_protected_paths(
+            &staged_diff,
+            &policy_protected_arr,
+            "policy_modified_in_pr",
+            &auth_pol.protected_paths,
+            auth_pol.allow_protected,
+            false,
+            mp_ci,
+        )?;
     }
 
     let cur_sym_res = run_git(&repo_root, &["symbolic-ref", "-q", "HEAD"], &no_env, None)?;
@@ -3044,7 +3633,7 @@ pub fn check_git_hook_operation(
         String::new()
     };
     let on_governed_target = if let Some(cur_branch) = cur_sym_full.strip_prefix("refs/heads/") {
-        is_governed_target_branch(cur_branch)
+        is_governed_target_branch(cur_branch, &trunk.branch, &auth_pol.allowed_target_branches)
     } else {
         !live_head_sha.is_empty() && !trunk.sha.is_empty() && live_head_sha == trunk.sha
     };
@@ -3059,25 +3648,28 @@ pub fn check_git_hook_operation(
                 2,
             ));
         }
-        if merge_head_sha.is_empty() {
+        if merge_heads.is_empty() {
             return Err(fail("MERGE_BLOCKED: missing_merge_head", 1));
         }
+        if merge_heads.len() > 1 {
+            return Err(fail("MERGE_BLOCKED: unsupported_octopus_merge", 1));
+        }
         let base_for_gate = if !live_head_sha.is_empty() {
-            live_head_sha.clone()
+            live_head_sha
         } else {
-            trunk.sha.clone()
+            trunk.sha
         };
         verify_hook_target_ledger_and_ci(
             &repo_root,
             &base_for_gate,
-            &merge_head_sha,
+            &merge_heads[0],
             ledger_path,
             receipt_path,
             auth_pol.require_ci,
         )?;
     }
 
-    Ok(())
+    Ok(None)
 }
 
 #[cfg(test)]

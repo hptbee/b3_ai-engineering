@@ -3,7 +3,7 @@ use crate::json::JsonValue;
 
 /// Host-neutral evaluation outcome for a hook invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HookOutcome {
+pub(crate) enum HookOutcome {
     Allow,
     Advisory { message: String },
     Deny { message: String },
@@ -11,10 +11,10 @@ pub enum HookOutcome {
 
 /// Host-specific formatted output streams and exit status.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostResponse {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
+pub(crate) struct HostResponse {
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+    pub(crate) exit_code: i32,
 }
 
 impl HostResponse {
@@ -32,7 +32,7 @@ fn json_field(k: &str, v: &str) -> (String, JsonValue) {
 }
 
 /// Formats a `HookOutcome` into the exact protocol expected by `host`.
-pub fn format_response(
+pub(crate) fn format_response(
     host: HostId,
     raw_event: &str,
     kind: EventKind,

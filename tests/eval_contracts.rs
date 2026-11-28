@@ -1828,12 +1828,18 @@ fn hook_integration_canonical_contract_and_no_duplication() {
         .expect("hooks section present");
     assert_eq!(parsed_hooks.enabled, Some(true));
     assert_eq!(parsed_hooks.mode, Some(b3::hook::config::HookMode::Enforce));
+    assert!(
+        models_ex.contains("clarification_gate:") && models_ex.contains("understanding_threshold:"),
+        "config/models.example.md must preserve PR #47 planning clarification keys alongside hooks"
+    );
 
     // Removed legacy hook variables must not remain in canonical reference or docs
     for removed in [
         "B3_HOOK_SKIP_PRECOMMIT",
         "B3_PRECOMMIT_VERIFIED_TREE",
         "B3_MERGE_AUTHORIZED",
+        "B3_PROTECTED_PATHS",
+        "B3_IGNORE_DIRTY_PATHS",
     ] {
         assert!(
             !hook_ref.contains(removed),
