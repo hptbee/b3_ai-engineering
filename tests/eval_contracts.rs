@@ -2052,6 +2052,16 @@ fn static_analysis_canonical_contract_and_anti_bloat() {
         "PREEXISTING_BASELINE",
         "WORKFLOW_ONLY",
         "allowed-paths",
+        "Adaptive Scope",
+        "Coverage-gap",
+        "XS",
+        "XXL",
+        "Inline / Sequential",
+        "Shared Disjoint Writes",
+        "Isolated Writes",
+        "supplementary protection",
+        "unrelated, unchanged, non-blocking",
+        "only when",
     ] {
         assert!(
             contract.contains(required),
@@ -2059,11 +2069,46 @@ fn static_analysis_canonical_contract_and_anti_bloat() {
         );
     }
 
-    // (b) Cross-links across workflows, skills, reviewer agent, and docs.
+    // Review-loop strategy & conditional dispatch-naming & narrow baseline reviewer checks
+    let rl_strategy = normalize_lf(
+        &fs::read_to_string(root.join("review-loop/strategy.md")).expect("read strategy.md"),
+    );
+    assert!(
+        rl_strategy.len() <= 5_200,
+        "review-loop/strategy.md ({} B) exceeds 5200 B cap",
+        rl_strategy.len()
+    );
+    assert!(
+        rl_strategy.contains("static-analysis.md"),
+        "review-loop/strategy.md must reference static-analysis.md"
+    );
+    let disp_ref = normalize_lf(
+        &fs::read_to_string(root.join("workflows/references/dispatch-naming.md"))
+            .expect("read dispatch-naming.md"),
+    );
+    assert!(
+        disp_ref.len() <= 9_200 && disp_ref.contains("only when") && disp_ref.contains("static-analysis.md"),
+        "workflows/references/dispatch-naming.md must load static-analysis.md conditionally within 9200 B"
+    );
+    let rev_agent = normalize_lf(
+        &fs::read_to_string(root.join("agents/b3-reviewer.md")).expect("read b3-reviewer.md"),
+    );
+    assert!(
+        !rev_agent.contains("ignore `PREEXISTING_BASELINE`")
+            && !rev_agent.contains("ignore PREEXISTING_BASELINE"),
+        "agents/b3-reviewer.md must not instruct blanket ignoring PREEXISTING_BASELINE"
+    );
+    assert!(
+        rev_agent.contains("unrelated unchanged non-blocking `PREEXISTING_BASELINE`"),
+        "agents/b3-reviewer.md must qualify baseline skipping narrowly"
+    );
+
+    // (b) Cross-links across workflows, review-loop, skills, reviewer agent, and docs.
     for rel in [
         "workflows/ship.md",
         "workflows/research-ship.md",
         "workflows/feature-implementation.md",
+        "review-loop/strategy.md",
         "skills/engineering/verification/SKILL.md",
         "skills/engineering/code-review/SKILL.md",
         "skills/engineering/refactoring/SKILL.md",

@@ -45,6 +45,11 @@ fn git_entry_type(mode: &str) -> &'static str {
     }
 }
 
+/// Supplementary protection matching well-known dependency, toolchain, lint,
+/// ignore, workspace, formatter, and type-checker inputs across ecosystems.
+/// This list is defense-in-depth only and NOT proof of full input closure:
+/// callers with imported custom lint configs or custom scripts must pass them
+/// via `--relevant-paths` or omit `--relevant-paths` (`ALL`).
 const MANIFEST_EXACT_NAMES: &[&str] = &[
     "cargo.toml",
     "cargo.lock",
@@ -57,7 +62,10 @@ const MANIFEST_EXACT_NAMES: &[&str] = &[
     "package.json",
     "package-lock.json",
     "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
     "yarn.lock",
+    ".npmrc",
+    "makefile",
     "biome.json",
     "biome.jsonc",
     "knip.json",
@@ -102,8 +110,11 @@ const MANIFEST_EXACT_NAMES: &[&str] = &[
     ".markdownlint-cli2.yaml",
     ".pre-commit-config.yaml",
     ".eslintrc",
+    ".eslintignore",
     ".stylelintrc",
+    ".stylelintignore",
     ".prettierrc",
+    ".prettierignore",
 ];
 
 const MANIFEST_GLOB_PATTERNS: &[&str] = &[
@@ -1502,8 +1513,14 @@ mod tests {
             ".markdownlint-cli2.yaml",
             ".pre-commit-config.yaml",
             ".eslintrc",
+            ".eslintignore",
             ".stylelintrc",
+            ".stylelintignore",
             ".prettierrc",
+            ".prettierignore",
+            "Makefile",
+            ".npmrc",
+            "pnpm-workspace.yaml",
             "packages/app/.ruff.toml",
             r".\SubDir\Clippy.TOML",
             ".cargo/config.toml",

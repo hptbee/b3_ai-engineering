@@ -2183,3 +2183,259 @@ fn core_lint_analyzer_config_manifest_invalidation_and_doc_isolation() {
     );
     assert!(pc_doc_out.contains("PRECOMMIT_OK"), "{pc_doc_out}");
 }
+
+#[test]
+fn core_real_rustc_lint_receipt_reuse_closure_and_no_lint_fallback() {
+    // 1. Real project-native compiler/linter execution via rustc + receipt reuse + fail attribution
+    let tmp = TempDirGuard::new("real-rustc-lint");
+    let repo = tmp.path.join("crate_repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(&repo, ".gitignore", ".b3/\ntarget_out/\n", "ignore");
+    commit_file(
+        &repo,
+        "clippy.toml",
+        "too-many-arguments-threshold = 7\n",
+        "clippy",
+    );
+    commit_file(
+        &repo,
+        "src/lib.rs",
+        "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        "clean lib",
+    );
+
+    // Edit src/lib.rs cleanly and run real rustc with lint denials
+    fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 {\n    a.saturating_add(b)\n}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(repo.join("target_out")).unwrap();
+
+    let rustc_cmd =
+        "rustc --crate-type lib -D unused_imports -D dead_code --out-dir target_out src/lib.rs";
+    let receipt_rel = ".b3/ship/verify/rustc-lint.verify";
+    let (vr_c, vr_out, vr_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T1",
+        "--relevant-paths",
+        "src/lib.rs",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        rustc_cmd,
+    ]);
+    assert_eq!(
+        vr_c, 0,
+        "real rustc lint should pass cleanly: {vr_out}\n{vr_err}"
+    );
+    assert!(vr_out.contains("VERIFY_PASS"), "{vr_out}");
+
+    // Receipt reuse on unchanged tree
+    let (vc_c, vc_out, vc_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        rustc_cmd,
+        "--relevant-paths",
+        "src/lib.rs",
+    ]);
+    assert_eq!(vc_c, 0, "{vc_out}\n{vc_err}");
+    assert!(vc_out.contains("VERIFY_VALID"), "{vc_out}");
+
+    // Lint/ignore/workspace supplementary manifest edits trigger VERIFY_STALE
+    for (rel, body) in [
+        (".eslintignore", "dist/\n"),
+        ("pnpm-workspace.yaml", "packages:\n  - 'apps/*'\n"),
+        ("Makefile", "lint:\n\techo check\n"),
+    ] {
+        fs::write(repo.join(rel), body).unwrap();
+        let (st_c, st_out, st_err) = run_b3(&[
+            "guard",
+            "verify-check",
+            "--repo-root",
+            r,
+            "--receipt-path",
+            receipt_rel,
+            "--expected-cmd",
+            rustc_cmd,
+        ]);
+        let st_all = format!("{st_out}\n{st_err}");
+        assert_eq!(st_c, 2, "{rel} should trigger VERIFY_STALE: {st_all}");
+        assert!(st_all.contains("VERIFY_STALE"), "{rel}: {st_all}");
+        git_in(&repo, &["add", rel]);
+        // Refresh clean receipt before next check
+        let (rx_c, rx_out, rx_err) = run_b3(&[
+            "guard",
+            "verify-run",
+            "--repo-root",
+            r,
+            "--task-id",
+            "T_REF",
+            "--relevant-paths",
+            &format!("src/lib.rs,{rel}"),
+            "--receipt-path",
+            receipt_rel,
+            "--verify-cmd",
+            rustc_cmd,
+        ]);
+        assert_eq!(rx_c, 0, "{rx_out}\n{rx_err}");
+    }
+
+    // F03 closure: custom imported script omitted from manifest patterns is invalidated under ALL scope
+    fs::create_dir_all(repo.join("tools")).unwrap();
+    fs::write(
+        repo.join("tools/custom-lint-rules.cjs"),
+        "module.exports = { strict: true };\n",
+    )
+    .unwrap();
+    let (all_c, all_out, all_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T_ALL",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        rustc_cmd,
+    ]);
+    assert_eq!(all_c, 0, "{all_out}\n{all_err}");
+    fs::write(
+        repo.join("tools/custom-lint-rules.cjs"),
+        "module.exports = { strict: false };\n",
+    )
+    .unwrap();
+    let (cust_c, cust_out, cust_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        rustc_cmd,
+    ]);
+    let cust_all = format!("{cust_out}\n{cust_err}");
+    assert_eq!(
+        cust_c, 2,
+        "custom lint rule edit under ALL must invalidate receipt: {cust_all}"
+    );
+    assert!(cust_all.contains("VERIFY_STALE"), "{cust_all}");
+
+    // Inject real unused import & dead private helper -> rustc exits non-zero -> VERIFY_FAIL & verify-check rejects
+    fs::write(
+        repo.join("src/lib.rs"),
+        "use std::fmt;\nfn dead_helper() -> i32 { 1 }\npub fn add(a: i32, b: i32) -> i32 {\n    a.saturating_add(b)\n}\n",
+    )
+    .unwrap();
+    let (vf_c, vf_out, vf_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T_FAIL",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        rustc_cmd,
+    ]);
+    let vf_all = format!("{vf_out}\n{vf_err}");
+    assert_ne!(
+        vf_c, 0,
+        "unused import + dead_code should fail real rustc: {vf_all}"
+    );
+    assert!(vf_all.contains("VERIFY_FAIL"), "{vf_all}");
+
+    let (fc_c, fc_out, fc_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        rustc_cmd,
+    ]);
+    assert_ne!(
+        fc_c, 0,
+        "failed lint receipt must never pass verify-check: {fc_out}\n{fc_err}"
+    );
+
+    // 2. No-lint JS fallback: zero config churn, mechanical-check + symbol-check catch removed exported symbol
+    let no_lint = tmp.path.join("no_lint_js");
+    init_git_repo(&no_lint);
+    let nl = no_lint.to_str().unwrap();
+    commit_file(
+        &no_lint,
+        "src/api.js",
+        "export function computeTax(x) { return x * 0.1; }\n",
+        "api",
+    );
+    let nl_base = commit_file(
+        &no_lint,
+        "src/app.js",
+        "import { computeTax } from './api.js';\nexport const total = computeTax(100);\n",
+        "app",
+    );
+
+    // Clean update without adding any lint config
+    fs::write(
+        no_lint.join("src/api.js"),
+        "export function computeTax(x) { return x * 0.2; }\n",
+    )
+    .unwrap();
+    let (mc_ok, mc_out, mc_err) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        nl,
+        "--base-sha",
+        &nl_base,
+        "--allowed-paths",
+        "src/api.js",
+    ]);
+    assert_eq!(mc_ok, 0, "{mc_out}\n{mc_err}");
+    let (sc_ok, sc_out, sc_err) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        nl,
+        "--base-sha",
+        &nl_base,
+    ]);
+    assert_eq!(sc_ok, 0, "{sc_out}\n{sc_err}");
+
+    // Removing referenced export in no-lint repo fails symbol-check fallback cleanly
+    fs::write(
+        no_lint.join("src/api.js"),
+        "export function otherFn() { return 1; }\n",
+    )
+    .unwrap();
+    let (sc_fail, sc_fout, sc_ferr) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        nl,
+        "--base-sha",
+        &nl_base,
+    ]);
+    let sc_fall = format!("{sc_fout}\n{sc_ferr}");
+    assert_eq!(
+        sc_fail, 2,
+        "no-lint fallback should catch dangling_refs: {sc_fall}"
+    );
+    assert!(sc_fall.contains("dangling_refs=computeTax"), "{sc_fall}");
+}

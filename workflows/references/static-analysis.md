@@ -1,49 +1,54 @@
 # Adaptive Static Analysis & Offloading Contract (On-Demand)
 
-Canonical workflow contract for project-native static analysis, dead-code verification, safe auto-fix boundaries, baseline attribution, and mechanical offloading (`0 B` always-on context cost). Heavy analysis is `WORKFLOW_ONLY` ([`hook-integration.md`](hook-integration.md)).
+Conditional workflow contract for static analysis, dead-code checks, safe auto-fix, baseline attribution, and mechanical offloading (`0 B` always-on; load **only when** code analysis, verify, auto-fix, review, refactor, audit, or impl applies — skip in pure `/b3-plan`, `/b3-research`, `/b3-pr-{comment,reply}`). Heavy checks stay `WORKFLOW_ONLY` ([`hook-integration.md`](hook-integration.md)).
 
-## 1. Project-Native Tool Discovery (Parent-Once, Untrusted-Safe)
+## 1. Project-Native Discovery & Adaptive Scope (Parent-Once, Untrusted-Safe)
 
-Parent runs discovery **once** during Preflight / before parallel dispatch (`ship.md`, `research-ship.md`, `feature-implementation.md`) and passes the resolved command/scope hint to workers—never repeat discovery inside every worker.
+Parent runs discovery **once** in Preflight / before parallel dispatch (`ship.md`, `research-ship.md`, `feature-implementation.md`) and passes the resolved command/scope hint to workers—never rediscover inside every worker.
 
-1. **Verified repo scripts & lint configs:** inspect manifests/configs read-only (`package.json`, `Cargo.toml`, `pyproject.toml`, `.eslintrc*`, `ruff.toml`, `clippy.toml`) before running; never blindly execute unreviewed third-party PR scripts or plugins.
-2. **Language toolchain defaults:** `cargo clippy`, `tsc --noEmit`, `ruff check`, `go vet`, `dotnet build`.
-3. **B3 native deterministic guards:** `b3 guard mechanical-check`, `b3 guard symbol-check`, `b3 guard verify-check` (with `src/guard/mechanical.rs` and `src/guard/symbol.rs` authoritative).
-4. **No-lint progressive fallback:** `REUSE` existing repo tools → `FALLBACK` compiler/typecheck + `mechanical-check` + `symbol-check` with zero config churn → `BOOTSTRAP` new lint config **only** when explicitly authorized by task/user.
-5. **Ecosystem security & boundary checks (when present):** dependency audits (`cargo audit`, `npm audit`), SAST/secret scans, circular-dep, or layer analyzers.
+1. **Verified repo scripts & configs:** inspect manifests/configs read-only before running; never blindly execute unreviewed third-party PR scripts or plugins.
+2. **Toolchain defaults:** `cargo clippy`, `tsc --noEmit`, `ruff check`, `go vet`, `dotnet build`.
+3. **B3 deterministic guards:** `mechanical-check`, `symbol-check`, `verify-check` (`src/guard/{mechanical,symbol,verify}.rs`).
+4. **Progressive fallback:** `REUSE` existing tools → `FALLBACK` compiler/typecheck + `mechanical-check` + `symbol-check` with zero config churn → `BOOTSTRAP` new config **only** when explicitly authorized by task/user.
+5. **Security & boundary analyzers (when present):** `cargo audit`/`npm audit`, SAST/secret scans, circular/layer checks.
+
+- **Adaptive scope (T-shirt size × risk/dependency impact):** `XS`: relevant changed files; `S`: changed symbols & consumers; `M`: affected modules; `L`: affected packages; `XL`: repository-wide if needed; `XXL`: repository-wide + architecture. Risk or dependency impact widens scope; mandatory CI checks always stay enabled.
+- **Coverage-gap rule:** invoke specialized analyzers and B3 `symbol-check` fallback **only** when native compiler/linter leaves a real coverage gap or task requires refactor/symbol checks—never duplicate checks already covered cleanly.
 
 ## 2. 4-Level Dead Code & Production-Consumer Verification
 
 | Level | Scope | Typical Signal / Tool |
 | --- | --- | --- |
-| `L1` | Local / private unused | Unused locals, params, private helpers, unused imports (compiler/linter) |
-| `L2` | Module-internal unreferenced | Package/module orphans (`SYMBOL_ADVISORY` `orphan_internal`, internal lints) |
-| `L3` | Exported / public API unreferenced | Workspace-wide unreferenced exports/symbols (`symbol-check`, TS/Rust/Go/Python refs) |
-| `L4` | Unreachable / dead config / unused deps | Unreachable branches, stale flags/configs, unused deps (`cargo udeps`/`machete`, `knip`, `depcheck`) |
+| `L1` | Local / private unused | Unused locals/params/helpers/imports (compiler/linter) |
+| `L2` | Module-internal unreferenced | Module/package orphans (`SYMBOL_ADVISORY` `orphan_internal`, internal lints) |
+| `L3` | Exported / public API unreferenced | Workspace unreferenced exports (`symbol-check`, workspace refs) |
+| `L4` | Unreachable / dead config / unused deps | Dead branches/flags/configs, unused deps (`cargo udeps`/`machete`, `knip`, `depcheck`) |
 
-- **Production-consumer verification (mandatory before deletion or blocking flag):** `unit tests != runtime/production caller`. Grep runtime entrypoints (`src/`, `bin/`, exports, DI/reflection/FFI) separately from test references before deleting or flagging `L2`/`L3` symbols.
-- Pair compiler/linter output with `b3 guard symbol-check` fallback cleanly: `SYMBOL_ADVISORY` (`orphan_internal`) is non-blocking; `SYMBOL_FINDINGS` (`dangling_refs`) blocks (`exit 2`) unless a proven textual false positive is documented.
+- **Production-consumer verification (before deletion or blocking flag):** `unit tests != runtime/production caller`. Grep runtime entrypoints (`src/`, `bin/`, exports, DI/reflection/FFI) separately from tests before flagging/deleting `L2`/`L3` symbols. Pair with `symbol-check`: `SYMBOL_ADVISORY` non-blocking; `SYMBOL_FINDINGS` (`dangling_refs`) blocks (`exit 2`) unless proven textual FP.
 
 ## 3. Duplicates, Complexity, Security & Architecture Boundaries
 
-- Offload token/AST duplicates, cyclomatic/cognitive complexity, SAST/secret scans, and circular/layer dependency checks to existing project tools + `b3 guard mechanical-check` (`safety_hits`, `advisory_hits`, `obsolete_hits`) first.
-- Distinguish accidental bloat / `CONFIRMED REDUNDANCY` from justified `INTENTIONAL COMPLEXITY` per [`residue-checklist.md`](../../skills/engineering/code-review/references/residue-checklist.md); never flag complexity on line count alone.
+- Offload AST/token duplicates, cyclomatic/cognitive complexity, SAST/secret scans, and circular/layer checks to project tools + `mechanical-check` (`safety_hits`, `advisory_hits`, `obsolete_hits`) first.
+- Distinguish `CONFIRMED REDUNDANCY` from `INTENTIONAL COMPLEXITY` ([`residue-checklist.md`](../../skills/engineering/code-review/references/residue-checklist.md)); never flag complexity on LOC alone.
 
-## 4. Scoped Safe Auto-Fix Boundaries
+## 4. Scoped Safe Auto-Fix & Receipt Closure
 
-- Run auto-fix **only** inside explicitly writable owned `allowed-paths`: **never** in read-only `/b3-audit` or `/b3-review` mode, **never** across overlapping wave paths, and **never** before `check-wave --partition` verification.
-- Allow safe deterministic fixes only (formatting, unused imports, safe lint `--fix` without dirty-tree masking).
-- **Never** silence warnings via suppressions (`eslint-disable`, `@ts-ignore`, `#[allow(...)]` without concrete rationale) or speculative behavioral rewrites.
-- **Receipt invalidation:** any auto-fix edit (including lint/analyzer config edits tracked by `src/guard/verify.rs`) invalidates prior `b3-verify-v1` receipts (`VERIFY_STALE`) — run auto-fixes **before** final `b3 guard verify-run` / final test & build verification.
+- **Execution-mode safety:**
+  - `Inline / Sequential`: enforce existing `allowed-paths` (no `check-wave` required).
+  - `Shared Disjoint Writes`: require `check-wave --partition` + ownership verification.
+  - `Isolated Writes`: require `check-worktree` + ownership verification.
+  - `Read-only` (`/b3-audit`, `/b3-review`): **no auto-fix**.
+- **Pre-run scoped mutation:** verify the tool accepts explicit file/path targets before running in shared WTs; run repo-wide mutators only in `ISOLATED_WRITES` or quiescent `SEQUENTIAL` mode (post-run `git diff` alone cannot undo overwritten peer edits).
+- Apply deterministic fixes only (formatting, unused imports, safe lint `--fix`); **never** add warning suppressions without concrete rationale or run speculative behavioral rewrites.
+- **Receipt closure:** built-in matchers in `src/guard/verify.rs` are **supplementary protection only**, not proof of full input closure. Parent MUST list all verification inputs (lint/ignore configs, imported custom configs, custom lint scripts) in `--relevant-paths`, or omit `--relevant-paths` (`ALL`) whenever dependency/config closure cannot be proven. Auto-fix edits invalidate prior receipts (`VERIFY_STALE`) → run before final `verify-run`.
 
-## 5. Baseline-Aware Verification (Regression Attribution)
+## 5. Narrow Baseline Policy (Exit-0 Warnings ≠ Regression-Free)
 
-- Never treat raw warning count deltas (`200 -> 195`) as regression-free (`10` fixed + `5` new = `5` introduced regressions).
-- Track touched-file / diff-line attribution or pre/post fingerprints:
-  - **Diff-introduced regressions:** block `PASS`.
-  - **Unchanged pre-existing warnings:** report separately as `PREEXISTING_BASELINE` (never conflate with clean or diff-caused defects).
+- Distinguish **command exit `0` ≠ zero regressions**: inspect diff-introduced warnings/diagnostics even when a linter exits `0` if policy forbids new warnings.
+- Ignore **only** unrelated, unchanged, non-blocking legacy `PREEXISTING_BASELINE` findings; **always** act on findings impacting security, correctness, required CI checks, or acceptance criteria. Do not bypass mandatory CI checks or introduce a standalone baseline DB.
 
-## 6. Mechanical Review Offloading & Guard Consolidation Boundary
+## 6. Mechanical Review Offloading & Review Loop Sync
 
-- **Pre-review offload:** run deterministic checks (`verify-check`/`verify-run`, `mechanical-check`, `symbol-check`, native lint/SAST/boundary tools) **before** dispatching AI reviewers. Hand reviewers a compact evidence digest (`tool: pass/fail + touched regression counts + PREEXISTING_BASELINE`) so `b3-reviewer`, `b3-security-reviewer`, and `b3-architecture-reviewer` skip mechanical trivia and focus on semantics, trust boundaries, architecture, and runtime risk.
-- **Hook vs workflow boundary:** keep `b3 hook` Tier 0 (`p95 < 10 ms`) and Tier 1 fast precommit/push hooks strictly free of heavy linters; keep `src/guard/mechanical.rs` and `src/guard/symbol.rs` as the single authoritative deterministic guard implementations.
+- **Pre-review offload:** run deterministic checks (`verify-run`/`verify-check`, `mechanical-check`, native lint/SAST/boundary, `symbol-check` on refactors/gaps) before AI reviewers; pass compact digest (`tool: pass/fail + new regressions + PREEXISTING_BASELINE`) so AI reviewers skip trivia and inspect semantics, security, architecture, and runtime risk.
+- **Review Loop (`review-loop/strategy.md`):** Iter 1 reuses fresh Parent lint digest on same tree/`HEAD`/scope; Iter 2+ re-runs affected-scope lint on `delta_files`+configs (widening on config/risk/boundary changes), skipping duplicate analyzers.
+- **Hook boundary:** keep `b3 hook` Tier 0 (`p95 < 10 ms`) and Tier 1 fast hooks free of heavy linters; keep `mechanical.rs` and `symbol.rs` authoritative.

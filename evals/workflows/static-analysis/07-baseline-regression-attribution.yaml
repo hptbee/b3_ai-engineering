@@ -1,9 +1,9 @@
 id: static-analysis-baseline-regression-attribution-007
 artifact: workflows/references/static-analysis.md
-intent: Baseline-aware attribution blocks PASS when a net warning drop masks diff-introduced regressions and separates unchanged warnings as PREEXISTING_BASELINE
+intent: Narrow baseline policy distinguishes exit-0 warnings from clean passes, blocks diff regressions and security/correctness/AC/CI-impacting baseline flaws, and avoids a baseline DB
 scenario: |
-  Total repository lint warnings drop from 200 to 195 after fixing 10 legacy warnings while introducing 5 new warnings in diff-touched files
-  Workflow compares touched-file/diff-line attribution against baseline, blocks PASS on the 5 diff-introduced regressions instead of trusting raw count deltas, and reports unchanged legacy warnings separately as PREEXISTING_BASELINE
+  Total repository lint warnings drop from 200 to 195 while introducing 5 new warnings on an exit-0 linter run, or new code depends on a preexisting security/type-correctness bug
+  Workflow distinguishes exit-0 status from regression count, blocks PASS on diff regressions and any security/correctness/AC/CI-impacting finding (skipping only unrelated unchanged non-blocking PREEXISTING_BASELINE noise), and uses no separate baseline DB
 expected_outcome: BLOCKED
 failure_mode: net-warning-drop-masking-new-regressions
 notes: Prevents legacy cleanup from hiding newly introduced static-analysis defects
