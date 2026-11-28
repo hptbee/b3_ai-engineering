@@ -1,0 +1,9 @@
+id: clarify-execution-reassessment-targeted-010
+artifact: workflows/references/clarification-gate.md
+intent: Newly discovered contradicting evidence or architectural constraints during execution trigger targeted reassessment only
+scenario: |
+  During execution of T003, build/test evidence contradicts an earlier schema assumption while completed T001 and independent T002 remain unaffected
+  Orchestrator invalidates only T003 and its affected dependents, preserves valid T001/T002 work and receipts, and reassesses T003
+expected_outcome: PASS
+failure_mode: ignores-contradicting-evidence-or-invalidates-unrelated-completed-work
+notes: Reassessment triggers only on material changes and avoids repeatedly re-scoring unchanged requirements

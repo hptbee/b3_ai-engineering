@@ -1,0 +1,9 @@
+id: clarify-discoverable-info-no-question-005
+artifact: workflows/references/clarification-gate.md
+intent: Information discoverable from source code, docs, configs, tests, or prior decisions does not trigger user questions
+scenario: |
+  User asks to add an endpoint matching existing repository error format and test framework without naming them explicitly
+  Agent inspects existing source code, docs, config, and tests locally instead of asking the user
+expected_outcome: PASS
+failure_mode: asking-user-for-locally-discoverable-context
+notes: Low-cost local discovery must be exhausted before raising any clarification question

@@ -23,6 +23,20 @@ Optional, advisory model preferences for B3 workflows. Copy to `~/.b3/models.md`
 - Use a preferred model only when the active host exposes a supported selection mechanism; otherwise inherit the native model.
 - Never block workflows, edit IDE settings, or mutate committed `agents/*.md` because of model preferences.
 
+## Planning Preferences
+
+Optional planning gate and understanding threshold defaults for `/b3-plan` and Plan / Scope phases:
+
+```yaml
+planning:
+  clarification_gate: true
+  understanding_threshold: 96
+```
+
+- Defaults: `clarification_gate: true`, `understanding_threshold: 96` (valid integer range `1..=100`).
+- Field-level precedence: `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (or B3_MODELS_PERSONAL) > built-in defaults`.
+- Parent resolves effective settings once per invocation; missing, partial, or invalid fields fall back per field to the **next valid layer** before built-in defaults (malformed project values never discard valid personal values; never blocks execution or mutates files).
+
 ## Hook Preferences
 
 Optional host-native guard hook preferences. Missing, partial, or malformed sections fall back to defaults (`enabled: true`, `mode: enforce`) with warnings.

@@ -1,0 +1,9 @@
+id: clarify-low-score-no-material-ambiguity-016
+artifact: workflows/references/clarification-gate.md
+intent: Estimated score below understanding_threshold without remaining material ambiguity proceeds autonomously without blocking
+scenario: |
+  clarification_gate is true and understanding_threshold is 96
+  Initial estimated score is 92%, local discovery resolves routine conventions to reversible assumptions, and zero actionable material ambiguity remains
+expected_outcome: PASS
+failure_mode: artificial-score-only-blocking-without-material-ambiguity
+notes: Threshold is an evidence-grounded heuristic trigger, not a mechanical block when zero material decisions require user input

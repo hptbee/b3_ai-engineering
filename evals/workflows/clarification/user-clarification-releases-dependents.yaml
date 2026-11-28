@@ -1,0 +1,9 @@
+id: clarify-user-answer-releases-dependents-009
+artifact: workflows/references/clarification-gate.md
+intent: Receiving user clarification updates requirement understanding and immediately releases newly unblocked dependent tasks
+scenario: |
+  T002 was blocked awaiting user clarification while T001 completed and research context was cached
+  User provides clarification; orchestrator updates understanding and dependency graph, releases T002 and its unblocked dependents immediately, and reuses prior context without restarting planning
+expected_outcome: PASS
+failure_mode: full-planning-restart-or-discarded-completed-context
+notes: Continuous dependency-aware dispatch resumes without discarding valid completed work

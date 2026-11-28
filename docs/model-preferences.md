@@ -36,6 +36,63 @@ B3 never claims a model switch occurred unless the host runtime actually confirm
 
 **Future runtime boundary:** These Markdown files are advisory role preferences, not a universal model API, pricing service, or guaranteed cost router. A future external coding-agent CLI must expose and confirm the capabilities it actually supports; B3 does not assume every host can switch models per subagent or report tokens. Keep private provider configuration and credentials outside the public repository. See the [roadmap](roadmap.md) and [evaluation method](evaluation.md).
 
+## Optional `planning:` Clarification Gate Settings
+
+The same preference files (`~/.b3/models.md` / `B3_MODELS_PERSONAL` and `<project>/.b3/models.md`) also host optional `planning:` settings for [`workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md):
+
+- **Field-level precedence:** `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (B3_MODELS_PERSONAL) > built-in defaults (clarification_gate: true, understanding_threshold: 96)`.
+- **Resolve once & per-field fallback:** Parent resolves effective `planning:` values once per invocation (workers do not re-read `models.md`). Missing, partial, or malformed fields/files fall back **per field to the next valid layer** before built-in defaults (`true`, `96`), never discarding valid personal values when a project override is partial or malformed, and never blocking across hosts.
+- Disabling `clarification_gate` only relaxes routine ambiguity prompts; it **never** bypasses security boundaries, required user authorization, research governance, protected paths, destructive safeguards, or merge authorization.
+
+### Field-Level Merge Example
+
+If `~/.b3/models.md` sets:
+
+```yaml
+planning:
+  clarification_gate: true
+  understanding_threshold: 90
+```
+
+and `<project>/.b3/models.md` sets only:
+
+```yaml
+planning:
+  clarification_gate: false
+```
+
+the effective configuration resolved by Parent for that invocation is `clarification_gate: false` and `understanding_threshold: 90` (if `<project>/.b3/models.md` instead had an invalid threshold such as `understanding_threshold: abc`, that invalid field falls back to the personal `90`, or to `96` if personal omitted it).
+
+### Enabled (default behavior)
+
+```yaml
+planning:
+  clarification_gate: true
+  understanding_threshold: 96
+```
+
+### Disabled (document reversible assumptions instead of routine prompts)
+
+```yaml
+planning:
+  clarification_gate: false
+```
+
+### Project Override (`<project>/.b3/models.md`)
+
+```yaml
+planning:
+  clarification_gate: true
+  understanding_threshold: 98
+```
+
+### Per-Invocation Override (in prompt or command invocation)
+
+```text
+/b3-ship clarification_gate: false -- implement the pagination endpoint using repo conventions
+```
+(Or raise/lower threshold for one run: `understanding_threshold: 90`.)
+
 ## Hook Configuration (`hooks:`)
 
 `~/.b3/models.md` (or `B3_MODELS_PERSONAL`) and `<project>/.b3/models.md` can also hold an optional `hooks:` YAML block controlling opt-in `b3 hook` behavior (`enabled: true|false`, `mode: enforce|audit|off`).

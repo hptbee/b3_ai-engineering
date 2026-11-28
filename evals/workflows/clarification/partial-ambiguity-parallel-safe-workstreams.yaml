@@ -1,0 +1,9 @@
+id: clarify-partial-ambiguity-parallel-safe-008
+artifact: workflows/references/clarification-gate.md
+intent: Partial ambiguity isolates only affected tasks and dependents while continuing independent and shared read-only workstreams
+scenario: |
+  Task A requires a user decision, Tasks B, C, and D declare depends_on: [A], Task E is an independent authorized task, and Task F is SHARED_READ_ONLY discovery
+  Orchestrator blocks A and holds B, C, and D with zero speculative edits, batches A's concise clarification once, and runs E and F immediately
+expected_outcome: PASS
+failure_mode: partial-ambiguity-stalls-entire-orchestration
+notes: Preserves Maximum Safe Parallelism via A..F continuous isolation without restarting planning
