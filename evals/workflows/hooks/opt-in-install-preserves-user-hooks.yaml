@@ -1,0 +1,9 @@
+id: hooks-opt-in-install-preserves-user-hooks-006
+artifact: docs/hooks.md
+intent: Explicit opt-in hook installation preserves existing user hooks, respects core.hooksPath and worktrees, and uninstalls cleanly
+scenario: |
+  User runs b3 install product or b3 install global, then runs b3 hook install --host all --scope project, then b3 hook uninstall
+  Existing installers never silently activate blocking hooks; b3 hook install chains user Git hooks via .b3-user and preserves JSON custom keys; uninstall restores user hooks cleanly
+expected_outcome: PASS
+failure_mode: silent-hook-activation-on-upgrade-or-clobbered-user-hooks
+notes: Supports idempotency, dry-run preview, spaces/Unicode paths, and atomic backup rollback

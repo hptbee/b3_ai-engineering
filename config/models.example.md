@@ -36,3 +36,18 @@ planning:
 - Defaults: `clarification_gate: true`, `understanding_threshold: 96` (valid integer range `1..=100`).
 - Field-level precedence: `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (or B3_MODELS_PERSONAL) > built-in defaults`.
 - Parent resolves effective settings once per invocation; missing, partial, or invalid fields fall back per field to the **next valid layer** before built-in defaults (malformed project values never discard valid personal values; never blocks execution or mutates files).
+
+## Hook Preferences
+
+Optional host-native guard hook preferences. Missing, partial, or malformed sections fall back to defaults (`enabled: true`, `mode: enforce`) with warnings.
+
+```yaml
+hooks:
+  enabled: true
+  mode: enforce
+```
+
+- Modes: `enforce` (block denied operations), `audit` (emit advisory warnings without blocking), `off` (no-op hook pass-through).
+- Precedence: CLI / env `B3_HOOK_MODE` > `<project>/.b3/models.md` > `~/.b3/models.md` (or `B3_MODELS_PERSONAL`) > built-in defaults (`enabled: true`, `mode: enforce`).
+- Hook installation is opt-in; upgrades and `b3 sync` never silently install blocking host hooks.
+- Hook `audit` or `off` settings do not disable or bypass mandatory workflow Guards run inside B3 workflows or `b3 guard`.

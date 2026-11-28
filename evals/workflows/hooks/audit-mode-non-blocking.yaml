@@ -1,0 +1,9 @@
+id: hooks-audit-mode-non-blocking-004
+artifact: workflows/references/hook-integration.md
+intent: Audit mode evaluates checks and emits concise advisory diagnostics without introducing B3 hook blocks
+scenario: |
+  hooks.mode is set to audit
+  A protected operation or policy check triggers a finding; b3 hook run downgrades Deny into [audit] Advisory with exit 0 (or host allow response)
+expected_outcome: PASS
+failure_mode: audit-mode-blocks-user-or-swallows-diagnostics
+notes: Supports low-friction rollout and telemetry observation

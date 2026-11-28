@@ -8,11 +8,55 @@ use crate::fs::{
 use crate::git::{run_git_paths_z, test_git_mid_operation, GitZMode};
 use crate::guard::verify::{test_verify_receipt, validate_receipt_covers_paths};
 
+#[derive(Clone, Copy)]
+enum AllowedScope<'a> {
+    ExplicitCli(&'a str),
+    HookExplicit(&'a str),
+    HookImplicit,
+}
+
+fn is_dot_b3_path(p: &str) -> bool {
+    let low = p.to_ascii_lowercase();
+    low == ".b3" || low.starts_with(".b3/")
+}
+
 /// Validates staged index state, allowed paths, secrets, checkpoint exclusion,
 /// and optional verification receipt binding prior to commit.
 pub fn run(
     repo_root_raw: &str,
     allowed_paths: &str,
+    require_verify_receipt: &str,
+    ignore_dirty_paths: &str,
+    expected_cmd: &str,
+    relevant_paths: &str,
+) -> Result<String, B3Error> {
+    run_inner(
+        repo_root_raw,
+        AllowedScope::ExplicitCli(allowed_paths),
+        require_verify_receipt,
+        ignore_dirty_paths,
+        expected_cmd,
+        relevant_paths,
+    )
+}
+
+/// Validates staged index state for `b3 hook` `pre-commit` events without CSV
+/// round-tripping when `explicit_allowed_paths` is `None`.
+pub(crate) fn run_for_hook(
+    repo_root_raw: &str,
+    explicit_allowed_paths: Option<&str>,
+    require_verify_receipt: &str,
+) -> Result<String, B3Error> {
+    let scope = match explicit_allowed_paths {
+        Some(csv) => AllowedScope::HookExplicit(csv),
+        None => AllowedScope::HookImplicit,
+    };
+    run_inner(repo_root_raw, scope, require_verify_receipt, "", "", "")
+}
+
+fn run_inner(
+    repo_root_raw: &str,
+    scope: AllowedScope<'_>,
     require_verify_receipt: &str,
     ignore_dirty_paths: &str,
     expected_cmd: &str,
@@ -36,7 +80,12 @@ pub fn run(
         ));
     }
 
-    let allowed = split_path_csv_checked(allowed_paths, "PRECOMMIT_FAIL", false, None)?;
+    let allowed = match scope {
+        AllowedScope::ExplicitCli(csv) | AllowedScope::HookExplicit(csv) => {
+            Some(split_path_csv_checked(csv, "PRECOMMIT_FAIL", false, None)?)
+        }
+        AllowedScope::HookImplicit => None,
+    };
     let ignored = split_path_csv_checked(ignore_dirty_paths, "PRECOMMIT_FAIL", true, None)?;
 
     let no_env: [(&str, &str); 0] = [];
@@ -61,10 +110,13 @@ pub fn run(
 
     let checkpoint_hits: Vec<String> = staged
         .iter()
-        .filter(|p| {
-            let low = p.to_ascii_lowercase();
-            let is_dot_b3 = low == ".b3" || low.starts_with(".b3/");
-            test_checkpoint_path(p) || (is_dot_b3 && !test_path_match(p, &allowed))
+        .filter(|p| match scope {
+            AllowedScope::ExplicitCli(_) | AllowedScope::HookExplicit(_) => {
+                let dot_b3 = is_dot_b3_path(p);
+                let allowed_dot_b3 = allowed.as_deref().is_some_and(|al| test_path_match(p, al));
+                test_checkpoint_path(p) || (dot_b3 && !allowed_dot_b3)
+            }
+            AllowedScope::HookImplicit => test_checkpoint_path(p),
         })
         .cloned()
         .collect();
@@ -78,39 +130,51 @@ pub fn run(
         ));
     }
 
-    if allowed.is_empty() {
-        return Err(fail("PRECOMMIT_FAIL: missing --allowed-paths", 1));
+    if let Some(ref al) = allowed {
+        if al.is_empty() {
+            return Err(fail("PRECOMMIT_FAIL: missing --allowed-paths", 1));
+        }
     }
 
+    let allow_exact_secret = matches!(scope, AllowedScope::ExplicitCli(_));
     let mut secret_hits = Vec::new();
     for p in &staged {
-        if test_secret_path(p) && !allowed.iter().any(|a| a == p) {
+        if test_secret_path(p)
+            && !(allow_exact_secret
+                && allowed
+                    .as_deref()
+                    .is_some_and(|al| al.iter().any(|a| a == p)))
+        {
             secret_hits.push(p.clone());
         }
     }
     if !secret_hits.is_empty() {
+        let detail = if allow_exact_secret {
+            "secret path staged without exact allow"
+        } else {
+            "secret path staged"
+        };
         return Err(fail(
-            format!(
-                "PRECOMMIT_FAIL: secret path staged without exact allow ({})",
-                secret_hits.join(", ")
-            ),
+            format!("PRECOMMIT_FAIL: {detail} ({})", secret_hits.join(", ")),
             1,
         ));
     }
 
-    let undeclared: Vec<String> = staged
-        .iter()
-        .filter(|p| !test_path_match(p, &allowed))
-        .cloned()
-        .collect();
-    if !undeclared.is_empty() {
-        return Err(fail(
-            format!(
-                "PRECOMMIT_FAIL: undeclared staged path ({})",
-                undeclared.join(", ")
-            ),
-            1,
-        ));
+    if let Some(ref al) = allowed {
+        let undeclared: Vec<String> = staged
+            .iter()
+            .filter(|p| !test_path_match(p, al))
+            .cloned()
+            .collect();
+        if !undeclared.is_empty() {
+            return Err(fail(
+                format!(
+                    "PRECOMMIT_FAIL: undeclared staged path ({})",
+                    undeclared.join(", ")
+                ),
+                1,
+            ));
+        }
     }
 
     if !req_receipt.is_empty() {

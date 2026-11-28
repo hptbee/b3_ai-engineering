@@ -93,6 +93,37 @@ planning:
 ```
 (Or raise/lower threshold for one run: `understanding_threshold: 90`.)
 
+## Hook Configuration (`hooks:`)
+
+`~/.b3/models.md` (or `B3_MODELS_PERSONAL`) and `<project>/.b3/models.md` can also hold an optional `hooks:` YAML block controlling opt-in `b3 hook` behavior (`enabled: true|false`, `mode: enforce|audit|off`).
+
+- **Opt-in activation:** Event hooks remain inactive on disk until installed with `b3 hook install`. Once installed, the default configuration is `enabled: true`, `mode: enforce`.
+- **Precedence:** CLI `--mode` / `B3_HOOK_MODE` (re-enables when set to `enforce`/`audit`) > `<project>/.b3/models.md` > `~/.b3/models.md` (or `B3_MODELS_PERSONAL`) > built-in default (`enabled: true`, `mode: enforce`).
+- **Non-bypass of mandatory workflow Guards:** Setting `hooks.mode: off` disables automatic event-triggered hooks only; mandatory workflow-boundary `b3 guard` checks in `/b3-ship`, `/b3-research-ship`, and `/b3-review-loop` remain enforced.
+
+```yaml
+# Enforce (blocks unsafe Tier 0 writes/commands and Tier 1 commits/pushes)
+hooks:
+  enabled: true
+  mode: enforce
+```
+
+```yaml
+# Audit (logs/surfaces Tier 0/1 findings without blocking)
+hooks:
+  enabled: true
+  mode: audit
+```
+
+```yaml
+# Off (event hooks no-op; workflow b3 guard gates stay active)
+hooks:
+  enabled: false
+  mode: off
+```
+
+Architecture, capability matrix, and lifecycle commands (`b3 hook install --dry-run`, `install`, `uninstall`, `verify`, `status`): [`hooks.md`](hooks.md) and [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md).
+
 ## Upgrading from Earlier PR #21 JSON Config
 
 Earlier PR #21 drafts used `~/.b3/models.local.json` or `<project>/.b3/models.local.json`. B3 does not delete or overwrite existing JSON files automatically:

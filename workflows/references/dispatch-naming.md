@@ -1,11 +1,11 @@
 # Subagent dispatch, adaptive scheduling & orchestration (on-demand)
 
-Single canonical orchestration & proportional [clarification](clarification-gate.md) contract inherited by all 14 B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-{resolve,reply,comment}`) and workflows. Load once at dispatch; never copy into subagent briefs.
+Canonical orchestration, [clarification](clarification-gate.md), and [hook](hook-integration.md) contract inherited by all 14 B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-{resolve,reply,comment}`). Load once; never copy into briefs.
 
 - **Canonical roles & aliases:** Keep `agents/b3-*.md` stems/`name:` stable (`b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer`). Prefer lowercase kebab-case spawn aliases when supported: `b3-impl-<task-id-lower>`, `b3-review-u<NN>-p<K>`, `b3-fix-p<K>`, `b3-research-<slug>`, `b3-verify-<slug>`; never block on naming.
-- **Session IDs & no nesting:** Store host agent IDs separately from aliases. Workers execute directly and **never** spawn nested subagents (B3 subagents only, not product workers).
+- **Session IDs & no nesting:** Store host agent IDs separately from aliases. Workers execute directly and **never** nest subagents (B3 subagents only, not product workers).
 
-## Optional model preferences
+## Model preferences
 
 - Read once per dispatch: `<project>/.b3/models.md`, then `~/.b3/models.md` (`B3_MODELS_PERSONAL`). Precedence: user > project > personal > `auto` across `planning`, `debugging`, `implementation`, `b3-reviewer`, `b3-fixer`, and specialists.
 - **Single-task fast-path:** 1-unit `XS` + `inline` runs inline on `main` when `implementation` is unset/`auto` (or matches `main`); dispatch `b3-impl-<task-id-lower>` when model differs, size `>= S`, `notes`/`detailed`, or multi-unit. Never edit host settings or `agents/*.md` (`model: inherit`) or claim unverified switches.
