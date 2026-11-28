@@ -1492,6 +1492,68 @@ fn r02_remote_policy_authority_scenarios() {
             "{err_tr_m}"
         );
     }
+
+    // N01: Unconfigured origin/HEAD + policy-absent origin/main + policy-bearing origin/trunk
+    let (n01_repo, n01_bare) = setup_remote_repo(&tmp, "n01-trunk", false);
+    let n01_admin = tmp.path.join("n01-admin");
+    assert!(Command::new("git")
+        .args([
+            "clone",
+            n01_bare.to_str().unwrap(),
+            n01_admin.to_str().unwrap(),
+        ])
+        .output()
+        .expect("clone n01-admin")
+        .status
+        .success());
+    git_in(&n01_admin, &["config", "user.email", "t@example.com"]);
+    git_in(&n01_admin, &["config", "user.name", "Test"]);
+    git_in(&n01_admin, &["checkout", "-b", "trunk"]);
+    write_lf(
+        &n01_admin.join(".b3/research-policy.json"),
+        r#"{"auto_merge":"disabled","protected_paths":["sec/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+    );
+    git_in(&n01_admin, &["add", ".b3/research-policy.json"]);
+    git_in(&n01_admin, &["commit", "-m", "trunk policy"]);
+    git_in(&n01_admin, &["push", "origin", "trunk"]);
+
+    git_in(&n01_repo, &["fetch", "origin"]);
+    let _ = Command::new("git")
+        .current_dir(&n01_repo)
+        .args(["symbolic-ref", "-d", "refs/remotes/origin/HEAD"])
+        .output();
+    git_in(
+        &n01_repo,
+        &["checkout", "-b", "feat/from-old-main", "origin/main"],
+    );
+    write_lf(&n01_repo.join("sec/bypass.txt"), "bypass\n");
+    git_in(&n01_repo, &["add", "sec/bypass.txt"]);
+    git_in(&n01_repo, &["commit", "-m", "touch sec from old main"]);
+    let (c_n01_blk, _, err_n01_blk) =
+        git_iso_status(&tmp, &n01_repo, &["push", "origin", "feat/from-old-main"]);
+    assert!(
+        c_n01_blk != 0
+            && (err_n01_blk.contains("policy_modified_in_pr")
+                || err_n01_blk.contains("protected_paths=sec/bypass.txt")),
+        "N01 must enforce origin/trunk policy over policy-absent origin/main: {err_n01_blk}"
+    );
+
+    // Conflicting policy blobs across origin/main and origin/trunk with unset origin/HEAD fail closed
+    git_in(&n01_admin, &["checkout", "main"]);
+    write_lf(
+        &n01_admin.join(".b3/research-policy.json"),
+        r#"{"auto_merge":"disabled","protected_paths":["other/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+    );
+    git_in(&n01_admin, &["add", ".b3/research-policy.json"]);
+    git_in(&n01_admin, &["commit", "-m", "conflicting main policy"]);
+    git_in(&n01_admin, &["push", "origin", "main"]);
+    git_in(&n01_repo, &["fetch", "origin"]);
+    let (c_n01_amb, _, err_n01_amb) =
+        git_iso_status(&tmp, &n01_repo, &["push", "origin", "feat/from-old-main"]);
+    assert!(
+        c_n01_amb != 0 && err_n01_amb.contains("ambiguous_policy_authority"),
+        "N01 conflicting tracking policies with unset origin/HEAD must fail closed: {err_n01_amb}"
+    );
 }
 
 #[test]

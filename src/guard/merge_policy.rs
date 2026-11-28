@@ -2861,20 +2861,10 @@ fn resolve_remote_tracking_authority(
         }
     }
 
-    for cand in ["main", "master"] {
-        if let Some(found) = tracking_refs.iter().find(|t| t.branch == cand) {
-            return Ok(RemoteTrackingResolution::Trunk(TrunkAuthority {
-                sym_full: found.sym_full.clone(),
-                branch: found.branch.clone(),
-                sha: found.sha.clone(),
-            }));
-        }
-    }
-
     if !policy_refs.is_empty() {
         let first_blob = &policy_refs[0].1;
         if policy_refs.iter().all(|(_, b)| b == first_blob) {
-            let chosen = ["trunk", "develop", "development"]
+            let chosen = ["main", "master", "trunk", "develop", "development"]
                 .iter()
                 .find_map(|pref| policy_refs.iter().find(|(t, _)| t.branch == *pref))
                 .map(|(t, _)| *t)
@@ -2892,6 +2882,16 @@ fn resolve_remote_tracking_authority(
             }));
         }
         return Err(fail("MERGE_BLOCKED: ambiguous_policy_authority", 1));
+    }
+
+    for cand in ["main", "master"] {
+        if let Some(found) = tracking_refs.iter().find(|t| t.branch == cand) {
+            return Ok(RemoteTrackingResolution::Trunk(TrunkAuthority {
+                sym_full: found.sym_full.clone(),
+                branch: found.branch.clone(),
+                sha: found.sha.clone(),
+            }));
+        }
     }
 
     Ok(RemoteTrackingResolution::Unknown(
