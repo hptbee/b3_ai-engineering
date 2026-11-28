@@ -1,0 +1,9 @@
+id: static-analysis-scoped-safe-autofix-and-verify-stale-006
+artifact: workflows/references/static-analysis.md
+intent: Safe auto-fix enforces execution-mode safety, pre-run scoped-mutation checks, zero warning suppressions, and receipt closure (VERIFY_STALE)
+scenario: |
+  An engineer runs safe lint/format fixes across Inline/Sequential, Shared Disjoint Writes, Isolated Writes, or Read-only modes, or edits custom/imported configs
+  Inline/Sequential enforces allowed-paths without requiring check-wave, Shared Disjoint requires check-wave --partition plus pre-run scoped-mutation verification, Isolated requires check-worktree, Read-only forbids auto-fix, suppressions remain banned, and unproven config closure uses ALL or triggers VERIFY_STALE before PASS
+expected_outcome: PASS
+failure_mode: out-of-scope-autofix-warning-suppression-or-stale-receipt-commit
+notes: Enforces src/guard/verify.rs receipt invalidation on source and config edits

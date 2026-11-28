@@ -252,6 +252,22 @@ Example:
 
 > Size the PR → review → validate → fix → verify → fresh review until the quality gate, non-convergence, or iteration limit.
 
+### Adaptive Static Analysis & Deterministic Verification Flow
+
+Project-native static analysis offloads mechanical checks before `b3 guard` gates and AI review (see [`ship-and-review-guide.md`](ship-and-review-guide.md) Diagram D and [`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md)):
+
+```mermaid
+flowchart LR
+    SA["Project-Native Lint / SAST / Dead-Code (WORKFLOW_ONLY: REUSE -> FALLBACK -> BOOTSTRAP)"] --> AutoFix["Scoped Safe Auto-Fix (owned paths only, before verify-run)"]
+    AutoFix --> Verify["b3 guard verify-run / verify-check (b3-verify-v1 + lint/formatter/typecheck config invalidation -> VERIFY_STALE)"]
+    Verify --> Mech["0-Token Guards: diff-scope + mechanical-check + symbol-check"]
+    Mech -->|"Exit 2: deterministic or dangling-ref findings"| FixDet["Fix ownership, leftovers, attribution, or confirmed dangling_refs"]
+    FixDet --> AutoFix
+    Mech -->|"Exit 0: clean + advisory/tool output"| AIRev["AI Reviewers (architecture, security, correctness, business logic)"]
+```
+
+This flow preserves strict boundaries: `0` new guard modules, `0` new public commands, `0` new agent roles, and `0` new Cargo dependencies; heavy static analysis stays `WORKFLOW_ONLY` (never inside `b3 hook` Tier 0/1 fast paths).
+
 ## Knowledge
 
 **Question:** What have we learned?
@@ -276,7 +292,7 @@ Example:
 
 > `skills/frontend/react-performance/references/checklist.md` — opened while applying that skill.
 
-Shared on-demand workflow contracts also live under `workflows/references/` (for example [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) for wave orchestration and [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md) for the proportional clarification gate anchored by Rule 1 of [`../rules/engineering-principles.md`](../rules/engineering-principles.md)). `clarification-gate.md` is an on-demand AI reasoning contract whose optional `planning:` preferences are resolved once per invocation by Parent (zero Rust config parser and zero separate scheduler), preventing always-on context bloat while ensuring all commands and workflows inherit one canonical contract.
+Shared on-demand workflow contracts also live under `workflows/references/` (for example [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) for wave orchestration, [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md) for the proportional clarification gate anchored by Rule 1 of [`../rules/engineering-principles.md`](../rules/engineering-principles.md), and [`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md) for adaptive static analysis discovery and mechanical review offloading). `clarification-gate.md` is an on-demand AI reasoning contract whose optional `planning:` preferences are resolved once per invocation by Parent (zero Rust config parser and zero separate scheduler), preventing always-on context bloat while ensuring all commands and workflows inherit one canonical contract.
 
 ## Research
 

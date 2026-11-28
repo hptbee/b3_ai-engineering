@@ -6,13 +6,13 @@ Verified end-to-end delivery until done or blocked.
 Preflight → Plan → continuous Scope/Build/Verify/Review/Commit → Finalize
 ```
 
-Links: [feature-impl](feature-implementation.md), [review-loop](../review-loop/strategy.md), [templates](references/ship-templates.md), [resume](references/ship-resume.md), [dispatch](references/dispatch-naming.md), [context-routing](references/context-routing.md), `b3 guard`.
+Links: [feature-impl](feature-implementation.md), [review-loop](../review-loop/strategy.md), [templates](references/ship-templates.md), [resume](references/ship-resume.md), [dispatch](references/dispatch-naming.md), [context-routing](references/context-routing.md), [static-analysis](references/static-analysis.md), `b3 guard`.
 
 ## Roots & hosts
 
-- **Use:** full run, `resume [<run_id>]`, `status [<run_id>|--all]` (not 1-step cmds); overrides `planning`/`problem-solving` stops (`precedence.md`).
+- **Use:** full run, `resume [<run_id>]`, `status [<run_id>|--all]` (not 1-step); overrides `planning`/`problem-solving` stops (`precedence.md`).
 - **Hosts:** Cursor/Claude (`/b3-ship`), Codex (`$b3-ship`), Antigravity (`b3-ship`); re-invoke to resume.
-- **Roots:** `PRODUCT_ROOT` = git root; `B3_HOME` = 1st dir (`B3_HOME` env → `.b3/home` → host global → repo) w/ `workflows/ship.md` (else `BLOCKED`). Skills/rules/agents from `B3_HOME`, state/commits in `PRODUCT_ROOT`, never copy `skills/`.
+- **Roots:** `PRODUCT_ROOT` = git root; `B3_HOME` = 1st (`B3_HOME` env → `.b3/home` → host global → repo) w/ `workflows/ship.md` (else `BLOCKED`). Skills/rules/agents: `B3_HOME`; state/commits: `PRODUCT_ROOT`; no `skills/` copy.
 
 ## State & git policy
 
@@ -26,16 +26,16 @@ In `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (`<run_id>`) + `runs/<run_id>/` (`{RUN_
 ## Input & Preflight
 
 1. `status [<run_id>|--all]` → `b3 guard list-runs`/`resolve-run` + Git report (0 edits).
-2. `resume [<run_id>]` or bare `/b3-ship` (`run_status != PASS`) → **Scenario C** ([resume](references/ship-resume.md); update `CURRENT`).
-3. Empty input + no checkpoint → ask (`BLOCKED`).
+2. `resume [<run_id>]` or bare `/b3-ship` (`run_status != PASS`) → **Scenario C** ([resume](references/ship-resume.md); set `CURRENT`).
+3. Empty + no checkpoint → ask (`BLOCKED`).
 4. Input → `b3 guard new-run` (`CURRENT`), then **Scenario B** (plan) or **A** (`debugging`/`refactoring`).
 
 ### Scenario A/B (Preflight & Plan)
 
-1. Restate request + current/desired behavior (`reuse:`).
-2. **Preflight:** record `initial_dirty_paths` + CI/manifest `build`/`typecheck`/`lint`/`test`; run `run_base_sha` baseline only on `Verify` failure (`baseline_status`: `PASS`|`FAIL(...)`|`NOT_RUN(verify_green)`).
-3. **Plan:** `{RUN_DIR}/master-plan.md` ([templates](references/ship-templates.md), `planning`+`simplest-correct`): 3–5 `Invariants`, `AC1..ACn`, contracts, `T001` hotspots, split if `>~800L`/`>=2` areas. Scenario B keeps intent, proves `completed` via Git only, copies plan 1x.
-4. Execute per [clarification](references/clarification-gate.md) (Parent-owned, isolate ambiguity); `BLOCKED` on blocking ambiguity, `initial_dirty_paths` overlap, external ops (push/merge/deploy/reset/secrets/prod), or unasked breaking changes; `detailed` = risk-only (§Scope.2, never task count).
+1. Restate request + current/desired (`reuse:`).
+2. **Preflight:** record `initial_dirty_paths` + Parent-once static (`build`/`typecheck`/`lint`/`test`); run `run_base_sha` baseline on `Verify` fail only (`baseline_status`: `PASS`|`FAIL(...)`|`NOT_RUN(verify_green)`).
+3. **Plan:** `{RUN_DIR}/master-plan.md` ([templates](references/ship-templates.md), `planning`+`simplest-correct`): 3–5 `Invariants`, `AC1..ACn`, contracts, `T001` hotspots, split if `>~800L`/`>=2` areas. Scenario B keeps intent, proves `completed` via Git, 1x plan copy.
+4. Follow [clarification](references/clarification-gate.md) (Parent-owned, isolate ambiguity); `BLOCKED` on blocking ambiguity, `initial_dirty_paths` overlap, external ops (push/merge/deploy/reset/secrets/prod), unasked breaking; `detailed` = risk-only (§Scope.2, not task count).
 
 ## Execution
 

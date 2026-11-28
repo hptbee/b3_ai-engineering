@@ -86,6 +86,8 @@ flowchart TD
 | `mechanical`, `scope`, `freshness`, `wave`, `worktree`, `inventory`, `ledger`, `symbol`, `snapshot`, `evidence` | Diff safety sweep, sizing, drift, wave partitioning, linked worktrees, L0–L4 review, symbol scan, snapshots, provenance | Medium–high (diff/repo/build-scoped checks) | `WORKFLOW_ONLY` (Tier 2) | Full multi-file & wave-level workflow gates |
 | `fingerprint`, `runs`, `cache` | Scope readiness hash, `.b3/{ship,research-ship}` run pointers, `b3-context-v1` freshness | Negligible–low (`0–8` Git/FS ops) | `ON_DEMAND` | Run lifecycle & context-cache checks |
 
+**`WORKFLOW_ONLY` Boundary for Heavy Static Analysis:** Project-native heavy linters, SAST scanners, dead-code analyzers, and complexity checks run strictly `WORKFLOW_ONLY` inside Tier 2 workflow execution ([`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md)) — never inside Tier 0 (`p95 < 10 ms`, `0` Git calls) or Tier 1 fast commit/push hooks. Edits to project lint, formatter, type-checker, and dead-code configs still invalidate `b3-verify-v1` receipts as `VERIFY_STALE` via `verify_check` during `BeforeCommit` when `B3_VERIFY_RECEIPT` is bound.
+
 ### Policy Authority & Trust Boundaries (`merge_policy::check_git_hook_operation`)
 
 Local Git hooks never treat missing local tracking refs as proof of remote policy absence and never issue extra network calls during normal feature pushes:

@@ -1,0 +1,9 @@
+id: static-analysis-dead-code-levels-and-prod-consumer-003
+artifact: workflows/references/static-analysis.md
+intent: Dead-code triage classifies L1-L4 signals and verifies runtime production consumers separately from unit tests before deleting or blocking L2/L3 symbols
+scenario: |
+  A symbol reported as orphan_internal (L2) or unreferenced export (L3) is referenced in unit tests or runtime DI/FFI entrypoints
+  Workflow treats unit tests != runtime/production caller, greps src/, bin/, exports, and reflection/FFI entrypoints separately before deletion, keeps SYMBOL_ADVISORY non-blocking, and blocks only on confirmed dangling_refs (SYMBOL_FINDINGS)
+expected_outcome: PASS
+failure_mode: deleting-runtime-used-symbols-or-keeping-dead-code-on-test-only-refs
+notes: Pairs compiler/linter L1-L4 signals with b3 guard symbol-check
