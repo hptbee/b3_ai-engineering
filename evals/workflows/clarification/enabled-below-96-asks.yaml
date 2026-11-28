@@ -1,9 +1,9 @@
 id: clarify-enabled-below-96-asks-002
 artifact: workflows/references/clarification-gate.md
-intent: Enabled clarification gate asks batched material questions when requirement understanding is below 96%
+intent: Enabled clarification gate asks concise batched questions when concrete material ambiguity remains below threshold
 scenario: |
   clarification_gate is true and understanding_threshold is 96
-  After exhausting local code/doc/config discovery, understanding remains at 85% due to conflicting or incomplete scope boundaries
+  After exhausting local code/doc/config discovery, understanding remains below 96% (e.g., 85%) because concrete material ambiguity in conflicting or incomplete scope boundaries cannot be safely inferred
 expected_outcome: BLOCKED
-failure_mode: speculative-implementation-below-threshold
-notes: Agent batches independent material questions with options and recommended defaults before editing affected targets
+failure_mode: speculative-implementation-with-unresolved-material-ambiguity
+notes: Remaining concrete material ambiguity (not numeric score alone) triggers concise batched clarification with impact, options/tradeoffs, and recommended defaults before editing affected targets

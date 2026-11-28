@@ -276,7 +276,7 @@ Example:
 
 > `skills/frontend/react-performance/references/checklist.md` — opened while applying that skill.
 
-Shared on-demand workflow contracts also live under `workflows/references/` (for example [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) for wave orchestration and [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md) for the proportional clarification gate anchored by Rule 1 of [`../rules/engineering-principles.md`](../rules/engineering-principles.md)). Keeping detailed rubrics in on-demand references prevents always-on context bloat while ensuring all commands and workflows inherit one canonical contract.
+Shared on-demand workflow contracts also live under `workflows/references/` (for example [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) for wave orchestration and [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md) for the proportional clarification gate anchored by Rule 1 of [`../rules/engineering-principles.md`](../rules/engineering-principles.md)). `clarification-gate.md` is an on-demand AI reasoning contract whose optional `planning:` preferences are resolved once per invocation by Parent (zero Rust config parser and zero separate scheduler), preventing always-on context bloat while ensuring all commands and workflows inherit one canonical contract.
 
 ## Research
 

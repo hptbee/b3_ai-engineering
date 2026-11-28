@@ -57,8 +57,8 @@ flowchart TD
     Resolve -->|"New requirement / plan"| NewRun["b3 guard new-run (.b3/ship/runs/run_id + CURRENT)"]
 
     NewRun --> PreFlight["Preflight: record initial_dirty_paths, DirtyDigests, baseline cmds (lazy at run_base_sha only on Verify failure; else NOT_RUN(verify_green))"]
-    PreFlight --> Plan["Plan (master-plan.md + clarification-gate.md >=96%): Invariants, AC1..ACn, Shared Contracts"]
-    Plan --> ReadyCheck["Select Ready Tasks (pending + all depends_on completed; isolate only blocked ambiguous units)"]
+    PreFlight --> Plan["Plan (Parent resolves models.md once, field-level precedence; heuristic clarification-gate.md ~96%): Invariants, AC1..ACn, Shared Contracts"]
+    Plan --> ReadyCheck["Select Ready Tasks (pending + all depends_on completed; hold A + dependents B,C,D while continuing independent E / SHARED_READ_ONLY F)"]
     Resume --> ReadyCheck
 
     ReadyCheck --> Scope["Scope (JIT per task): Context Packet + optional detailed matrices + Readiness Gate"]
@@ -80,7 +80,7 @@ flowchart TD
     IsoMode -->|"Disjoint low-risk writes"| SharedWave["Mode 2: SHARED_DISJOINT_WRITES (parallel disjoint writers)"]
     IsoMode -->|"High-risk / colliding side-effects"| IsoWave["Mode 3: ISOLATED_WRITES (check-worktree --require-isolated --peer-roots)"]
 
-    ReadWave --> Hub["Single-Writer Parent Hub: merge discoveries, integrate wave"]
+    ReadWave --> Hub["Single-Writer Parent Hub: consolidate worker uncertainties (no worker rubric reload), release clarified dependents immediately, integrate wave"]
     SharedWave --> Hub
     IsoWave --> Hub
     InlineTask --> TaskVerify["Verify: b3 guard verify-run (writes b3-verify-v1 receipt; lazy baseline at run_base_sha only on failure)"]
@@ -121,7 +121,7 @@ flowchart TD
 
 Subagent logical aliases are described in [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) and are only requested when the host supports custom spawn names. Host-returned IDs remain authoritative for resume.
 
-`b3 guard check-wave --partition` computes continuous `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). On partial ambiguity ([`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md)), only affected units are held while safe independent `SHARED_READ_ONLY` discovery and unblocked units continue without speculative edits. Subagents never talk directly to each other and never edit `read_only_deps`, `--protected-paths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `--worker-changes` or Git-proven `VERIFIED_PER_WORKER` via `--worker-roots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
+`b3 guard check-wave --partition` computes continuous `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). Parent resolves `models.md` `planning:` settings once per invocation (field-level precedence) and owns all user clarification: when task `A` is blocked on a user decision (and `B, C, D` depend on `A`), Parent holds `A, B, C, D` while immediately continuing independent authorized `E` and `SHARED_READ_ONLY` `F` without speculative edits, consolidates any worker-reported uncertainties without workers reloading rubrics or `models.md`, and releases newly unblocked dependents immediately once `A` is clarified and verified ([`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md)). Subagents never talk directly to each other and never edit `read_only_deps`, `--protected-paths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `--worker-changes` or Git-proven `VERIFIED_PER_WORKER` via `--worker-roots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
 
 ```mermaid
 sequenceDiagram

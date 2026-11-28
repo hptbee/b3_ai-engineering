@@ -1,9 +1,9 @@
 id: clarify-config-precedence-resolution-013
-artifact: src/planning_config.rs
-intent: Global, project-level, and per-invocation planning preferences resolve deterministically with strict precedence
+artifact: workflows/references/clarification-gate.md
+intent: Per-invocation, project, personal, and default planning preferences resolve per field with strict precedence and partial merge
 scenario: |
-  ~/.b3/models.md sets understanding_threshold: 92, <project>/.b3/models.md sets clarification_gate: false, and an explicit per-invocation directive sets clarification_gate: true
-  Effective configuration resolves to clarification_gate: true (invocation wins) and understanding_threshold: 92 (inherited from global), while missing files default to (true, 96)
+  ~/.b3/models.md (personal) sets (clarification_gate: true, understanding_threshold: 90) and <project>/.b3/models.md sets only (clarification_gate: false)
+  Field-level precedence (invocation > project > personal > built-in defaults (true, 96)) merges partial overrides to effective (false, 90), and an explicit per-invocation directive overrides either field without mutating files
 expected_outcome: PASS
-failure_mode: incorrect-precedence-or-ignored-project-global-override
-notes: Deterministic Rust tests in tests/planning_config.rs verify parsing, range validation (1..=100), and precedence
+failure_mode: whole-file-override-drops-personal-fields-or-incorrect-precedence
+notes: Parent resolves planning preferences once per invocation in AI planning/dispatch layers per docs/model-preferences.md

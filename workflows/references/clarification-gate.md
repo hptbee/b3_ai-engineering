@@ -1,110 +1,52 @@
 # Clarification Gate & Global Planning Contract (On-Demand)
 
-Single canonical clarification contract anchored by `rules/engineering-principles.md` (Rule 1) and inherited proportionally by all B3 commands and workflows via [`dispatch-naming.md`](dispatch-naming.md). Keep the detailed rubric here—never duplicate it across commands or skills.
+Canonical clarification contract anchored by `rules/engineering-principles.md` (Rule 1), inherited proportionally via [`dispatch-naming.md`](dispatch-naming.md). Loaded **on demand** when complexity or material ambiguity warrants—never into worker briefs or routine `XS`/`S` tasks.
 
-## Configuration & Precedence
-
-Reuse existing B3 preference files with zero external runtime dependencies:
-
-- **Built-in defaults:** `clarification_gate: true`, `understanding_threshold: 96` (integer percentage `1..=100`).
-- **Personal config:** `~/.b3/models.md` (or `B3_MODELS_PERSONAL` env var).
-- **Project override:** `<project>/.b3/models.md`.
-- **Per-invocation override:** explicit inline directive or user instruction in the current prompt (for example `clarification_gate: false`, `understanding_threshold: 90`, or "proceed with safe assumptions without asking routine questions").
-
-Optional `planning:` YAML block inside `models.md`:
+## Configuration & Field-Level Precedence
 
 ```yaml
 planning:
   clarification_gate: true
-  understanding_threshold: 96
+  understanding_threshold: 96   # integer 1..=100
 ```
 
-- **Precedence:** `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (B3_MODELS_PERSONAL) > built-in defaults (true, 96)`.
-- **Graceful host degradation:** Works across Cursor, Codex, Claude Code, and Antigravity. Missing, partial, or malformed preference files fall back silently to built-in defaults and never block execution or mutate host settings.
+- **Defaults & precedence:** `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (B3_MODELS_PERSONAL) > built-in defaults (true, 96)`.
+- **Resolve once & per-field fallback:** Parent resolves `planning:` **once per invocation** without mutating preference or host files. Missing, partial, or invalid fields/files fall back **per field to the next valid layer**, then defaults—bad project fields never drop valid personal fields, and bad config never blocks on Cursor, Codex, Claude Code, or Antigravity.
 
-## 7-Step Global Planning Contract & Gate
+## Risk-Based Proportionality & Assessment
 
-Before changing non-trivial affected targets, follow this contract proportionally to task scope and risk:
+Pair task size (`XS` | `S` | `M` | `L` | `XL` | `XXL`) with risk (`LOW` | `MEDIUM` | `HIGH` | `CRITICAL`)—size never replaces risk (a small authz edit needs deeper review than a large refactor):
 
-1. **Core objective:** State the user's primary goal in one verifiable sentence.
-2. **Explicit requirements:** Extract stated behaviors, inputs, outputs, and priorities.
-3. **Constraints & non-goals:** Identify technical/policy limits and explicit out-of-scope bounds.
-4. **Acceptance criteria (ACs):** Define observable, testable success conditions and verification checks.
-5. **Project context:** Inspect relevant source files, docs, prior decisions, configs, tests, and conventions.
-6. **Local uncertainty resolution:** Resolve answerable questions locally through discovery before asking the user.
-7. **Remaining understanding assessment:** Evaluate remaining clarity across material dimensions and isolate or clarify gaps.
+- **`XS` / `S` (clear, localized, low-risk):** Confirm intent, inspect targets, execute immediately; skip full rubric, numeric scorecards, and extra artifacts.
+- **`M` / `L` (multi-file / moderate):** Define goal, requirements, constraints/non-goals, `AC1..ACn`; inspect code/docs/configs/tests/`research/decisions/`; assess relevant dimensions.
+- **`XL` / `XXL` or `HIGH` / `CRITICAL` risk:** Assess shared contracts, deps, compatibility, security/authz/privacy, external side effects, irreversible choices; isolate uncertain slices and continue safe work.
 
-### Gate Rule
+**7-Step Contract:** (1) Core objective (1 sentence), (2) Explicit requirements, (3) Constraints & non-goals, (4) Testable `AC1..ACn` & verification, (5) Project context discovery, (6) Local uncertainty resolution, (7) Material ambiguity gate.
 
-- **Proceed:** `understanding >= understanding_threshold` AND zero unresolved material/critical ambiguities.
-- **Clarify affected work:** `understanding < understanding_threshold` → hold edits to affected targets and batch material questions for the user.
-- **Critical ambiguity override:** Any unresolved critical or irreversible ambiguity blocks the affected workstream **regardless of score**—never average away critical unknowns with high scores on minor dimensions.
+**10 Dimensions:** (1) Intent, (2) Functional reqs & edge cases, (3) Scope & non-goals, (4) Deliverables & targets, (5) ACs & verification, (6) Technical/arch constraints, (7) Compatibility & integration boundaries, (8) Security/authn/authz/privacy, (9) External side effects, (10) Irreversible/destructive choices.
 
-## 10 Understanding Assessment Dimensions
+## Non-Blocking Gate Behavior
 
-Assess clarity across these 10 dimensions when planning or scoping non-trivial work:
+Treat `understanding_threshold` (`96`) as an **evidence-grounded heuristic trigger**, not rigid math. **Never** inflate scores, and **never** block solely on score `< understanding_threshold` when zero actionable material ambiguity remains.
 
-1. **User intent** & desired outcome
-2. **Functional requirements** & key edge cases
-3. **Scope & non-goals** (in-scope vs out-of-scope boundaries)
-4. **Concrete deliverables** & touched files/artifacts
-5. **Acceptance criteria** & verification expectations
-6. **Technical & architectural constraints**
-7. **Compatibility & integration boundaries** (APIs, schemas, callers, hosts)
-8. **Security, authn/authz & data/privacy implications**
-9. **External side effects** (PRs, remote APIs, deploys, migrations, billing/state)
-10. **Irreversible or destructive decisions**
+1. **Clear & zero material ambiguity:** Proceed autonomously; no unnecessary questions or scorecards.
+2. **Understanding `< understanding_threshold`:** Do proportional local discovery, list uncertainties, resolve routine gaps via repo conventions and reversible assumptions, and ask **only** when material ambiguity needs a user decision.
+3. **Material ambiguity remains:** Hold **only** affected tasks (zero speculative edits), batch concise questions (unclear point, impact, options + tradeoffs, recommended default), and continue independent work.
+4. **Critical, irreversible, security, or authz ambiguity:** Block affected work **regardless of score** (never average away critical unknowns).
+5. **Disabled (`clarification_gate: false`):** Use reversible repo-consistent assumptions for routine gaps and document material assumptions. **Never** bypass security/authz, user authorization, research/Owner governance ([`../research-ship.md`](../research-ship.md)), `--protected-paths`, destructive safeguards, or `merge-policy-check` (`BLOCKED` if mandatory auth or required decision is missing or unverified).
 
-- **Evidence grounding:** Every assessment must be an honest heuristic engineering judgment grounded in inspected evidence and explicitly named uncertainties—never fabricate, pad, or inflate scores to pass the threshold.
-- **Trivial-task shortcut:** Skip exhaustive 10-dimension scoring on trivial, clearly specified tasks (localized 1-file fixes or explicit mechanical requests with zero material unknowns).
+Never re-ask answered questions or confirm routine details, tests, or conventions.
 
-## Clarification Behavior
+## Parent-Only Ownership & Maximum Safe Parallelism
 
-- **Exhaust low-cost local discovery first:** Before asking the user, inspect source code, docs, prior decisions (`research/decisions/`), config files, repo conventions, acceptance tests, and architectural contracts.
-- **Ask only material questions:** Only ask when the answer changes design, scope, contracts, safety, or acceptance criteria.
-- **Batch independent questions:** Group all independent questions into one concise request stating for each item:
-  1. what is unclear,
-  2. why it matters,
-  3. viable options (with tradeoffs),
-  4. recommended default.
-- **Never re-ask** questions already answered in the conversation, plan, or repository artifacts.
-- **Never ask confirmation** for routine implementation details, reversible internal refactoring, ordinary test authoring/execution, or established repository conventions.
+- **Parent (sole clarification owner):** Resolves `planning:` once, assesses scope, owns user questions, merges worker uncertainties, updates plan/deps, releases unblocked tasks immediately, and reassesses only affected slices.
+- **Planning / scout agents:** Inspect context, surface gaps/contradictions, return findings to Parent.
+- **Implementation workers:** Execute `Context Packet`, report new material ambiguity to Parent, continue unaffected work. Workers **must NOT** load `clarification-gate.md`, re-read `models.md`, recalc percentages, ask users, or restart planning.
+- **Reviewers:** Report contradictions, gaps, risks, and evidence to Parent without restarting clarification.
+- **Continuous isolation (`A..F`):** If `A` needs a user decision and `B, C, D` declare `depends_on: [A]`, hold `A, B, C, D` while running independent `E` and `SHARED_READ_ONLY` `F`. Ask only `A`'s question; once clarified & verified, release eligible dependents immediately per [`dispatch-naming.md`](dispatch-naming.md) without waiting or restarting planning.
 
-## Maximum Safe Parallelism Integration
+## Targeted Reassessment & Inheritance
 
-Partial ambiguity must **never** stall safe independent work:
+Never re-run clarification on routine steps. Reassess **only** on material triggers (new req, contradicting evidence, major scope shift, unknown arch constraint, untestable AC, new irreversible/security choice); invalidate **only** affected slices; keep valid work and receipts.
 
-1. **Isolate only blocked workstreams:** Mark only the tasks/units depending on the unresolved decision as blocked; apply **zero speculative edits** inside blocked workstreams.
-2. **Continue safe parallel/independent work** per [`dispatch-naming.md`](dispatch-naming.md):
-   - independent `SHARED_READ_ONLY` discovery, research, and analysis,
-   - independent authorized and sufficiently understood implementation units whose edits and side effects cannot prejudice the pending decision,
-   - safe test/baseline preparation and fixture analysis.
-3. **Resume smoothly after clarification:** Update understanding and the dependency graph, release newly unblocked tasks immediately, reuse valid completed investigation and warm worker context, and **never restart planning from scratch**.
-
-## Disabled Mode (`clarification_gate: false`)
-
-When disabled globally, per-project, or per-invocation:
-
-- Resolve ordinary implementation ambiguities using repository conventions and reversible, low-risk assumptions.
-- Document all material assumptions explicitly in the plan, `progress.md`, or delivery report.
-- Minimize user interruptions.
-- **Mandatory safety & governance floor (NEVER bypassed):** `clarification_gate: false` never waives security/authz boundaries, required user authorization, research governance or Owner/editorial authority gates (`research-ship.md`), `--protected-paths` or protected operations, destructive/irreversible safeguards, merge authorization (`merge-policy-check`), or external mutation permissions. Report `BLOCKED` whenever a mandatory decision cannot be safely inferred or delegated.
-
-## Reassessment During Execution
-
-- Do **not** re-run clarification checks on every routine step.
-- Reassess **only** on a material trigger:
-  - new material user requirement,
-  - contradicting codebase, test, or runtime evidence,
-  - significant scope change,
-  - previously unknown architectural constraint,
-  - ambiguous or untestable ACs uncovered during build/verify,
-  - newly surfaced irreversible or security-sensitive decision.
-- Invalidate **only** the affected plan slice(s) or workstream(s); preserve valid completed work, commits, and fresh verification evidence.
-
-## Proportional System-Wide Inheritance
-
-Inherited by all 14 commands (`b3-plan`, `b3-implement`, `b3-debug`, `b3-research`, `b3-audit`, `b3-review`, `b3-refactor`, `b3-verify`, `b3-review-loop`, `b3-ship`, `b3-research-ship`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`) and any future commands via `rules/engineering-principles.md` + [`dispatch-naming.md`](dispatch-naming.md), proportional to intent and risk:
-
-- **Lightweight / read-only / bounded commands** (`b3-verify`, `b3-research`, `b3-audit`, `b3-review`, `b3-pr-reply`, `b3-pr-comment`, localized `b3-debug` / `b3-implement` / `b3-refactor`): apply silently—confirm target, claim, or required external authorization after local inspection; ask only on genuine material ambiguity without turning lightweight commands into heavyweight planning workflows.
-- **Planning / multi-step / autonomous delivery commands** (`b3-plan`, `b3-ship`, `b3-research-ship`, complex `b3-implement` / `b3-refactor` / `b3-review-loop` / `b3-pr-resolve`): apply the full 7-step contract, evidence-grounded assessment against `understanding_threshold`, partial-ambiguity unit isolation, and execution reassessment triggers.
+Inherited proportionally across all 14 commands (`b3-plan`, `b3-implement`, `b3-debug`, `b3-research`, `b3-audit`, `b3-review`, `b3-refactor`, `b3-verify`, `b3-review-loop`, `b3-ship`, `b3-research-ship`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`).

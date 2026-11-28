@@ -6,28 +6,28 @@ Verified end-to-end delivery until done or blocked.
 Preflight → Plan → continuous Scope/Build/Verify/Review/Commit → Finalize
 ```
 
-Links: [feature-impl](feature-implementation.md), [review-loop](../review-loop/strategy.md), [templates](references/ship-templates.md), [resume](references/ship-resume.md), [dispatch](references/dispatch-naming.md), [clarification](references/clarification-gate.md), [context-routing](references/context-routing.md), `b3 guard`.
+Links: [feature-impl](feature-implementation.md), [review-loop](../review-loop/strategy.md), [templates](references/ship-templates.md), [resume](references/ship-resume.md), [dispatch](references/dispatch-naming.md), [context-routing](references/context-routing.md), `b3 guard`.
 
 ## Roots & hosts
 
-- **Use:** full run, `resume [<run_id>]`, or `status [<run_id>|--all]` (not 1-step cmds); overrides `planning`/`problem-solving` stops (`precedence.md`).
+- **Use:** full run, `resume [<run_id>]`, `status [<run_id>|--all]` (not 1-step cmds); overrides `planning`/`problem-solving` stops (`precedence.md`).
 - **Hosts:** Cursor/Claude (`/b3-ship`), Codex (`$b3-ship`), Antigravity (`b3-ship`); re-invoke to resume.
-- **Roots:** `PRODUCT_ROOT` = git root; `B3_HOME` = 1st dir (`B3_HOME` env → `.b3/home` → host global → repo) w/ `workflows/ship.md` (else `BLOCKED`). Load skills/rules/agents from `B3_HOME`, state/commits in `PRODUCT_ROOT`, never copy `skills/`.
+- **Roots:** `PRODUCT_ROOT` = git root; `B3_HOME` = 1st dir (`B3_HOME` env → `.b3/home` → host global → repo) w/ `workflows/ship.md` (else `BLOCKED`). Skills/rules/agents from `B3_HOME`, state/commits in `PRODUCT_ROOT`, never copy `skills/`.
 
 ## State & git policy
 
 In `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (`<run_id>`) + `runs/<run_id>/` (`{RUN_DIR}` via `resolve-run`: `master-plan.md`, `progress.md`, `findings.md`, `approach/T00N.md`, `logs/`).
 - **Hygiene:** read `CURRENT` → `{RUN_DIR}/`; scan `runs/` only on `status --all` (`list-runs`) or `prune` (keeps 10 `PASS` + `CURRENT`/non-`PASS`).
-1. Ignore `.b3/ship/` in products (track `.b3/home`); B3 ignores `.b3/`.
-2. Never `git add .b3/ship/`, `-A`, or `.`; run `b3 guard precommit` pre-commit.
+1. Products ignore `.b3/ship/` (track `.b3/home`); B3 ignores `.b3/`.
+2. Never `git add .b3/ship/`, `-A`, `.`; run `b3 guard precommit` pre-commit.
 3. Ignored `.b3/` never dirties tree; unignored run files block `PASS`.
-4. **Thin Parent:** post-commit, collapse `progress.md` `## Approach` to 1L; read summaries/diffs/contracts; red/`>35L` logs → `{RUN_DIR}/logs/`.
+4. **Thin Parent:** post-commit, collapse `progress.md` `Approach` to 1L; read summaries/diffs/contracts; red/`>35L` logs → `{RUN_DIR}/logs/`.
 
 ## Input & Preflight
 
 1. `status [<run_id>|--all]` → `b3 guard list-runs`/`resolve-run` + Git report (0 edits).
 2. `resume [<run_id>]` or bare `/b3-ship` (`run_status != PASS`) → **Scenario C** ([resume](references/ship-resume.md); update `CURRENT`).
-3. Empty request + no checkpoint → ask user (`BLOCKED`).
+3. Empty input + no checkpoint → ask (`BLOCKED`).
 4. Input → `b3 guard new-run` (`CURRENT`), then **Scenario B** (plan) or **A** (`debugging`/`refactoring`).
 
 ### Scenario A/B (Preflight & Plan)
@@ -35,7 +35,7 @@ In `{PRODUCT_ROOT}/.b3/ship/`: `CURRENT` (`<run_id>`) + `runs/<run_id>/` (`{RUN_
 1. Restate request + current/desired behavior (`reuse:`).
 2. **Preflight:** record `initial_dirty_paths` + CI/manifest `build`/`typecheck`/`lint`/`test`; run `run_base_sha` baseline only on `Verify` failure (`baseline_status`: `PASS`|`FAIL(...)`|`NOT_RUN(verify_green)`).
 3. **Plan:** `{RUN_DIR}/master-plan.md` ([templates](references/ship-templates.md), `planning`+`simplest-correct`): 3–5 `Invariants`, `AC1..ACn`, contracts, `T001` hotspots, split if `>~800L`/`>=2` areas. Scenario B keeps intent, proves `completed` via Git only, copies plan 1x.
-4. Execute per [clarification](references/clarification-gate.md) (isolate partial ambiguity); `BLOCKED` on blocking ambiguity, `initial_dirty_paths` overlap, external ops (push/merge/deploy/reset/secrets/prod), or unasked breaking changes; `detailed` = risk-only (§Scope.2, never task count).
+4. Execute per [clarification](references/clarification-gate.md) (Parent-owned, isolate ambiguity); `BLOCKED` on blocking ambiguity, `initial_dirty_paths` overlap, external ops (push/merge/deploy/reset/secrets/prod), or unasked breaking changes; `detailed` = risk-only (§Scope.2, never task count).
 
 ## Execution
 
@@ -52,8 +52,8 @@ Skip `planning`; follow `skills/engineering/problem-solving/SKILL.md`:
 
 ### Build (Continuous Waves & Modes) & Verify
 
-- **Build:** dispatch per [dispatch](references/dispatch-naming.md) + `.b3/models.md` (1-task `XS`+`inline` inline if `implementation` unset/`auto`/matches `main`, else `b3-impl-t00N`; 0 nested subagents). With `>=2` ready tasks or active workers, run `b3 guard check-wave --partition` (`--wave-specs`, `--wave-reads`, `--active-specs`, `--active-reads`, `--verified-dirty-paths`, `--protected-paths`, `--ignore-dirty-paths`, `--check-dirty-scope`, `--expected-base-sha`): act on `admitted_tasks` (`wave|1|`, bounded by `available_slots`), queue `deferred_tasks`, across `SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES` (`b3 guard check-worktree --require-isolated`), or `SEQUENTIAL` (malformed → `malformed_wave_output`/`BLOCKED`; never claim `PARALLEL` if sequential; 1-task keeps guards). Re-evaluate ready tasks per worker exit (no barrier). Save `impl_agent`, `mode`, `worker_root`, `integration`, `last_wave:`; pass `<=25L` `Context Packet` (`approach/T00N.md`/`### T00N` minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, skill; no `ship.md`/`master-plan.md`).
-- **Verify:** minimal edits (`problem-solving` + domain skill), delete `obsoletes`. Run `b3 guard verify-run` (`{RUN_DIR}/evidence/T00N.verify`, `--relevant-paths`, red/`>35L` → `{RUN_DIR}/logs/`; no pipe masking); skip immediate `verify-check` on 0 edits (use on resume/unchanged); fix own reds or check `run_base_sha`.
+- **Build:** dispatch per [dispatch](references/dispatch-naming.md) + `.b3/models.md` (1-task `XS`+`inline` inline if `implementation` unset/`auto`/matches `main`, else `b3-impl-t00N`; 0 nested subagents). With `>=2` ready tasks or active workers, run `b3 guard check-wave --partition` (`--wave-specs`, `--wave-reads`, `--active-specs`, `--active-reads`, `--verified-dirty-paths`, `--protected-paths`, `--ignore-dirty-paths`, `--check-dirty-scope`, `--expected-base-sha`): act on `admitted_tasks` (`wave|1|`, bounded by `available_slots`), queue `deferred_tasks`, across `SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES` (`b3 guard check-worktree --require-isolated`), or `SEQUENTIAL` (malformed → `malformed_wave_output`/`BLOCKED`; never claim `PARALLEL` if sequential; 1-task/0-active keeps guards). Re-evaluate ready tasks on each worker exit (no wave barrier). Save `impl_agent`, `mode`, `worker_root`, `integration`, `last_wave:`; pass `<=25L` `Context Packet` (`approach/T00N.md`/`### T00N` minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, skill; no `ship.md`/`master-plan.md`).
+- **Verify:** minimal edits (`problem-solving` + domain skill), delete `obsoletes`. Run `b3 guard verify-run` (`{RUN_DIR}/evidence/T00N.verify`, `--relevant-paths` on waves, red/`>35L` → `{RUN_DIR}/logs/`; no pipe masking); skip immediate `verify-check` after `verify-run` `0` w/ 0 edits (`verify-check` for resume/unchanged); fix own reds or check `run_base_sha` baseline.
 
 ### Review (Guard → Reviewer → Fix) & Commit
 
@@ -66,4 +66,4 @@ Skip `planning`; follow `skills/engineering/problem-solving/SKILL.md`:
 All required tasks `completed`:
 1. Verify `AC1..ACn` e2e, `Invariants`, full checks vs `baseline_status` (`verify-check` if unchanged; `PASS` → `NOT_RUN(verify_green)`), `git log --oneline {run_base_sha}..HEAD`.
 2. Cumulative `review-loop` on `{run_base_sha}..HEAD` (excl. `initial_dirty_paths`): **only** on `>=2` completed tasks/post-task edits; if task receipts `FRESH`, cap to **Cross-Cutting** (`git diff --stat`, contracts, duplication, residue) + post-task deltas (full diff if stale/missing); fixes need `verify-run` + `precommit --require-verify-receipt --expected-cmd <cmd> --relevant-paths <csv>` → 1 `final` commit.
-3. Unignored run-dirty files → `INCOMPLETE`. Set `run_status` (`PASS`|`FAIL`|`INCOMPLETE`|`BLOCKED`); report `last_wave:`, ACs, SHAs, checks, review, unverified claims, `{RUN_DIR}/pr-body.md` ([pr-template.md](references/pr-template.md)); PR feedback: `pr-feedback/SKILL.md`.
+3. Unignored run-dirty files block `PASS` (`INCOMPLETE`). Set `run_status` (`PASS`|`FAIL`|`INCOMPLETE`|`BLOCKED`); report `last_wave:`, ACs, SHAs, checks, review, unverified claims, `{RUN_DIR}/pr-body.md` ([pr-template.md](references/pr-template.md)); PR feedback: `pr-feedback/SKILL.md`.

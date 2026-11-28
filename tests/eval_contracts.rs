@@ -88,6 +88,8 @@ const EXPECTED_CLARIFICATION_EVALS: &[&str] = &[
     "evals/workflows/clarification/config-precedence-resolution.yaml",
     "evals/workflows/clarification/unsupported-host-graceful-degradation.yaml",
     "evals/workflows/clarification/no-duplicate-clarification-implementation.yaml",
+    "evals/workflows/clarification/low-score-no-material-ambiguity-proceeds.yaml",
+    "evals/workflows/clarification/parent-consolidates-worker-uncertainties.yaml",
 ];
 
 fn normalize_lf(raw: &str) -> String {
@@ -611,8 +613,8 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 353,
-        "expected >= 353 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 355,
+        "expected >= 355 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(
@@ -1666,17 +1668,17 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
     assert!(collect_errs.is_empty(), "collect errors: {collect_errs:?}");
     assert_eq!(
         all_yaml.len(),
-        353,
-        "expected 353 total YAML fixtures across evals/, found {}",
+        355,
+        "expected 355 total YAML fixtures across evals/, found {}",
         all_yaml.len()
     );
 
     let evals_readme = read_lf("evals/README.md");
     assert!(
-        evals_readme.contains("`353` YAML")
-            && evals_readme.contains("| `workflows/clarification/` | 15 |")
+        evals_readme.contains("`355` YAML")
+            && evals_readme.contains("| `workflows/clarification/` | 17 |")
             && evals_readme.contains("| `workflows/orchestration/` | 22 |"),
-        "evals/README.md inventory out of sync with 353 total / 15 workflows/clarification / 22 workflows/orchestration fixtures"
+        "evals/README.md inventory out of sync with 355 total / 17 workflows/clarification / 22 workflows/orchestration fixtures"
     );
 
     // 5. `scripts/README.md` flag documentation & end-to-end `run_b3` smoke check on
@@ -1754,7 +1756,23 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
 
 #[test]
 fn clarification_gate_canonical_contract_and_no_duplication() {
+    // Static contract & anti-bloat checks only (NOT live AI behavioral verification).
     let root = repo_root();
+
+    // F01 dead-code regression guards: no unused Rust planning_config parser.
+    assert!(
+        !root.join("src/planning_config.rs").exists(),
+        "unused src/planning_config.rs must remain removed"
+    );
+    assert!(
+        !root.join("tests/planning_config.rs").exists(),
+        "unused tests/planning_config.rs must remain removed"
+    );
+    let lib_rs = fs::read_to_string(root.join("src/lib.rs")).expect("read src/lib.rs");
+    assert!(
+        !lib_rs.contains("planning_config"),
+        "src/lib.rs must not expose or reference planning_config"
+    );
 
     let rule_raw = fs::read_to_string(root.join("rules/engineering-principles.md"))
         .expect("read rules/engineering-principles.md");
@@ -1765,19 +1783,34 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
 
     let contract = fs::read_to_string(root.join("workflows/references/clarification-gate.md"))
         .expect("read workflows/references/clarification-gate.md");
+    let contract_lf = normalize_lf(&contract);
+    assert!(
+        contract_lf.len() <= 5_800,
+        "workflows/references/clarification-gate.md ({} B) exceeds 5800 B static cap",
+        contract_lf.len()
+    );
     for required_fragment in [
         "clarification_gate: true",
         "understanding_threshold: 96",
-        "7-Step Global Planning Contract",
-        "10 Understanding Assessment Dimensions",
         "clarification_gate: false",
-        "Maximum Safe Parallelism",
-        "Reassessment During Execution",
-        "Proportional System-Wide Inheritance",
-        "Graceful host degradation",
+        "next valid layer",
+        "evidence-grounded heuristic trigger",
+        "block solely on score",
+        "Parent-Only Ownership & Maximum Safe Parallelism",
+        "sole clarification owner",
+        "Workers **must NOT** load `clarification-gate.md`",
+        "`XS` | `S` | `M` | `L` | `XL` | `XXL`",
+        "`XS` / `S`",
+        "**7-Step Contract:**",
+        "**10 Dimensions:**",
+        "Critical, irreversible, security, or authz ambiguity:",
+        "**regardless of score**",
+        "Targeted Reassessment & Inheritance",
+        "Reassess **only** on material triggers",
+        "Continuous isolation (`A..F`):",
     ] {
         assert!(
-            contract.contains(required_fragment),
+            contract_lf.contains(required_fragment),
             "workflows/references/clarification-gate.md missing '{required_fragment}'"
         );
     }
@@ -1796,6 +1829,18 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         );
     }
 
+    // F03 regression guards on workflows/ship.md.
+    let ship_wf =
+        fs::read_to_string(root.join("workflows/ship.md")).expect("read workflows/ship.md");
+    assert!(
+        ship_wf.contains("skip immediate `verify-check` after `verify-run` `0` w/ 0 edits"),
+        "workflows/ship.md must preserve skip immediate verify-check after verify-run 0 with 0 edits"
+    );
+    assert!(
+        ship_wf.contains("Unignored run-dirty files block `PASS`"),
+        "workflows/ship.md must preserve 'Unignored run-dirty files block `PASS`'"
+    );
+
     let models_example = fs::read_to_string(root.join("config/models.example.md"))
         .expect("read config/models.example.md");
     assert!(
@@ -1804,11 +1849,35 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
             && models_example.contains("understanding_threshold: 96"),
         "config/models.example.md missing canonical planning config"
     );
-    let parsed = b3::planning_config::parse_planning_config_from_markdown(&models_example)
-        .expect("parse config/models.example.md")
-        .expect("planning section in config/models.example.md");
-    assert_eq!(parsed.clarification_gate, Some(true));
-    assert_eq!(parsed.understanding_threshold, Some(96));
+
+    let models_doc = fs::read_to_string(root.join("docs/model-preferences.md"))
+        .expect("read docs/model-preferences.md");
+    for required_doc_fragment in [
+        "Field-level precedence:",
+        "next valid layer",
+        "understanding_threshold: 90",
+        "clarification_gate: false",
+    ] {
+        assert!(
+            models_doc.contains(required_doc_fragment),
+            "docs/model-preferences.md missing '{required_doc_fragment}'"
+        );
+    }
+
+    assert_eq!(
+        EXPECTED_CLARIFICATION_EVALS.len(),
+        17,
+        "expected 17 clarification eval entries"
+    );
+    let clarif_yaml_count = fs::read_dir(root.join("evals/workflows/clarification"))
+        .expect("read evals/workflows/clarification")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_file() && e.file_name().to_string_lossy().ends_with(".yaml"))
+        .count();
+    assert_eq!(
+        clarif_yaml_count, 17,
+        "expected 17 YAML fixtures in evals/workflows/clarification/, found {clarif_yaml_count}"
+    );
 
     // Ensure no command or command-skill duplicates the clarification rubric.
     for name in EXPECTED_COMMANDS {
@@ -1821,7 +1890,8 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
             let raw = fs::read_to_string(&path).expect("read command/skill file");
             assert!(
                 !raw.contains("understanding_threshold")
-                    && !raw.contains("10 Understanding Assessment Dimensions"),
+                    && !raw.contains("10 Understanding Assessment Dimensions")
+                    && !raw.contains("**10 Dimensions:**"),
                 "{} must not duplicate clarification rubric",
                 rel_slash(&root, &path)
             );

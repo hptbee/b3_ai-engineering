@@ -1,9 +1,9 @@
 id: clarify-simple-task-lightweight-011
 artifact: workflows/references/clarification-gate.md
-intent: Simple, clearly specified tasks remain lightweight without exhaustive 10-dimension scoring or heavyweight planning ceremony
+intent: Clear XS/S tasks proceed directly without loading clarification-gate.md or emitting numeric score reports
 scenario: |
-  User invokes b3-implement or b3-verify on a localized 1-file typo or explicit verification command with zero material unknowns
-  Agent applies the proportional invariant silently and executes inline without emitting artificial 10-dimension scorecards
+  User invokes b3-implement or b3-verify on a clear, localized, low-risk XS/S task (e.g., 1-file typo or explicit verification command)
+  Agent confirms intent, inspects targets, and executes directly without loading clarification-gate.md or emitting scorecards or ceremony
 expected_outcome: PASS
-failure_mode: bureaucratic-scoring-ritual-on-trivial-task
-notes: Keeps lightweight standalone commands fast and preserves minimum necessary context
+failure_mode: bureaucratic-scoring-ritual-or-rubric-load-on-trivial-task
+notes: Keeps XS/S standalone commands fast and preserves minimum necessary context

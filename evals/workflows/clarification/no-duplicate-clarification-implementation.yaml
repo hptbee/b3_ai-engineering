@@ -1,9 +1,9 @@
 id: clarify-no-duplicate-implementation-015
 artifact: workflows/references/clarification-gate.md
-intent: No duplicate clarification engine, extra config system, extra public command, or extra agent role exists
+intent: No duplicate clarification engine, extra config parser, extra public command, or extra agent role exists
 scenario: |
   Audit commands/*.md, adapters/command-skills/*/SKILL.md, agents/*.md, and src/
-  Detailed clarification rubric lives solely in workflows/references/clarification-gate.md; commands stay thin, total commands remain 11, total skills remain 35, and no LLM confidence heuristic exists in Rust
+  Detailed clarification rubric lives solely in workflows/references/clarification-gate.md; commands stay thin, total commands remain 14, total skills remain 38 (24 canonical + 14 command-skills), canonical agent roles remain 5, and zero unused Rust clarification config parser exists in src/
 expected_outcome: PASS
-failure_mode: duplicated-clarification-prose-or-unrequested-abstraction-layer
+failure_mode: duplicated-clarification-prose-or-dead-rust-config-parser
 notes: Enforced statically by tests/eval_contracts.rs and b3 context measure --strict

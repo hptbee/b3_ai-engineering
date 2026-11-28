@@ -34,5 +34,5 @@ planning:
 ```
 
 - Defaults: `clarification_gate: true`, `understanding_threshold: 96` (valid integer range `1..=100`).
-- Precedence: per-invocation override > `<project>/.b3/models.md` > `~/.b3/models.md` (or `B3_MODELS_PERSONAL`) > built-in defaults.
-- Missing, partial, or malformed preference files never block execution; invalid fields or files fall back gracefully to the next valid layer or built-in defaults.
+- Field-level precedence: `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (or B3_MODELS_PERSONAL) > built-in defaults`.
+- Parent resolves effective settings once per invocation; missing, partial, or invalid fields fall back per field to the **next valid layer** before built-in defaults (malformed project values never discard valid personal values; never blocks execution or mutates files).

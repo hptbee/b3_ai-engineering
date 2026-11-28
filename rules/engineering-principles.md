@@ -10,7 +10,7 @@ authority: high
 
 Hard rules for how work is done in this system.
 
-1. **Understand before changing.** Do not edit affected targets until clear (`>=96%` default clarification gate, proportional; partial ambiguity never stalls safe independent work): `workflows/references/clarification-gate.md`.
+1. **Understand before changing.** Do not edit affected targets until clear (proportional clarification gate, `96%` default; never stall independent work): `workflows/references/clarification-gate.md`.
 2. **Prefer the smallest change that satisfies the success condition.** Scope expansion requires an explicit decision.
 3. **Keep methods composable.** Use a focused skill; do not invent a one-off giant procedure when an existing skill applies.
 4. **Do not confuse layers.** Constraints→`rules/`; methods→`skills/`; actions→`commands/`; roles→`agents/`; sequencing→`workflows/`; host wiring→`CLAUDE.md`, `adapters/`, generated host files; taste→`knowledge/personal/`.

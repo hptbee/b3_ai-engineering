@@ -40,9 +40,28 @@ B3 never claims a model switch occurred unless the host runtime actually confirm
 
 The same preference files (`~/.b3/models.md` / `B3_MODELS_PERSONAL` and `<project>/.b3/models.md`) also host optional `planning:` settings for [`workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md):
 
-- **Precedence:** `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (B3_MODELS_PERSONAL) > built-in defaults (clarification_gate: true, understanding_threshold: 96)`.
-- Missing, partial, or malformed files fall back silently to built-in defaults (`true`, `96`) across all hosts.
+- **Field-level precedence:** `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (B3_MODELS_PERSONAL) > built-in defaults (clarification_gate: true, understanding_threshold: 96)`.
+- **Resolve once & per-field fallback:** Parent resolves effective `planning:` values once per invocation (workers do not re-read `models.md`). Missing, partial, or malformed fields/files fall back **per field to the next valid layer** before built-in defaults (`true`, `96`), never discarding valid personal values when a project override is partial or malformed, and never blocking across hosts.
 - Disabling `clarification_gate` only relaxes routine ambiguity prompts; it **never** bypasses security boundaries, required user authorization, research governance, protected paths, destructive safeguards, or merge authorization.
+
+### Field-Level Merge Example
+
+If `~/.b3/models.md` sets:
+
+```yaml
+planning:
+  clarification_gate: true
+  understanding_threshold: 90
+```
+
+and `<project>/.b3/models.md` sets only:
+
+```yaml
+planning:
+  clarification_gate: false
+```
+
+the effective configuration resolved by Parent for that invocation is `clarification_gate: false` and `understanding_threshold: 90` (if `<project>/.b3/models.md` instead had an invalid threshold such as `understanding_threshold: abc`, that invalid field falls back to the personal `90`, or to `96` if personal omitted it).
 
 ### Enabled (default behavior)
 

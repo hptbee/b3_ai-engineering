@@ -26,7 +26,7 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 
 ### B. Research Planning
 - **Out:** critical-path ordered units `U001..U00N` (`research-plan.md`, or inline in `progress.md` for 1-unit): question, baseline, gaps, sources, domains, hard verified-output `depends_on`, disjoint `owned_files`, ACs, checks, implications.
-- **Gate:** keep ledgers/manifests/`evidence-index.md`/authority single-writer ([dispatch](references/dispatch-naming.md)); isolate ambiguous units per [clarification](references/clarification-gate.md) (`continue independent eligible units`) or `BLOCKED`.
+- **Gate:** keep ledgers/manifests/`evidence-index.md`/authority single-writer ([dispatch](references/dispatch-naming.md)); Parent isolates ambiguous units per [clarification](references/clarification-gate.md) (`continue independent eligible units`) or `BLOCKED`.
 
 ### C. Source Discovery & Provenance
 - **Out:** `evidence-index.md` + SHA-256 `{RUN_DIR}/evidence/sources.manifest` (`b3 guard evidence-check --write-manifest`). Run ready unit source checks continuously in `SHARED_READ_ONLY` (`dispatch-naming.md`); Parent merges `evidence-index.md` + manifest single-writer and sets `integration=output_ready` once artifact + `evidence-check` pass.
