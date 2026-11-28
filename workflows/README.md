@@ -18,6 +18,7 @@ Progressive-disclosure references for `/b3-ship` and `/b3-research-ship` (opened
 - [`references/research-ship-gates.md`](references/research-ship-gates.md) — independent source verification, dual technical/editorial gates, provider-neutral branch/PR lifecycle, and `merge-policy-check` / post-merge checks
 - [`references/dispatch-naming.md`](references/dispatch-naming.md) — subagent logical aliases, optional model preferences, adaptive concurrency & continuous dispatch, 4 isolation modes, and canonical `mechanical-check` ownership contract
 - [`references/context-routing.md`](references/context-routing.md) — capability-aware context routing contract for optional Codebase Memory / Serena MCPs with native fallback
+- [`references/static-analysis.md`](references/static-analysis.md) — project-native lint/SAST/dead-code discovery (`REUSE`/`FALLBACK`/authorized `BOOTSTRAP`), scoped safe auto-fix, baseline regression attribution, and mechanical review offloading
 - [`references/pr-template.md`](references/pr-template.md) — provider-neutral branch/PR description template (`{RUN_DIR}/pr-body.md`, optional `gh pr` on GitHub)
 - Deterministic native CLI (not an orchestrator): `b3 guard` / `b3 pr` / `b3 context measure` (`src/`)
 - Visual diagrams & walkthrough: [`../docs/ship-and-review-guide.md`](../docs/ship-and-review-guide.md)

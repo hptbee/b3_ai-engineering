@@ -1,0 +1,9 @@
+id: static-analysis-workflow-only-hook-and-guard-boundary-008
+artifact: workflows/references/static-analysis.md
+intent: Heavy static analysis remains WORKFLOW_ONLY outside Tier 0 and Tier 1 hooks while mechanical.rs and symbol.rs stay the sole deterministic guard modules
+scenario: |
+  Audit hook-integration.md, docs/hooks.md, src/hook/*.rs, and src/guard/*.rs
+  Heavy linters, SAST, and dead-code analyzers stay WORKFLOW_ONLY outside Tier 0 (p95 under 10 ms) and Tier 1 precommit hooks, with zero new guard modules added beyond the existing 16 modules (including mechanical.rs and symbol.rs)
+expected_outcome: PASS
+failure_mode: slow-linters-in-tier0-hooks-or-duplicate-guard-modules
+notes: Enforced by tests/eval_contracts.rs anti-bloat and guard-module count assertions

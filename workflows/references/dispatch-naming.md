@@ -1,13 +1,13 @@
 # Subagent dispatch, adaptive scheduling & orchestration (on-demand)
 
-Canonical orchestration, [clarification](clarification-gate.md), and [hook](hook-integration.md) contract inherited by all 14 B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-{resolve,reply,comment}`). Load once; never copy into briefs.
+Canonical orchestration, [clarification](clarification-gate.md), [static-analysis](static-analysis.md), and [hook](hook-integration.md) contract inherited by all 14 B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-{resolve,reply,comment}`). Load once; never copy into briefs.
 
-- **Canonical roles & aliases:** Keep `agents/b3-*.md` stems/`name:` stable (`b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer`). Prefer lowercase kebab-case spawn aliases when supported: `b3-impl-<task-id-lower>`, `b3-review-u<NN>-p<K>`, `b3-fix-p<K>`, `b3-research-<slug>`, `b3-verify-<slug>`; never block on naming.
-- **Session IDs & no nesting:** Store host agent IDs separately from aliases. Workers execute directly and **never** nest subagents (B3 subagents only, not product workers).
+- **Canonical roles & aliases:** Keep `agents/b3-*.md` stems/`name:` stable (`b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer`). Prefer lowercase kebab-case aliases when supported: `b3-impl-<task-id-lower>`, `b3-review-u<NN>-p<K>`, `b3-fix-p<K>`, `b3-research-<slug>`, `b3-verify-<slug>`; never block on naming.
+- **Session IDs & no nesting:** Store host agent IDs separate from aliases. Workers run directly and **never** nest subagents (B3 subagents only, not product workers).
 
 ## Model preferences
 
-- Read once per dispatch: `<project>/.b3/models.md`, then `~/.b3/models.md` (`B3_MODELS_PERSONAL`). Precedence: user > project > personal > `auto` across `planning`, `debugging`, `implementation`, `b3-reviewer`, `b3-fixer`, and specialists.
+- Read once/dispatch: `<project>/.b3/models.md`, then `~/.b3/models.md` (`B3_MODELS_PERSONAL`). Precedence: user > project > personal > `auto` across `planning`, `debugging`, `implementation`, `b3-reviewer`, `b3-fixer`, and specialists.
 - **Single-task fast-path:** 1-unit `XS` + `inline` runs inline on `main` when `implementation` is unset/`auto` (or matches `main`); dispatch `b3-impl-<task-id-lower>` when model differs, size `>= S`, `notes`/`detailed`, or multi-unit. Never edit host settings or `agents/*.md` (`model: inherit`) or claim unverified switches.
 
 ## Continuous scheduling & safe integration contract
@@ -18,7 +18,7 @@ Canonical orchestration, [clarification](clarification-gate.md), and [hook](hook
   - `SHARED_READ_ONLY` / research: artifact written, validated (`evidence-check` if applicable), and recorded (`output_ready`).
   - `SHARED_DISJOINT_WRITES`: `A`'s scoped verification passed and files exist stably in the shared WT (`output_ready`). **Never `git commit` (advancing `HEAD`) in a shared WT while peer `SHARED_DISJOINT_WRITES` workers remain active**; pass `A`'s uncommitted verified files via `--verified-dirty-paths` until a commit-safe quiescent window.
   - `ISOLATED_WRITES`: `A` is **not** ready for dependents merely by passing inside `wt-a`; Parent must first integrate `A` into the integration branch (`integrated`) so `B` starts from integrated state.
-- **Adaptive concurrency & lean packets:** Scale concurrency by independent work, context/CPU/memory/rate budgets, host limits, and throughput (no fixed `3`/`4` caps; `check-wave --partition` defaults to `available_parallelism` `4..=16`, explicit `--max-concurrency 1..64`; fall back to conservative `--max-concurrency` or `1` on `SINGLE_AGENT_LIMIT` if host limits unknown). Pass `<=25L` packets (`approach`/targets minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, matched skill; no orchestrator docs). Reuse healthy MCPs (`context-routing.md`) optionally; reuse subsystem workers unless independence is needed (always fresh workers for reviews). Parent owns clarification, shared state, integration, commits, and PR mutations.
+- **Adaptive concurrency & lean packets:** Scale concurrency by independent work, context/CPU/memory/rate budgets, host limits, and throughput (no fixed `3`/`4` caps; `check-wave --partition` defaults to `available_parallelism` `4..=16`, explicit `--max-concurrency 1..64`; fall back to conservative `--max-concurrency` or `1` on `SINGLE_AGENT_LIMIT` if host limits unknown). Pass `<=25L` packets (`approach`/targets minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, matched skill; no orchestrator docs). Reuse healthy MCPs (`context-routing.md`) optionally; reuse subsystem workers unless independence needed (fresh workers for reviews). Parent owns discovery (`static-analysis.md`), clarification, shared state, integration, commits, PR mutations.
 
 ## 4 adaptive isolation modes (least-expensive-safe)
 

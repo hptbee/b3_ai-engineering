@@ -1882,3 +1882,304 @@ fn mid_wave_resume_preserves_fresh_receipts_and_invalidates_only_stale_approache
     assert!(fb2_all.contains("STALE"), "{fb2_all}");
     assert!(fb2_all.contains("src/a.txt"), "{fb2_all}");
 }
+
+#[test]
+fn core_lint_analyzer_config_manifest_invalidation_and_doc_isolation() {
+    let tmp = TempDirGuard::new("lint-manifest-inval");
+    let repo = tmp.path.join("repo");
+    init_git_repo(&repo);
+    let r = repo.to_str().unwrap();
+
+    commit_file(
+        &repo,
+        "clippy.toml",
+        "cognitive-complexity-threshold = 25\n",
+        "add clippy config",
+    );
+    commit_file(
+        &repo,
+        "tsconfig.app.json",
+        "{\"compilerOptions\":{\"strict\":true}}\n",
+        "add tsconfig app",
+    );
+    commit_file(&repo, "ruff.toml", "line-length = 100\n", "add ruff config");
+    commit_file(
+        &repo,
+        "src/app.rs",
+        "pub fn run() -> i32 { 1 }\n",
+        "add app rs",
+    );
+    commit_file(
+        &repo,
+        "src/web.ts",
+        "export const value = 1;\n",
+        "add web ts",
+    );
+    commit_file(&repo, "docs/notes.md", "initial notes\n", "add notes");
+
+    // Stage a scoped source change and record verify-run receipt covering code paths
+    fs::write(repo.join("src/app.rs"), "pub fn run() -> i32 { 2 }\n").unwrap();
+    git_in(&repo, &["add", "src/app.rs"]);
+
+    let receipt_rel = ".b3/ship/evidence/lint-cfg.verify";
+    let (vr_c, vr_out, vr_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T1",
+        "--relevant-paths",
+        "src/app.rs,src/web.ts",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(vr_c, 0, "initial verify-run failed: {vr_out}\n{vr_err}");
+
+    let (vc0, vc0_out, vc0_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(vc0, 0, "initial verify-check failed: {vc0_out}\n{vc0_err}");
+    assert!(vc0_out.contains("VERIFY_VALID"), "{vc0_out}");
+
+    // Modifying clippy.toml invalidates receipt -> verify-check exits 2 (VERIFY_STALE) & precommit blocks
+    fs::write(
+        repo.join("clippy.toml"),
+        "cognitive-complexity-threshold = 10\n",
+    )
+    .unwrap();
+    let (vc_clippy, clippy_out, clippy_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    let clippy_all = format!("{clippy_out}\n{clippy_err}");
+    assert_eq!(vc_clippy, 2, "{clippy_all}");
+    assert!(clippy_all.contains("VERIFY_STALE"), "{clippy_all}");
+
+    let (pc_clippy, pc_clippy_out, pc_clippy_err) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    let pc_clippy_all = format!("{pc_clippy_out}\n{pc_clippy_err}");
+    assert_ne!(pc_clippy, 0, "{pc_clippy_all}");
+    assert!(pc_clippy_all.contains("VERIFY_STALE"), "{pc_clippy_all}");
+
+    // Re-verifying after auto-fixing src/web.ts and staging clippy.toml restores VERIFY_VALID and precommit passes
+    fs::write(repo.join("src/web.ts"), "export const value: number = 2;\n").unwrap();
+    git_in(&repo, &["add", "clippy.toml", "src/web.ts"]);
+    let (vr2_c, vr2_out, vr2_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T2",
+        "--relevant-paths",
+        "src/app.rs,src/web.ts,clippy.toml",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(vr2_c, 0, "re-verify failed: {vr2_out}\n{vr2_err}");
+
+    let (vc_restored, vc_res_out, vc_res_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(vc_restored, 0, "{vc_res_out}\n{vc_res_err}");
+    assert!(vc_res_out.contains("VERIFY_VALID"), "{vc_res_out}");
+
+    let (pc_ok, pc_ok_out, pc_ok_err) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs,src/web.ts,clippy.toml",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(pc_ok, 0, "{pc_ok_out}\n{pc_ok_err}");
+    assert!(pc_ok_out.contains("PRECOMMIT_OK"), "{pc_ok_out}");
+
+    // Creating a nested glob lint config (packages/web/eslint.config.mjs) invalidates receipt too
+    fs::create_dir_all(repo.join("packages/web")).unwrap();
+    fs::write(
+        repo.join("packages/web/eslint.config.mjs"),
+        "export default [{ rules: { 'no-console': 'error' } }];\n",
+    )
+    .unwrap();
+    let (vc_eslint, es_out, es_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    let es_all = format!("{es_out}\n{es_err}");
+    assert_eq!(vc_eslint, 2, "{es_all}");
+    assert!(es_all.contains("VERIFY_STALE"), "{es_all}");
+
+    let (pc_eslint, pc_es_out, pc_es_err) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs,src/web.ts,clippy.toml",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    let pc_es_all = format!("{pc_es_out}\n{pc_es_err}");
+    assert_ne!(pc_eslint, 0, "{pc_es_all}");
+    assert!(pc_es_all.contains("VERIFY_STALE"), "{pc_es_all}");
+
+    // Also test tsconfig.*.json and ruff.toml invalidation, then clean re-verify
+    git_in(&repo, &["add", "packages/web/eslint.config.mjs"]);
+    let (vr3_c, _, vr3_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T3",
+        "--relevant-paths",
+        "src/app.rs,src/web.ts,clippy.toml,packages/web/eslint.config.mjs",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(vr3_c, 0, "{vr3_err}");
+
+    fs::write(
+        repo.join("tsconfig.app.json"),
+        "{\"compilerOptions\":{\"strict\":true,\"noUnusedLocals\":true}}\n",
+    )
+    .unwrap();
+    let (vc_ts, ts_out, ts_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    let ts_all = format!("{ts_out}\n{ts_err}");
+    assert_eq!(vc_ts, 2, "{ts_all}");
+    assert!(ts_all.contains("VERIFY_STALE"), "{ts_all}");
+
+    git_in(&repo, &["add", "tsconfig.app.json"]);
+    fs::write(repo.join("ruff.toml"), "line-length = 120\n").unwrap();
+    let (vc_ruff, ruff_out, ruff_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    let ruff_all = format!("{ruff_out}\n{ruff_err}");
+    assert_eq!(vc_ruff, 2, "{ruff_all}");
+    assert!(ruff_all.contains("VERIFY_STALE"), "{ruff_all}");
+
+    // Re-verify all modified code/config files, then edit unrelated doc files -> NO false invalidation
+    git_in(&repo, &["add", "ruff.toml"]);
+    let (vr4_c, vr4_out, vr4_err) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r,
+        "--task-id",
+        "T4",
+        "--relevant-paths",
+        "src/app.rs,src/web.ts,clippy.toml,packages/web/eslint.config.mjs,tsconfig.app.json,ruff.toml",
+        "--receipt-path",
+        receipt_rel,
+        "--verify-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(vr4_c, 0, "{vr4_out}\n{vr4_err}");
+
+    fs::write(repo.join("docs/notes.md"), "updated documentation only\n").unwrap();
+    fs::write(
+        repo.join("docs/clippy.toml.md"),
+        "# not a clippy manifest\n",
+    )
+    .unwrap();
+
+    let (vc_doc, doc_out, doc_err) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(
+        vc_doc, 0,
+        "unrelated doc edit must not invalidate scoped receipt: {doc_out}\n{doc_err}"
+    );
+    assert!(doc_out.contains("VERIFY_VALID"), "{doc_out}");
+
+    let (pc_doc, pc_doc_out, pc_doc_err) = run_b3(&[
+        "guard",
+        "precommit",
+        "--repo-root",
+        r,
+        "--allowed-paths",
+        "src/app.rs,src/web.ts,clippy.toml,packages/web/eslint.config.mjs,tsconfig.app.json,ruff.toml",
+        "--require-verify-receipt",
+        receipt_rel,
+        "--expected-cmd",
+        "echo lint-ok",
+    ]);
+    assert_eq!(
+        pc_doc, 0,
+        "unrelated doc edit must not block precommit for verified code/config: {pc_doc_out}\n{pc_doc_err}"
+    );
+    assert!(pc_doc_out.contains("PRECOMMIT_OK"), "{pc_doc_out}");
+}

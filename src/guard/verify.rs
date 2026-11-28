@@ -50,17 +50,35 @@ const MANIFEST_EXACT_NAMES: &[&str] = &[
     "cargo.lock",
     "rust-toolchain.toml",
     "rust-toolchain",
+    "clippy.toml",
+    ".clippy.toml",
+    "rustfmt.toml",
+    ".rustfmt.toml",
     "package.json",
     "package-lock.json",
     "pnpm-lock.yaml",
     "yarn.lock",
+    "biome.json",
+    "biome.jsonc",
+    "knip.json",
+    "knip.jsonc",
+    ".editorconfig",
+    "jsconfig.json",
     "go.mod",
     "go.sum",
+    ".golangci.yml",
+    ".golangci.yaml",
     "pyproject.toml",
     "poetry.lock",
     "uv.lock",
     "requirements.txt",
     "pipfile.lock",
+    "ruff.toml",
+    ".ruff.toml",
+    "pyrightconfig.json",
+    "mypy.ini",
+    ".flake8",
+    "setup.cfg",
     "gemfile",
     "gemfile.lock",
     "pom.xml",
@@ -73,9 +91,43 @@ const MANIFEST_EXACT_NAMES: &[&str] = &[
     "directory.build.targets",
     "directory.packages.props",
     "global.json",
+    ".shellcheckrc",
+    ".yamllint",
+    ".yamllint.yml",
+    ".yamllint.yaml",
+    ".markdownlint.json",
+    ".markdownlint.yaml",
+    ".markdownlint.yml",
+    ".markdownlint-cli2.jsonc",
+    ".markdownlint-cli2.yaml",
+    ".pre-commit-config.yaml",
+    ".eslintrc",
+    ".stylelintrc",
+    ".prettierrc",
+];
+
+const MANIFEST_GLOB_PATTERNS: &[&str] = &[
+    "eslint.config.*",
+    ".eslintrc.*",
+    "tsconfig.*.json",
+    "knip.config.*",
+    ".stylelintrc.*",
+    "stylelint.config.*",
+    "prettier.config.*",
+    ".prettierrc.*",
 ];
 
 const MANIFEST_EXTS: &[&str] = &["csproj", "sln"];
+
+fn matches_manifest_glob_pattern(leaf: &str, pattern: &str) -> bool {
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        leaf.len() >= prefix.len() + suffix.len()
+            && leaf.starts_with(prefix)
+            && leaf.ends_with(suffix)
+    } else {
+        leaf == pattern
+    }
+}
 
 pub(crate) fn is_dependency_or_config_manifest(path: &str) -> bool {
     let norm = path.replace('\\', "/");
@@ -87,7 +139,11 @@ pub(crate) fn is_dependency_or_config_manifest(path: &str) -> bool {
         return true;
     }
     let leaf = low.rsplit('/').next().unwrap_or("");
-    if MANIFEST_EXACT_NAMES.contains(&leaf) {
+    if MANIFEST_EXACT_NAMES.contains(&leaf)
+        || MANIFEST_GLOB_PATTERNS
+            .iter()
+            .any(|pat| matches_manifest_glob_pattern(leaf, pat))
+    {
         return true;
     }
     matches!(
@@ -97,10 +153,15 @@ pub(crate) fn is_dependency_or_config_manifest(path: &str) -> bool {
 }
 
 fn manifest_git_pathspecs() -> Vec<String> {
-    let mut specs = Vec::with_capacity(MANIFEST_EXACT_NAMES.len() + MANIFEST_EXTS.len() + 1);
+    let mut specs = Vec::with_capacity(
+        MANIFEST_EXACT_NAMES.len() + MANIFEST_GLOB_PATTERNS.len() + MANIFEST_EXTS.len() + 1,
+    );
     specs.push(":(icase,glob)**/.cargo/config.toml".to_string());
     for name in MANIFEST_EXACT_NAMES {
         specs.push(format!(":(icase,glob)**/{name}"));
+    }
+    for pat in MANIFEST_GLOB_PATTERNS {
+        specs.push(format!(":(icase,glob)**/{pat}"));
     }
     for ext in MANIFEST_EXTS {
         specs.push(format!(":(icase,glob)**/*.{ext}"));
@@ -1400,4 +1461,129 @@ pub fn verify_check(
         target_commit_sha,
     );
     Ok((res.message, res.code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_dependency_or_config_manifest, manifest_git_pathspecs, MANIFEST_EXACT_NAMES,
+        MANIFEST_EXTS, MANIFEST_GLOB_PATTERNS,
+    };
+
+    #[test]
+    fn manifest_matcher_accepts_exact_lint_and_analyzer_configs() {
+        for path in [
+            "clippy.toml",
+            ".clippy.toml",
+            "rustfmt.toml",
+            ".rustfmt.toml",
+            "biome.json",
+            "biome.jsonc",
+            "knip.json",
+            "knip.jsonc",
+            ".editorconfig",
+            "jsconfig.json",
+            "ruff.toml",
+            ".ruff.toml",
+            "pyrightconfig.json",
+            "mypy.ini",
+            ".flake8",
+            "setup.cfg",
+            ".golangci.yml",
+            ".golangci.yaml",
+            ".shellcheckrc",
+            ".yamllint",
+            ".yamllint.yml",
+            ".yamllint.yaml",
+            ".markdownlint.json",
+            ".markdownlint.yaml",
+            ".markdownlint.yml",
+            ".markdownlint-cli2.jsonc",
+            ".markdownlint-cli2.yaml",
+            ".pre-commit-config.yaml",
+            ".eslintrc",
+            ".stylelintrc",
+            ".prettierrc",
+            "packages/app/.ruff.toml",
+            r".\SubDir\Clippy.TOML",
+            ".cargo/config.toml",
+            "services/api/Api.csproj",
+            "MyApp.sln",
+        ] {
+            assert!(
+                is_dependency_or_config_manifest(path),
+                "expected manifest match for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_matcher_accepts_glob_config_patterns() {
+        for path in [
+            "eslint.config.mjs",
+            "apps/web/eslint.config.ts",
+            ".eslintrc.cjs",
+            ".eslintrc.json",
+            "tsconfig.app.json",
+            "packages/ui/tsconfig.build.json",
+            "knip.config.ts",
+            ".stylelintrc.json",
+            "stylelint.config.mjs",
+            "prettier.config.mjs",
+            ".prettierrc.json",
+            ".PrettierRC.YAML",
+        ] {
+            assert!(
+                is_dependency_or_config_manifest(path),
+                "expected glob manifest match for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_matcher_rejects_non_manifest_files() {
+        for path in [
+            "",
+            "src/main.rs",
+            "eslint.config",
+            "notes/tsconfig.txt",
+            "tsconfig.json.bak",
+            "docs/clippy.toml.md",
+            "prettier.config",
+            "knip.config",
+        ] {
+            assert!(
+                !is_dependency_or_config_manifest(path),
+                "expected non-manifest rejection for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_git_pathspecs_contains_all_exact_glob_and_ext_patterns() {
+        let specs = manifest_git_pathspecs();
+        assert!(specs.contains(&":(icase,glob)**/.cargo/config.toml".to_string()));
+        for name in MANIFEST_EXACT_NAMES {
+            let expected = format!(":(icase,glob)**/{name}");
+            assert!(
+                specs.contains(&expected),
+                "missing exact pathspec {expected}"
+            );
+        }
+        for pat in MANIFEST_GLOB_PATTERNS {
+            let expected = format!(":(icase,glob)**/{pat}");
+            assert!(
+                specs.contains(&expected),
+                "missing glob pathspec {expected}"
+            );
+        }
+        for ext in MANIFEST_EXTS {
+            let expected = format!(":(icase,glob)**/*.{ext}");
+            assert!(specs.contains(&expected), "missing ext pathspec {expected}");
+        }
+        assert_eq!(
+            specs.len(),
+            1 + MANIFEST_EXACT_NAMES.len() + MANIFEST_GLOB_PATTERNS.len() + MANIFEST_EXTS.len()
+        );
+    }
 }

@@ -83,6 +83,17 @@ const EXPECTED_HOOK_EVALS: &[&str] = &[
     "evals/workflows/hooks/clarification-boundary-separation.yaml",
 ];
 
+const EXPECTED_STATIC_ANALYSIS_EVALS: &[&str] = &[
+    "evals/workflows/static-analysis/01-project-lint-discovery-and-reuse.yaml",
+    "evals/workflows/static-analysis/02-no-lint-fallback-and-explicit-bootstrap.yaml",
+    "evals/workflows/static-analysis/03-dead-code-levels-and-prod-consumer.yaml",
+    "evals/workflows/static-analysis/04-unused-deps-duplicates-and-complexity.yaml",
+    "evals/workflows/static-analysis/05-security-and-boundary-offloading.yaml",
+    "evals/workflows/static-analysis/06-scoped-safe-autofix-and-verify-stale.yaml",
+    "evals/workflows/static-analysis/07-baseline-regression-attribution.yaml",
+    "evals/workflows/static-analysis/08-workflow-only-hook-and-guard-boundary.yaml",
+];
+
 const EXPECTED_CLARIFICATION_EVALS: &[&str] = &[
     "evals/workflows/clarification/enabled-clear-proceeds.yaml",
     "evals/workflows/clarification/enabled-below-96-asks.yaml",
@@ -615,18 +626,19 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
         .iter()
         .chain(EXPECTED_CLARIFICATION_EVALS.iter())
         .chain(EXPECTED_HOOK_EVALS.iter())
+        .chain(EXPECTED_STATIC_ANALYSIS_EVALS.iter())
     {
         let full = root.join(expected_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         if !full.is_file() {
             errors.push(format!(
-                "missing required semantic orchestration/clarification/hook eval: {expected_rel}"
+                "missing required semantic orchestration/clarification/hook/static-analysis eval: {expected_rel}"
             ));
         }
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 363,
-        "expected >= 363 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 371,
+        "expected >= 371 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(
@@ -1684,18 +1696,19 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
     assert!(collect_errs.is_empty(), "collect errors: {collect_errs:?}");
     assert_eq!(
         all_yaml.len(),
-        363,
-        "expected 363 total YAML fixtures across evals/, found {}",
+        371,
+        "expected 371 total YAML fixtures across evals/, found {}",
         all_yaml.len()
     );
 
     let evals_readme = read_lf("evals/README.md");
     assert!(
-        evals_readme.contains("`363` YAML")
+        evals_readme.contains("`371` YAML")
             && evals_readme.contains("| `workflows/clarification/` | 17 |")
             && evals_readme.contains("| `workflows/orchestration/` | 22 |")
-            && evals_readme.contains("| `workflows/hooks/` | 8 |"),
-        "evals/README.md inventory out of sync with 363 total / 17 workflows/clarification / 22 workflows/orchestration / 8 workflows/hooks fixtures"
+            && evals_readme.contains("| `workflows/hooks/` | 8 |")
+            && evals_readme.contains("| `workflows/static-analysis/` | 8 |"),
+        "evals/README.md inventory out of sync with 371 total / 17 workflows/clarification / 22 workflows/orchestration / 8 workflows/hooks / 8 workflows/static-analysis fixtures"
     );
 
     // 5. `scripts/README.md` flag documentation & end-to-end `run_b3` smoke check on
@@ -2010,4 +2023,163 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         }
     }
     assert_eq!(role_count, 5, "expected 5 canonical agent roles");
+}
+
+#[test]
+fn static_analysis_canonical_contract_and_anti_bloat() {
+    let root = repo_root();
+
+    // (a) Canonical static-analysis contract size & required tokens.
+    let contract_raw = fs::read_to_string(root.join("workflows/references/static-analysis.md"))
+        .expect("read workflows/references/static-analysis.md");
+    let contract = normalize_lf(&contract_raw);
+    assert!(
+        contract.len() <= 6_500,
+        "workflows/references/static-analysis.md ({} B) exceeds 6500 B static cap",
+        contract.len()
+    );
+    for required in [
+        "REUSE",
+        "FALLBACK",
+        "BOOTSTRAP",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "Production-consumer verification",
+        "unit tests != runtime/production caller",
+        "VERIFY_STALE",
+        "PREEXISTING_BASELINE",
+        "WORKFLOW_ONLY",
+        "allowed-paths",
+    ] {
+        assert!(
+            contract.contains(required),
+            "workflows/references/static-analysis.md missing '{required}'"
+        );
+    }
+
+    // (b) Cross-links across workflows, skills, reviewer agent, and docs.
+    for rel in [
+        "workflows/ship.md",
+        "workflows/research-ship.md",
+        "workflows/feature-implementation.md",
+        "skills/engineering/verification/SKILL.md",
+        "skills/engineering/code-review/SKILL.md",
+        "skills/engineering/refactoring/SKILL.md",
+        "agents/b3-reviewer.md",
+        "docs/hooks.md",
+        "docs/ship-and-review-guide.md",
+    ] {
+        let raw = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+        assert!(
+            raw.contains("static-analysis.md"),
+            "{rel} must cross-link static-analysis.md"
+        );
+    }
+
+    // Eval suite inventory for workflows/static-analysis/.
+    assert_eq!(
+        EXPECTED_STATIC_ANALYSIS_EVALS.len(),
+        8,
+        "expected 8 static-analysis eval entries"
+    );
+    let sa_yaml_count = fs::read_dir(root.join("evals/workflows/static-analysis"))
+        .expect("read evals/workflows/static-analysis")
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_file() && e.file_name().to_string_lossy().ends_with(".yaml"))
+        .count();
+    assert_eq!(
+        sa_yaml_count, 8,
+        "expected 8 YAML fixtures in evals/workflows/static-analysis/, found {sa_yaml_count}"
+    );
+
+    // (c) Strict anti-bloat counts: commands, agents, guard modules, Cargo.toml deps, and context budget.
+    let count_md_excl_readme = |dir: &Path| -> usize {
+        fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let p = e.path();
+                p.is_file()
+                    && p.extension().and_then(|x| x.to_str()) == Some("md")
+                    && p.file_name().and_then(|n| n.to_str()) != Some("README.md")
+            })
+            .count()
+    };
+
+    let cmd_count = count_md_excl_readme(&root.join("commands"));
+    assert_eq!(
+        cmd_count, 14,
+        "expected 14 commands/*.md, found {cmd_count}"
+    );
+
+    let agent_count = count_md_excl_readme(&root.join("agents"));
+    assert_eq!(
+        agent_count, 5,
+        "expected 5 runtime agent files in agents/*.md (excl. README.md), found {agent_count}"
+    );
+
+    let guard_module_count = fs::read_dir(root.join("src/guard"))
+        .expect("read src/guard")
+        .filter_map(Result::ok)
+        .filter(|e| {
+            let p = e.path();
+            p.is_file()
+                && p.extension().and_then(|x| x.to_str()) == Some("rs")
+                && p.file_name().and_then(|n| n.to_str()) != Some("mod.rs")
+        })
+        .count();
+    assert_eq!(
+        guard_module_count, 16,
+        "expected 16 guard modules under src/guard/*.rs (excl. mod.rs), found {guard_module_count}"
+    );
+
+    let cargo_toml =
+        normalize_lf(&fs::read_to_string(root.join("Cargo.toml")).expect("read Cargo.toml"));
+    let mut in_deps = false;
+    let mut found_deps_header = false;
+    let mut dep_lines = Vec::new();
+    for line in cargo_toml.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if trimmed == "[dependencies]" {
+                in_deps = true;
+                found_deps_header = true;
+                continue;
+            }
+            if in_deps {
+                break;
+            }
+        } else if in_deps && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            dep_lines.push(trimmed.to_string());
+        }
+    }
+    assert!(
+        found_deps_header,
+        "Cargo.toml missing [dependencies] section"
+    );
+    assert!(
+        dep_lines.is_empty(),
+        "Cargo.toml must retain zero external dependencies, found: {dep_lines:?}"
+    );
+
+    let root_str = root.to_str().expect("repo_root utf8");
+    let (report, code) = b3::context::measure_context(root_str, true).expect("measure_context");
+    assert_eq!(code, 0, "strict context budget failed:\n{report}");
+    assert!(
+        report.contains("warnings          : 0"),
+        "expected zero context warnings:\n{report}"
+    );
+    let always_line = report
+        .lines()
+        .find(|l| l.starts_with("always_on_total"))
+        .expect("always_on_total line");
+    let after_colon = always_line.split(':').nth(1).expect("colon in line").trim();
+    let bytes_str = after_colon.split_whitespace().next().expect("bytes number");
+    let always_on_bytes: usize = bytes_str.parse().expect("parse always_on_total bytes");
+    assert_eq!(
+        always_on_bytes, 15_579,
+        "always_on_total must remain 15579 B:\n{report}"
+    );
 }

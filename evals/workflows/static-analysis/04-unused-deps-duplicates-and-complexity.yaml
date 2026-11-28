@@ -1,0 +1,9 @@
+id: static-analysis-unused-deps-duplicates-and-complexity-004
+artifact: workflows/references/static-analysis.md
+intent: Unused dependencies (L4), token/AST duplicates, and complexity metrics are offloaded to project tools and mechanical-check while separating CONFIRMED REDUNDANCY from INTENTIONAL COMPLEXITY
+scenario: |
+  A change introduces a non-trivial state machine or protocol parser alongside potential duplicate helpers or unused crate/package dependencies
+  Workflow offloads L4 unused-dependency and duplicate/complexity checks to project tools and b3 guard mechanical-check, flagging CONFIRMED REDUNDANCY while preserving justified INTENTIONAL COMPLEXITY instead of judging by line count alone
+expected_outcome: PASS
+failure_mode: line-count-complexity-false-positives-or-missed-unused-deps
+notes: Aligns static-analysis offloading with residue-checklist.md and b3-refactor

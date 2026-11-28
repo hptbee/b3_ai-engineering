@@ -1,6 +1,6 @@
 # Simplification, overengineering & implementation residue checklist
 
-Reference for [`../SKILL.md`](../SKILL.md) (local-diff simplification/residue; system-shape architecture belongs to `simplest-correct` / `b3-architecture-reviewer`). Ask:
+Reference for [`../SKILL.md`](../SKILL.md) (local-diff simplification/residue; system-shape architecture belongs to `simplest-correct` / `b3-architecture-reviewer`). Offload duplicates, complexity, and `L1`–`L4` dead-code/unused-dep scans to project-native tools + `b3 guard mechanical-check`/`symbol-check` first per [`../../../../workflows/references/static-analysis.md`](../../../../workflows/references/static-analysis.md). Ask:
 - *“Given the final implementation and current requirements, is all of this code still necessary?”*
 - *“Could the same requirements be satisfied with substantially less implementation and maintenance complexity?”*
 
@@ -35,4 +35,4 @@ Reference for [`../SKILL.md`](../SKILL.md) (local-diff simplification/residue; s
 | **INTENTIONAL COMPLEXITY** | Concrete requirement holds (security, correctness, portability, compatibility, explicit spec, verified perf, external consumer) | Accept / preserve; do not flag or simplify away |
 | **UNKNOWN** | Insufficient evidence to judge safety | Do not convert uncertainty into deletion |
 
-Require a concrete simpler alternative meeting ALL security, correctness, portability, compatibility, and verified performance requirements before classifying overengineering as `CONFIRMED`. Never flag complexity on line count alone, never turn stylistic preferences into blocking findings, and never perform aesthetic line-count golf or unrelated refactors.
+Require a concrete simpler alternative meeting ALL security, correctness, portability, compatibility, and verified performance requirements—and **production-consumer verification** (`unit tests != runtime/production caller`, checking runtime entrypoints separately from tests) for unused/orphan symbols—before classifying overengineering or dead code as `CONFIRMED`. Never flag complexity on line count alone, never turn stylistic preferences into blocking findings, and never perform aesthetic line-count golf or unrelated refactors.

@@ -1,0 +1,9 @@
+id: static-analysis-security-and-boundary-offloading-005
+artifact: workflows/references/static-analysis.md
+intent: Deterministic security, secret, dependency-audit, and layer-boundary scans run before dispatching b3-security-reviewer and b3-architecture-reviewer
+scenario: |
+  A ship or review-loop wave modifies auth/network boundary code and dependencies
+  Workflow runs project SAST, secret, dependency-audit, and circular/layer checks plus b3 guard mechanical-check first, passing a compact evidence digest (tool pass/fail, touched regressions, PREEXISTING_BASELINE) so AI reviewers focus on trust boundaries and semantics
+expected_outcome: PASS
+failure_mode: wasting-ai-review-tokens-on-mechanical-sast-or-boundary-trivia
+notes: Reduces AI reviewer noise and enforces pre-review deterministic offloading

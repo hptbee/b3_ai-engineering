@@ -5480,3 +5480,294 @@ fn continuous_wave_duplicate_active_rejection_partial_failure_and_single_slot_fa
         "{out_f3}"
     );
 }
+
+#[test]
+fn scoped_autofix_mechanical_boundaries_and_failing_lint_receipt() {
+    let tmp = TempDirGuard::new("guard-autofix-mech");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    write_lf(&repo.join("src/scoped.ts"), "export const scoped = 1;\n");
+    write_lf(&repo.join("src/outside.ts"), "export const outside = 1;\n");
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed scoped autofix"]);
+    let base = git_in(&repo, &["rev-parse", "HEAD"]);
+    let r_str = repo.to_str().unwrap();
+
+    // 1. Clean edit inside allowed-paths passes mechanical-check
+    write_lf(
+        &repo.join("src/scoped.ts"),
+        "export const scoped: number = 2;\n",
+    );
+    let (ok_c, ok_out, _) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r_str,
+        "--base-sha",
+        &base,
+        "--allowed-paths",
+        "src/scoped.ts",
+    ]);
+    assert_eq!(ok_c, 0, "{ok_out}");
+    assert!(ok_out.contains("MECHANICAL_OK"), "{ok_out}");
+
+    // 2. Out-of-scope edit violates allowed-paths -> scope_creep, exit 2
+    write_lf(
+        &repo.join("src/outside.ts"),
+        "export const outside: number = 2;\n",
+    );
+    let (sc_c, sc_out, _) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r_str,
+        "--base-sha",
+        &base,
+        "--allowed-paths",
+        "src/scoped.ts",
+    ]);
+    assert_eq!(sc_c, 2, "{sc_out}");
+    assert!(sc_out.contains("MECHANICAL_FINDINGS"), "{sc_out}");
+    assert!(sc_out.contains("scope_creep=src/outside.ts"), "{sc_out}");
+    git_in(&repo, &["checkout", "--", "src/outside.ts"]);
+
+    // 3. Leftover test isolation marker (only/debug breakpoint) -> leftovers, exit 2
+    let marker_only = concat!(".on", "ly(");
+    let marker_dbg = concat!("de", "bugger");
+    let leftover_body = format!(
+        "export const scoped = 2;\nit{marker_only}'isolated', () => {{}});\n{marker_dbg};\n"
+    );
+    write_lf(&repo.join("src/scoped.ts"), &leftover_body);
+    let (lo_c, lo_out, _) = run_b3(&[
+        "guard",
+        "mechanical-check",
+        "--repo-root",
+        r_str,
+        "--base-sha",
+        &base,
+        "--allowed-paths",
+        "src/scoped.ts",
+    ]);
+    assert_eq!(lo_c, 2, "{lo_out}");
+    assert!(lo_out.contains("MECHANICAL_FINDINGS"), "{lo_out}");
+    assert!(
+        lo_out.contains("leftovers=") && !lo_out.contains("leftovers=none"),
+        "{lo_out}"
+    );
+    assert!(lo_out.contains(marker_only), "{lo_out}");
+    assert!(lo_out.contains(marker_dbg), "{lo_out}");
+
+    // Restore clean scoped edit and confirm failing lint command records failure & fails verify-check
+    write_lf(
+        &repo.join("src/scoped.ts"),
+        "export const scoped: number = 2;\n",
+    );
+    let fail_lint_cmd = verify_cmd_fail(2, "lint error: unused import");
+    let receipt_rel = ".b3/ship/verify/lint-fail.verify";
+    let (vr_c, vr_out, _) = run_b3(&[
+        "guard",
+        "verify-run",
+        "--repo-root",
+        r_str,
+        "--task-id",
+        "T1",
+        "--verify-cmd",
+        &fail_lint_cmd,
+        "--receipt-path",
+        receipt_rel,
+        "--relevant-paths",
+        "src/scoped.ts",
+    ]);
+    assert_eq!(vr_c, 1, "failing lint verify-run must exit 1: {vr_out}");
+    assert!(vr_out.contains("VERIFY_FAIL: exit=2"), "{vr_out}");
+
+    let (vc_c, vc_out, _) = run_b3(&[
+        "guard",
+        "verify-check",
+        "--repo-root",
+        r_str,
+        "--receipt-path",
+        receipt_rel,
+        "--expected-cmd",
+        &fail_lint_cmd,
+    ]);
+    assert_ne!(
+        vc_c, 0,
+        "verify-check must reject failed lint receipt: {vc_out}"
+    );
+    assert!(
+        vc_out.contains("VERIFY_FAILED_RECEIPT: exit=2 status=FAIL"),
+        "{vc_out}"
+    );
+}
+
+#[test]
+fn no_lint_symbol_check_deterministic_fallback_dangling_and_advisory() {
+    let tmp = TempDirGuard::new("guard-sym-fallback");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    write_lf(
+        &repo.join("src/provider.ts"),
+        "export function helperApi() { return 1; }\nexport function keepApi() { return 2; }\n",
+    );
+    write_lf(
+        &repo.join("src/consumer.ts"),
+        "import { helperApi } from './provider';\nexport const result = helperApi();\n",
+    );
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed symbol fallback"]);
+    let base = git_in(&repo, &["rev-parse", "HEAD"]);
+    let r_str = repo.to_str().unwrap();
+
+    // 1. Introducing an unused internal symbol reports SYMBOL_ADVISORY cleanly (exit 0)
+    write_lf(
+        &repo.join("src/provider.ts"),
+        "export function helperApi() { return 1; }\nexport function keepApi() { return 2; }\nfunction internalUnused() { return 9; }\n",
+    );
+    let (adv_c, adv_out, _) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r_str,
+        "--base-sha",
+        &base,
+    ]);
+    assert_eq!(adv_c, 0, "unused internal symbol must exit 0: {adv_out}");
+    assert!(adv_out.contains("SYMBOL_ADVISORY"), "{adv_out}");
+    assert!(adv_out.contains("dangling_refs=none"), "{adv_out}");
+    assert!(
+        adv_out.contains("orphan_internal=src/provider.ts:internalUnused"),
+        "{adv_out}"
+    );
+
+    // 2. Deleting a symbol still referenced elsewhere exits 2 with dangling_refs
+    write_lf(
+        &repo.join("src/provider.ts"),
+        "export function keepApi() { return 2; }\n",
+    );
+    let (dan_c, dan_out, _) = run_b3(&[
+        "guard",
+        "symbol-check",
+        "--repo-root",
+        r_str,
+        "--base-sha",
+        &base,
+    ]);
+    assert_eq!(dan_c, 2, "dangling ref must exit 2: {dan_out}");
+    assert!(dan_out.contains("SYMBOL_FINDINGS"), "{dan_out}");
+    assert!(dan_out.contains("exported_removed=helperApi"), "{dan_out}");
+    assert!(dan_out.contains("dangling_refs=helperApi(1f)"), "{dan_out}");
+}
+
+#[test]
+fn wave_partition_blocks_shared_write_paths_and_allows_disjoint_writes() {
+    let tmp = TempDirGuard::new("guard-wave-partition");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    write_lf(&repo.join("eslint.config.mjs"), "export default [];\n");
+    write_lf(&repo.join("src/a.ts"), "export const a = 1;\n");
+    write_lf(&repo.join("src/b.ts"), "export const b = 1;\n");
+    write_lf(&repo.join("src/c.ts"), "export const c = 1;\n");
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "seed wave partition"]);
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let r_str = repo.to_str().unwrap();
+
+    // 1. Disjoint write paths allow parallel admission
+    let (ok_c, ok_out, _) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r_str,
+        "--partition",
+        "--expected-base-sha",
+        &head,
+        "--wave-specs",
+        "T1=src/a.ts;T2=src/b.ts",
+    ]);
+    assert_eq!(ok_c, 0, "{ok_out}");
+    assert!(ok_out.contains("conflicts=none"), "{ok_out}");
+    assert!(
+        ok_out.contains("WAVE_OK: disjoint (2 tasks, 2 paths)"),
+        "{ok_out}"
+    );
+
+    // 2. Two workers sharing writable manifest/auto-fix path cannot run in parallel
+    let (seq_c, seq_out, _) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r_str,
+        "--partition",
+        "--expected-base-sha",
+        &head,
+        "--wave-specs",
+        "T1=eslint.config.mjs,src/a.ts;T2=eslint.config.mjs,src/b.ts",
+    ]);
+    assert_eq!(seq_c, 2, "{seq_out}");
+    assert!(
+        seq_out.contains("conflicts=eslint.config.mjs(T1,T2)"),
+        "{seq_out}"
+    );
+    assert!(seq_out.contains("max_parallel=1"), "{seq_out}");
+    assert!(
+        seq_out.contains("wave|1|SEQUENTIAL|agents=1|tasks=T1|reason=shared_write_conflict"),
+        "{seq_out}"
+    );
+    assert!(
+        seq_out.contains("wave|2|SEQUENTIAL|agents=1|tasks=T2|reason=shared_write_conflict"),
+        "{seq_out}"
+    );
+    assert!(
+        seq_out.contains("WAVE_SEQUENTIAL: waves=2 max_parallel=1 reason=shared_write_conflict"),
+        "{seq_out}"
+    );
+
+    // 3. Conflicting pair splits into sequential wave while disjoint T3 runs in parallel wave 1
+    let (part_c, part_out, _) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r_str,
+        "--partition",
+        "--expected-base-sha",
+        &head,
+        "--wave-specs",
+        "T1=eslint.config.mjs,src/a.ts;T2=eslint.config.mjs,src/b.ts;T3=src/c.ts",
+    ]);
+    assert_eq!(part_c, 0, "{part_out}");
+    assert!(
+        part_out.contains("conflicts=eslint.config.mjs(T1,T2)"),
+        "{part_out}"
+    );
+    assert!(
+        part_out.contains("wave|1|PARALLEL|agents=2|tasks=T1,T3|reason=independent_ready_tasks"),
+        "{part_out}"
+    );
+    assert!(
+        part_out.contains("wave|2|SEQUENTIAL|agents=1|tasks=T2|reason=shared_write_conflict"),
+        "{part_out}"
+    );
+    assert!(
+        part_out.contains("WAVE_PARTITIONED: waves=2 max_parallel=2 reason=conflicting_wave_split"),
+        "{part_out}"
+    );
+
+    // 4. Continuous active-worker mode defers conflicting T2 while admitting disjoint T3
+    let (act_c, act_out, _) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        r_str,
+        "--partition",
+        "--expected-base-sha",
+        &head,
+        "--active-specs",
+        "T1=eslint.config.mjs,src/a.ts",
+        "--wave-specs",
+        "T2=eslint.config.mjs,src/b.ts;T3=src/c.ts",
+    ]);
+    assert_eq!(act_c, 0, "{act_out}");
+    assert!(act_out.contains("admitted_tasks=T3\n"), "{act_out}");
+    assert!(act_out.contains("deferred_tasks=T2\n"), "{act_out}");
+}

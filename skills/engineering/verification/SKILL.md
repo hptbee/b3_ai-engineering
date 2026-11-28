@@ -26,7 +26,7 @@ Near miss: “add unit tests for this module” → testing/implementation work,
 
 1. **Name the claim & scope** in one sentence (exact behavior + acceptance criteria / paths).
 2. **Name the evidence** that confirms it (command, probe, test scope, and relevant dependency manifests/configs).
-3. **Run & record provenance:** execute cleanly via `b3 guard verify-run` (writes reusable `b3-verify-v1` receipt at `.b3/ship/verify/<slug>.verify` capturing `HEAD`, `tree_hash`, `command`, `exit_code`, `log_path`, `timestamp_utc`) or direct tool execution when CLI guards are unavailable. Include dependency manifests/lockfiles/configs in `--relevant-paths` (or omit for `ALL`) so dep/config changes invalidate stale receipts. Parallelize independent verification commands only when build dirs, DBs, ports, and temp paths are conflict-free (`SHARED_READ_ONLY` per `workflows/references/dispatch-naming.md`), preserving exact exit codes and receipts.
+3. **Run & record provenance:** execute cleanly via `b3 guard verify-run` (writes reusable `b3-verify-v1` receipt at `.b3/ship/verify/<slug>.verify` capturing `HEAD`, `tree_hash`, `command`, `exit_code`, `log_path`, `timestamp_utc`) or direct tool execution when CLI guards are unavailable. Include dependency manifests/lockfiles/configs in `--relevant-paths` (or omit for `ALL`) so dep/config changes invalidate stale receipts. Run scoped safe auto-fixes before final `verify-run` (edits cause `VERIFY_STALE`) and attribute diff-introduced regressions separately from `PREEXISTING_BASELINE` (`workflows/references/static-analysis.md`). Parallelize independent verification commands only when build dirs, DBs, ports, and temp paths are conflict-free (`SHARED_READ_ONLY` per `workflows/references/dispatch-naming.md`), preserving exact exit codes and receipts.
 4. **Validate before reusing evidence:** never trust an agent-written receipt or log summary without running `b3 guard verify-check --expected-cmd ... --relevant-paths ...` (`VERIFY_VALID` exit `0`). On untrusted provenance, `VERIFY_STALE`, `VERIFY_MISMATCH`, `VERIFY_SCOPE_MISMATCH`, or `VERIFY_CORRUPT`, re-run checks on the current working tree.
 5. **Map result to outcome:**
    - executed evidence supports claim on current tree → `PASS`
@@ -39,6 +39,7 @@ Near miss: “add unit tests for this module” → testing/implementation work,
 
 - Hard constraints: `rules/verification.md`
 - Review-loop use of outcomes: `review-loop/strategy.md`
+- Static analysis & baseline attribution: `workflows/references/static-analysis.md`
 
 ## Verification of this skill
 
