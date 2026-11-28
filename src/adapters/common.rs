@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Component, Path, PathBuf, Prefix};
+use std::path::{Path, PathBuf};
 
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    find_reparse_in_path_hierarchy, has_control_chars, is_hex64_lower, is_reparse_or_symlink,
-    normalize_repo_root, paths_equal_fs, resolve_unresolved_path, sha256_bytes_hex,
-    sha256_file_hex, sort_ordinal,
+    find_reparse_in_path_hierarchy, has_control_chars, has_reparse_in_path_steps, is_hex64_lower,
+    is_reparse_or_symlink, is_unc_or_network_path, normalize_repo_root, paths_equal_fs,
+    resolve_unresolved_path, sha256_bytes_hex, sha256_file_hex, sort_ordinal,
 };
 
 /// Normalizes `raw` lexically against CWD, trimming trailing slashes and uppercasing Windows drive letters.
@@ -521,50 +521,113 @@ pub fn resolve_user_home_dir(override_home: Option<&Path>) -> PathBuf {
     PathBuf::from(normalize_abs_path_str(Path::new(home_env.trim())))
 }
 
-/// Initializes optional personal `~/.b3/models.md` from `config/models.example.md`.
-pub fn initialize_personal_models_file(
+fn personal_config_err(
+    dest_str: &str,
+    reason: impl std::fmt::Display,
+    non_fatal: bool,
+    fatal_msg: String,
+) -> Result<String, B3Error> {
+    if non_fatal {
+        eprintln!(
+            "WARNING: optional personal config could not be initialized at {dest_str} : {reason}"
+        );
+        return Ok(format!("error:{dest_str}"));
+    }
+    Err(fail(fatal_msg, 1))
+}
+
+/// Initializes optional personal `~/.b3/config.toml` from `config/config.example.toml`
+/// (falling back to `DEFAULT_CONFIG_TEMPLATE`), never overwriting existing files and
+/// leaving any legacy `~/.b3/models.md` untouched on disk.
+pub fn initialize_personal_config_file(
     b3_home: &Path,
     user_home: Option<&Path>,
     dry_run: bool,
     non_fatal: bool,
 ) -> Result<String, B3Error> {
-    if std::env::var("B3_SKIP_MODEL_INIT").ok().as_deref() == Some("1") {
+    if std::env::var("B3_SKIP_CONFIG_INIT").ok().as_deref() == Some("1") {
         return Ok("skipped".to_string());
     }
-    let template_md = b3_home.join("config").join("models.example.md");
-    if !template_md.is_file() {
-        return Ok("no-template".to_string());
-    }
-    let dest = match std::env::var("B3_MODELS_PERSONAL") {
-        Ok(val) if !val.trim().is_empty() && !has_control_chars(val.trim()) => {
-            PathBuf::from(val.trim())
+
+    let env_cfg = std::env::var("B3_CONFIG_PERSONAL").ok();
+    let env_cfg_trimmed = env_cfg.as_deref().map(str::trim).unwrap_or("");
+    let dest = if !env_cfg_trimmed.is_empty() {
+        let cand = PathBuf::from(env_cfg_trimmed);
+        if has_control_chars(env_cfg_trimmed) || is_unc_or_network_path(env_cfg_trimmed, &cand) {
+            return personal_config_err(
+                env_cfg_trimmed,
+                "unsafe B3_CONFIG_PERSONAL path",
+                non_fatal,
+                format!("ADAPTER_FAIL: unsafe B3_CONFIG_PERSONAL path: {env_cfg_trimmed}"),
+            );
         }
-        _ => resolve_user_home_dir(user_home)
+        cand
+    } else {
+        resolve_user_home_dir(user_home)
             .join(".b3")
-            .join("models.md"),
+            .join("config.toml")
     };
     let dest_str = dest.to_string_lossy().into_owned();
+
+    let cwd = std::env::current_dir()
+        .map_err(|e| fail(format!("ADAPTER_FAIL: cannot resolve cwd: {e}"), 1))?;
+    if has_reparse_in_path_steps(&cwd, &dest) {
+        return personal_config_err(
+            &dest_str,
+            "refusing symlink or reparse point",
+            non_fatal,
+            format!("ADAPTER_FAIL: refusing symlink or reparse point at {dest_str}"),
+        );
+    }
+    let dest = resolve_unresolved_path(&cwd, &dest_str);
+    let dest_str = dest.to_string_lossy().into_owned();
+
     if path_exists_or_link(&dest) {
         return Ok(format!("kept:{dest_str}"));
     }
+
     if dry_run {
         return Ok(format!("dry-run:{dest_str}"));
     }
+
+    let template_path = b3_home.join("config").join("config.example.toml");
+    let template_abs = resolve_unresolved_path(&cwd, &template_path.to_string_lossy());
+    let template_text = if template_path.is_file()
+        && !is_reparse_link(&template_path)
+        && find_reparse_in_path_hierarchy(&template_abs).is_none()
+    {
+        fs::read_to_string(&template_path)
+            .unwrap_or_else(|_| crate::config::DEFAULT_CONFIG_TEMPLATE.to_string())
+    } else {
+        crate::config::DEFAULT_CONFIG_TEMPLATE.to_string()
+    };
+    let clean = template_text
+        .strip_prefix('\u{FEFF}')
+        .unwrap_or(&template_text);
+    let lf_content = clean.replace("\r\n", "\n").replace('\r', "\n");
+
     if let Some(parent) = dest.parent() {
-        if let Err(e) = fs::create_dir_all(parent) {
-            if path_exists_or_link(&dest) {
-                return Ok(format!("kept:{dest_str}"));
-            }
-            if non_fatal {
-                eprintln!(
-                    "WARNING: optional model preferences could not be initialized at {dest_str} : {e}"
+        if !parent.as_os_str().is_empty() {
+            let abs_parent = resolve_unresolved_path(&cwd, &parent.to_string_lossy());
+            if find_reparse_in_path_hierarchy(&abs_parent).is_some() {
+                return personal_config_err(
+                    &dest_str,
+                    "refusing symlink or reparse parent directory",
+                    non_fatal,
+                    format!("ADAPTER_FAIL: refusing reparse parent for {dest_str}"),
                 );
-                return Ok(format!("error:{dest_str}"));
             }
-            return Err(fail(
-                format!("ADAPTER_FAIL: cannot create {}: {e}", parent.display()),
-                1,
-            ));
+            if let Err(e) = fs::create_dir_all(parent) {
+                if path_exists_or_link(&dest) {
+                    return Ok(format!("kept:{dest_str}"));
+                }
+                return personal_config_err(
+                    &dest_str,
+                    &e,
+                    non_fatal,
+                    format!("ADAPTER_FAIL: cannot create {}: {e}", parent.display()),
+                );
+            }
         }
     }
     match fs::OpenOptions::new()
@@ -573,24 +636,16 @@ pub fn initialize_personal_models_file(
         .open(&dest)
     {
         Ok(mut f) => {
-            let content = fs::read(&template_md).map_err(|e| {
-                fail(
-                    format!("ADAPTER_FAIL: cannot read {}: {e}", template_md.display()),
-                    1,
-                )
-            })?;
             use std::io::Write;
-            if let Err(e) = f.write_all(&content) {
-                if non_fatal {
-                    eprintln!(
-                        "WARNING: optional model preferences could not be initialized at {dest_str} : {e}"
-                    );
-                    return Ok(format!("error:{dest_str}"));
-                }
-                return Err(fail(
+            if let Err(e) = f.write_all(lf_content.as_bytes()) {
+                drop(f);
+                let _ = fs::remove_file(&dest);
+                return personal_config_err(
+                    &dest_str,
+                    &e,
+                    non_fatal,
                     format!("ADAPTER_FAIL: cannot write {dest_str}: {e}"),
-                    1,
-                ));
+                );
             }
             Ok(format!("created:{dest_str}"))
         }
@@ -599,37 +654,37 @@ pub fn initialize_personal_models_file(
             if path_exists_or_link(&dest) {
                 return Ok(format!("kept:{dest_str}"));
             }
-            if non_fatal {
-                eprintln!(
-                    "WARNING: optional model preferences could not be initialized at {dest_str} : {e}"
-                );
-                return Ok(format!("error:{dest_str}"));
-            }
-            Err(fail(
+            personal_config_err(
+                &dest_str,
+                &e,
+                non_fatal,
                 format!("ADAPTER_FAIL: cannot initialize {dest_str}: {e}"),
-                1,
-            ))
+            )
         }
     }
 }
 
-pub fn format_personal_models_status(
+pub fn format_personal_config_status(
     b3_home: &Path,
     status: &str,
     emit_error: bool,
 ) -> Option<String> {
     if let Some(rest) = status.strip_prefix("kept:") {
-        Some(format!("model_preferences={rest} (kept existing)"))
+        Some(format!("config_preferences={rest} (kept existing)"))
     } else if let Some(rest) = status.strip_prefix("dry-run:") {
-        let tmpl = b3_home.join("config").join("models.example.md");
+        let tmpl = b3_home.join("config").join("config.example.toml");
+        let tmpl_src = if tmpl.is_file() && !is_reparse_link(&tmpl) {
+            tmpl.display().to_string()
+        } else {
+            "built-in config.example.toml".to_string()
+        };
         Some(format!(
-            "dry-run: initialize model_preferences={rest} from {}",
-            tmpl.display()
+            "dry-run: initialize config_preferences={rest} from {tmpl_src}"
         ))
     } else if let Some(rest) = status.strip_prefix("created:") {
-        Some(format!("model_preferences={rest} (created from example)"))
+        Some(format!("config_preferences={rest} (created from example)"))
     } else if emit_error && status.starts_with("error:") {
-        Some(format!("model_preferences={status}"))
+        Some(format!("config_preferences={status}"))
     } else {
         None
     }
@@ -655,31 +710,6 @@ fn is_b3_checkout_dir(dir: &Path) -> bool {
 
 fn is_valid_b3_target_dir(dir: &Path) -> bool {
     dir.is_dir() && (dir.join("skills").is_dir() || dir.join("workflows").join("ship.md").is_file())
-}
-
-fn is_unc_or_network_path(raw: &str, p: &Path) -> bool {
-    let raw_trimmed = raw.trim();
-    let raw_bs = raw_trimmed.replace('/', "\\");
-    if raw_trimmed.starts_with("\\\\")
-        || raw_trimmed.starts_with("//")
-        || raw_bs.to_ascii_uppercase().starts_with("\\??\\")
-    {
-        return true;
-    }
-    let s = p.to_string_lossy();
-    if s.starts_with("\\\\") || s.starts_with("//") {
-        return true;
-    }
-    p.components().any(|c| {
-        matches!(
-            c,
-            Component::Prefix(pfx)
-                if matches!(
-                    pfx.kind(),
-                    Prefix::UNC(..) | Prefix::VerbatimUNC(..) | Prefix::DeviceNS(..)
-                )
-        )
-    })
 }
 
 fn read_b3_home_pointer(pointer_file: &Path, base: &Path) -> Option<PathBuf> {

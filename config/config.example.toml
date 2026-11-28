@@ -1,0 +1,207 @@
+# B3 AI Engineering Configuration
+#
+# Personal: ~/.b3/config.toml (or B3_CONFIG_PERSONAL)
+# Project:  <project>/.b3/config.toml (optional, Git-ignored)
+#
+# Precedence (resolved per field):
+#   1. Explicit invocation / CLI override
+#   2. Supported environment override
+#   3. Project configuration (<project>/.b3/config.toml)
+#   4. Personal configuration (~/.b3/config.toml)
+#   5. Built-in defaults
+#
+# Project preferences override personal preferences per field.
+# Missing or invalid values fall back to the next valid configuration layer.
+# Governance (.b3/policy.toml) and mandatory safety gates cannot be overridden here.
+
+
+[models]
+
+# adaptive: select model according to role, task complexity, and risk.
+# fixed: use the first configured model for each role.
+# native: inherit the host-selected model.
+# Valid values: "adaptive", "fixed", "native".
+# Default: "adaptive".
+routing = "adaptive"
+
+# Escalate to a higher-capability model when justified by confirmed reasoning/risk triggers.
+# Never escalates automatically on ordinary test, dependency, or environment failures.
+# Valid values: true, false.
+# Default: true.
+auto_escalate = true
+
+# Maximum model escalations per task.
+# Valid range: 0-2.
+# Default: 2.
+max_escalations = 2
+
+# Fallback strategy when a requested model is unavailable on the active host.
+# next: try another eligible configured model, then native.
+# native: inherit native host selection when permitted.
+# Never silently downgrades high-risk work below required capability.
+# Valid values: "next", "native".
+# Default: "next".
+fallback = "next"
+
+
+[models.tiers]
+
+# Tier aliases referenced from [models.roles].
+# Use "auto" to inherit the active host's native model, or a host-recognized model ID.
+# Optional host-specific overrides may be added under [models.hosts.<host>] in this file.
+
+# L1: routine, low-complexity, low-risk work (e.g., docs, routine tests).
+# Default: "auto".
+economy = "auto"
+
+# L2: standard engineering and moderate complexity.
+# Default: "auto".
+balanced = "auto"
+
+# L3: complex reasoning, architecture, and HIGH/CRITICAL risk work.
+# Default: "auto".
+advanced = "auto"
+
+
+[models.roles]
+
+# Each role supports 1-3 ordered tier aliases ("economy", "balanced", "advanced"),
+# "auto", or direct host-recognized model identifiers (prefix "model:<id>" to escape a tier name).
+#   1 entry:   fixed preference (subject to capability requirements)
+#   2 entries: [standard, advanced]
+#   3 entries: [economy, balanced, advanced]
+# Keep identifiers host-neutral; never commit vendor credentials here.
+
+# Primary orchestrator and workflow coordination.
+# Default: ["balanced", "advanced"].
+main = ["balanced", "advanced"]
+
+# Requirements analysis and dependency-aware planning.
+# Default: ["economy", "balanced", "advanced"].
+planning = ["economy", "balanced", "advanced"]
+
+# Feature implementation and code generation.
+# Default: ["economy", "balanced", "advanced"].
+implementation = ["economy", "balanced", "advanced"]
+
+# Root-cause investigation.
+# Default: ["balanced", "advanced"].
+debugging = ["balanced", "advanced"]
+
+# Research, source discovery, and evidence analysis.
+# Default: ["economy", "balanced", "advanced"].
+research = ["economy", "balanced", "advanced"]
+
+# Independent code review.
+# Default: ["economy", "balanced", "advanced"].
+reviewer = ["economy", "balanced", "advanced"]
+
+# Focused fixes for confirmed findings.
+# Default: ["economy", "balanced", "advanced"].
+fixer = ["economy", "balanced", "advanced"]
+
+# Independent security review.
+# Default: ["advanced"].
+security_reviewer = ["advanced"]
+
+# Architecture and system design review.
+# Default: ["balanced", "advanced"].
+architecture_reviewer = ["balanced", "advanced"]
+
+# Performance and resource-usage review.
+# Default: ["balanced", "advanced"].
+performance_reviewer = ["balanced", "advanced"]
+
+
+[planning]
+
+# Enable routine requirement clarification before implementation.
+# Does not bypass mandatory security, destructive-action, or governance authorizations.
+# Valid values: true, false.
+# Default: true.
+clarification_gate = true
+
+# Target requirement-understanding heuristic threshold.
+# Valid range: 1-100.
+# Default: 96.
+understanding_threshold = 96
+
+
+[parallel]
+
+# Maximum concurrent workers per orchestration run (upper bound, not forced worker count).
+# auto: adapt to independent tasks and host CPU parallelism (clamped 4-16).
+# Valid values: "auto" or integer 1-64.
+# Default: "auto".
+max_concurrency = "auto"
+
+# Execution mode preference for parallel-eligible tasks.
+# auto: select the safest efficient isolation mode.
+# sequential: disable concurrent execution.
+# isolated: prefer isolated git worktrees for write tasks.
+# Cannot override dependency, ownership, host capability, or safety restrictions.
+# Valid values: "auto", "sequential", "isolated".
+# Default: "auto".
+execution_mode = "auto"
+
+
+[review]
+
+# Maximum review/fix iterations per standard review loop.
+# Preserves existing hierarchical L/XL/XXL pass budgets and circuit breakers.
+# Unresolved findings at the limit must never produce PASS.
+# Valid range: 1-20.
+# Default: 5.
+max_iterations = 5
+
+# Maximum added + deleted LOC per review unit (excluding recognized noise).
+# This bounds individual review units, not total PR size (XXL has no upper PR cap).
+# Valid range: 100-50000.
+# Default: 5000.
+max_loc_per_unit = 5000
+
+# Maximum changed files per review unit (partitioned by logical module/dependency boundaries).
+# Valid range: 5-1000.
+# Default: 100.
+max_files_per_unit = 100
+
+
+[review.sizing]
+
+# Classify PRs using both changed LOC and changed files (smallest size satisfying both).
+# Thresholds must be strictly positive and strictly increasing (xs < s < m < l < xl).
+# Risk classification is independent of size; XXL has no maximum total PR size.
+
+# Extra-small PR threshold (Default: 100 LOC, 3 files).
+xs_max_loc = 100
+xs_max_files = 3
+
+# Small PR threshold (Default: 300 LOC, 8 files).
+s_max_loc = 300
+s_max_files = 8
+
+# Medium PR threshold (Default: 800 LOC, 20 files).
+m_max_loc = 800
+m_max_files = 20
+
+# Large PR threshold (Default: 1999 LOC, 49 files).
+l_max_loc = 1999
+l_max_files = 49
+
+# Extra-large PR threshold (Default: 5000 LOC, 100 files).
+xl_max_loc = 5000
+xl_max_files = 100
+
+
+[hooks]
+
+# Enable native event-driven guard hooks (requires 'b3 hook install' to wire into hosts/Git).
+# Valid values: true, false.
+# Default: true.
+enabled = true
+
+# Enforcement mode for installed event hooks (overridden by CLI --mode or B3_HOOK_MODE).
+# Setting mode = "off" disables automatic event hooks only; mandatory workflow guards stay active.
+# Valid values: "enforce", "audit", "off".
+# Default: "enforce".
+mode = "enforce"

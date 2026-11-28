@@ -16,10 +16,10 @@ B3 began as a lightweight way to make everyday coding agents more efficient unde
 
 | Area | Current position |
 | --- | --- |
-| Native deterministic execution | **Implemented:** Rust `b3` handles guards, verification, context measurement, PR checks, adapter sync, and installation (`0` LLM tokens for deterministic checks). |
+| Native deterministic execution | **Implemented:** Rust `b3` handles guards, verification, typed config/routing (`b3 config`), context measurement, PR checks, adapter sync, and installation (`0` LLM tokens for deterministic checks). |
 | Host-neutral guidance & adapters | **Implemented:** Canonical rules/skills/commands with adapters for **Cursor**, **Codex**, **Antigravity**, and **Claude Code**. |
 | Orchestration procedures | **Implemented as host-executed guidance:** `/b3-ship`, `/b3-research-ship`, and review-loop procedures run inside the active host; B3 is **not** a standalone agent scheduler. |
-| Context/cost discipline | **Implemented statically only:** Static context budgets, optional model preferences, delta/context routing, and risk-based dispatch; **runtime token/cost savings remain unmeasured**. |
+| Context/cost discipline | **Implemented statically only:** Static context budgets, typed TOML preferences & adaptive model routing ([`configuration.md`](configuration.md)), delta/context routing, and risk-based dispatch; **runtime token/cost savings remain unmeasured**. |
 | Agent runtime API | **Not implemented:** Model sessions, model API calls, tool-use loops, and standalone scheduling remain responsibilities of the active host. |
 | Real-host acceptance & telemetry | **Not verified at runtime:** Live slash-command/skill discovery, end-to-end host outcomes, cross-host runtime cost telemetry, and alternative runtime integrations require explicit live validation; do not infer them from filesystem, adapter-sync, or CLI tests. |
 

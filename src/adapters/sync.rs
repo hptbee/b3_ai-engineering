@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crate::adapters::common::{
     add_canonical_skills, assert_regular_dir_or_missing, assert_regular_file_or_missing,
-    collect_skill_md_files, create_dir_link, format_personal_models_status, has_active_path,
-    initialize_personal_models_file, is_reparse_link, normalize_abs_path_str, path_exists_or_link,
+    collect_skill_md_files, create_dir_link, format_personal_config_status, has_active_path,
+    initialize_personal_config_file, is_reparse_link, normalize_abs_path_str, path_exists_or_link,
     remove_link_only, resolve_b3_repo_root_auto, test_link_target, write_utf8_no_bom_lf,
 };
 use crate::error::{fail, B3Error};
@@ -866,12 +866,12 @@ fn extract_exact_fm_name(raw: &str) -> Option<String> {
     None
 }
 
-fn sync_personal_models(home_dir: &Path, dry_run: bool, verify_only: bool, out: &mut Vec<String>) {
-    if dry_run || verify_only || std::env::var("B3_SKIP_MODEL_INIT").ok().as_deref() == Some("1") {
+fn sync_personal_config(home_dir: &Path, dry_run: bool, verify_only: bool, out: &mut Vec<String>) {
+    if dry_run || verify_only || std::env::var("B3_SKIP_CONFIG_INIT").ok().as_deref() == Some("1") {
         return;
     }
-    if let Ok(status) = initialize_personal_models_file(home_dir, None, false, true) {
-        if let Some(msg) = format_personal_models_status(home_dir, &status, true) {
+    if let Ok(status) = initialize_personal_config_file(home_dir, None, false, true) {
+        if let Some(msg) = format_personal_config_status(home_dir, &status, true) {
             out.push(msg);
         }
     }
@@ -1005,7 +1005,7 @@ pub fn run(
             )?;
             let count = test_antigravity_manifest(&root, &antigravity_manifest)
                 .map_err(|r| fail(format!("manifest written but verification failed: {r}"), 1))?;
-            sync_personal_models(&root, dry_run, verify_only, &mut out);
+            sync_personal_config(&root, dry_run, verify_only, &mut out);
             out.push(format!(
                 "synced: {} (antigravity); {count} SKILL.md entries visible",
                 antigravity_manifest.display()
@@ -1088,7 +1088,7 @@ pub fn run(
                 &mut out,
             )?;
             sync_cursor_rules(&root, dry_run, false, force, &mut out)?;
-            sync_personal_models(&root, dry_run, verify_only, &mut out);
+            sync_personal_config(&root, dry_run, verify_only, &mut out);
             out.push(
                 "note: this proves filesystem links, not Cursor runtime skill discovery"
                     .to_string(),
@@ -1137,7 +1137,7 @@ pub fn run(
                 dry_run,
                 &mut out,
             )?;
-            sync_personal_models(&root, dry_run, verify_only, &mut out);
+            sync_personal_config(&root, dry_run, verify_only, &mut out);
             out.push(
                 "note: this proves filesystem links, not Codex runtime skill discovery".to_string(),
             );
@@ -1194,7 +1194,7 @@ pub fn run(
                 dry_run,
                 &mut out,
             )?;
-            sync_personal_models(&root, dry_run, verify_only, &mut out);
+            sync_personal_config(&root, dry_run, verify_only, &mut out);
             out.push(
                 "note: this proves filesystem links, not Claude Code runtime skill discovery"
                     .to_string(),

@@ -5,10 +5,10 @@ Canonical orchestration, [clarification](clarification-gate.md), and [hook](hook
 - **Canonical roles & aliases:** Keep `agents/b3-*.md` stems/`name:` stable (`b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer`). Prefer lowercase kebab-case aliases when supported: `b3-impl-<task-id-lower>`, `b3-review-u<NN>-p<K>`, `b3-fix-p<K>`, `b3-research-<slug>`, `b3-verify-<slug>`; never block on naming.
 - **Session IDs & no nesting:** Store host agent IDs separate from aliases. Workers run directly and **never** nest subagents (B3 subagents only, not product workers).
 
-## Model preferences
+## Model routing & preferences
 
-- Read once/dispatch: `<project>/.b3/models.md`, then `~/.b3/models.md` (`B3_MODELS_PERSONAL`). Precedence: user > project > personal > `auto` across `planning`, `debugging`, `implementation`, `b3-reviewer`, `b3-fixer`, and specialists.
-- **Single-task fast-path:** 1-unit `XS` + `inline` runs inline on `main` when `implementation` is unset/`auto` (or matches `main`); dispatch `b3-impl-<task-id-lower>` when model differs, size `>= S`, `notes`/`detailed`, or multi-unit. Never edit host settings or `agents/*.md` (`model: inherit`) or claim unverified switches.
+- Read once/dispatch via `b3 config` (`config.toml` > defaults); route subagents, tiers, fallback, and escalation (`--escalations <n> --trigger <t> --available-models <csv>`) via `b3 config get --route <role> --complexity <low|medium|high> --risk <LOW|MEDIUM|HIGH|CRITICAL> --host <host>`.
+- **Fast-path:** 1-unit `XS` + `inline` runs inline on `main` if `implementation` routes to `auto`/`main`; else `b3-impl-<task-id-lower>`. Never edit host settings, `agents/*.md` (`model: inherit`), or claim unverified switches (`INHERITED|UNKNOWN`).
 
 ## Continuous scheduling & safe integration contract
 
@@ -18,7 +18,7 @@ Canonical orchestration, [clarification](clarification-gate.md), and [hook](hook
   - `SHARED_READ_ONLY` / research: artifact written, validated (`evidence-check` if applicable), and recorded (`output_ready`).
   - `SHARED_DISJOINT_WRITES`: `A`'s scoped verification passed and files exist stably in the shared WT (`output_ready`). **Never `git commit` (advancing `HEAD`) in a shared WT while peer `SHARED_DISJOINT_WRITES` workers remain active**; pass `A`'s uncommitted verified files via `--verified-dirty-paths` until a commit-safe quiescent window.
   - `ISOLATED_WRITES`: `A` is **not** ready for dependents merely by passing inside `wt-a`; Parent must first integrate `A` into the integration branch (`integrated`) so `B` starts from integrated state.
-- **Adaptive concurrency & lean packets:** Scale concurrency by independent work, context/CPU/memory/rate budgets, host limits, and throughput (no fixed `3`/`4` caps; `check-wave --partition` defaults to `available_parallelism` `4..=16`, explicit `--max-concurrency 1..64`; fall back to conservative `--max-concurrency` or `1` on `SINGLE_AGENT_LIMIT` if host limits unknown). Pass `<=25L` packets (`approach`/targets minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, skill; no orchestrator docs). Optionally reuse MCPs (`context-routing.md`) and subsystem workers (fresh for reviews). Parent owns discovery (`static-analysis.md` when applicable), clarification, shared state, integration, commits, PRs.
+- **Adaptive concurrency & lean packets:** Scale concurrency by independent work, context/CPU/memory/rate budgets, host limits, and throughput (`check-wave --partition` reads `parallel.max_concurrency` — def `4..=16`, explicit `1..64` — and `parallel.execution_mode`; honor `SEQUENTIAL`/`ISOLATED_WRITES` preference when safe, or fall back to `1` on `SINGLE_AGENT_LIMIT`). Pass `<=25L` packets (`approach`/targets minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, skill; no orchestrator docs). Optionally reuse MCPs (`context-routing.md`) and subsystem workers (fresh for reviews). Parent owns discovery (`static-analysis.md` when applicable), clarification, shared state, integration, commits, PRs.
 
 ## 4 adaptive isolation modes (least-expensive-safe)
 

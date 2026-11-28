@@ -14,7 +14,7 @@
 | `commands/` | Unified with skills via `adapters/command-skills/` in `.claude/skills/<name>` (Claude Code treats slash commands as skills — no duplicate `.claude/commands` link) |
 | `agents/*.md` | Gitignored `.claude/agents` → `agents/` |
 
-Review-loop roles: `b3-reviewer` (no edits), `b3-fixer` (no PASS), plus specialists. Optional `model:` overrides stay host-configured (`review-loop/models.md`). Orchestrator remains the parent conversation.
+Review-loop roles: `b3-reviewer` (no edits), `b3-fixer` (no PASS), plus specialists. Optional `model:` overrides stay host-configured (`review-loop/models.md`, `~/.b3/config.toml`). Orchestrator remains the parent conversation.
 
 ## Setup
 
@@ -35,7 +35,7 @@ b3 sync --host claude --verify-only
 b3 install product --product-root /path/to/product --host claude
 ```
 
-Writes `.b3/home`, `AGENTS.md` and thin `CLAUDE.md` (`@AGENTS.md`, when missing), `.b3/ship/` + `.b3/research-ship/` + `.b3/pr-feedback/` + `.b3/models.md` + `.claude/skills` + `.claude/agents` in `.gitignore`, flattened `.claude/skills/<name>` junctions/symlinks (including `b3-ship`, `b3-research-ship`, `b3-plan`, `b3-implement`, `b3-debug`, `b3-research`, `b3-audit`, `b3-review`, `b3-refactor`, `b3-verify`, `b3-review-loop`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`), and `.claude/agents` → `{B3_HOME}/agents`.
+Writes `.b3/home`, `AGENTS.md` and thin `CLAUDE.md` (`@AGENTS.md`, when missing), `.b3/ship/` + `.b3/research-ship/` + `.b3/pr-feedback/` + `.b3/config.toml` + `.claude/skills` + `.claude/agents` in `.gitignore`, flattened `.claude/skills/<name>` junctions/symlinks (including `b3-ship`, `b3-research-ship`, `b3-plan`, `b3-implement`, `b3-debug`, `b3-research`, `b3-audit`, `b3-review`, `b3-refactor`, `b3-verify`, `b3-review-loop`, `b3-pr-resolve`, `b3-pr-reply`, `b3-pr-comment`), and `.claude/agents` → `{B3_HOME}/agents`.
 
 ## Host-native fallback & thin design
 

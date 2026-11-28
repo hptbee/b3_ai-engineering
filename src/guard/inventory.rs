@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::config::resolve_config;
 use crate::error::{fail, B3Error};
 use crate::fs::{
     normalize_repo_root, sort_ordinal, split_csv_list, split_path_csv_checked, test_binary_file,
@@ -9,10 +10,11 @@ use crate::fs::{
 use crate::git::{resolve_scope_target_and_base, run_git};
 use crate::guard::push_unique_str;
 use crate::guard::scope::{
-    collect_scope_data, eval_risk_for_subset, get_raw_module_group, get_tshirt_size,
-    test_contract_path, test_doc_or_asset_path, test_generated_code_path,
+    collect_scope_data, eval_risk_for_subset, get_raw_module_group,
+    get_tshirt_size_with_thresholds, test_contract_path, test_doc_or_asset_path,
+    test_generated_code_path,
 };
-use crate::guard::wave::resolve_concurrency;
+use crate::guard::wave::resolve_concurrency_with_config;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReviewUnit {
@@ -62,7 +64,16 @@ struct Bucket {
 }
 
 pub(crate) fn is_oversized_unit(files_cnt: usize, lines_cnt: usize) -> bool {
-    lines_cnt > 5000 || (files_cnt > 100 && lines_cnt > 1000)
+    is_oversized_unit_with(files_cnt, lines_cnt, 5000, 100)
+}
+
+pub(crate) fn is_oversized_unit_with(
+    files_cnt: usize,
+    lines_cnt: usize,
+    max_loc: usize,
+    max_files: usize,
+) -> bool {
+    lines_cnt > max_loc || (files_cnt > max_files && (max_files < 100 || lines_cnt > 1000))
 }
 
 fn get_unit_metrics(
@@ -482,12 +493,14 @@ fn expand_oversized_unit(
     file_lines: &HashMap<String, usize>,
     file_signals: &HashMap<String, Vec<String>>,
     depth: usize,
+    limits: (usize, usize),
 ) -> Result<Vec<ReviewUnit>, String> {
+    let (max_loc, max_files) = limits;
     for f in &unit.files {
         let fl = file_lines.get(f).copied().unwrap_or(0);
-        if fl > 5000 {
+        if fl > max_loc {
             return Err(format!(
-                "PARTITION_INCOMPLETE: single file '{f}' ({fl}L) exceeds max unit bound (5000L); refactor or split PR"
+                "PARTITION_INCOMPLETE: single file '{f}' ({fl}L) exceeds max unit bound ({max_loc}L); refactor or split PR"
             ));
         }
     }
@@ -565,7 +578,7 @@ fn expand_oversized_unit(
             let coalesced = coalesce_tiny_sub_buckets(sub_buckets, file_lines, file_signals);
             let mut out_units = Vec::new();
             for cu in coalesced {
-                if is_oversized_unit(cu.files_cnt, cu.lines_cnt) {
+                if is_oversized_unit_with(cu.files_cnt, cu.lines_cnt, max_loc, max_files) {
                     let sub_res = expand_oversized_unit(
                         root,
                         target_commit_sha,
@@ -573,6 +586,7 @@ fn expand_oversized_unit(
                         file_lines,
                         file_signals,
                         depth + 1,
+                        limits,
                     )?;
                     out_units.extend(sub_res);
                 } else {
@@ -715,7 +729,7 @@ fn expand_oversized_unit(
                 .iter()
                 .map(|f| file_lines.get(f).copied().unwrap_or(0))
                 .sum();
-            if is_oversized_unit(c_list.len(), c_lines)
+            if is_oversized_unit_with(c_list.len(), c_lines, max_loc, max_files)
                 && c_list.len() >= 2
                 && !comp_has_cross_ext.contains(&r_key)
             {
@@ -752,7 +766,7 @@ fn expand_oversized_unit(
         attach_tests_to_sub_buckets(base_group, &mut b2_buckets, &tests);
         let coalesced = coalesce_tiny_sub_buckets(b2_buckets, file_lines, file_signals);
         for cu in &coalesced {
-            if is_oversized_unit(cu.files_cnt, cu.lines_cnt) {
+            if is_oversized_unit_with(cu.files_cnt, cu.lines_cnt, max_loc, max_files) {
                 return Err(format!(
                     "PARTITION_INCOMPLETE: oversized unit '{}' ({}f, {}L) cannot be cohesively partitioned without arbitrary LOC splitting",
                     cu.group, cu.files_cnt, cu.lines_cnt
@@ -773,6 +787,8 @@ fn merge_cohesive_units_to_cap(
     file_lines: &HashMap<String, usize>,
     file_signals: &HashMap<String, Vec<String>>,
     size_class: &str,
+    max_loc: usize,
+    max_files: usize,
 ) -> Result<(), String> {
     while units.len() > 4 {
         let mut best_pair: Option<(usize, usize)> = None;
@@ -784,7 +800,7 @@ fn merge_cohesive_units_to_cap(
                 let uj = &units[j];
                 let c_files = ui.files_cnt + uj.files_cnt;
                 let c_lines = ui.lines_cnt + uj.lines_cnt;
-                if is_oversized_unit(c_files, c_lines) {
+                if is_oversized_unit_with(c_files, c_lines, max_loc, max_files) {
                     continue;
                 }
                 let d_top = usize::from(ui.top_seg != uj.top_seg);
@@ -869,7 +885,9 @@ fn build_unit_assignments(
     file_lines: &HashMap<String, usize>,
     file_signals: &HashMap<String, Vec<String>>,
     size_class: &str,
+    limits: (usize, usize),
 ) -> Result<Vec<ReviewUnit>, String> {
+    let (max_loc, max_files) = limits;
     let mut groups_map: HashMap<String, Vec<String>> = HashMap::new();
     let mut non_test_groups: HashSet<String> = HashSet::new();
     for f in review_files {
@@ -916,7 +934,7 @@ fn build_unit_assignments(
             file_lines,
             file_signals,
         );
-        if is_oversized_unit(u_raw.files_cnt, u_raw.lines_cnt) {
+        if is_oversized_unit_with(u_raw.files_cnt, u_raw.lines_cnt, max_loc, max_files) {
             let expanded = expand_oversized_unit(
                 root,
                 target_commit_sha,
@@ -924,6 +942,7 @@ fn build_unit_assignments(
                 file_lines,
                 file_signals,
                 0,
+                limits,
             )?;
             work_units.extend(expanded);
         } else {
@@ -932,7 +951,14 @@ fn build_unit_assignments(
     }
 
     if matches!(size_class, "L" | "XL") && work_units.len() > 4 {
-        merge_cohesive_units_to_cap(&mut work_units, file_lines, file_signals, size_class)?;
+        merge_cohesive_units_to_cap(
+            &mut work_units,
+            file_lines,
+            file_signals,
+            size_class,
+            max_loc,
+            max_files,
+        )?;
     }
 
     work_units.sort_by(|a, b| {
@@ -989,15 +1015,16 @@ pub(crate) fn eval_level1_dispatch(
     (l1_out, skip_rat)
 }
 
-pub(crate) fn build_inventory(
+pub(crate) fn build_inventory_with_cfg(
     root: &Path,
     resolved_base: &str,
     target_commit_sha: &str,
     ignored: &[String],
     max_concurrency: i32,
+    cfg: &crate::config::B3Config,
     fail_prefix: &str,
 ) -> Result<InventoryResult, B3Error> {
-    let resolved_conc = resolve_concurrency(max_concurrency, fail_prefix)?;
+    let resolved_conc = resolve_concurrency_with_config(max_concurrency, cfg, fail_prefix)?;
     let scope = collect_scope_data(root, resolved_base, target_commit_sha, ignored, fail_prefix)?;
     if scope.review_files.is_empty() && scope.noise_files.is_empty() {
         return Ok(InventoryResult {
@@ -1023,7 +1050,11 @@ pub(crate) fn build_inventory(
         });
     }
 
-    let size_class = get_tshirt_size(scope.review_files.len(), scope.total_lines);
+    let size_class = get_tshirt_size_with_thresholds(
+        scope.review_files.len(),
+        scope.total_lines,
+        &cfg.review.sizing,
+    );
     let risk_all_set = if !scope.review_files.is_empty() {
         &scope.review_files
     } else {
@@ -1077,6 +1108,7 @@ pub(crate) fn build_inventory(
             &scope.file_lines,
             &scope.file_signals,
             size_class,
+            (cfg.review.max_loc_per_unit, cfg.review.max_files_per_unit),
         ) {
             Ok(u) => units = u,
             Err(pe) => partition_error = Some(pe),
@@ -1109,6 +1141,26 @@ pub(crate) fn build_inventory(
     })
 }
 
+pub(crate) fn build_inventory(
+    root: &Path,
+    resolved_base: &str,
+    target_commit_sha: &str,
+    ignored: &[String],
+    max_concurrency: i32,
+    fail_prefix: &str,
+) -> Result<InventoryResult, B3Error> {
+    let cfg = resolve_config(Some(root), None, &[]).config;
+    build_inventory_with_cfg(
+        root,
+        resolved_base,
+        target_commit_sha,
+        ignored,
+        max_concurrency,
+        &cfg,
+        fail_prefix,
+    )
+}
+
 /// Executes `b3 guard review-inventory`.
 pub fn run(
     repo_root_raw: &str,
@@ -1117,7 +1169,6 @@ pub fn run(
     ignore_dirty_paths: &str,
     max_concurrency: i32,
 ) -> Result<(String, i32), B3Error> {
-    let max_concurrency = resolve_concurrency(max_concurrency, "INVENTORY_FAIL")?;
     let ignored = split_path_csv_checked(ignore_dirty_paths, "INVENTORY_FAIL", true, None)?;
     let repo_root = normalize_repo_root(repo_root_raw)?;
     let scope = resolve_scope_target_and_base(

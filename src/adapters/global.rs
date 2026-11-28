@@ -127,9 +127,9 @@ pub fn run(
             Some(PathBuf::from(common::normalize_path_str(&user_home_arg)?))
         };
         if let Ok(status) =
-            common::initialize_personal_models_file(&b3_home, uh_opt.as_deref(), dry_run, true)
+            common::initialize_personal_config_file(&b3_home, uh_opt.as_deref(), dry_run, true)
         {
-            if let Some(msg) = common::format_personal_models_status(&b3_home, &status, false) {
+            if let Some(msg) = common::format_personal_config_status(&b3_home, &status, false) {
                 out.push(msg);
             }
         }

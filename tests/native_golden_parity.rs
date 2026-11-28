@@ -321,12 +321,9 @@ fn golden_ledger_merge_policy_mechanical_symbol_and_cache() {
     let base_sha = init_git_repo(repo);
     fs::create_dir_all(repo.join(".b3")).unwrap();
     fs::create_dir_all(repo.join("releases")).unwrap();
-    fs::write(
-        repo.join(".b3/research-policy.json"),
-        "{\"auto_merge\":\"authorized\",\"protected_paths\":[\"releases/\"],\"allow_protected_paths\":false,\"require_ci\":true,\"require_review\":true}\n",
-    )
-    .unwrap();
-    git_in(repo, &["add", ".b3/research-policy.json"]);
+    let pol_txt = "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n";
+    fs::write(repo.join(".b3/policy.toml"), pol_txt).unwrap();
+    git_in(repo, &["add", ".b3/policy.toml"]);
     git_in(repo, &["commit", "-m", "add policy on main"]);
     let trunk_sha = git_in(repo, &["rev-parse", "HEAD"]);
 
@@ -1289,8 +1286,8 @@ fn golden_legacy_baseline_65eaaae_contracts() {
     let prot_dir = tmp5.path.join("releases/v1 [draft] caf\u{00e9}");
     fs::create_dir_all(&prot_dir).unwrap();
     fs::write(
-        tmp5.path.join(".b3/research-policy.json"),
-        "{\"auto_merge\":\"authorized\",\"protected_paths\":[\"releases/\"],\"allow_protected_paths\":false,\"require_ci\":true,\"require_review\":true}\n",
+        tmp5.path.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     )
     .unwrap();
     fs::write(prot_dir.join("secret.txt"), "keep\n").unwrap();
@@ -1643,8 +1640,8 @@ fn golden_legacy_baseline_65eaaae_contracts() {
         ],
     );
     fs::write(
-        repo8.join(".b3/research-policy.json"),
-        "{\"auto_merge\":\"authorized\",\"require_ci\":true,\"require_review\":false}\n",
+        repo8.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nrequire_ci = true\nrequire_review = false\n",
     )
     .unwrap();
     git_in(&repo8, &["add", "-A"]);
@@ -1744,7 +1741,7 @@ fn golden_legacy_baseline_65eaaae_contracts() {
                 host,
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
         );
         assert_eq!(ec, c_inst.legacy_exit_code, "install {host}: {out}");
         let norm_out = replace_path_variants(out, &prod.path, "<PROD_ROOT>");
@@ -1790,7 +1787,7 @@ fn golden_legacy_baseline_65eaaae_contracts() {
             "antigravity",
         ],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
     );
     assert_eq!(sc1, 0);
     let c_sv = find_legacy_case(&cases, "sync_skills_antigravity_verify_only");
@@ -1804,7 +1801,7 @@ fn golden_legacy_baseline_65eaaae_contracts() {
             "--verify-only",
         ],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
     );
     assert_eq!(ec, c_sv.legacy_exit_code);
     let norm_sv = replace_path_variants(out, &sync_tmp.path, "<SYNC_ROOT>");

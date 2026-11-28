@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::adapters::common::{
     assert_regular_dir_or_missing, assert_regular_file_or_missing, collect_skill_md_files,
-    create_dir_link, get_skill_name_from_file, initialize_personal_models_file, is_reparse_link,
+    create_dir_link, get_skill_name_from_file, initialize_personal_config_file, is_reparse_link,
     normalize_abs_path_str, normalize_path_str, path_exists_or_link, remove_link_only,
     resolve_b3_home_auto, test_link_target, text_sha256_lf, write_utf8_no_bom_lf,
 };
@@ -195,7 +195,7 @@ fn replace_exact_trimmed_line(text: &str, target: &str, replacement: &str) -> St
 fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
     let gi = root.join(".gitignore");
     assert_regular_file_or_missing(&gi, ".gitignore")?;
-    let block = "\n# B3: commit .b3/home; keep run checkpoints and local model preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/pr-feedback/\n.b3/models.md\n";
+    let block = "\n# B3: commit .b3/home and .b3/policy.toml; keep run checkpoints and local preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/pr-feedback/\n.b3/config.toml\n";
     if !path_exists_or_link(&gi) {
         let content = format!("{}\n", block.trim_start());
         fs::write(&gi, content.as_bytes())
@@ -207,8 +207,8 @@ fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
     let has_ship = has_exact_trimmed_line(&text, ".b3/ship/");
     let has_research = has_exact_trimmed_line(&text, ".b3/research-ship/");
     let has_pr_fb = has_exact_trimmed_line(&text, ".b3/pr-feedback/");
-    let has_models = has_exact_trimmed_line(&text, ".b3/models.md");
-    if has_ship && has_research && has_pr_fb && has_models {
+    let has_config = has_exact_trimmed_line(&text, ".b3/config.toml");
+    if has_ship && has_research && has_pr_fb && has_config {
         return Ok("present");
     }
 
@@ -222,8 +222,8 @@ fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
     if !has_pr_fb {
         missing.push(".b3/pr-feedback/");
     }
-    if !has_models {
-        missing.push(".b3/models.md");
+    if !has_config {
+        missing.push(".b3/config.toml");
     }
 
     if has_exact_trimmed_line(&text, ".b3/") {
@@ -233,7 +233,7 @@ fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
             .map_err(|e| fail(format!("cannot update {}: {e}", gi.display()), 1))?;
         return Ok("upgraded");
     }
-    if has_ship || has_research || has_pr_fb || has_models {
+    if has_ship || has_research || has_pr_fb || has_config {
         let mut combined = text;
         if !combined.ends_with('\n') && !combined.is_empty() {
             combined.push('\n');
@@ -581,7 +581,7 @@ pub fn run(
             }
         }
         out.push(
-            "dry-run: gitignore .b3/ship/, .b3/research-ship/, .b3/pr-feedback/, and .b3/models.md (see Update-B3Gitignore)"
+            "dry-run: gitignore .b3/ship/, .b3/research-ship/, .b3/pr-feedback/, and .b3/config.toml (see Update-B3Gitignore)"
                 .to_string(),
         );
         if use_flat_agents_skills {
@@ -603,16 +603,18 @@ pub fn run(
                 b3_agents.display()
             ));
         }
-        if let Ok(ms) = initialize_personal_models_file(&b3_home, None, true, true) {
-            if let Some(rest) = ms.strip_prefix("kept:") {
+        if let Ok(cs) = initialize_personal_config_file(&b3_home, None, true, true) {
+            if let Some(rest) = cs.strip_prefix("kept:") {
+                out.push(format!("dry-run: keep existing personal config {rest}"));
+            } else if let Some(rest) = cs.strip_prefix("dry-run:") {
+                let tmpl = b3_home.join("config").join("config.example.toml");
+                let tmpl_src = if tmpl.is_file() && !is_reparse_link(&tmpl) {
+                    tmpl.display().to_string()
+                } else {
+                    "built-in config.example.toml".to_string()
+                };
                 out.push(format!(
-                    "dry-run: keep existing personal model preferences {rest}"
-                ));
-            } else if let Some(rest) = ms.strip_prefix("dry-run:") {
-                let tmpl = b3_home.join("config").join("models.example.md");
-                out.push(format!(
-                    "dry-run: initialize personal model preferences at {rest} from {}",
-                    tmpl.display()
+                    "dry-run: initialize personal config at {rest} from {tmpl_src}"
                 ));
             }
         }
@@ -677,8 +679,8 @@ pub fn run(
         }
     }
 
-    let model_pref_status =
-        initialize_personal_models_file(&b3_home, None, false, true).unwrap_or_default();
+    let config_pref_status =
+        initialize_personal_config_file(&b3_home, None, false, true).unwrap_or_default();
 
     out.push(format!(
         "installed B3 pointer in {}",
@@ -704,7 +706,7 @@ pub fn run(
     }
     out.push(format!("gitignore.b3={ignore_plan}"));
     out.push(format!("gitignore.skills={skill_ignore_plan}"));
-    out.push(format!("model_preferences={model_pref_status}"));
+    out.push(format!("model_preferences={config_pref_status}"));
     out.push(format!("host={host_name}"));
     match host_name {
         "codex" => out.push(format!(

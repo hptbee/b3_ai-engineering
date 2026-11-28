@@ -19,7 +19,7 @@ flowchart TB
     end
 
     subgraph HOOK["2. Hook Integration Layer (b3 hook CLI — Zero Daemon, Zero LLM)"]
-        hk_cfg["Opt-In Config: ~/.b3/models.md, .b3/models.md (upward to .git), B3_HOOK_MODE (enforce | audit | off)"]
+        hk_cfg["Opt-In Config: ~/.b3/config.toml, .b3/config.toml (upward to .git), B3_HOOK_MODE (enforce | audit | off)"]
         hk_disp["b3 hook dispatcher (early mode resolution, B3_HOOK_ACTIVE=1 recursion guard)"]
     end
 
@@ -52,7 +52,7 @@ flowchart TB
 flowchart TD
     Ev["Host or Git Event Arrives"] --> Rec{"B3_HOOK_ACTIVE == 1?"}
     Rec -->|"Yes (prevent re-entry loop)"| AllowFast["Exit 0 (Allow / No-Op)"]
-    Rec -->|"No"| Mode{"Early Mode Resolution (CLI/Env > upward .b3/models.md > ~/.b3/models.md > enforce)"}
+    Rec -->|"No"| Mode{"Early Mode Resolution (CLI/Env > upward .b3/config.toml > ~/.b3/config.toml > enforce)"}
 
     Mode -->|"disabled / off (even before payload parse)"| AllowFast
     Mode -->|"audit or enforce"| Parse["Bounded <=1 MiB Stdin + Host Payload Parse (audit stays non-blocking on bad input)"]
@@ -92,7 +92,7 @@ flowchart TD
 
 Local Git hooks never treat missing local tracking refs as proof of remote policy absence and never issue extra network calls during normal feature pushes:
 
-1. **`EstablishedPolicy`:** Triggered when the remote's tracking trunk (`refs/remotes/<rem>/*` via `HEAD`, `main`/`master`, or unique policy blob), an already-fetched `remote_oid`, local `HEAD`/candidate commits, staged merge index, or working-tree `.b3/research-policy.json` establishes governance. Blocks policy tampering/deletions (including orphan drops), protected paths, governed branch deletion, stale/unfetched target `remote_oid`, direct push when `auto_merge != "authorized"`, and octopus merges onto governed branches.
+1. **`EstablishedPolicy`:** Triggered when the remote's tracking trunk (`refs/remotes/<rem>/*` via `HEAD`, `main`/`master`, or unique policy blob), an already-fetched `remote_oid`, local `HEAD`/candidate commits, staged merge index, or working-tree `.b3/policy.toml` establishes governance (legacy `.b3/research-policy.json` fails closed). Blocks policy tampering/deletions (including orphan drops), legacy JSON policies, protected paths, governed branch deletion, stale/unfetched target `remote_oid`, direct push when `auto_merge != "authorized"`, and octopus merges onto governed branches.
 2. **`LocalAbsentOnly`:** Triggered when destination URLs match fetch URL and remote tracking trunk exists locally with no policy found locally. Still blocks pushes to trunk when `remote_oid` is non-zero and unfetched or mismatched against local tracking trunk (catching remotely added policy after the last `git fetch`).
 3. **`UnknownRemoteAuthority(reason)`:** Triggered on direct URL pushes (`direct_url_push`), mismatched fetch vs push URLs (`push_url_differs_from_fetch_url`), empty `git remote` tracking cache (`missing_remote_tracking_refs`), or unset `<remote>/HEAD` without `main`/`master`/unique policy (`unconfigured_remote_head`). Blocks `main`/`master` deletion or pushes to existing remote `main`/`master`; emits non-blocking `HOOK_ADVISORY` on feature branch pushes and defers authoritative remote checks to `b3 guard merge-policy-check`.
 4. **`pre-merge-commit` Scope:** Validates `HEAD`, every `MERGE_HEAD` parent (including multi-parent merges), AND the **actual staged merge result** (`git ls-files --stage` + `git diff --cached <trunk.sha>`). **Explicit non-coverage:** fast-forward merges (`git merge --ff-only` / ff default) never fire `pre-merge-commit`; conflicted merges resolved and finalized with `git commit` run `pre-commit` rather than `pre-merge-commit`; `git rebase`, `git cherry-pick`, `--no-verify`, and server-side PR merges are outside `pre-merge-commit`.
@@ -101,10 +101,10 @@ Local Git hooks never treat missing local tracking refs as proof of remote polic
 
 | Action | Components | Rationale |
 | --- | --- | --- |
-| **KEEP** | `src/hook/{config,event,dispatch,install,response}`, Tier 0 `<10 ms`/`0` Git checks, `precommit::run_for_hook`, `merge_policy` 3-state authority, upward early mode resolution, Git shim `v3` | Minimal, sound surface with zero daemon/LLM overhead |
+| **KEEP** | `src/config.rs` (`[hooks]` unified resolver), `src/hook/{event,dispatch,install,response}`, Tier 0 `<10 ms`/`0` Git checks, `precommit::run_for_hook`, `merge_policy` 3-state authority, upward early mode resolution, Git shim `v3` | Single TOML resolver + minimal, sound hook surface with zero daemon/LLM overhead |
 | **CONSOLIDATE** | `enforce_policy_and_protected_paths`, `assert_target_branch_preserved_policy`, `is_governed_target_branch` in `merge_policy.rs`; `precommit::run_inner` (`ExplicitCli` / `HookExplicit` / `HookImplicit`); `JsonHost` table | Eliminated 4 duplicated policy/protected-path loops and duplicate `git diff --cached` invocation |
 | **SIMPLIFY** | `eval_before_command` Git lexical tripwire; Antigravity flat `Stop`; Codex `"hooks"` wrapper; `pub(crate)` visibility across `src/hook/{event,install,response,dispatch}` and hook-only helpers | Tightens internal crate API surface and matches live host schemas |
-| **REMOVE** | 25 speculative env vars (bypass/tree-cache/merge-auth, `B3_HOOK_REQUIRE_REPO`, `B3_EXPECTED_CMD`, `B3_RELEVANT_PATHS`, 17 PR/CI/HEAD vars, and 2 redundant Tier 0/hook path-list env overrides), `check_policy_absent_batch`, `run_with_pre_staged`, `NormalizedEvent.host`, `HostId::as_str`, `HookHostTarget::as_str`, dead Git JSON `paths`/`staged_files` extraction | Removed unsafe absence assumptions and speculative/unreferenced code (`-441` prod LOC in `src/hook/*.rs` vs `29462c9`) |
+| **REMOVE** | Duplicate hook config parser, 25 speculative env vars (bypass/tree-cache/merge-auth, `B3_HOOK_REQUIRE_REPO`, `B3_EXPECTED_CMD`, `B3_RELEVANT_PATHS`, 17 PR/CI/HEAD vars, and 2 redundant Tier 0/hook path-list env overrides), `check_policy_absent_batch`, `run_with_pre_staged`, `NormalizedEvent.host`, `HostId::as_str`, `HookHostTarget::as_str`, dead Git JSON `paths`/`staged_files` extraction | Removed duplicate hook parser, unsafe absence assumptions, and speculative/unreferenced code |
 
 ---
 
@@ -148,15 +148,15 @@ b3 hook uninstall --host <cursor|claude|codex|antigravity|git|all> [--scope <pro
 
 | Variable | Producer | Consumer | Status & Binding | Host Propagation & Fallback |
 | --- | --- | --- | --- | --- |
-| `B3_HOOK_MODE` | User shell / CLI wrapper | `config.rs`, `dispatch.rs` | Optional; overridden by `--mode`; applies session/shell-wide | Env inheritance; invalid values warn and fall back to `models.md` / `enforce` (**Production-integrated**) |
+| `B3_HOOK_MODE` | User shell / CLI wrapper | `config.rs`, `dispatch.rs` | Optional; overridden by `--mode`; applies session/shell-wide | Env inheritance; invalid values warn and fall back to `config.toml` / `enforce` (**Production-integrated**) |
 | `B3_HOOK_ACTIVE` | `dispatch.rs`, Git shim `v3` | `dispatch.rs`, Git shim `v3` | Internal recursion guard (`1`/`true`); shell commands setting `B3_HOOK_ACTIVE=` blocked in Tier 0; never disables direct `b3 guard` | Inherited by child `.b3-user` and internal Git calls; defaults unset (**Production-integrated**) |
-| `B3_MODELS_PERSONAL` | User shell / CI config | `config.rs` | Optional override for `~/.b3/models.md`; global | Env inheritance; falls back to `<user_home>/.b3/models.md` (**Optional explicit input**) |
+| `B3_CONFIG_PERSONAL` | User shell / CI config | `src/config.rs` | Optional override for `~/.b3/config.toml` | Env inheritance; falls back to `<user_home>/.b3/config.toml` (**Optional explicit input**) |
 | `B3_WORKER_ALLOWED_PATHS` | Caller / worker wrapper | `dispatch.rs` (`BeforeFileWrite`) | Optional explicit worker CSV; checks normalized relative paths in repo & linked worktrees | **Not auto-propagated by IDE workflows** (`FIXTURE_TESTED_ONLY` / `NOT_VERIFIED` live); omitted = repo-wide containment; workflow `check-wave`/`mechanical-check` stay authoritative |
 | `B3_ALLOWED_PATHS` | Caller / workflow shell | `dispatch.rs` (`BeforeCommit`), `precommit::run_for_hook` | Optional commit scope CSV; **never** allowed to whitelist secrets | Env inheritance if explicitly exported; omitted = `HookImplicit` (no CSV round-trip) (**Optional explicit input**) |
 | `B3_VERIFY_RECEIPT` | Caller / workflow shell | `dispatch.rs` (`BeforeCommit`/`AfterFileWrite`/`Stop`, `BeforePush`/`BeforeMerge`) | Optional receipt path bound to `HEAD`, staged=WT, and scope | Env inheritance if exported; omitted = skip receipt binding in `BeforeCommit`, `Ok` in advisories (**Optional explicit input**) |
 | `B3_LEDGER_PATH` | Caller / workflow shell | `dispatch.rs` (`BeforePush`/`BeforeMerge`) | Optional review ledger path for governed branch `auto_merge=authorized` pushes | Env inheritance if exported; omitted = fail closed (`missing_ledger_path`) when pushing governed `authorized` target (**Optional explicit input**) |
 
-**Honest Ambiguity Note (Early Mode Resolution):** When `--repo-root` is omitted and `cwd` is inside a repository subdirectory (`<repo>/sub/dir`), pure-FS upward discovery finds `<repo>/.b3/models.md` (stopping at user home, system temp, symlinks/junctions, or first `.git` boundary). However, if `--repo-root` is omitted, `cwd` is outside any repository, AND stdin JSON is malformed before `project_root`/`cwd` can be parsed, project-level `audit`/`off` settings cannot be discovered and defaults/global/`B3_HOOK_MODE` apply.
+**Honest Ambiguity Note (Early Mode Resolution):** When `--repo-root` is omitted and `cwd` is inside a repository subdirectory (`<repo>/sub/dir`), pure-FS upward discovery finds `<repo>/.b3/config.toml` (stopping at user home, system temp, symlinks/junctions, or first `.git` boundary). However, if `--repo-root` is omitted, `cwd` is outside any repository, AND stdin JSON is malformed before `project_root`/`cwd` can be parsed, project-level `audit`/`off` settings cannot be discovered and defaults/global/`B3_HOOK_MODE` apply.
 
 ---
 

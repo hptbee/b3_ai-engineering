@@ -3203,7 +3203,7 @@ fn context_cache_evidence_check_and_product_smoke() {
     init_fresh_git_repo(&product);
     let p_str = product.to_str().unwrap();
     let home_str = b3_home.to_str().unwrap();
-    let models_iso = tmp.path.join("isolated-models.md");
+    let cfg_iso = tmp.path.join("isolated-config.toml");
     let (ic, iout, ierr) = run_b3_env(
         &[
             "install",
@@ -3217,8 +3217,8 @@ fn context_cache_evidence_check_and_product_smoke() {
         ],
         None,
         &[
-            ("B3_SKIP_MODEL_INIT", "1"),
-            ("B3_MODELS_PERSONAL", models_iso.to_str().unwrap()),
+            ("B3_SKIP_CONFIG_INIT", "1"),
+            ("B3_CONFIG_PERSONAL", cfg_iso.to_str().unwrap()),
         ],
         &[],
     );
@@ -5479,6 +5479,215 @@ fn continuous_wave_duplicate_active_rejection_partial_failure_and_single_slot_fa
         out_f3.contains("wave|1|SEQUENTIAL|agents=1|tasks=B|reason=active_worker_conflict\n"),
         "{out_f3}"
     );
+}
+
+#[test]
+fn guard_commands_honor_project_toml_config_consumers() {
+    let tmp = TempDirGuard::new("guard-toml-cfg");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    write_lf(&repo.join(".gitignore"), ".b3/config.toml\n.b3/ship/\n");
+    git_in(&repo, &["add", ".gitignore"]);
+    git_in(&repo, &["commit", "-qm", "gitignore b3 config"]);
+    let r = repo.to_str().unwrap();
+
+    // 1. `diff-scope` honors customized `review.sizing.*` thresholds from `<project>/.b3/config.toml`
+    let mut lines_150 = String::new();
+    for i in 1..=150 {
+        lines_150.push_str(&format!("pub const C_{i}: i32 = {i};\n"));
+    }
+    write_lf(&repo.join("src/mod_a/sub_a/f1.rs"), &lines_150);
+    let base_sha = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    // Default sizing: 1 file, 150 LOC (> xs_max_loc=100, <= s_max_loc=300) -> S
+    let (c_ds0, out_ds0, err_ds0) = run_b3(&[
+        "guard",
+        "diff-scope",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_sha,
+    ]);
+    assert_eq!(c_ds0, 0, "{out_ds0}\n{err_ds0}");
+    assert!(out_ds0.contains("size_class=S\n"), "{out_ds0}");
+
+    // Raise xs_max_loc = 200 -> same 150-LOC diff becomes XS
+    write_lf(
+        &repo.join(".b3/config.toml"),
+        "[review.sizing]\nxs_max_loc = 200\nxs_max_files = 3\ns_max_loc = 400\ns_max_files = 8\nm_max_loc = 800\nm_max_files = 20\nl_max_loc = 1999\nl_max_files = 49\nxl_max_loc = 5000\nxl_max_files = 100\n",
+    );
+    let (c_ds1, out_ds1, err_ds1) = run_b3(&[
+        "guard",
+        "diff-scope",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_sha,
+    ]);
+    assert_eq!(c_ds1, 0, "{out_ds1}\n{err_ds1}");
+    assert!(out_ds1.contains("size_class=XS\n"), "{out_ds1}");
+
+    // 2. `review-ledger` honors `review.max_iterations`
+    write_lf(
+        &repo.join(".b3/config.toml"),
+        "[review]\nmax_iterations = 8\n",
+    );
+    let (c_rl, out_rl, err_rl) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--repo-root",
+        r,
+        "--action",
+        "init",
+        "--ledger-path",
+        ".b3/ship/cfg-ledger.md",
+        "--base-sha",
+        &base_sha,
+        "--review-independence",
+        "INDEPENDENT",
+    ]);
+    assert_eq!(c_rl, 0, "{out_rl}\n{err_rl}");
+    assert!(out_rl.contains("max_passes=8 "), "{out_rl}");
+    let led_txt = fs::read_to_string(repo.join(".b3/ship/cfg-ledger.md")).unwrap();
+    assert!(led_txt.contains("max_passes=8\n"), "{led_txt}");
+
+    // 3. `review-inventory` honors `review.max_files_per_unit` and `review.max_loc_per_unit`
+    // Add 6 files (each 25 lines -> 150 LOC total across 2 subdirs of `src/pkg`)
+    let mut lines_25 = String::new();
+    for i in 1..=25 {
+        lines_25.push_str(&format!("pub fn f_{i}() -> i32 {{ {i} }}\n"));
+    }
+    fs::remove_file(repo.join("src/mod_a/sub_a/f1.rs")).unwrap();
+    for sub in ["sub_a", "sub_b"] {
+        for idx in 1..=3 {
+            write_lf(&repo.join(format!("src/pkg/{sub}/m{idx}.rs")), &lines_25);
+        }
+    }
+    // Reset to clean base, then commit or stage? review-inventory compares base_sha to working tree cleanly.
+    fs::remove_file(repo.join(".b3/config.toml")).unwrap();
+    let (c_inv_def, out_inv_def, err_inv_def) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_sha,
+    ]);
+    assert_eq!(c_inv_def, 0, "{out_inv_def}\n{err_inv_def}");
+    assert!(out_inv_def.contains("unit_count=1\n"), "{out_inv_def}");
+
+    // With max_files_per_unit = 5, 6 files under src/pkg must split into 2 units
+    write_lf(
+        &repo.join(".b3/config.toml"),
+        "[review]\nmax_files_per_unit = 5\n",
+    );
+    let (c_inv_f, out_inv_f, err_inv_f) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_sha,
+    ]);
+    assert_eq!(c_inv_f, 0, "{out_inv_f}\n{err_inv_f}");
+    assert!(out_inv_f.contains("unit_count=2\n"), "{out_inv_f}");
+
+    // With max_loc_per_unit = 100 (and default max_files_per_unit=100), 150 LOC across 2 subdirs (75 LOC each) splits into 2 units
+    write_lf(
+        &repo.join(".b3/config.toml"),
+        "[review]\nmax_loc_per_unit = 100\n",
+    );
+    let (c_inv_l, out_inv_l, err_inv_l) = run_b3(&[
+        "guard",
+        "review-inventory",
+        "--repo-root",
+        r,
+        "--base-sha",
+        &base_sha,
+    ]);
+    assert_eq!(c_inv_l, 0, "{out_inv_l}\n{err_inv_l}");
+    assert!(out_inv_l.contains("unit_count=2\n"), "{out_inv_l}");
+
+    // 4. `check-wave --partition` honors `parallel.max_concurrency` and `parallel.execution_mode`
+    let wave_repo = tmp.path.join("wave-repo");
+    clone_seeded_git_repo(&wave_repo);
+    for name in ["a", "b", "c"] {
+        write_lf(
+            &wave_repo.join(format!("src/{name}.rs")),
+            &format!("pub fn {name}() {{}}\n"),
+        );
+    }
+    git_in(&wave_repo, &["add", "."]);
+    git_in(&wave_repo, &["commit", "-qm", "wave seed"]);
+    let wr = wave_repo.to_str().unwrap();
+
+    // 4a. parallel.max_concurrency = 2
+    write_lf(
+        &wave_repo.join(".b3/config.toml"),
+        "[parallel]\nmax_concurrency = 2\nexecution_mode = \"auto\"\n",
+    );
+    let (c_w2, out_w2, err_w2) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        wr,
+        "--partition",
+        "--wave-specs",
+        "A=src/a.rs;B=src/b.rs;C=src/c.rs",
+    ]);
+    assert_eq!(c_w2, 0, "{out_w2}\n{err_w2}");
+    assert!(out_w2.contains("max_concurrency=2\n"), "{out_w2}");
+    assert!(
+        out_w2.contains("wave|1|PARALLEL|agents=2|tasks=A,B|reason=independent_ready_tasks\n"),
+        "{out_w2}"
+    );
+    assert!(
+        out_w2.contains("wave|2|SEQUENTIAL|agents=1|tasks=C|reason=bounded_concurrency\n"),
+        "{out_w2}"
+    );
+
+    // 4b. parallel.execution_mode = "sequential"
+    write_lf(
+        &wave_repo.join(".b3/config.toml"),
+        "[parallel]\nmax_concurrency = 4\nexecution_mode = \"sequential\"\n",
+    );
+    let (c_ws, out_ws, err_ws) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        wr,
+        "--partition",
+        "--wave-specs",
+        "A=src/a.rs;B=src/b.rs;C=src/c.rs",
+    ]);
+    assert_eq!(c_ws, 0, "{out_ws}\n{err_ws}");
+    assert!(out_ws.contains("max_concurrency=1\n"), "{out_ws}");
+    assert!(out_ws.contains("execution_mode=sequential\n"), "{out_ws}");
+    assert!(
+        out_ws.contains("WAVE_SEQUENTIAL: waves=3 max_parallel=1 reason=bounded_concurrency"),
+        "{out_ws}"
+    );
+
+    // 4c. parallel.execution_mode = "isolated"
+    write_lf(
+        &wave_repo.join(".b3/config.toml"),
+        "[parallel]\nmax_concurrency = 4\nexecution_mode = \"isolated\"\n",
+    );
+    let (c_wi, out_wi, err_wi) = run_b3(&[
+        "guard",
+        "check-wave",
+        "--repo-root",
+        wr,
+        "--partition",
+        "--wave-specs",
+        "A=src/a.rs;B=src/b.rs;C=src/c.rs",
+    ]);
+    assert_eq!(c_wi, 0, "{out_wi}\n{err_wi}");
+    assert!(
+        out_wi.contains("preferred_isolation=ISOLATED_WRITES\n"),
+        "{out_wi}"
+    );
+    assert!(out_wi.contains("WAVE_OK: disjoint"), "{out_wi}");
 }
 
 #[test]

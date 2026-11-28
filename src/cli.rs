@@ -10,6 +10,7 @@ pub enum Command {
         repo_root: String,
         strict: bool,
     },
+    Config(ConfigCommand),
     Guard(GuardSubcommand),
     Pr(PrSubcommand),
     Sync {
@@ -59,6 +60,29 @@ pub enum HookSubcommand {
         repo_root: String,
         user_home: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigCommand {
+    pub action: String,
+    pub repo_root: Option<String>,
+    pub user_home: Option<String>,
+    pub scope: Option<String>,
+    pub key: Option<String>,
+    pub value: Option<String>,
+    pub sources: bool,
+    pub json: bool,
+    pub dry_run: bool,
+    pub force: bool,
+    pub overrides: Vec<(String, String)>,
+    pub route_role: Option<String>,
+    pub route_complexity: Option<String>,
+    pub route_risk: Option<String>,
+    pub route_host: Option<String>,
+    pub route_escalations: u8,
+    pub route_trigger: Option<String>,
+    pub route_available: Option<String>,
+    pub route_confirmed: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +334,7 @@ b3 - B3 AI Engineering deterministic native core
 USAGE:
   b3 --version | --help
   b3 context measure [--repo-root <path>] [--strict]
+  b3 config <show|get|set|validate|init> [args] [flags]
   b3 pr <verify|fetch|reconcile|reply|resolve|comment> [flags]
   b3 sync --host cursor|codex|claude|antigravity [--repo-root <dir>] [--dry-run] [--verify-only] [--force]
   b3 install <product|cursor|antigravity|global> [flags]
@@ -372,6 +397,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, B3Error> {
     match args[0].as_str() {
         "-V" | "--version" => Ok(Command::Version),
         "-h" | "--help" | "help" => Ok(Command::Help),
+        "config" => parse_config(&args[1..]).map(Command::Config),
         "context" => parse_context(&args[1..]),
         "guard" => parse_guard(&args[1..]).map(Command::Guard),
         "pr" => parse_pr(&args[1..]).map(Command::Pr),
@@ -380,6 +406,177 @@ pub fn parse_args(args: &[String]) -> Result<Command, B3Error> {
         "hook" => parse_hook(&args[1..]).map(Command::Hook),
         other => Err(fail(format!("B3_CLI_FAIL: unknown command '{other}'"), 1)),
     }
+}
+
+fn parse_config(args: &[String]) -> Result<ConfigCommand, B3Error> {
+    let (action, rest): (String, &[String]) = if args.is_empty() || args[0].starts_with('-') {
+        ("show".to_string(), args)
+    } else {
+        match args[0].as_str() {
+            sub @ ("show" | "get" | "set" | "validate" | "init") => (sub.to_string(), &args[1..]),
+            other => {
+                return Err(fail(
+                    format!("CONFIG_FAIL: unknown config subcommand '{other}'"),
+                    1,
+                ));
+            }
+        }
+    };
+
+    let mut repo_root: Option<String> = None;
+    let mut user_home: Option<String> = None;
+    let mut scope: Option<String> = None;
+    let mut key: Option<String> = None;
+    let mut value: Option<String> = None;
+    let mut sources = false;
+    let mut json = false;
+    let mut dry_run = false;
+    let mut force = false;
+    let mut overrides: Vec<(String, String)> = Vec::new();
+    let mut route_role: Option<String> = None;
+    let mut route_complexity: Option<String> = None;
+    let mut route_risk: Option<String> = None;
+    let mut route_host: Option<String> = None;
+    let mut route_escalations: u8 = 0;
+    let mut route_trigger: Option<String> = None;
+    let mut route_available: Option<String> = None;
+    let mut route_confirmed: Option<String> = None;
+
+    let mut i = 0usize;
+    let mut positional_only = false;
+    while i < rest.len() {
+        let arg = &rest[i];
+        if !positional_only && arg == "--" {
+            positional_only = true;
+            i += 1;
+            continue;
+        }
+        if !positional_only && arg.starts_with('-') {
+            let (flag, iv) = parse_opt(arg);
+            match flag {
+                "--repo-root" | "-RepoRoot" => {
+                    repo_root = Some(take_val(rest, &mut i, "--repo-root", iv, "CONFIG_FAIL")?);
+                }
+                "--user-home" | "-UserHome" => {
+                    user_home = Some(take_val(rest, &mut i, "--user-home", iv, "CONFIG_FAIL")?);
+                }
+                "--scope" => {
+                    scope = Some(take_val(rest, &mut i, "--scope", iv, "CONFIG_FAIL")?);
+                }
+                "--key" => {
+                    key = Some(take_val(rest, &mut i, "--key", iv, "CONFIG_FAIL")?);
+                }
+                "--value" => {
+                    value = Some(take_val(rest, &mut i, "--value", iv, "CONFIG_FAIL")?);
+                }
+                "--override" => {
+                    let kv = take_val(rest, &mut i, "--override", iv, "CONFIG_FAIL")?;
+                    let (k, v) = kv.split_once('=').ok_or_else(|| {
+                        fail(
+                            format!("CONFIG_FAIL: --override expects KEY=VALUE, got '{kv}'"),
+                            1,
+                        )
+                    })?;
+                    overrides.push((k.trim().to_string(), v.to_string()));
+                }
+                "--route" => {
+                    route_role = Some(take_val(rest, &mut i, "--route", iv, "CONFIG_FAIL")?);
+                }
+                "--complexity" => {
+                    route_complexity =
+                        Some(take_val(rest, &mut i, "--complexity", iv, "CONFIG_FAIL")?);
+                }
+                "--risk" => {
+                    route_risk = Some(take_val(rest, &mut i, "--risk", iv, "CONFIG_FAIL")?);
+                }
+                "--host" | "--host-name" | "-HostName" => {
+                    route_host = Some(take_val(rest, &mut i, "--host", iv, "CONFIG_FAIL")?);
+                }
+                "--escalations" => {
+                    let raw = take_val(rest, &mut i, "--escalations", iv, "CONFIG_FAIL")?;
+                    route_escalations = raw.trim().parse::<u8>().map_err(|_| {
+                        fail(format!("CONFIG_FAIL: invalid --escalations '{raw}'"), 1)
+                    })?;
+                }
+                "--trigger" => {
+                    route_trigger = Some(take_val(rest, &mut i, "--trigger", iv, "CONFIG_FAIL")?);
+                }
+                "--available-models" => {
+                    route_available = Some(take_val(
+                        rest,
+                        &mut i,
+                        "--available-models",
+                        iv,
+                        "CONFIG_FAIL",
+                    )?);
+                }
+                "--confirmed-model" => {
+                    route_confirmed = Some(take_val(
+                        rest,
+                        &mut i,
+                        "--confirmed-model",
+                        iv,
+                        "CONFIG_FAIL",
+                    )?);
+                }
+                "--sources" if iv.is_none() => sources = true,
+                "--json" if iv.is_none() => json = true,
+                "--dry-run" | "-DryRun" if iv.is_none() => dry_run = true,
+                "--force" | "-Force" if iv.is_none() => force = true,
+                other => return Err(fail(format!("CONFIG_FAIL: unknown option '{other}'"), 1)),
+            }
+        } else if key.is_none() && matches!(action.as_str(), "get" | "set") {
+            key = Some(arg.clone());
+        } else if value.is_none() && action == "set" {
+            value = Some(arg.clone());
+        } else {
+            return Err(fail(format!("CONFIG_FAIL: unexpected argument '{arg}'"), 1));
+        }
+        i += 1;
+    }
+
+    let has_route_opts = route_role.is_some()
+        || route_complexity.is_some()
+        || route_risk.is_some()
+        || route_host.is_some()
+        || route_escalations != 0
+        || route_trigger.is_some()
+        || route_available.is_some()
+        || route_confirmed.is_some();
+    if has_route_opts && action != "get" {
+        return Err(fail(
+            format!("CONFIG_FAIL: routing flags are only valid with 'config get --route', not 'config {action}'"),
+            1,
+        ));
+    }
+    if !overrides.is_empty() && !matches!(action.as_str(), "show" | "get") {
+        return Err(fail(
+            format!("CONFIG_FAIL: --override is only valid with 'config show|get', not 'config {action}'"),
+            1,
+        ));
+    }
+
+    Ok(ConfigCommand {
+        action,
+        repo_root,
+        user_home,
+        scope,
+        key,
+        value,
+        sources,
+        json,
+        dry_run,
+        force,
+        overrides,
+        route_role,
+        route_complexity,
+        route_risk,
+        route_host,
+        route_escalations,
+        route_trigger,
+        route_available,
+        route_confirmed,
+    })
 }
 
 fn parse_hook(rest: &[String]) -> Result<HookSubcommand, B3Error> {
@@ -2185,6 +2382,81 @@ mod tests {
         match parsed_mc_ps {
             Command::Guard(GuardSubcommand::MechanicalCheck { worker_bases, .. }) => {
                 assert_eq!(worker_bases, "T1=abcdef0123456789abcdef0123456789abcdef01");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_config_commands_and_routing_flags() {
+        let show = parse_args(&to_args(&[
+            "config",
+            "show",
+            "--sources",
+            "--json",
+            "--override",
+            "parallel.max_concurrency=8",
+        ]))
+        .expect("parse config show");
+        match show {
+            Command::Config(cfg) => {
+                assert_eq!(cfg.action, "show");
+                assert!(cfg.sources);
+                assert!(cfg.json);
+                assert_eq!(
+                    cfg.overrides,
+                    vec![("parallel.max_concurrency".to_string(), "8".to_string())]
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let set = parse_args(&to_args(&[
+            "config",
+            "set",
+            "parallel.execution_mode",
+            "sequential",
+            "--scope",
+            "project",
+            "--dry-run",
+        ]))
+        .expect("parse config set");
+        match set {
+            Command::Config(cfg) => {
+                assert_eq!(cfg.action, "set");
+                assert_eq!(cfg.key.as_deref(), Some("parallel.execution_mode"));
+                assert_eq!(cfg.value.as_deref(), Some("sequential"));
+                assert_eq!(cfg.scope.as_deref(), Some("project"));
+                assert!(cfg.dry_run);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let route = parse_args(&to_args(&[
+            "config",
+            "get",
+            "--route",
+            "b3-reviewer",
+            "--complexity=high",
+            "--risk",
+            "HIGH",
+            "--host",
+            "codex",
+            "--escalations",
+            "1",
+            "--trigger",
+            "complexity_increase",
+        ]))
+        .expect("parse config get --route");
+        match route {
+            Command::Config(cfg) => {
+                assert_eq!(cfg.action, "get");
+                assert_eq!(cfg.route_role.as_deref(), Some("b3-reviewer"));
+                assert_eq!(cfg.route_complexity.as_deref(), Some("high"));
+                assert_eq!(cfg.route_risk.as_deref(), Some("HIGH"));
+                assert_eq!(cfg.route_host.as_deref(), Some("codex"));
+                assert_eq!(cfg.route_escalations, 1);
+                assert_eq!(cfg.route_trigger.as_deref(), Some("complexity_increase"));
             }
             other => panic!("unexpected command: {other:?}"),
         }

@@ -1791,9 +1791,9 @@ fn hook_integration_canonical_contract_and_no_duplication() {
     let hook_ref = fs::read_to_string(root.join("workflows/references/hook-integration.md"))
         .expect("read workflows/references/hook-integration.md");
     for required in [
-        "hooks:",
-        "enabled: true",
-        "mode: enforce",
+        "[hooks]",
+        "enabled = true",
+        "mode = \"enforce\"",
         "Tier 0",
         "Tier 1",
         "Tier 2",
@@ -1834,16 +1834,20 @@ fn hook_integration_canonical_contract_and_no_duplication() {
         .expect("read dispatch-naming.md");
     assert!(disp.contains("hook-integration.md"));
 
-    let models_ex =
-        fs::read_to_string(root.join("config/models.example.md")).expect("read models.example.md");
-    let parsed_hooks = b3::hook::config::parse_hook_config_from_markdown(&models_ex)
-        .expect("parse models.example.md hooks")
-        .expect("hooks section present");
-    assert_eq!(parsed_hooks.enabled, Some(true));
-    assert_eq!(parsed_hooks.mode, Some(b3::hook::config::HookMode::Enforce));
+    let ex_path = root.join("config/config.example.toml");
+    let config_ex = fs::read_to_string(&ex_path).expect("read config.example.toml");
+    let (parsed_hooks, parsed_warnings) =
+        b3::config::resolve_hooks_config_from_paths(Some(&ex_path), None, None);
     assert!(
-        models_ex.contains("clarification_gate:") && models_ex.contains("understanding_threshold:"),
-        "config/models.example.md must preserve PR #47 planning clarification keys alongside hooks"
+        parsed_warnings.is_empty(),
+        "unexpected warnings parsing config.example.toml: {parsed_warnings:?}"
+    );
+    assert!(parsed_hooks.enabled);
+    assert_eq!(parsed_hooks.mode, b3::config::HookMode::Enforce);
+    assert!(
+        config_ex.contains("clarification_gate = true")
+            && config_ex.contains("understanding_threshold = 96"),
+        "config/config.example.toml must include planning clarification keys alongside [hooks]"
     );
 
     // Removed legacy hook variables must not remain in canonical reference or docs
@@ -1903,9 +1907,9 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         contract_lf.len()
     );
     for required_fragment in [
-        "clarification_gate: true",
-        "understanding_threshold: 96",
-        "clarification_gate: false",
+        "clarification_gate = true",
+        "understanding_threshold = 96",
+        "clarification_gate = false",
         "next valid layer",
         "evidence-grounded heuristic trigger",
         "block solely on score",
@@ -1954,26 +1958,38 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         "workflows/ship.md must preserve 'Unignored run-dirty files block `PASS`'"
     );
 
-    let models_example = fs::read_to_string(root.join("config/models.example.md"))
-        .expect("read config/models.example.md");
+    let config_example = fs::read_to_string(root.join("config/config.example.toml"))
+        .expect("read config/config.example.toml");
     assert!(
-        models_example.contains("planning:")
-            && models_example.contains("clarification_gate: true")
-            && models_example.contains("understanding_threshold: 96"),
-        "config/models.example.md missing canonical planning config"
+        config_example.contains("[planning]")
+            && config_example.contains("clarification_gate = true")
+            && config_example.contains("understanding_threshold = 96"),
+        "config/config.example.toml missing canonical planning config"
     );
 
-    let models_doc = fs::read_to_string(root.join("docs/model-preferences.md"))
-        .expect("read docs/model-preferences.md");
+    let policy_example = fs::read_to_string(root.join("config/policy.example.toml"))
+        .expect("read config/policy.example.toml");
+    assert!(
+        policy_example.contains("auto_merge = \"disabled\"")
+            && policy_example.contains("auto_merge_max_risk = \"LOW\""),
+        "config/policy.example.toml missing canonical governance policy defaults"
+    );
+
+    assert!(
+        !root.join("docs").join("model-preferences.md").exists(),
+        "obsolete model-preferences guide must be removed"
+    );
+    let cfg_doc =
+        fs::read_to_string(root.join("docs/configuration.md")).expect("read docs/configuration.md");
     for required_doc_fragment in [
         "Field-level precedence:",
         "next valid layer",
-        "understanding_threshold: 90",
-        "clarification_gate: false",
+        "understanding_threshold = 90",
+        "clarification_gate = false",
     ] {
         assert!(
-            models_doc.contains(required_doc_fragment),
-            "docs/model-preferences.md missing '{required_doc_fragment}'"
+            cfg_doc.contains(required_doc_fragment),
+            "docs/configuration.md missing '{required_doc_fragment}'"
         );
     }
 

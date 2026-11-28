@@ -11,7 +11,9 @@ This document defines the building blocks of the system. It is definitional. Ope
 | **Documentation** | Explains the system; not configuration | `docs/`, `README.md` |
 | **Research** | Provenance; not production config | `research/` |
 | **Generated host activation** | Gitignored local host links/wrappers/manifests or global/product installs created by `b3 sync` / `b3 install` | `.cursor/{skills,commands,agents,rules}`, `.agents/skills.json`, `.agents/skills`, `.claude/{skills,agents}` |
-| **User-owned configuration** | Personal preferences or custom host rules/manifests; never silently overwritten without `--force` | `~/.b3/models.md`, `<project>/.b3/models.md`, unmanaged `.cursor/rules/*.mdc`, customized `.agents/skills.json` |
+| **Templates & governance schema** | Copy-ready configuration and policy templates | `config/config.example.toml`, `config/policy.example.toml` |
+| **User-owned configuration** | Personal preferences or custom host rules/manifests; never silently overwritten without `--force` | `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`), `<project>/.b3/config.toml`, unmanaged `.cursor/rules/*.mdc`, customized `.agents/skills.json` (any existing legacy `~/.b3/models.md` is preserved untouched and ignored) |
+| **Project governance policy** | Trunk-tracked repository merge/path governance resolved from canonical trunk | `<project>/.b3/policy.toml` (legacy `.b3/research-policy.json` fails closed) |
 
 Activation lifecycle:
 
@@ -41,7 +43,7 @@ B3 is an **engineering harness layer** around existing coding-agent hosts, not a
 
 - **Canonical definitions** (`AGENTS.md` + `CLAUDE.md` bridge, `rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `review-loop/`, `research/`, `knowledge/`): host-neutral specifications of *what* must hold and *how* workflows run.
 - **Generated host activation** (`.cursor/`, `.agents/`, `.claude/`, `~/.cursor/`, `~/.gemini/config/plugins/`): gitignored or global links, wrappers, and manifests produced by `b3 sync` and `b3 install`.
-- **Native deterministic CLI** (Rust `b3` in `src/`): deterministic adapter management (`b3 sync`, `b3 install`), opt-in event-hook dispatch (`b3 hook` delegating to `src/guard/*`), plus deterministic Git, verification, evidence, context, and PR checks (`b3 guard`, `b3 pr`, `b3 context`). Rust `b3` never runs LLM agents, daemons, or a model gateway.
+- **Native deterministic CLI** (Rust `b3` in `src/`): deterministic adapter management (`b3 sync`, `b3 install`), typed configuration resolution/validation/routing (`b3 config`), opt-in event-hook dispatch (`b3 hook` delegating to `src/guard/*`), plus deterministic Git, verification, evidence, context, and PR checks (`b3 guard`, `b3 pr`, `b3 context`). Rust `b3` never runs LLM agents, daemons, or a model gateway.
 - **Host-owned LLM execution** (**Cursor**, **Codex**, **Antigravity**, **Claude Code**): the coding-agent hosts own model inference, tool-use loops, and agent sessions, consuming canonical definitions and generated host activation while invoking native `b3` checks.
 
 Do not mistake a host-executed workflow contract for a B3-managed agent scheduler.
@@ -292,7 +294,7 @@ Example:
 
 > `skills/frontend/react-performance/references/checklist.md` — opened while applying that skill.
 
-Shared on-demand workflow contracts also live under `workflows/references/` (for example [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) for wave orchestration, [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md) for the proportional clarification gate anchored by Rule 1 of [`../rules/engineering-principles.md`](../rules/engineering-principles.md), and [`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md) for adaptive static analysis discovery and mechanical review offloading). `clarification-gate.md` is an on-demand AI reasoning contract whose optional `planning:` preferences are resolved once per invocation by Parent (zero Rust config parser and zero separate scheduler), preventing always-on context bloat while ensuring all commands and workflows inherit one canonical contract.
+Shared on-demand workflow contracts also live under `workflows/references/` (for example [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) for wave orchestration, [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md) for the proportional clarification gate anchored by Rule 1 of [`../rules/engineering-principles.md`](../rules/engineering-principles.md), and [`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md) for adaptive static analysis discovery and mechanical review offloading). `clarification-gate.md` is an on-demand AI reasoning contract whose optional `[planning]` preferences are resolved once per invocation by Parent via [`configuration.md`](configuration.md) (`b3 config` / `config.toml`), preventing always-on context bloat while ensuring all commands and workflows inherit one canonical contract.
 
 ## Research
 
@@ -352,6 +354,7 @@ Example:
 
 ## Related docs
 
+- Configuration & Governance Policy: [`configuration.md`](configuration.md)
 - Precedence: [`precedence.md`](precedence.md)
 - Evolution: [`system-lifecycle.md`](system-lifecycle.md)
 - Native Guard event hooks: [`hooks.md`](hooks.md), [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md), [`../research/decisions/decision-015-native-guard-event-hooks.md`](../research/decisions/decision-015-native-guard-event-hooks.md)

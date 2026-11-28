@@ -1,6 +1,6 @@
 # Model / role slots & Cost-Preserving Quality Tiering
 
-Portable contract. This file does **not** name vendor models. Hosts differ (Cursor, Codex, Claude Code, Antigravity). Optional personal/project Markdown preferences live in `~/.b3/models.md` and `<project>/.b3/models.md` (template: [`../config/models.example.md`](../config/models.example.md); guide: [`../docs/model-preferences.md`](../docs/model-preferences.md)). Where unsupported, hosts inherit their native model.
+Portable contract. This file does **not** name vendor models. Hosts differ (Cursor, Codex, Claude Code, Antigravity). Optional personal/project TOML configuration lives in `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`) and `<project>/.b3/config.toml` (template: [`../config/config.example.toml`](../config/config.example.toml); CLI: `b3 config <show|get|set|validate|init>` with canonical `b3 config get --route`; guide: [`../docs/configuration.md`](../docs/configuration.md)). Where unsupported, hosts inherit their native model.
 
 ## Three slots (`/b3-review-loop`)
 

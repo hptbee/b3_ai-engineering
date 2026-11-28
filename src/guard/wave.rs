@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::config::{resolve_config, B3Config, ExecutionMode, MaxConcurrency};
 use crate::error::{fail, B3Error};
 use crate::fs::{
     convert_to_wave_paths, convert_to_wave_task_map, find_reparse_in_path_hierarchy,
@@ -33,6 +34,20 @@ pub fn resolve_concurrency(max_concurrency: i32, err_prefix: &str) -> Result<i32
         ));
     }
     Ok(max_concurrency)
+}
+
+pub fn resolve_concurrency_with_config(
+    max_concurrency: i32,
+    cfg: &B3Config,
+    err_prefix: &str,
+) -> Result<i32, B3Error> {
+    if max_concurrency != 0 {
+        return resolve_concurrency(max_concurrency, err_prefix);
+    }
+    match cfg.parallel.max_concurrency {
+        MaxConcurrency::Auto => Ok(default_adaptive_concurrency()),
+        MaxConcurrency::Fixed(n) => Ok((n as i32).clamp(1, MAX_CONCURRENCY_LIMIT)),
+    }
 }
 
 struct DirtyEntry {
@@ -88,7 +103,14 @@ pub fn run(
     if repo_root_raw.is_empty() {
         return Err(fail("WAVE_FAIL: missing --repo-root", 1));
     }
-    let max_concurrency = resolve_concurrency(max_concurrency, "WAVE_FAIL")?;
+    let repo_root = normalize_repo_root(repo_root_raw)?;
+    let cfg = resolve_config(Some(&repo_root), None, &[]).config;
+    let explicit_conc = max_concurrency != 0;
+    let mut max_concurrency = resolve_concurrency_with_config(max_concurrency, &cfg, "WAVE_FAIL")?;
+    let cfg_exec_mode = cfg.parallel.execution_mode;
+    if !explicit_conc && cfg_exec_mode == ExecutionMode::Sequential {
+        max_concurrency = 1;
+    }
     let has_continuous_ctx = !active_specs.trim().is_empty()
         || !active_reads.trim().is_empty()
         || !verified_dirty_paths.trim().is_empty();
@@ -96,7 +118,6 @@ pub fn run(
         return Err(fail("WAVE_FAIL: --active-reads requires --active-specs", 1));
     }
 
-    let repo_root = normalize_repo_root(repo_root_raw)?;
     if find_reparse_in_path_hierarchy(&repo_root).is_some() {
         return Err(fail(
             "WAVE_FAIL: unsafe symlink or junction alias in path '.'",
@@ -894,6 +915,11 @@ pub fn run(
         lines.push(format!("max_concurrency={max_concurrency}"));
         lines.push(format!("max_parallel={max_parallel}"));
         lines.push(format!("conflicts={conflicts_csv}"));
+        if cfg_exec_mode == ExecutionMode::Isolated {
+            lines.push("preferred_isolation=ISOLATED_WRITES".to_string());
+        } else if !explicit_conc && cfg_exec_mode == ExecutionMode::Sequential {
+            lines.push("execution_mode=sequential".to_string());
+        }
         lines.push(format!("active_tasks={active_tasks_csv}"));
         lines.push(format!("active_count={active_count}"));
         lines.push(format!("available_slots={available_slots}"));
@@ -1000,6 +1026,11 @@ pub fn run(
     lines.push(format!("max_concurrency={max_concurrency}"));
     lines.push(format!("max_parallel={max_parallel}"));
     lines.push(format!("conflicts={conflicts_csv}"));
+    if cfg_exec_mode == ExecutionMode::Isolated {
+        lines.push("preferred_isolation=ISOLATED_WRITES".to_string());
+    } else if !explicit_conc && cfg_exec_mode == ExecutionMode::Sequential {
+        lines.push("execution_mode=sequential".to_string());
+    }
 
     for (w, members) in waves.iter().enumerate() {
         let cnt = members.len();

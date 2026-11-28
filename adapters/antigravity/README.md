@@ -55,7 +55,7 @@ b3 install antigravity update
 b3 install antigravity uninstall
 ```
 
-**Optional model preferences:** `b3 install global` initializes `~/.b3/models.md` on successful install/update and preserves it on later updates/uninstall. With `b3 install antigravity` directly, copy [`../../config/models.example.md`](../../config/models.example.md) to `~/.b3/models.md` manually. Model selection remains native/advisory; see [`../../docs/model-preferences.md`](../../docs/model-preferences.md).
+**Optional configuration & model preferences:** `b3 install global` initializes `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`; skipped with `B3_SKIP_CONFIG_INIT=1`) on successful install/update and preserves it on later updates/uninstall without touching any existing user files. With `b3 install antigravity` directly, run `b3 config init` or copy [`../../config/config.example.toml`](../../config/config.example.toml) to `~/.b3/config.toml`. Manage settings with `b3 config <show|get|set|validate|init>`; model routing remains native/advisory (see [`../../docs/configuration.md`](../../docs/configuration.md)).
 
 - Pass `--dry-run` to preview `install` or `uninstall` without modifying disk.
 - Normal `install`/`update` checks SHA-256 values recorded in `.b3-plugin-manifest` **before writing**. Modified generated files cause `UPDATE_CONFLICT` and are preserved. Back up your edits before using `--force` to deliberately replace same-named generated files or skill directories.

@@ -2,12 +2,12 @@
 
 **Trigger:** `commands/b3-review-loop.md` or `/b3-ship` `Review`. Loop **Guard -> Review -> Fix -> Verify -> fresh Review** until gate, `STUCK`, or cap.
 
-**Orchestrator:** never review+fix in 1 pass; merge findings; **alone** emit `PASS`|`FAIL`|`STUCK`|`INCOMPLETE`|`BLOCKED`. Load [`hierarchical.md`](hierarchical.md) only on `L`/`XL`/`XXL`; skip `spec/sizing/models.md` normally.
+**Orchestrator:** never review+fix in 1 pass; merge findings; **alone** emit `PASS`|`FAIL`|`STUCK`|`INCOMPLETE`|`BLOCKED`. Load [`hierarchical.md`](hierarchical.md) only on `L`/`XL`/`XXL`; skip `spec`/`sizing`/`models.md` normally.
 
 ## Roles & dispatch (`b3-*` roles only)
 
-- **Lean loads:** [dispatch](../workflows/references/dispatch-naming.md) + `.b3/models.md` **1x/loop**; [context-routing](../workflows/references/context-routing.md) `<=1x/loop` **when triggered** (`context_hint: tools=native cache=none` skips). Pass 1L `context_hint:`; cache IDs; no nested subagents.
-- **Reviewer (`b3-reviewer` + specialists):** fresh, read-only; `b3-reviewer.md` self-contained (skip `code-review/SKILL.md`,`review-template.md`). Fan out `SHARED_READ_ONLY` (`dispatch-naming.md`); `risk_level` != size:
+- **Lean loads:** [dispatch](../workflows/references/dispatch-naming.md) + `b3 config get --route` **1x/loop**; [context-routing](../workflows/references/context-routing.md) `<=1x/loop` if triggered (`context_hint: tools=native cache=none` skips). Pass 1L `context_hint:`; cache IDs; no nested subagents.
+- **Reviewer (`b3-reviewer` + specialists):** fresh, read-only; `agents/b3-reviewer.md` self-contained (skip `code-review/SKILL.md`/`review-template.md`). Fan out `SHARED_READ_ONLY` (`dispatch-naming.md`); `risk_level` != size:
   - `LOW`: 0-tok checks + 1 `b3-reviewer`.
   - `MEDIUM`: `b3-reviewer` + triggered specialist (`b3-{security,architecture,performance}-reviewer`).
   - `HIGH`: `b3-reviewer` + specialists + contract/dep review.
@@ -18,7 +18,7 @@
 ## 0. Target, Guard, Size × Risk & Status
 
 1. **Guard:** standalone Iter 1+ (`--prev-sha` Iter 2+) own `diff-scope` (`--base-sha`; never `HEAD~1`)+`mechanical-check` (`--base-sha`,`--allowed-paths`,`--protected-paths`,`--obsoletes`)+`symbol-check` (refactors/gaps); skip Iter-1 guards & lint if caller passed fresh outputs on same tree/`HEAD`/scope ([`static-analysis.md`](../workflows/references/static-analysis.md)). Empty->`INCOMPLETE`; `CLEAN_AFTER_FIX`->§1 `delta_files`. `exit 2` blocks (`MECHANICAL_FINDINGS`/`SYMBOL_FINDINGS` `dangling_refs`; `safety_hits`->`BLOCKED`; proven FP noted). Surface `exit 0` `MECHANICAL_ADVISORY`/`SYMBOL_ADVISORY`+lint to Reviewer.
-2. **Sizing:** `NOISE_ONLY` (`files=0`+checks `PASS`); smallest fit (`XS` `<=3f,<=100L`; `S` `<=8f,<=300L`; `M` `<=20f,<=800L`)->**§1** (max 5); (`L` `<50f,<2000L`; `XL` `<=100f,<=5000L`; `XXL` dynamic)->**§2** (`hierarchical.md`).
+2. **Sizing:** `NOISE_ONLY` (`files=0`+checks `PASS`); `review.sizing` (`XS`<=3f,100L;`S`<=8f,300L;`M`<=20f,800L)->**§1** (`max=review.max_iterations`,def 5); (`L`<50f,2k;`XL`<=100f,5k;`XXL`)->**§2** (`hierarchical.md`).
 3. **Statuses (`R001`..):** `OPEN`=blocking `CONFIRMED` (`CRITICAL|HIGH|MEDIUM`,`CONFIRMED REDUNDANCY`,evidenced overengineering w/ simpler alt meeting reqs—never LOC alone,hot `EVIDENCED RISK`); `FIXED`=unverified (`VERIFIED`/`CLOSED`); `REJECTED`=`FALSE_POSITIVE`; `ACCEPTED`=`INTENTIONAL COMPLEXITY`/OOS; `SPECULATIVE`=unproven/`LOW`-conf/`LIKELY REDUNDANT` (non-blocking); `UNKNOWN`=unproven.
 
 ## 1. XS / S / M — full-PR loop (max 5 iterations)

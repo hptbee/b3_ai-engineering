@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::config::{resolve_config, ReviewSizingConfig};
 use crate::error::{fail, B3Error};
 use crate::fs::{
     normalize_path_value, normalize_repo_root, sort_ordinal, split_path_csv_checked,
@@ -30,26 +31,39 @@ pub(crate) fn normalize_size_class(raw: &str) -> Option<&'static str> {
     }
 }
 
-pub fn get_tshirt_size(files_count: usize, lines_count: usize) -> &'static str {
+pub fn get_tshirt_size_with_thresholds(
+    files_count: usize,
+    lines_count: usize,
+    sizing: &ReviewSizingConfig,
+) -> &'static str {
     if files_count == 0 {
         return "NOISE_ONLY";
     }
-    if files_count <= 3 && lines_count <= 100 {
+    if files_count <= sizing.xs_max_files && lines_count <= sizing.xs_max_loc {
         return "XS";
     }
-    if files_count <= 8 && lines_count <= 300 {
+    if files_count <= sizing.s_max_files && lines_count <= sizing.s_max_loc {
         return "S";
     }
-    if files_count <= 20 && lines_count <= 800 {
+    if files_count <= sizing.m_max_files && lines_count <= sizing.m_max_loc {
         return "M";
     }
-    if files_count < 50 && lines_count < 2000 {
+    if sizing == &ReviewSizingConfig::default() {
+        // Preserve exact existing strict boundary (< 50 files && < 2000 LOC) at default thresholds.
+        if files_count < 50 && lines_count < 2000 {
+            return "L";
+        }
+    } else if files_count <= sizing.l_max_files && lines_count <= sizing.l_max_loc {
         return "L";
     }
-    if files_count <= 100 && lines_count <= 5000 {
+    if files_count <= sizing.xl_max_files && lines_count <= sizing.xl_max_loc {
         return "XL";
     }
     "XXL"
+}
+
+pub fn get_tshirt_size(files_count: usize, lines_count: usize) -> &'static str {
+    get_tshirt_size_with_thresholds(files_count, lines_count, &ReviewSizingConfig::default())
 }
 
 pub fn test_doc_or_asset_path(path_val: &str) -> bool {
@@ -1145,8 +1159,9 @@ pub fn run_diff_scope(
         }
     }
 
+    let cfg = resolve_config(Some(&repo_root), None, &[]).config;
     let file_count = review_files.len();
-    let size_class = get_tshirt_size(file_count, total_lines);
+    let size_class = get_tshirt_size_with_thresholds(file_count, total_lines, &cfg.review.sizing);
     let risk_target = if !review_files.is_empty() {
         &review_files
     } else {

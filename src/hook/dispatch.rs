@@ -3,17 +3,15 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::adapters::common::{normalize_abs_path_str, resolve_user_home_dir};
+use crate::config::{resolve_hooks_config_from_paths, HookMode, HooksConfig as HookConfig};
 use crate::error::{fail, B3Error};
 use crate::fs::{
-    find_reparse_in_path_hierarchy, has_control_chars, is_reparse_or_symlink, normalize_path_value,
-    resolve_safe_repo_write_path, resolve_unresolved_path, split_path_csv_checked,
-    test_checkpoint_path, test_path_match, test_secret_path,
+    find_reparse_in_path_hierarchy, has_control_chars, is_reparse_or_symlink,
+    is_unc_or_network_path, normalize_path_value, resolve_safe_repo_write_path,
+    resolve_unresolved_path, split_path_csv_checked, test_checkpoint_path, test_path_match,
+    test_secret_path,
 };
 use crate::guard::{merge_policy, precommit, verify::test_verify_receipt};
-use crate::hook::config::{
-    default_global_preferences_path, default_project_preferences_path, resolve_hook_config,
-    HookConfig, HookConfigOverride, HookMode,
-};
 use crate::hook::event::{
     normalize_event, EventKind, HostId, NormalizedEvent, MAX_HOOK_PAYLOAD_BYTES,
 };
@@ -60,7 +58,7 @@ fn resolve_event_project_root(event: &NormalizedEvent) -> Option<PathBuf> {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
         })?;
-    if has_control_chars(raw) {
+    if has_control_chars(raw) || is_unc_or_network_path(raw, Path::new(raw)) {
         return None;
     }
     Some(resolve_lexical_root(raw))
@@ -123,8 +121,9 @@ fn read_hook_stdin_bounded() -> Result<String, B3Error> {
 
 fn resolve_project_pref_path(raw_dir: &str, is_explicit_repo: bool) -> PathBuf {
     let dir = resolve_lexical_root(raw_dir);
+    let fallback = dir.join(".b3").join("config.toml");
     if is_explicit_repo {
-        return default_project_preferences_path(&dir);
+        return fallback;
     }
     let home_cmp = norm_cmp_path(&resolve_user_home_dir(None));
     let tmp_cmp = norm_cmp_path(&std::env::temp_dir());
@@ -135,16 +134,20 @@ fn resolve_project_pref_path(raw_dir: &str, is_explicit_repo: bool) -> PathBuf {
         {
             break;
         }
-        let pref = default_project_preferences_path(c);
-        if pref.is_file() {
-            return pref;
+        let dot_b3 = c.join(".b3");
+        let toml_pref = dot_b3.join("config.toml");
+        if !is_reparse_or_symlink(&dot_b3)
+            && toml_pref.is_file()
+            && !is_reparse_or_symlink(&toml_pref)
+        {
+            return toml_pref;
         }
         if c.join(".git").exists() {
-            return pref;
+            return toml_pref;
         }
         cur = c.parent();
     }
-    default_project_preferences_path(&dir)
+    fallback
 }
 
 fn resolve_cfg_for_root(
@@ -152,12 +155,20 @@ fn resolve_cfg_for_root(
     mode_ov: Option<HookMode>,
 ) -> (HookConfig, Vec<String>) {
     let project_pref = root.map(|(r, is_explicit)| resolve_project_pref_path(r, is_explicit));
-    let global_pref = default_global_preferences_path(None);
-    let cli_ov = mode_ov.map(|m| HookConfigOverride {
-        enabled: None,
-        mode: Some(m),
-    });
-    resolve_hook_config(project_pref.as_deref(), Some(&global_pref), cli_ov)
+    let mut pre_warnings = Vec::new();
+    let global_pref =
+        crate::config::resolve_personal_config_path_with_fallback(None, &mut pre_warnings);
+    let (cfg, mut warnings) =
+        resolve_hooks_config_from_paths(project_pref.as_deref(), Some(&global_pref), mode_ov);
+    for msg in pre_warnings.into_iter().rev() {
+        let prefixed = if msg.starts_with("HOOK_CONFIG_WARN:") {
+            msg
+        } else {
+            format!("HOOK_CONFIG_WARN: {msg}")
+        };
+        warnings.insert(0, prefixed);
+    }
+    (cfg, warnings)
 }
 
 fn mode_outcome_for_error(mode: HookMode, message: &str) -> HookOutcome {
@@ -242,9 +253,7 @@ fn run_hook_internal(
         let resp = format_response(host, raw_ev_hint, kind_hint, &HookOutcome::Allow);
         return Ok((resp, HookOutcome::Allow));
     }
-    if mode_ov.is_none()
-        && env_nonempty("B3_HOOK_MODE").is_some_and(|m| m.eq_ignore_ascii_case("off"))
-    {
+    if mode_ov.is_none() && env_nonempty("B3_HOOK_MODE").is_some_and(|m| m == "off") {
         let resp = format_response(host, raw_ev_hint, kind_hint, &HookOutcome::Allow);
         return Ok((resp, HookOutcome::Allow));
     }
@@ -486,9 +495,11 @@ fn check_resolved_target(
     if is_ship_evidence_path(rel) {
         return Some(format!("HOOK_BLOCKED: protected ship evidence path: {rel}"));
     }
-    if rel.eq_ignore_ascii_case(".b3/research-policy.json") {
+    if rel.eq_ignore_ascii_case(".b3/policy.toml")
+        || rel.eq_ignore_ascii_case(".b3/research-policy.json")
+    {
         return Some(format!(
-            "HOOK_BLOCKED: protected research policy path: {rel}"
+            "HOOK_BLOCKED: protected governance policy path: {rel}"
         ));
     }
     if test_secret_path(rel) {
@@ -1166,7 +1177,7 @@ mod tests {
             ("B3_ALLOWED_PATHS", None),
             ("B3_VERIFY_RECEIPT", None),
             ("B3_LEDGER_PATH", None),
-            ("B3_MODELS_PERSONAL", None),
+            ("B3_CONFIG_PERSONAL", None),
         ])
     }
 
@@ -1638,8 +1649,8 @@ mod tests {
         let _lock = lock_hook_env();
         let _env = clear_hook_env();
         let base = temp_dir("upward_disc");
-        let missing_personal = base.join("no_personal.md").to_string_lossy().into_owned();
-        let _pers = EnvGuard::new(&[("B3_MODELS_PERSONAL", Some(&missing_personal))]);
+        let missing_personal = base.join("no_personal.toml").to_string_lossy().into_owned();
+        let _pers = EnvGuard::new(&[("B3_CONFIG_PERSONAL", Some(&missing_personal))]);
 
         let outer = base.join("outer");
         let sub = outer.join("a/b");
@@ -1647,25 +1658,25 @@ mod tests {
         fs::create_dir_all(outer.join(".b3")).unwrap();
         fs::create_dir_all(&sub).unwrap();
         fs::write(
-            outer.join(".b3/models.md"),
-            "```yaml\nhooks:\n  enabled: true\n  mode: audit\n```\n",
+            outer.join(".b3/config.toml"),
+            "[hooks]\nenabled = true\nmode = \"audit\"\n",
         )
         .unwrap();
 
         let sub_str = sub.to_string_lossy().into_owned();
         assert_eq!(
             norm_cmp_path(&resolve_project_pref_path(&sub_str, false)),
-            norm_cmp_path(&outer.join(".b3/models.md"))
+            norm_cmp_path(&outer.join(".b3/config.toml"))
         );
         assert_eq!(
             norm_cmp_path(&resolve_project_pref_path(&sub_str, true)),
-            norm_cmp_path(&sub.join(".b3/models.md"))
+            norm_cmp_path(&sub.join(".b3/config.toml"))
         );
         let (cfg, warnings) = resolve_cfg_for_root(Some((&sub_str, false)), None);
         assert!(warnings.is_empty());
         assert_eq!(cfg.effective_mode(), HookMode::Audit);
 
-        // Nested repo with its own .git must stop at inner .git and not walk into outer .b3/models.md
+        // Nested repo with its own .git must stop at inner .git and not walk into outer .b3/config.toml
         let nested = outer.join("nested");
         let nested_sub = nested.join("src");
         fs::create_dir_all(nested.join(".git")).unwrap();
@@ -1673,7 +1684,7 @@ mod tests {
         let nested_sub_str = nested_sub.to_string_lossy().into_owned();
         assert_eq!(
             norm_cmp_path(&resolve_project_pref_path(&nested_sub_str, false)),
-            norm_cmp_path(&nested.join(".b3/models.md"))
+            norm_cmp_path(&nested.join(".b3/config.toml"))
         );
         let (nested_cfg, _) = resolve_cfg_for_root(Some((&nested_sub_str, false)), None);
         assert_eq!(nested_cfg.effective_mode(), HookMode::Enforce);

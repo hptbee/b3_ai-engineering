@@ -1,0 +1,44 @@
+# B3 Project Governance Policy
+#
+# Location: <project>/.b3/policy.toml
+# Track this file in Git.
+# Authorization must be resolved from canonical trunk (e.g., origin/main).
+# Personal preferences, environment variables, invocation arguments,
+# and unmerged feature branches cannot relax or self-authorize this policy.
+
+# disabled: stop at PR_READY when eligible.
+# authorized: allow automatic merge only after all mandatory gates pass.
+# Valid values: "disabled", "authorized".
+# Default: "disabled".
+auto_merge = "disabled"
+
+# Maximum PR risk level eligible for automatic merge.
+# Valid values: "LOW", "MEDIUM", "HIGH", "CRITICAL".
+# Default for new policies: "LOW".
+auto_merge_max_risk = "LOW"
+
+# Repository-relative literal paths requiring explicit governance protection.
+# Note: .b3/policy.toml is always protected; legacy .b3/research-policy.json fails closed.
+# Default: [].
+protected_paths = []
+
+# Allow changes to configured protected_paths (never permits policy self-authorization).
+# Valid values: true, false.
+# Default: false.
+allow_protected_paths = false
+
+# Target branches eligible for automatic merge (supports simple '*' globs, e.g. "release/*").
+# Recommended: ["main"].
+# Default: ["main"].
+allowed_target_branches = ["main"]
+
+# Require valid CI or canonical verification evidence bound to exact PR HEAD.
+# Valid values: true, false.
+# Default: true.
+require_ci = true
+
+# Require verified review according to governance rules.
+# Does not bypass mandatory independent review invariants on HIGH/CRITICAL changes.
+# Valid values: true, false.
+# Default: true.
+require_review = true

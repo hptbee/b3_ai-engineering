@@ -4,14 +4,14 @@ Canonical clarification contract anchored by `rules/engineering-principles.md` (
 
 ## Configuration & Field-Level Precedence
 
-```yaml
-planning:
-  clarification_gate: true
-  understanding_threshold: 96   # integer 1..=100
+```toml
+[planning]
+clarification_gate = true
+understanding_threshold = 96   # integer 1..=100
 ```
 
-- **Defaults & precedence:** `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (B3_MODELS_PERSONAL) > built-in defaults (true, 96)`.
-- **Resolve once & per-field fallback:** Parent resolves `planning:` **once per invocation** without mutating preference or host files. Missing, partial, or invalid fields/files fall back **per field to the next valid layer**, then defaults—bad project fields never drop valid personal fields, and bad config never blocks on Cursor, Codex, Claude Code, or Antigravity.
+- **Defaults & precedence:** `per-invocation override > <project>/.b3/config.toml > ~/.b3/config.toml (B3_CONFIG_PERSONAL) > built-in defaults (true, 96)`.
+- **Resolve once & per-field fallback:** Parent resolves `[planning]` **once per invocation** without mutating config or host files. Missing, partial, or invalid fields/files fall back **per field to the next valid layer**, then defaults—bad project fields never drop valid personal fields, and bad config never blocks on Cursor, Codex, Claude Code, or Antigravity.
 
 ## Risk-Based Proportionality & Assessment
 
@@ -33,7 +33,7 @@ Treat `understanding_threshold` (`96`) as an **evidence-grounded heuristic trigg
 2. **Understanding `< understanding_threshold`:** Do proportional local discovery, list uncertainties, resolve routine gaps via repo conventions and reversible assumptions, and ask **only** when material ambiguity needs a user decision.
 3. **Material ambiguity remains:** Hold **only** affected tasks (zero speculative edits), batch concise questions (unclear point, impact, options + tradeoffs, recommended default), and continue independent work.
 4. **Critical, irreversible, security, or authz ambiguity:** Block affected work **regardless of score** (never average away critical unknowns).
-5. **Disabled (`clarification_gate: false`):** Use reversible repo-consistent assumptions for routine gaps and document material assumptions. **Never** bypass security/authz, user authorization, research/Owner governance ([`../research-ship.md`](../research-ship.md)), `--protected-paths`, destructive safeguards, or `merge-policy-check` (`BLOCKED` if mandatory auth or required decision is missing or unverified).
+5. **Disabled (`clarification_gate = false`):** Use reversible repo-consistent assumptions for routine gaps and document material assumptions. **Never** bypass security/authz, user authorization, research/Owner governance ([`../research-ship.md`](../research-ship.md)), `--protected-paths`, destructive safeguards, or `merge-policy-check` (`BLOCKED` if mandatory auth or required decision is missing or unverified).
 
 Never re-ask answered questions or confirm routine details, tests, or conventions.
 
@@ -41,7 +41,7 @@ Never re-ask answered questions or confirm routine details, tests, or convention
 
 - **Parent (sole clarification owner):** Resolves `planning:` once, assesses scope, owns user questions, merges worker uncertainties, updates plan/deps, releases unblocked tasks immediately, and reassesses only affected slices.
 - **Planning / scout agents:** Inspect context, surface gaps/contradictions, return findings to Parent.
-- **Implementation workers:** Execute `Context Packet`, report new material ambiguity to Parent, continue unaffected work. Workers **must NOT** load `clarification-gate.md`, re-read `models.md`, recalc percentages, ask users, or restart planning.
+- **Implementation workers:** Execute `Context Packet`, report new material ambiguity to Parent, continue unaffected work. Workers **must NOT** load `clarification-gate.md`, re-read `config.toml`, recalc percentages, ask users, or restart planning.
 - **Reviewers:** Report contradictions, gaps, risks, and evidence to Parent without restarting clarification.
 - **Continuous isolation (`A..F`):** If `A` needs a user decision and `B, C, D` declare `depends_on: [A]`, hold `A, B, C, D` while running independent `E` and `SHARED_READ_ONLY` `F`. Ask only `A`'s question; once clarified & verified, release eligible dependents immediately per [`dispatch-naming.md`](dispatch-naming.md) without waiting or restarting planning.
 

@@ -737,14 +737,14 @@ mod tests {
             "hook_event_name": "PreToolUse",
             "tool_name": "apply_patch",
             "tool_input": {
-                "patch": "*** Begin Patch\n*** Update File: src/hook/config.rs\n*** Add File: src/hook/new.rs\n*** Delete File: old.rs\n*** End Patch"
+                "patch": "*** Begin Patch\n*** Update File: src/hook/mod.rs\n*** Add File: src/hook/new.rs\n*** Delete File: old.rs\n*** End Patch"
             }
         }"#;
         let ev_codex = normalize_event(HostId::Codex, None, codex_patch, None).unwrap();
         assert_eq!(ev_codex.event, EventKind::BeforeFileWrite);
         assert_eq!(
             ev_codex.affected_paths,
-            vec!["src/hook/config.rs", "src/hook/new.rs", "old.rs"]
+            vec!["src/hook/mod.rs", "src/hook/new.rs", "old.rs"]
         );
 
         let ev_shell = normalize_event(
