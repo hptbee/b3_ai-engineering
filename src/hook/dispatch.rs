@@ -1367,7 +1367,71 @@ mod tests {
                     HookOutcome::Deny { .. }
                 ));
             }
+
+            let long_container_raw = temp_dir("runneradmin_long_segment");
+            let long_container = crate::fs::expand_windows_long_path(&long_container_raw);
+            let long_main = long_container.join("main_repo");
+            let long_wt = long_container.join("worktree_leaf");
+            let long_wt_meta = long_main.join(".git/worktrees/wt_long");
+            fs::create_dir_all(&long_wt_meta).unwrap();
+            fs::create_dir_all(&long_wt).unwrap();
+            let long_wt_git = long_wt.join(".git");
+            fs::write(
+                &long_wt_git,
+                format!(
+                    "gitdir: {}\n",
+                    long_wt_meta.to_string_lossy().replace('\\', "/")
+                ),
+            )
+            .unwrap();
+            fs::write(
+                long_wt_meta.join("gitdir"),
+                format!("{}\n", long_wt_git.to_string_lossy().replace('\\', "/")),
+            )
+            .unwrap();
+            if let (Some(short_main), Some(short_wt)) = (
+                crate::fs::to_short_path(&long_main),
+                crate::fs::to_short_path(&long_wt),
+            ) {
+                let sm = short_main.to_string_lossy().into_owned();
+                let short_ok = short_wt.join("src/ok.rs").to_string_lossy().into_owned();
+                let short_env = short_wt.join(".env").to_string_lossy().into_owned();
+                assert_eq!(
+                    dispatch_event(&make_write_event(Some(&sm), &[&short_ok]), &cfg),
+                    HookOutcome::Allow
+                );
+                assert!(matches!(
+                    dispatch_event(&make_write_event(Some(&sm), &[&short_env]), &cfg),
+                    HookOutcome::Deny { .. }
+                ));
+            }
+            let _ = fs::remove_dir_all(&long_container);
         }
+
+        assert_eq!(
+            crate::hook::collapse_macos_private_prefix("/private/var/folders/x"),
+            "/var/folders/x"
+        );
+        assert_eq!(
+            crate::hook::collapse_macos_private_prefix("/private/var"),
+            "/var"
+        );
+        assert_eq!(
+            crate::hook::collapse_macos_private_prefix("/private/tmp/x"),
+            "/tmp/x"
+        );
+        assert_eq!(
+            crate::hook::collapse_macos_private_prefix("/private/tmp"),
+            "/tmp"
+        );
+        assert_eq!(
+            crate::hook::collapse_macos_private_prefix("/private/etc"),
+            "/private/etc"
+        );
+        assert_eq!(
+            crate::hook::collapse_macos_private_prefix("/private/variable"),
+            "/private/variable"
+        );
 
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&outside);

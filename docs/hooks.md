@@ -172,17 +172,17 @@ Measured back-to-back on Windows (`target/release/b3.exe`, 1 warmup + `n = 20` t
 
 | Benchmark Case | A (`d98369a`) `p50` | B (`29462c9`) `p50` / `p95` | C (`0c79113`) `p50` / `p95` | D (Final) `p50` / `p95` / `max` (Git) | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `b3 --version` | `4.57 ms` | `4.26` / `12.84 ms` | `3.99` / `9.09 ms` | `4.32` / `8.02` / `9.26 ms` (`0`) | Comparable startup, zero daemon |
-| `b3 context measure --strict` | `7.25 ms` | `8.20` / `16.53 ms` | `7.47` / `12.17 ms` | `8.11` / `17.34` / `45.04 ms` (`0`) | `always_on_total = 15,579 B`, `warnings = 0` (`+0 B` vs A) |
-| Tier 0 `BeforeFileWrite` allow | — | `4.93` / `14.52 ms` | `5.43` / `15.73 ms` | `6.48` / `11.61` / `13.92 ms` (`0`) | Empty `PATH`; `0` Git calls |
-| Tier 0 `BeforeFileWrite` deny `.env` | — | `5.16` / `10.97 ms` | `5.93` / `13.63 ms` | `7.92` / `12.66` / `13.10 ms` (`0`) | Empty `PATH`; `rc=2`, `0` Git calls |
-| Tier 0 `BeforeCommand` allow / deny | — | `6.32` / `5.77 ms` | `4.01` / `3.96 ms` | `5.32` (`p95 11.29`) / `4.26` (`p95 11.26`) ms (`0`) | Empty `PATH`; `0` Git calls |
-| 4-worker parallel Tier 0 write | — | `8.32` / `20.47 ms` | `8.96` / `19.09 ms` | `9.65` / `89.09` / `89.09 ms` (`0`) | Wall time across 4 concurrent processes |
-| Tier 1 `BeforeCommit` (no receipt) | — | `108.03` / `130.07 ms` (`3`) | `73.28` / `94.99 ms` (`2`) | `71.44` / `101.25` / `206.61 ms` (`2`) | **`-33.9%` p50** vs B; single `git diff --cached` in `run_for_hook` |
-| Tier 1 `BeforeCommit` (`B3_VERIFY_RECEIPT`) | — | `455.97` / `508.21 ms` (`14`) | `411.51` / `465.18 ms` (`13`) | `430.40` / `500.00` / `528.18 ms` (`13`) | Canonical `run_for_hook` + `verify_check` |
-| Tier 1 `BeforePush` (non-governed) | — | `4.14 ms` (`0`, `rc=1` broken) | `41.58 ms` (`1`, unsafe R02) | `299.14` / `355.29` / `358.01 ms` (`9`) | Inspects destination URLs, tracking trunk & `remote_oid` (`0` network calls) |
-| Tier 1 `BeforePush` (governed feat / `main`) | — | N/A | `409.24` / `413.13 ms` (`13`) | `485.58` (`15`) / `554.41 ms` (`17`) | Real `pre-push` stdin (`rc=0` allow / `rc=1` block) |
-| Tier 1 `BeforePush` (`UnknownRemoteAuthority`) | — | N/A | N/A | `334.30` / `410.21` / `411.08 ms` (`10`) | Direct URL feature push + local policy floor (`rc=0`, `178 B` advisory stderr) |
-| `audit` / `off` malformed `{not-json` (`p50`) | — | `4.94 (rc=2)` / `4.10 (rc=2)` | `5.59 (rc=0)` / `4.40 (rc=0)` | `5.87` / `3.96 ms` (`rc=0`, `0`) | Non-blocking across malformed inputs & subdirs |
+| `b3 --version` | `4.57 ms` | `4.26` / `12.84 ms` | `3.99` / `9.09 ms` | `4.97` / `12.85` / `16.26 ms` (`0`) | Comparable startup, zero daemon |
+| `b3 context measure --strict` | `7.25 ms` | `8.20` / `16.53 ms` | `7.47` / `12.17 ms` | `12.20` / `25.38` / `33.51 ms` (`0`) | `always_on_total = 15,579 B`, `warnings = 0` (`+0 B` vs A) |
+| Tier 0 `BeforeFileWrite` allow | — | `4.93` / `14.52 ms` | `5.43` / `15.73 ms` | `6.94` / `13.00` / `13.02 ms` (`0`) | Empty `PATH`; `0` Git calls |
+| Tier 0 `BeforeFileWrite` deny `.env` | — | `5.16` / `10.97 ms` | `5.93` / `13.63 ms` | `7.04` / `14.09` / `35.87 ms` (`0`) | Empty `PATH`; `rc=2`, `0` Git calls |
+| Tier 0 `BeforeCommand` allow / deny | — | `6.32` / `5.77 ms` | `4.01` / `3.96 ms` | `6.00` (`p95 7.74`) / `6.00` (`p95 6.67`) ms (`0`) | Empty `PATH`; `0` Git calls |
+| 4-worker parallel Tier 0 write | — | `8.32` / `20.47 ms` | `8.96` / `19.09 ms` | `9.37` / `35.51` / `35.51 ms` (`0`) | Wall time across 4 concurrent processes |
+| Tier 1 `BeforeCommit` (no receipt) | — | `108.03` / `130.07 ms` (`3`) | `73.28` / `94.99 ms` (`2`) | `75.09` / `109.70` / `113.30 ms` (`2`) | **`-30.5%` p50** vs B; single `git diff --cached` in `run_for_hook` |
+| Tier 1 `BeforeCommit` (`B3_VERIFY_RECEIPT`) | — | `455.97` / `508.21 ms` (`14`) | `411.51` / `465.18 ms` (`13`) | `454.22` / `536.28` / `577.22 ms` (`13`) | Canonical `run_for_hook` + `verify_check` |
+| Tier 1 `BeforePush` (non-governed) | — | `4.14 ms` (`0`, `rc=1` broken) | `41.58 ms` (`1`, unsafe R02) | `300.56` / `380.65` / `425.84 ms` (`9`) | Inspects destination URLs, tracking trunk & `remote_oid` (`0` network calls) |
+| Tier 1 `BeforePush` (governed feat / `main`) | — | N/A | `409.24` / `413.13 ms` (`13`) | `494.00` (`15`) / `558.53 ms` (`17`) | Real `pre-push` stdin (`rc=0` allow / `rc=1` block) |
+| Tier 1 `BeforePush` (`UnknownRemoteAuthority`) | — | N/A | N/A | `336.83` / `441.55` / `500.90 ms` (`10`) | Direct URL feature push + local policy floor (`rc=0`, `178 B` advisory stderr) |
+| `audit` / `off` malformed `{not-json` (`p50`) | — | `4.94 (rc=2)` / `4.10 (rc=2)` | `5.59 (rc=0)` / `4.40 (rc=0)` | `6.38` / `5.61 ms` (`rc=0`, `0`) | Non-blocking across malformed inputs & subdirs |
 
 > Raw benchmark JSON: `.b3/ship/runs/20261128-1742-pr46-final-hardening/benchmarks-abcd.json`. Context budget: `always_on_total = 15,579 B` (`~3,895 tok`, `+0 B` vs `origin/main` `d98369a`, `warnings = 0`).

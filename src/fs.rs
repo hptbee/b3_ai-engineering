@@ -756,7 +756,7 @@ pub fn get_repo_relative_path(root: &Path, full: &Path) -> String {
     full_norm
 }
 
-fn expand_windows_long_existing_prefix(path: &Path) -> PathBuf {
+pub(crate) fn expand_windows_long_existing_prefix(path: &Path) -> PathBuf {
     #[cfg(windows)]
     {
         if path.exists() {
