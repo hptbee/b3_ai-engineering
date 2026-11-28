@@ -17,7 +17,7 @@
 
 ## 0. Target, Guard, Size × Risk & Status
 
-1. **Guard:** Iter 1+ (`--prev-sha` Iter 2+) run `diff-scope` (`--base-sha`; never `HEAD~1`)+`mechanical-check` (`--base-sha`,`--allowed-paths`,`--protected-paths`,`--obsoletes`)+`symbol-check` (refactors/gaps); Iter 1 reuses fresh Parent lint digest on same tree/`HEAD`/scope (skip dupes; [`static-analysis.md`](../workflows/references/static-analysis.md)). Empty->`INCOMPLETE`; `CLEAN_AFTER_FIX`->§1 `delta_files`. `exit 2` blocks (`MECHANICAL_FINDINGS`/`SYMBOL_FINDINGS` `dangling_refs`; `safety_hits`->`BLOCKED`; proven FP noted). Surface `exit 0` `MECHANICAL_ADVISORY`/`SYMBOL_ADVISORY`+lint to Reviewer.
+1. **Guard:** standalone Iter 1+ (`--prev-sha` Iter 2+) own `diff-scope` (`--base-sha`; never `HEAD~1`)+`mechanical-check` (`--base-sha`,`--allowed-paths`,`--protected-paths`,`--obsoletes`)+`symbol-check` (refactors/gaps); skip Iter-1 guards & lint if caller passed fresh outputs on same tree/`HEAD`/scope ([`static-analysis.md`](../workflows/references/static-analysis.md)). Empty->`INCOMPLETE`; `CLEAN_AFTER_FIX`->§1 `delta_files`. `exit 2` blocks (`MECHANICAL_FINDINGS`/`SYMBOL_FINDINGS` `dangling_refs`; `safety_hits`->`BLOCKED`; proven FP noted). Surface `exit 0` `MECHANICAL_ADVISORY`/`SYMBOL_ADVISORY`+lint to Reviewer.
 2. **Sizing:** `NOISE_ONLY` (`files=0`+checks `PASS`); smallest fit (`XS` `<=3f,<=100L`; `S` `<=8f,<=300L`; `M` `<=20f,<=800L`)->**§1** (max 5); (`L` `<50f,<2000L`; `XL` `<=100f,<=5000L`; `XXL` dynamic)->**§2** (`hierarchical.md`).
 3. **Statuses (`R001`..):** `OPEN`=blocking `CONFIRMED` (`CRITICAL|HIGH|MEDIUM`,`CONFIRMED REDUNDANCY`,evidenced overengineering w/ simpler alt meeting reqs—never LOC alone,hot `EVIDENCED RISK`); `FIXED`=unverified (`VERIFIED`/`CLOSED`); `REJECTED`=`FALSE_POSITIVE`; `ACCEPTED`=`INTENTIONAL COMPLEXITY`/OOS; `SPECULATIVE`=unproven/`LOW`-conf/`LIKELY REDUNDANT` (non-blocking); `UNKNOWN`=unproven.
 
@@ -26,7 +26,7 @@
 1. **Reviewer:** fresh pass + 1L `context_hint:`—Iter 1 diff-first; Iter 2+ delta-first (`delta_files`+callers+`OPEN`+contracts; respect `closed:`). MCP fail->native fallback, never false `PASS`.
 2. **Gate:** skip `verify-check` right after `verify-run` exit `0` w/ 0 edits, else `verify-check` — `OPEN`=0 + `VERIFY_VALID` + risk evidence -> `PASS` (`FAIL` on red check; `UNKNOWN / INCOMPLETE` on bad/stale receipt, tool fail, or `SINGLE_AGENT_LIMIT` on `HIGH`/`CRITICAL`, which cannot emit `PASS` on `HIGH`/`CRITICAL` -> `INCOMPLETE`, blocks `auto_merge`).
 3. **Breaker:** (a) 2 rounds same finding -> rewrite/fresh `b3-fixer`; (b) 2 rounds same bug class -> `Scope`/design. Stop `STUCK`/`INCOMPLETE` on flat/rising blockers, loops, no-op, or cap (`FAIL` if blockers remain).
-4. **Fix+Verify:** sole owner pre-Fix `b3 guard snapshot` (`prev_sha`), sweep `OPEN` by bug class (disjoint `check-wave --partition`), re-lint affected scope (`delta_files`+configs; widen on config/risk)+`verify-run`, loop §0.1 (`--prev-sha`)+fresh Reviewer.
+4. **Fix+Verify:** sole owner pre-Fix `b3 guard snapshot` (`prev_sha`), sweep `OPEN` by bug class (disjoint `check-wave --partition`), `verify-run` (incl. affected-scope lint on `delta_files`+configs; widen on config/risk; skip dupe lint if covered), loop §0.1 (`--prev-sha`)+fresh Reviewer.
 
 ## 2. L / XL / XXL — hierarchical L0–L4 (`hierarchical.md`)
 

@@ -2062,6 +2062,8 @@ fn static_analysis_canonical_contract_and_anti_bloat() {
         "supplementary protection",
         "unrelated, unchanged, non-blocking",
         "only when",
+        "owns the entire affected scope",
+        "Compare individual diagnostics",
     ] {
         assert!(
             contract.contains(required),
@@ -2079,8 +2081,9 @@ fn static_analysis_canonical_contract_and_anti_bloat() {
         rl_strategy.len()
     );
     assert!(
-        rl_strategy.contains("static-analysis.md"),
-        "review-loop/strategy.md must reference static-analysis.md"
+        rl_strategy.contains("static-analysis.md")
+            && rl_strategy.contains("skip Iter-1 guards & lint"),
+        "review-loop/strategy.md must reference static-analysis.md and reuse fresh Iter-1 guards & lint"
     );
     let disp_ref = normalize_lf(
         &fs::read_to_string(root.join("workflows/references/dispatch-naming.md"))
