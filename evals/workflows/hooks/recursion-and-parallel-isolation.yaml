@@ -1,0 +1,9 @@
+id: hooks-recursion-and-parallel-isolation-007
+artifact: workflows/references/hook-integration.md
+intent: Hooks prevent recursive invocation and allow concurrent disjoint worker checks without global lock serialization
+scenario: |
+  Parallel workers invoke b3 hook run concurrently with disjoint B3_WORKER_ALLOWED_PATHS, and Git hook shim exports B3_HOOK_ACTIVE=1
+  Concurrent read/disjoint checks succeed in parallel, conflicting writes fail closed, and B3_HOOK_ACTIVE=1 prevents recursive re-entry
+expected_outcome: PASS
+failure_mode: recursive-hook-loop-or-global-lock-serialization
+notes: Compatible with Maximum Safe Parallelism and Stop continuationActive loop safety

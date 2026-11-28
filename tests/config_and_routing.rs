@@ -16,6 +16,7 @@ const ALL_CONFIG_ENVS: &[&str] = &[
     "B3_EXECUTION_MODE",
     "B3_CLARIFICATION_GATE",
     "B3_UNDERSTANDING_THRESHOLD",
+    "B3_HOOK_MODE",
 ];
 
 fn run_cfg(args: &[&str], cwd: Option<&Path>, set_env: &[(&str, &str)]) -> (i32, String, String) {
@@ -1702,5 +1703,175 @@ planning:
     assert!(
         proj_toml.contains("planning = [\"auto\"]"),
         "project models.md explicit `auto` must be preserved:\n{proj_toml}"
+    );
+}
+
+#[test]
+fn hooks_config_precedence_env_set_and_migration() {
+    let tmp = TempDirGuard::new("cfg-hooks");
+    let home = tmp.path.join("home");
+    let repo = tmp.path.join("repo");
+    clone_seeded_git_repo(&repo);
+    fs::create_dir_all(home.join(".b3")).unwrap();
+    fs::create_dir_all(repo.join(".b3")).unwrap();
+
+    let h_str = home.to_str().unwrap();
+    let r_str = repo.to_str().unwrap();
+
+    // 1. Defaults + TOML personal/project layering
+    let (c_def, out_def, err_def) = run_cfg(
+        &[
+            "config",
+            "show",
+            "--json",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[("B3_HOOK_MODE", ""), ("B3_CONFIG_PERSONAL", "")],
+    );
+    assert_eq!(c_def, 0, "{out_def}\n{err_def}");
+    let j_def = parse_json_output(&out_def);
+    assert_eq!(
+        j_def
+            .get("values")
+            .and_then(|v| v.get("hooks.enabled"))
+            .and_then(JsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        j_def
+            .get("values")
+            .and_then(|v| v.get("hooks.mode"))
+            .and_then(JsonValue::as_str),
+        Some("enforce")
+    );
+
+    // 2. b3 config set + B3_HOOK_MODE env precedence & warning fallback
+    let (c_set, _, err_set) = run_cfg(
+        &[
+            "config",
+            "set",
+            "hooks.mode",
+            "audit",
+            "--scope",
+            "project",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[],
+    );
+    assert_eq!(c_set, 0, "{err_set}");
+    let (c_proj, out_proj, _) = run_cfg(
+        &[
+            "config",
+            "get",
+            "hooks.mode",
+            "--sources",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[("B3_HOOK_MODE", "")],
+    );
+    assert_eq!(c_proj, 0);
+    assert!(out_proj.contains("\"audit\"") && out_proj.contains("source=project"));
+
+    let (c_env, out_env, _) = run_cfg(
+        &[
+            "config",
+            "show",
+            "--json",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[("B3_HOOK_MODE", "off")],
+    );
+    assert_eq!(c_env, 0);
+    let j_env = parse_json_output(&out_env);
+    assert_eq!(
+        j_env
+            .get("values")
+            .and_then(|v| v.get("hooks.mode"))
+            .and_then(JsonValue::as_str),
+        Some("off")
+    );
+    assert_eq!(
+        j_env
+            .get("values")
+            .and_then(|v| v.get("hooks.enabled"))
+            .and_then(JsonValue::as_bool),
+        Some(false)
+    );
+
+    let (c_bad, out_bad, _) = run_cfg(
+        &[
+            "config",
+            "show",
+            "--json",
+            "--repo-root",
+            r_str,
+            "--user-home",
+            h_str,
+        ],
+        None,
+        &[("B3_HOOK_MODE", "bogus")],
+    );
+    assert_eq!(c_bad, 0);
+    let j_bad = parse_json_output(&out_bad);
+    assert_eq!(
+        j_bad
+            .get("values")
+            .and_then(|v| v.get("hooks.mode"))
+            .and_then(JsonValue::as_str),
+        Some("audit")
+    );
+    assert!(j_bad
+        .get("warnings")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|w| w
+            .iter()
+            .any(|x| x.as_str().is_some_and(|s| s.contains("B3_HOOK_MODE")))));
+
+    // 3. Migrate legacy models.md with hooks: YAML block into config.toml
+    let mig_home = tmp.path.join("mig-home");
+    let mig_repo = tmp.path.join("mig-repo");
+    clone_seeded_git_repo(&mig_repo);
+    fs::create_dir_all(mig_home.join(".b3")).unwrap();
+    write_lf(
+        &mig_home.join(".b3/models.md"),
+        "| `planning` | `balanced` |\n\n```yaml\nhooks:\n  enabled: false\n  mode: audit\n```\n",
+    );
+    let (c_mig, out_mig, err_mig) = run_cfg(
+        &[
+            "config",
+            "migrate",
+            "--scope",
+            "personal",
+            "--repo-root",
+            mig_repo.to_str().unwrap(),
+            "--user-home",
+            mig_home.to_str().unwrap(),
+        ],
+        None,
+        &[],
+    );
+    assert_eq!(c_mig, 0, "{out_mig}\n{err_mig}");
+    let migrated_toml = fs::read_to_string(mig_home.join(".b3/config.toml")).unwrap();
+    assert!(
+        migrated_toml.contains("[hooks]")
+            && migrated_toml.contains("enabled = false")
+            && migrated_toml.contains("mode = \"audit\""),
+        "migrated personal config.toml missing [hooks]:\n{migrated_toml}"
     );
 }

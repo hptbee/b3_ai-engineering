@@ -101,6 +101,37 @@ b3 config show --override planning.clarification_gate=false
 
 (Or raise/lower threshold for one run via `--override planning.understanding_threshold=90` or prompt override `understanding_threshold: 90`.)
 
+## Hook Configuration (`[hooks]`)
+
+`~/.b3/config.toml` (or `B3_CONFIG_PERSONAL`) and `<project>/.b3/config.toml` also hold the `[hooks]` table controlling opt-in `b3 hook` behavior (`enabled = true|false`, `mode = "enforce"|"audit"|"off"`). Legacy `~/.b3/models.md` / `<project>/.b3/models.md` (`hooks:` YAML) are supported via fallback or `b3 config migrate`.
+
+- **Opt-in activation:** Event hooks remain inactive on disk until installed with `b3 hook install`. Once installed, the default configuration is `enabled = true`, `mode = "enforce"`.
+- **Precedence:** CLI `--mode` / `B3_HOOK_MODE` (re-enables when set to `enforce`/`audit`) > `<project>/.b3/config.toml` > `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`, or legacy `.b3/models.md`) > built-in default (`enabled = true`, `mode = "enforce"`).
+- **Non-bypass of mandatory workflow Guards:** Setting `hooks.mode = "off"` disables automatic event-triggered hooks only; mandatory workflow-boundary `b3 guard` checks in `/b3-ship`, `/b3-research-ship`, and `/b3-review-loop` remain enforced.
+
+```toml
+# Enforce (blocks unsafe Tier 0 writes/commands and Tier 1 commits/pushes)
+[hooks]
+enabled = true
+mode = "enforce"
+```
+
+```toml
+# Audit (logs/surfaces Tier 0/1 findings without blocking)
+[hooks]
+enabled = true
+mode = "audit"
+```
+
+```toml
+# Off (event hooks no-op; workflow b3 guard gates stay active)
+[hooks]
+enabled = false
+mode = "off"
+```
+
+Architecture, capability matrix, and lifecycle commands (`b3 hook install --dry-run`, `install`, `uninstall`, `verify`, `status`): [`hooks.md`](hooks.md) and [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md).
+
 ## Upgrading from Earlier Legacy Formats
 
 - **From `models.md` (`~/.b3/models.md` or `<project>/.b3/models.md`):** Run `b3 config migrate --scope personal` or `b3 config migrate --scope project` (or `--scope all`). Legacy files are preserved and never overwritten.

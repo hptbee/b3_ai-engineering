@@ -6,17 +6,78 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod guard;
+pub mod hook;
 pub mod json;
 pub mod pr;
 pub mod process;
 pub mod toml_lite;
 
-use cli::{help_text, parse_args, Command, GuardSubcommand, InstallSubcommand, PrSubcommand};
+use std::path::Path;
+
+use cli::{
+    help_text, parse_args, Command, GuardSubcommand, HookSubcommand, InstallSubcommand,
+    PrSubcommand,
+};
 use error::B3Error;
+
+/// Structured CLI output supporting separate `stdout`, `stderr`, and exit status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+fn non_empty_opt(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Executes a parsed `b3` CLI invocation with full `stdout`/`stderr` separation.
+pub fn dispatch_args_io(raw_args: &[String]) -> Result<CliOutput, B3Error> {
+    let cmd = parse_args(raw_args)?;
+    if let Command::Hook(HookSubcommand::Run {
+        host,
+        event,
+        repo_root,
+        mode,
+        payload,
+        git_args,
+    }) = cmd
+    {
+        let resp = hook::dispatch::run_hook_cli(
+            &host,
+            non_empty_opt(&event),
+            non_empty_opt(&repo_root),
+            non_empty_opt(&mode),
+            payload.as_deref(),
+            &git_args,
+        )?;
+        return Ok(CliOutput {
+            stdout: resp.stdout,
+            stderr: resp.stderr,
+            exit_code: resp.exit_code,
+        });
+    }
+    let (stdout, exit_code) = dispatch_parsed(cmd)?;
+    Ok(CliOutput {
+        stdout,
+        stderr: String::new(),
+        exit_code,
+    })
+}
 
 /// Executes a parsed `b3` CLI invocation and returns `(stdout_text, exit_code)`.
 pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
     let cmd = parse_args(raw_args)?;
+    dispatch_parsed(cmd)
+}
+
+fn dispatch_parsed(cmd: Command) -> Result<(String, i32), B3Error> {
     match cmd {
         Command::Version => Ok((format!("b3 {}", env!("CARGO_PKG_VERSION")), 0)),
         Command::Help => Ok((help_text().to_string(), 0)),
@@ -473,5 +534,115 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
             };
             Ok((out, 0))
         }
+        Command::Hook(hook_cmd) => match hook_cmd {
+            HookSubcommand::Run {
+                host,
+                event,
+                repo_root,
+                mode,
+                payload,
+                git_args,
+            } => {
+                let resp = hook::dispatch::run_hook_cli(
+                    &host,
+                    non_empty_opt(&event),
+                    non_empty_opt(&repo_root),
+                    non_empty_opt(&mode),
+                    payload.as_deref(),
+                    &git_args,
+                )?;
+                let text = if !resp.stdout.is_empty() {
+                    resp.stdout
+                } else {
+                    resp.stderr
+                };
+                Ok((text, resp.exit_code))
+            }
+            HookSubcommand::Install {
+                host,
+                scope,
+                repo_root,
+                user_home,
+                b3_bin,
+                dry_run,
+                force,
+            } => {
+                let h = hook::install::HookHostTarget::parse(&host)?;
+                let s = hook::install::HookScope::parse(&scope)?;
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                let bb = if b3_bin.trim().is_empty() {
+                    None
+                } else {
+                    Some(b3_bin.trim())
+                };
+                hook::install::install_hooks(h, s, rr, uh, bb, dry_run, force)
+            }
+            HookSubcommand::Uninstall {
+                host,
+                scope,
+                repo_root,
+                user_home,
+                dry_run,
+            } => {
+                let h = hook::install::HookHostTarget::parse(&host)?;
+                let s = hook::install::HookScope::parse(&scope)?;
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                hook::install::uninstall_hooks(h, s, rr, uh, dry_run)
+            }
+            HookSubcommand::Verify {
+                host,
+                scope,
+                repo_root,
+                user_home,
+            } => {
+                let h = hook::install::HookHostTarget::parse(&host)?;
+                let s = hook::install::HookScope::parse(&scope)?;
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                hook::install::verify_hooks(h, s, rr, uh)
+            }
+            HookSubcommand::Status {
+                repo_root,
+                user_home,
+            } => {
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                hook::install::status_hooks(rr, uh)
+            }
+        },
     }
 }

@@ -211,9 +211,12 @@ pub fn escape_json_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
+const MAX_JSON_DEPTH: usize = 128;
+
 struct Parser<'a> {
     src: &'a [u8],
     pos: usize,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -393,11 +396,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_array(&mut self) -> Result<JsonValue, String> {
+        if self.depth >= MAX_JSON_DEPTH {
+            return Err("JSON nesting depth exceeded".to_string());
+        }
+        self.depth += 1;
         self.pos += 1; // '['
         self.skip_ws();
         let mut items = Vec::new();
         if self.peek() == Some(b']') {
             self.pos += 1;
+            self.depth -= 1;
             return Ok(JsonValue::Array(items));
         }
         loop {
@@ -405,18 +413,29 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             match self.next() {
                 Some(b',') => continue,
-                Some(b']') => return Ok(JsonValue::Array(items)),
-                _ => return Err("expected ',' or ']' in array".to_string()),
+                Some(b']') => {
+                    self.depth -= 1;
+                    return Ok(JsonValue::Array(items));
+                }
+                _ => {
+                    self.depth -= 1;
+                    return Err("expected ',' or ']' in array".to_string());
+                }
             }
         }
     }
 
     fn parse_object(&mut self) -> Result<JsonValue, String> {
+        if self.depth >= MAX_JSON_DEPTH {
+            return Err("JSON nesting depth exceeded".to_string());
+        }
+        self.depth += 1;
         self.pos += 1; // '{'
         self.skip_ws();
         let mut entries = Vec::new();
         if self.peek() == Some(b'}') {
             self.pos += 1;
+            self.depth -= 1;
             return Ok(JsonValue::Object(entries));
         }
         loop {
@@ -424,6 +443,7 @@ impl<'a> Parser<'a> {
             let key = self.parse_string()?;
             self.skip_ws();
             if self.next() != Some(b':') {
+                self.depth -= 1;
                 return Err("expected ':' after object key".to_string());
             }
             let val = self.parse_value()?;
@@ -431,8 +451,14 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             match self.next() {
                 Some(b',') => continue,
-                Some(b'}') => return Ok(JsonValue::Object(entries)),
-                _ => return Err("expected ',' or '}' in object".to_string()),
+                Some(b'}') => {
+                    self.depth -= 1;
+                    return Ok(JsonValue::Object(entries));
+                }
+                _ => {
+                    self.depth -= 1;
+                    return Err("expected ',' or '}' in object".to_string());
+                }
             }
         }
     }
@@ -447,6 +473,7 @@ pub fn parse_json(raw: &str) -> Result<JsonValue, String> {
     let mut p = Parser {
         src: trimmed.as_bytes(),
         pos: 0,
+        depth: 0,
     };
     let val = p.parse_value()?;
     p.skip_ws();
@@ -454,4 +481,16 @@ pub fn parse_json(raw: &str) -> Result<JsonValue, String> {
         return Err("trailing characters after JSON value".to_string());
     }
     Ok(val)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_json;
+
+    #[test]
+    fn rejects_excessive_json_nesting_depth() {
+        let deep = format!("{}{}", "[".repeat(200), "]".repeat(200));
+        let err = parse_json(&deep).unwrap_err();
+        assert!(err.contains("depth"), "err={err}");
+    }
 }

@@ -20,7 +20,7 @@ B3 separates **advisory user/project preferences** (`config.toml`) from **canoni
 flowchart TD
     L1["1. Explicit Invocation Override (--override KEY=VALUE)"] --> Check1{"Valid for target key?"}
     Check1 -->|"Yes"| Use1["Use Invocation Value (source=invocation)"]
-    Check1 -->|"Missing or Invalid (warn)"| L2["2. Supported Env Vars (B3_MODEL_ROUTING, B3_MAX_CONCURRENCY, B3_EXECUTION_MODE, B3_CLARIFICATION_GATE, B3_UNDERSTANDING_THRESHOLD)"]
+    Check1 -->|"Missing or Invalid (warn)"| L2["2. Supported Env Vars (B3_MODEL_ROUTING, B3_MAX_CONCURRENCY, B3_EXECUTION_MODE, B3_CLARIFICATION_GATE, B3_UNDERSTANDING_THRESHOLD, B3_HOOK_MODE)"]
 
     L2 --> Check2{"Valid for target key?"}
     Check2 -->|"Yes"| Use2["Use Env Value (source=env)"]
@@ -134,6 +134,13 @@ Each role accepts a string array of **1–3 ordered entries** (a single string i
 | `parallel.max_concurrency` | `"auto"` or integer `1..=64` | `"auto"` | `B3_MAX_CONCURRENCY` | Upper bound per run; `"auto"` adapts to host CPU parallelism clamped to `4..=16`. |
 | `parallel.execution_mode` | `"auto"` \| `"sequential"` \| `"isolated"` | `"auto"` | `B3_EXECUTION_MODE` | `"sequential"` caps effective concurrency at `1`; `"isolated"` signals `preferred_isolation=ISOLATED_WRITES`; cannot override safety or ownership restrictions. |
 
+#### `[hooks]`
+
+| Key | Type / Valid Values | Default | Env Var Override | Notes |
+| --- | --- | --- | --- | --- |
+| `hooks.enabled` | `true` \| `false` | `true` | `B3_HOOK_MODE` | Enables opt-in native event hooks once installed (`b3 hook install`). |
+| `hooks.mode` | `"enforce"` \| `"audit"` \| `"off"` | `"enforce"` | `B3_HOOK_MODE` | `"off"` disables event hooks only; mandatory workflow `b3 guard` checks stay active. Valid `B3_HOOK_MODE` also updates `hooks.enabled`. |
+
 #### `[review]` & `[review.sizing]`
 
 | Key | Type / Valid Values | Default | Notes |
@@ -152,8 +159,9 @@ Each role accepts a string array of **1–3 ordered entries** (a single string i
 #### Path & Initialization Environment Variables
 
 - `B3_CONFIG_PERSONAL`: Explicit personal `config.toml` file path (overrides `~/.b3/config.toml`; UNC/`//` paths and control characters are rejected).
+- `B3_HOOK_MODE`: Session-wide hook mode override (`"enforce"` | `"audit"` | `"off"`; valid values also set `hooks.enabled`; overridden by explicit `b3 hook run --mode` or CLI `--override`).
 - `B3_SKIP_CONFIG_INIT=1` (and legacy `B3_SKIP_MODEL_INIT=1`): Prevents `b3 install` and `b3 sync` from auto-creating `~/.b3/config.toml`.
-- `B3_MODELS_PERSONAL`: Legacy personal `models.md` path override consulted by `b3 config migrate` and legacy detection during adapter init.
+- `B3_MODELS_PERSONAL`: Legacy personal `models.md` path override consulted by `b3 config migrate`, hook legacy fallback, and adapter init.
 
 ---
 
@@ -367,7 +375,7 @@ flowchart TD
     DestChk -->|"Yes"| Conflict["MIGRATE_CONFLICT (exit 1; manual reconciliation required, never overwrites)"]
     DestChk -->|"No"| Kind{"Legacy file kind?"}
 
-    Kind -->|"models.md (personal or project)"| ParseMd["Parse Role table + planning YAML (clarification_gate, understanding_threshold)"]
+    Kind -->|"models.md (personal or project)"| ParseMd["Parse Role table + planning & hooks YAML"]
     ParseMd --> WriteCfg["Write config.toml safely (create_new, LF) and preserve legacy models.md"]
 
     Kind -->|"research-policy.json"| ParseJson["Parse legacy JSON policy"]

@@ -11,6 +11,7 @@ use crate::fs::{
     is_reparse_or_symlink, is_unc_or_network_path, normalize_repo_root, resolve_unresolved_path,
     write_atomic_lf,
 };
+use crate::hook::config::{parse_hook_config_from_markdown, HookMode};
 use crate::json::{parse_json, JsonValue};
 use crate::toml_lite::{
     format_toml_value, parse_toml_strict, set_toml_key_preserving_comments, TomlDocument, TomlValue,
@@ -279,11 +280,18 @@ pub struct ReviewConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HooksConfig {
+    pub enabled: bool,
+    pub mode: HookMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct B3Config {
     pub models: ModelsConfig,
     pub planning: PlanningConfig,
     pub parallel: ParallelConfig,
     pub review: ReviewConfig,
+    pub hooks: HooksConfig,
 }
 
 impl Default for B3Config {
@@ -348,6 +356,10 @@ impl Default for B3Config {
                 max_files_per_unit: 100,
                 sizing: ReviewSizingConfig::default(),
             },
+            hooks: HooksConfig {
+                enabled: true,
+                mode: HookMode::Enforce,
+            },
         }
     }
 }
@@ -389,6 +401,8 @@ fn default_sources() -> BTreeMap<String, ConfigSource> {
         "review.sizing.l_max_files",
         "review.sizing.xl_max_loc",
         "review.sizing.xl_max_files",
+        "hooks.enabled",
+        "hooks.mode",
     ] {
         s.insert(k.to_string(), ConfigSource::Default);
     }
@@ -842,6 +856,33 @@ fn apply_doc(
                     }
                 }
             }
+            "hooks" => {
+                for (k, v) in tbl {
+                    match k.as_str() {
+                        "enabled" => {
+                            if let Some(b) = v.as_bool() {
+                                cfg.hooks.enabled = b;
+                                sources.insert("hooks.enabled".to_string(), layer);
+                            } else {
+                                warnings.push(format!(
+                                    "{label}: invalid hooks.enabled; keeping previous value"
+                                ));
+                            }
+                        }
+                        "mode" => {
+                            if let Some(Ok(m)) = v.as_str().map(HookMode::parse) {
+                                cfg.hooks.mode = m;
+                                sources.insert("hooks.mode".to_string(), layer);
+                            } else {
+                                warnings.push(format!(
+                                    "{label}: invalid hooks.mode (expected enforce|audit|off); keeping previous value"
+                                ));
+                            }
+                        }
+                        other => warnings.push(format!("{label}: unknown key hooks.{other}")),
+                    }
+                }
+            }
             other => {
                 let disp = if other.is_empty() { "<root>" } else { other };
                 warnings.push(format!("{label}: unknown section [{disp}]"));
@@ -954,6 +995,26 @@ fn apply_string_override(
                 warnings.push(format!("{label}: invalid {k}='{v}'"));
             }
         }
+        "hooks.enabled" => {
+            if let Ok(b) = v.to_ascii_lowercase().parse::<bool>() {
+                cfg.hooks.enabled = b;
+                sources.insert(k.to_string(), layer);
+            } else {
+                warnings.push(format!("{label}: invalid {k}='{v}'"));
+            }
+        }
+        "hooks.mode" => {
+            if let Ok(m) = HookMode::parse(v) {
+                cfg.hooks.mode = m;
+                sources.insert(k.to_string(), layer);
+                if matches!(layer, ConfigSource::Invocation | ConfigSource::Env) {
+                    cfg.hooks.enabled = m != HookMode::Off;
+                    sources.insert("hooks.enabled".to_string(), layer);
+                }
+            } else {
+                warnings.push(format!("{label}: invalid {k}='{v}'"));
+            }
+        }
         _ => {
             if let Ok(toml_val) = parse_cli_value_for_key(k, v) {
                 let mut mini_doc = TomlDocument::default();
@@ -1048,6 +1109,22 @@ pub fn resolve_config(
                     &mut sources,
                     &mut warnings,
                 );
+            }
+        }
+    }
+
+    if let Ok(val) = std::env::var("B3_HOOK_MODE") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            if has_control_chars(trimmed) {
+                warnings.push("B3_HOOK_MODE: ignoring value with control characters".to_string());
+            } else if let Ok(mode) = HookMode::parse(trimmed) {
+                cfg.hooks.mode = mode;
+                cfg.hooks.enabled = mode != HookMode::Off;
+                sources.insert("hooks.mode".to_string(), ConfigSource::Env);
+                sources.insert("hooks.enabled".to_string(), ConfigSource::Env);
+            } else {
+                warnings.push(format!("B3_HOOK_MODE: invalid hooks.mode='{trimmed}'"));
             }
         }
     }
@@ -1541,12 +1618,16 @@ fn parse_cli_value_for_key(key: &str, raw: &str) -> Result<TomlValue, String> {
             ModelFallback::parse(v).ok_or_else(|| format!("invalid models.fallback '{v}'"))?;
             Ok(TomlValue::Str(v.to_ascii_lowercase()))
         }
-        "models.auto_escalate" | "planning.clarification_gate" => {
+        "models.auto_escalate" | "planning.clarification_gate" | "hooks.enabled" => {
             let b = v
                 .to_ascii_lowercase()
                 .parse::<bool>()
                 .map_err(|_| format!("invalid boolean '{v}' for {k}"))?;
             Ok(TomlValue::Bool(b))
+        }
+        "hooks.mode" => {
+            let m = HookMode::parse(v).map_err(|e| e.message)?;
+            Ok(TomlValue::Str(m.as_str().to_string()))
         }
         "models.max_escalations" => {
             let n = v
@@ -1724,6 +1805,8 @@ fn get_effective_key_value(cfg: &B3Config, key: &str) -> Option<TomlValue> {
         "review.sizing.l_max_files" => Some(TomlValue::Int(cfg.review.sizing.l_max_files as i64)),
         "review.sizing.xl_max_loc" => Some(TomlValue::Int(cfg.review.sizing.xl_max_loc as i64)),
         "review.sizing.xl_max_files" => Some(TomlValue::Int(cfg.review.sizing.xl_max_files as i64)),
+        "hooks.enabled" => Some(TomlValue::Bool(cfg.hooks.enabled)),
+        "hooks.mode" => Some(TomlValue::Str(cfg.hooks.mode.as_str().to_string())),
         k if k.starts_with("models.roles.") => {
             let role = &k["models.roles.".len()..];
             cfg.models
@@ -1794,6 +1877,8 @@ fn canonical_dot_keys(cfg: &B3Config) -> Vec<String> {
         "review.sizing.l_max_files".to_string(),
         "review.sizing.xl_max_loc".to_string(),
         "review.sizing.xl_max_files".to_string(),
+        "hooks.enabled".to_string(),
+        "hooks.mode".to_string(),
     ]);
     keys
 }
@@ -1834,11 +1919,65 @@ fn load_config_template(repo_root: Option<&Path>) -> String {
     DEFAULT_CONFIG_TEMPLATE.replace("\r\n", "\n")
 }
 
-/// Parses legacy `models.md` (`Role | Preferred Model` table + optional `planning:` YAML block).
+/// Parses legacy `models.md` (`Role | Preferred Model` table + optional `planning:`/`hooks:` YAML blocks).
 struct ParsedLegacyModelsMd {
     roles: BTreeMap<String, String>,
     clarification_gate: Option<bool>,
     understanding_threshold: Option<u8>,
+    hooks_enabled: Option<bool>,
+    hooks_mode: Option<HookMode>,
+}
+
+fn apply_migrated_models_md(
+    parsed: ParsedLegacyModelsMd,
+    mut out_toml: String,
+) -> Result<String, B3Error> {
+    for (r, m) in parsed.roles {
+        out_toml = set_toml_key_preserving_comments(
+            &out_toml,
+            "models.roles",
+            &r,
+            &TomlValue::Array(vec![TomlValue::Str(m)]),
+        )
+        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
+    }
+    if let Some(cg) = parsed.clarification_gate {
+        out_toml = set_toml_key_preserving_comments(
+            &out_toml,
+            "planning",
+            "clarification_gate",
+            &TomlValue::Bool(cg),
+        )
+        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
+    }
+    if let Some(th) = parsed.understanding_threshold {
+        out_toml = set_toml_key_preserving_comments(
+            &out_toml,
+            "planning",
+            "understanding_threshold",
+            &TomlValue::Int(th as i64),
+        )
+        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
+    }
+    if let Some(enabled) = parsed.hooks_enabled {
+        out_toml = set_toml_key_preserving_comments(
+            &out_toml,
+            "hooks",
+            "enabled",
+            &TomlValue::Bool(enabled),
+        )
+        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
+    }
+    if let Some(mode) = parsed.hooks_mode {
+        out_toml = set_toml_key_preserving_comments(
+            &out_toml,
+            "hooks",
+            "mode",
+            &TomlValue::Str(mode.as_str().to_string()),
+        )
+        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
+    }
+    Ok(out_toml)
 }
 
 fn parse_legacy_models_md(raw: &str) -> ParsedLegacyModelsMd {
@@ -1892,10 +2031,13 @@ fn parse_legacy_models_md(raw: &str) -> ParsedLegacyModelsMd {
         }
     }
 
+    let hooks_ov = parse_hook_config_from_markdown(raw).ok().flatten();
     ParsedLegacyModelsMd {
         roles,
         clarification_gate,
         understanding_threshold,
+        hooks_enabled: hooks_ov.and_then(|h| h.enabled),
+        hooks_mode: hooks_ov.and_then(|h| h.mode),
     }
 }
 
@@ -2509,34 +2651,7 @@ pub fn run_config_cli(
                         )
                     })?;
                     let parsed = parse_legacy_models_md(&raw);
-                    let mut out_toml = tpl.clone();
-                    for (r, m) in parsed.roles {
-                        out_toml = set_toml_key_preserving_comments(
-                            &out_toml,
-                            "models.roles",
-                            &r,
-                            &TomlValue::Array(vec![TomlValue::Str(m)]),
-                        )
-                        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-                    }
-                    if let Some(cg) = parsed.clarification_gate {
-                        out_toml = set_toml_key_preserving_comments(
-                            &out_toml,
-                            "planning",
-                            "clarification_gate",
-                            &TomlValue::Bool(cg),
-                        )
-                        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-                    }
-                    if let Some(th) = parsed.understanding_threshold {
-                        out_toml = set_toml_key_preserving_comments(
-                            &out_toml,
-                            "planning",
-                            "understanding_threshold",
-                            &TomlValue::Int(th as i64),
-                        )
-                        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-                    }
+                    let out_toml = apply_migrated_models_md(parsed, tpl.clone())?;
                     if dry_run {
                         actions.push(format!(
                             "dry-run: migrate {} -> {}",
@@ -2584,35 +2699,10 @@ pub fn run_config_cli(
                             )
                         })?;
                         let parsed = parse_legacy_models_md(&raw);
-                        let mut out_toml =
-                            "# Project-local B3 preference overrides (Git-ignored)\n".to_string();
-                        for (r, m) in parsed.roles {
-                            out_toml = set_toml_key_preserving_comments(
-                                &out_toml,
-                                "models.roles",
-                                &r,
-                                &TomlValue::Array(vec![TomlValue::Str(m)]),
-                            )
-                            .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-                        }
-                        if let Some(cg) = parsed.clarification_gate {
-                            out_toml = set_toml_key_preserving_comments(
-                                &out_toml,
-                                "planning",
-                                "clarification_gate",
-                                &TomlValue::Bool(cg),
-                            )
-                            .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-                        }
-                        if let Some(th) = parsed.understanding_threshold {
-                            out_toml = set_toml_key_preserving_comments(
-                                &out_toml,
-                                "planning",
-                                "understanding_threshold",
-                                &TomlValue::Int(th as i64),
-                            )
-                            .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-                        }
+                        let out_toml = apply_migrated_models_md(
+                            parsed,
+                            "# Project-local B3 preference overrides (Git-ignored)\n".to_string(),
+                        )?;
                         if dry_run {
                             actions.push(format!(
                                 "dry-run: migrate {} -> {}",

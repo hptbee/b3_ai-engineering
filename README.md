@@ -14,6 +14,7 @@ This is an **evolving** operating layer for AI coding agents. It is not a compan
 | Workflows, Adaptive Dispatch & Review Loop (Diagrams C–E) | [`docs/ship-and-review-guide.md`](docs/ship-and-review-guide.md), [`workflows/README.md`](workflows/README.md), [`review-loop/README.md`](review-loop/README.md) |
 | Configuration & Governance Policy (`config.toml` & `policy.toml`) | [`docs/configuration.md`](docs/configuration.md), [`docs/model-preferences.md`](docs/model-preferences.md) |
 | Context Routing & Evidence Lifecycle (Diagram H) | [`docs/context-routing.md`](docs/context-routing.md) |
+| Native Guard Event Hooks (`b3 hook`) | [`docs/hooks.md`](docs/hooks.md), [`workflows/references/hook-integration.md`](workflows/references/hook-integration.md) |
 | Evaluation & Benchmark Methodology (Diagram F) | [`docs/evaluation.md`](docs/evaluation.md), [`evals/README.md`](evals/README.md) |
 | CI, Release Pipeline & Native CLI (Diagram G) | [`docs/ci-architecture.md`](docs/ci-architecture.md), [`scripts/README.md`](scripts/README.md) |
 | Roadmap, Maturity, Ownership & Limitations | [`docs/roadmap.md`](docs/roadmap.md), [`docs/system-lifecycle.md`](docs/system-lifecycle.md), [`docs/precedence.md`](docs/precedence.md) |
@@ -60,7 +61,7 @@ Full per-host setup, coexistence guards, native binary distribution, and manual 
 
 - **Sole zero-Rust bootstrapper (`bootstrap-b3.{ps1,sh}`):** End users only need [`scripts/bootstrap-b3.ps1`](scripts/bootstrap-b3.ps1) / [`scripts/bootstrap-b3.sh`](scripts/bootstrap-b3.sh) once to obtain `b3`. It downloads and verifies `SHA256SUMS.txt` from GitHub Releases (or `--release-dir` / `-ReleaseDir` offline bundles) and installs `b3` atomically (with `--rollback` / `-Rollback` to `.prev`) without requiring Rust, Cargo, Node.js, Python, PowerShell, or Bash at runtime.
 - **Build from source (contributors):** `cargo build --release` produces `target/release/b3.exe` / `target/release/b3`.
-- **Native subcommands:** `b3 config <show|get|set|validate|init|migrate>`, `b3 guard <cmd>`, `b3 pr <cmd>`, `b3 sync --host <host>`, `b3 install <product|cursor|antigravity|global>`, and `b3 context measure [--strict]`. End users need only `git` (and optional `gh` for PR commands).
+- **Native subcommands:** `b3 config <show|get|set|validate|init|migrate>`, `b3 guard <cmd>`, `b3 hook <install|uninstall|verify|status>`, `b3 pr <cmd>`, `b3 sync --host <host>`, `b3 install <product|cursor|antigravity|global>`, and `b3 context measure [--strict]`. End users need only `git` (and optional `gh` for PR commands).
 - **Machine-global install (Cursor & Antigravity):**
   ```bash
   b3 install global --action install --host all

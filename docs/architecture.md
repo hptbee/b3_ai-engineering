@@ -43,7 +43,7 @@ B3 is an **engineering harness layer** around existing coding-agent hosts, not a
 
 - **Canonical definitions** (`AGENTS.md` + `CLAUDE.md` bridge, `rules/`, `skills/`, `commands/`, `agents/`, `workflows/`, `review-loop/`, `research/`, `knowledge/`): host-neutral specifications of *what* must hold and *how* workflows run.
 - **Generated host activation** (`.cursor/`, `.agents/`, `.claude/`, `~/.cursor/`, `~/.gemini/config/plugins/`): gitignored or global links, wrappers, and manifests produced by `b3 sync` and `b3 install`.
-- **Native deterministic CLI** (Rust `b3` in `src/`): deterministic adapter management (`b3 sync`, `b3 install`), typed configuration resolution/validation/routing (`b3 config`), plus deterministic Git, verification, evidence, context, and PR checks (`b3 guard`, `b3 pr`, `b3 context`). Rust `b3` never runs LLM agents or acts as a model gateway.
+- **Native deterministic CLI** (Rust `b3` in `src/`): deterministic adapter management (`b3 sync`, `b3 install`), typed configuration resolution/validation/routing (`b3 config`), opt-in event-hook dispatch (`b3 hook` delegating to `src/guard/*`), plus deterministic Git, verification, evidence, context, and PR checks (`b3 guard`, `b3 pr`, `b3 context`). Rust `b3` never runs LLM agents, daemons, or a model gateway.
 - **Host-owned LLM execution** (**Cursor**, **Codex**, **Antigravity**, **Claude Code**): the coding-agent hosts own model inference, tool-use loops, and agent sessions, consuming canonical definitions and generated host activation while invoking native `b3` checks.
 
 Do not mistake a host-executed workflow contract for a B3-managed agent scheduler.
@@ -59,8 +59,8 @@ flowchart TB
     end
 
     subgraph CLI["2. Native Deterministic CLI (Rust b3 in src/ - No LLM or Model Gateway)"]
-        cli_adapt["Host Adapters: b3 sync and b3 install"]
-        cli_det["Deterministic Checks: b3 guard, b3 pr, b3 context"]
+        cli_adapt["Host Adapters: b3 sync, b3 install, b3 hook install"]
+        cli_det["Deterministic Checks: b3 guard, b3 hook, b3 pr, b3 context"]
     end
 
     subgraph ACT["3. Generated Host Activation (Gitignored or Machine-Global)"]
@@ -341,4 +341,5 @@ Example:
 - Configuration & Governance Policy: [`configuration.md`](configuration.md)
 - Precedence: [`precedence.md`](precedence.md)
 - Evolution: [`system-lifecycle.md`](system-lifecycle.md)
+- Native Guard event hooks: [`hooks.md`](hooks.md), [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md), [`../research/decisions/decision-015-native-guard-event-hooks.md`](../research/decisions/decision-015-native-guard-event-hooks.md)
 - Roadmap and outcome criteria: [`roadmap.md`](roadmap.md)

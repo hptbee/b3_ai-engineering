@@ -72,6 +72,17 @@ const EXPECTED_NEW_ORCHESTRATION_EVALS: &[&str] = &[
     "evals/commands/daily-commands-canonical-wrapper-parity.yaml",
 ];
 
+const EXPECTED_HOOK_EVALS: &[&str] = &[
+    "evals/workflows/hooks/tier0-fast-containment.yaml",
+    "evals/workflows/hooks/tier1-canonical-precommit-reuse.yaml",
+    "evals/workflows/hooks/disabled-preserves-workflow-guards.yaml",
+    "evals/workflows/hooks/audit-mode-non-blocking.yaml",
+    "evals/workflows/hooks/host-protocol-honesty-and-fallback.yaml",
+    "evals/workflows/hooks/opt-in-install-preserves-user-hooks.yaml",
+    "evals/workflows/hooks/recursion-and-parallel-isolation.yaml",
+    "evals/workflows/hooks/clarification-boundary-separation.yaml",
+];
+
 const EXPECTED_CLARIFICATION_EVALS: &[&str] = &[
     "evals/workflows/clarification/enabled-clear-proceeds.yaml",
     "evals/workflows/clarification/enabled-below-96-asks.yaml",
@@ -603,18 +614,19 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
     for expected_rel in EXPECTED_NEW_ORCHESTRATION_EVALS
         .iter()
         .chain(EXPECTED_CLARIFICATION_EVALS.iter())
+        .chain(EXPECTED_HOOK_EVALS.iter())
     {
         let full = root.join(expected_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         if !full.is_file() {
             errors.push(format!(
-                "missing required semantic orchestration/clarification eval: {expected_rel}"
+                "missing required semantic orchestration/clarification/hook eval: {expected_rel}"
             ));
         }
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 355,
-        "expected >= 355 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 363,
+        "expected >= 363 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(
@@ -658,9 +670,7 @@ expected_outcome: PASS
     );
 }
 
-#[test]
-fn always_on_context_budget_and_no_forbidden_routing_leaks() {
-    let root = repo_root();
+fn assert_always_on_context_budget(root: &Path) {
     let root_str = root.to_str().expect("repo_root utf8");
     let (report, code) = b3::context::measure_context(root_str, true).expect("measure_context");
     assert_eq!(code, 0, "strict context budget failed:\n{report}");
@@ -680,6 +690,12 @@ fn always_on_context_budget_and_no_forbidden_routing_leaks() {
         always_on_bytes <= 15_777,
         "always_on_total {always_on_bytes} B exceeds cap 15777 B:\n{report}"
     );
+}
+
+#[test]
+fn always_on_context_budget_and_no_forbidden_routing_leaks() {
+    let root = repo_root();
+    assert_always_on_context_budget(&root);
 
     let agents_raw = fs::read_to_string(root.join("AGENTS.md")).expect("read AGENTS.md");
     assert_eq!(
@@ -1668,17 +1684,18 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
     assert!(collect_errs.is_empty(), "collect errors: {collect_errs:?}");
     assert_eq!(
         all_yaml.len(),
-        355,
-        "expected 355 total YAML fixtures across evals/, found {}",
+        363,
+        "expected 363 total YAML fixtures across evals/, found {}",
         all_yaml.len()
     );
 
     let evals_readme = read_lf("evals/README.md");
     assert!(
-        evals_readme.contains("`355` YAML")
+        evals_readme.contains("`363` YAML")
             && evals_readme.contains("| `workflows/clarification/` | 17 |")
-            && evals_readme.contains("| `workflows/orchestration/` | 22 |"),
-        "evals/README.md inventory out of sync with 355 total / 17 workflows/clarification / 22 workflows/orchestration fixtures"
+            && evals_readme.contains("| `workflows/orchestration/` | 22 |")
+            && evals_readme.contains("| `workflows/hooks/` | 8 |"),
+        "evals/README.md inventory out of sync with 363 total / 17 workflows/clarification / 22 workflows/orchestration / 8 workflows/hooks fixtures"
     );
 
     // 5. `scripts/README.md` flag documentation & end-to-end `run_b3` smoke check on
@@ -1752,6 +1769,90 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
             "expected '{expected}' in check-wave output:\n{out}"
         );
     }
+}
+
+#[test]
+fn hook_integration_canonical_contract_and_no_duplication() {
+    let root = repo_root();
+
+    let hook_ref = fs::read_to_string(root.join("workflows/references/hook-integration.md"))
+        .expect("read workflows/references/hook-integration.md");
+    for required in [
+        "[hooks]",
+        "enabled = true",
+        "mode = \"enforce\"",
+        "Tier 0",
+        "Tier 1",
+        "Tier 2",
+        "B3_HOOK_ACTIVE",
+        "clarification-gate.md",
+    ] {
+        assert!(
+            hook_ref.contains(required),
+            "workflows/references/hook-integration.md missing '{required}'"
+        );
+    }
+
+    let hooks_doc = fs::read_to_string(root.join("docs/hooks.md")).expect("read docs/hooks.md");
+    for required in [
+        "EVENT_BLOCKING",
+        "NATIVE_BLOCKING",
+        "NOT_VERIFIED",
+        "Cursor",
+        "Claude Code",
+        "Codex",
+        "Antigravity",
+        "Git",
+        "mermaid",
+    ] {
+        assert!(
+            hooks_doc.contains(required),
+            "docs/hooks.md missing '{required}'"
+        );
+    }
+
+    let adr = fs::read_to_string(
+        root.join("research/decisions/decision-015-native-guard-event-hooks.md"),
+    )
+    .expect("read decision-015");
+    assert!(adr.contains("hook-integration.md") || adr.contains("b3 hook"));
+
+    let disp = fs::read_to_string(root.join("workflows/references/dispatch-naming.md"))
+        .expect("read dispatch-naming.md");
+    assert!(disp.contains("hook-integration.md"));
+
+    let config_ex = fs::read_to_string(root.join("config/config.example.toml"))
+        .expect("read config.example.toml");
+    let parsed_hooks = b3::hook::config::parse_hook_config_from_toml(&config_ex)
+        .expect("parse config.example.toml hooks")
+        .expect("hooks section present");
+    assert_eq!(parsed_hooks.enabled, Some(true));
+    assert_eq!(parsed_hooks.mode, Some(b3::hook::config::HookMode::Enforce));
+    assert!(
+        config_ex.contains("clarification_gate = true")
+            && config_ex.contains("understanding_threshold = 96"),
+        "config/config.example.toml must include planning clarification keys alongside [hooks]"
+    );
+
+    // Removed legacy hook variables must not remain in canonical reference or docs
+    for removed in [
+        "B3_HOOK_SKIP_PRECOMMIT",
+        "B3_PRECOMMIT_VERIFIED_TREE",
+        "B3_MERGE_AUTHORIZED",
+        "B3_PROTECTED_PATHS",
+        "B3_IGNORE_DIRTY_PATHS",
+    ] {
+        assert!(
+            !hook_ref.contains(removed),
+            "workflows/references/hook-integration.md must not contain removed '{removed}'"
+        );
+        assert!(
+            !hooks_doc.contains(removed),
+            "docs/hooks.md must not contain removed '{removed}'"
+        );
+    }
+
+    assert_always_on_context_budget(&root);
 }
 
 #[test]

@@ -1,0 +1,9 @@
+id: hooks-host-protocol-honesty-and-fallback-005
+artifact: docs/hooks.md
+intent: Host adapters map only verified native hook capabilities and preserve workflow fallbacks for unsupported events
+scenario: |
+  Inspect Cursor, Claude Code, Codex, Antigravity, and Git hook adapters and docs/hooks.md
+  Each host emits its exact native JSON/exit-code protocol, unsupported events degrade gracefully to Allow, and live IDE compliance is marked NOT_VERIFIED until observed in live sessions
+expected_outcome: PASS
+failure_mode: inventing-unsupported-host-events-or-overclaiming-live-enforcement
+notes: Prevents fabricated capabilities or custom host simulation daemons

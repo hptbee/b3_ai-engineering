@@ -661,8 +661,8 @@ pub fn test_no_reparse_segments(root: &Path, rel_slash: &str) -> bool {
         }
         cur.push(seg);
         match fs::symlink_metadata(&cur) {
-            Ok(_) => {
-                if is_reparse_or_symlink(&cur) {
+            Ok(meta) => {
+                if is_reparse_or_symlink_meta(&meta) {
                     return false;
                 }
             }
@@ -681,6 +681,18 @@ fn is_nonexempt_reparse(p: &Path) -> bool {
         }
     }
     is_reparse_or_symlink(p)
+}
+
+fn is_reparse_or_symlink_meta(meta: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        meta.file_type().is_symlink() || (meta.file_attributes() & 0x0400) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
+    }
 }
 
 /// Scans each component of an absolute path `abs_path` and returns the first
@@ -815,6 +827,33 @@ pub fn get_repo_relative_path(root: &Path, full: &Path) -> String {
     full_norm
 }
 
+pub(crate) fn expand_windows_long_existing_prefix(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if path.exists() {
+            return expand_windows_long_path(path);
+        }
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        let mut cur = path;
+        while let (Some(name), Some(parent)) = (cur.file_name(), cur.parent()) {
+            tail.push(name.to_os_string());
+            if parent.exists() {
+                let mut out = expand_windows_long_path(parent);
+                for seg in tail.into_iter().rev() {
+                    out.push(seg);
+                }
+                return out;
+            }
+            cur = parent;
+        }
+        path.to_path_buf()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
 /// Validates and resolves a safe repo-contained write path (`FullPath`, `RelPath`),
 /// matching `Resolve-SafeRepoWritePath`.
 pub fn resolve_safe_repo_write_path(root: &Path, path_arg: &str) -> Option<(PathBuf, String)> {
@@ -845,16 +884,17 @@ pub fn resolve_safe_repo_write_path(root: &Path, path_arg: &str) -> Option<(Path
         return None;
     }
 
-    let full = resolve_unresolved_path(root, trimmed);
-    if !test_resolved_path_within_root(root, &full) {
+    let root_eff = expand_windows_long_existing_prefix(root);
+    let full = expand_windows_long_existing_prefix(&resolve_unresolved_path(&root_eff, trimmed));
+    if !test_resolved_path_within_root(&root_eff, &full) {
         return None;
     }
-    let rel = get_repo_relative_path(root, &full);
+    let rel = get_repo_relative_path(&root_eff, &full);
     if rel.is_empty() || Path::new(&rel).is_absolute() || !test_safe_repo_path_segments(&rel, true)
     {
         return None;
     }
-    if !test_no_reparse_segments(root, &rel) {
+    if !test_no_reparse_segments(&root_eff, &rel) {
         return None;
     }
     Some((full, rel))

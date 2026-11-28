@@ -191,3 +191,17 @@ l_max_files = 49
 # Extra-large PR threshold (Default: 5000 LOC, 100 files).
 xl_max_loc = 5000
 xl_max_files = 100
+
+
+[hooks]
+
+# Enable native event-driven guard hooks (requires 'b3 hook install' to wire into hosts/Git).
+# Valid values: true, false.
+# Default: true.
+enabled = true
+
+# Enforcement mode for installed event hooks (overridden by CLI --mode or B3_HOOK_MODE).
+# Setting mode = "off" disables automatic event hooks only; mandatory workflow guards stay active.
+# Valid values: "enforce", "audit", "off".
+# Default: "enforce".
+mode = "enforce"

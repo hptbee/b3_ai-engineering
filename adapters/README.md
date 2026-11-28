@@ -113,6 +113,15 @@ b3 install global --action verify --host all
 
 Host-specific commands (`b3 install cursor` and `b3 install antigravity`) stay independent, share filesystem/hashing/manifest/discovery primitives via `src/adapters/`, support `install`, `verify`, `update`, `uninstall`, `--dry-run`, and `--force`, and are documented in [`cursor/README.md`](cursor/README.md) and [`antigravity/README.md`](antigravity/README.md).
 
+## Opt-in Event Hooks (`b3 hook install`)
+
+B3 supports optional, opt-in native event hooks (`b3 hook install [--dry-run]`, `verify`, `status`, `uninstall`) backed directly by canonical `src/guard/*` primitives and configured via `[hooks]` in `~/.b3/config.toml` / `<project>/.b3/config.toml` (`"enforce"` | `"audit"` | `"off"`, with legacy `.b3/models.md` fallback).
+
+- **Cursor (`.cursor/hooks.json`), Claude Code (`.claude/settings.json`), Codex (`.codex/hooks.json`), and Antigravity (`.agents/hooks.json` / `~/.gemini/config/hooks.json`):** Support opt-in Tier 0 pre-tool/file/command guards (`<10 ms`, `0` Git calls) and Tier 1 advisory/completion hooks via native host protocols; live IDE runtime execution remains **`NOT_VERIFIED`**.
+- **Local Git hooks (`pre-commit`, `pre-push`, `pre-merge-commit`):** Installed in repo-contained local `core.hooksPath` or `<git-common-dir>/hooks/` (never mutating global `core.hooksPath`), chaining user hooks via `<hook>.b3-user` and delegating to `guard::precommit` and `guard::merge_policy`; local hooks do not replace server-side branch protection. Setting `hooks.mode: off` never bypasses mandatory workflow `b3 guard` gates.
+
+Full matrices, threat model, and troubleshooting: [`../docs/hooks.md`](../docs/hooks.md) and [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md).
+
 ## Retired adapter compatibility wrappers
 
 These 5 adapter wrapper pairs were retired in favor of the single native `b3` contract (zero shell-wrapper overhead; end users only need `bootstrap-b3` once to install `b3`):

@@ -1,0 +1,9 @@
+id: hooks-clarification-boundary-separation-008
+artifact: workflows/references/hook-integration.md
+intent: Requirement Clarification Gate (96% threshold) stays strictly in the AI planning layer and is never moved into Rust hooks
+scenario: |
+  Audit src/hook/*.rs and workflows/references/hook-integration.md
+  Hooks perform deterministic Guard enforcement only and never calculate artificial LLM confidence or ask semantic clarification questions
+expected_outcome: PASS
+failure_mode: semantic-clarification-scoring-embedded-in-rust-hooks
+notes: Preserves strict separation between AI intelligence and deterministic Rust Guard

@@ -21,6 +21,45 @@ pub enum Command {
         force: bool,
     },
     Install(InstallSubcommand),
+    Hook(HookSubcommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookSubcommand {
+    Run {
+        host: String,
+        event: String,
+        repo_root: String,
+        mode: String,
+        payload: Option<String>,
+        git_args: Vec<String>,
+    },
+    Install {
+        host: String,
+        scope: String,
+        repo_root: String,
+        user_home: String,
+        b3_bin: String,
+        dry_run: bool,
+        force: bool,
+    },
+    Uninstall {
+        host: String,
+        scope: String,
+        repo_root: String,
+        user_home: String,
+        dry_run: bool,
+    },
+    Verify {
+        host: String,
+        scope: String,
+        repo_root: String,
+        user_home: String,
+    },
+    Status {
+        repo_root: String,
+        user_home: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,6 +338,7 @@ USAGE:
   b3 pr <verify|fetch|reconcile|reply|resolve|comment> [flags]
   b3 sync --host cursor|codex|claude|antigravity [--repo-root <dir>] [--dry-run] [--verify-only] [--force]
   b3 install <product|cursor|antigravity|global> [flags]
+  b3 hook <run|install|uninstall|verify|status> [flags]
   b3 guard <subcommand> [flags]
 
 GUARD SUBCOMMANDS:
@@ -363,6 +403,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, B3Error> {
         "pr" => parse_pr(&args[1..]).map(Command::Pr),
         "sync" => parse_sync(&args[1..]),
         "install" => parse_install(&args[1..]).map(Command::Install),
+        "hook" => parse_hook(&args[1..]).map(Command::Hook),
         other => Err(fail(format!("B3_CLI_FAIL: unknown command '{other}'"), 1)),
     }
 }
@@ -538,6 +579,232 @@ fn parse_config(args: &[String]) -> Result<ConfigCommand, B3Error> {
         route_available,
         route_confirmed,
     })
+}
+
+fn parse_hook(rest: &[String]) -> Result<HookSubcommand, B3Error> {
+    if rest.is_empty() {
+        return Err(fail(
+            "HOOK_CLI_FAIL: missing hook subcommand (expected run|install|uninstall|verify|status)",
+            1,
+        ));
+    }
+    if matches!(rest[0].as_str(), "-h" | "--help") {
+        return Err(fail(
+            "Usage: b3 hook <run|install|uninstall|verify|status> [flags]",
+            0,
+        ));
+    }
+    let sub = rest[0].as_str();
+    let tail = &rest[1..];
+    match sub {
+        "run" => {
+            let mut host = String::new();
+            let mut event = String::new();
+            let mut repo_root = String::new();
+            let mut mode = String::new();
+            let mut payload: Option<String> = None;
+            let mut git_args: Vec<String> = Vec::new();
+            let mut i = 0usize;
+            while i < tail.len() {
+                if tail[i] == "--" {
+                    git_args = tail[i + 1..].to_vec();
+                    break;
+                }
+                let (flag, iv) = parse_opt(&tail[i]);
+                match flag {
+                    "--host" => host = take_val(tail, &mut i, "--host", iv, "HOOK_CLI_FAIL")?,
+                    "--event" => event = take_val(tail, &mut i, "--event", iv, "HOOK_CLI_FAIL")?,
+                    "--repo-root" => {
+                        repo_root = take_val(tail, &mut i, "--repo-root", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--mode" => mode = take_val(tail, &mut i, "--mode", iv, "HOOK_CLI_FAIL")?,
+                    "--payload" => {
+                        payload = Some(take_val(tail, &mut i, "--payload", iv, "HOOK_CLI_FAIL")?);
+                    }
+                    "-h" | "--help" if iv.is_none() => {
+                        return Err(fail(
+                            "Usage: b3 hook run --host cursor|claude|codex|antigravity|git [--event <name>] [--repo-root <dir>] [--mode enforce|audit|off] [--payload <json>] [-- <git-args>...]",
+                            0,
+                        ));
+                    }
+                    other => {
+                        return Err(fail(format!("HOOK_CLI_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            if host.trim().is_empty() {
+                return Err(fail(
+                    "HOOK_CLI_FAIL: --host is required for 'b3 hook run'",
+                    1,
+                ));
+            }
+            Ok(HookSubcommand::Run {
+                host,
+                event,
+                repo_root,
+                mode,
+                payload,
+                git_args,
+            })
+        }
+        "install" => {
+            let mut host = "all".to_string();
+            let mut scope = "project".to_string();
+            let mut repo_root = String::new();
+            let mut user_home = String::new();
+            let mut b3_bin = String::new();
+            let mut dry_run = false;
+            let mut force = false;
+            let mut i = 0usize;
+            while i < tail.len() {
+                let (flag, iv) = parse_opt(&tail[i]);
+                match flag {
+                    "--host" => host = take_val(tail, &mut i, "--host", iv, "HOOK_CLI_FAIL")?,
+                    "--scope" => scope = take_val(tail, &mut i, "--scope", iv, "HOOK_CLI_FAIL")?,
+                    "--repo-root" => {
+                        repo_root = take_val(tail, &mut i, "--repo-root", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--user-home" => {
+                        user_home = take_val(tail, &mut i, "--user-home", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--b3-bin" => {
+                        b3_bin = take_val(tail, &mut i, "--b3-bin", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--dry-run" if iv.is_none() => dry_run = true,
+                    "--force" if iv.is_none() => force = true,
+                    "-h" | "--help" if iv.is_none() => {
+                        return Err(fail(
+                            "Usage: b3 hook install [--host cursor|claude|codex|antigravity|git|all] [--scope project|global] [--repo-root <dir>] [--user-home <dir>] [--b3-bin <path>] [--dry-run] [--force]",
+                            0,
+                        ));
+                    }
+                    other => {
+                        return Err(fail(format!("HOOK_CLI_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(HookSubcommand::Install {
+                host,
+                scope,
+                repo_root,
+                user_home,
+                b3_bin,
+                dry_run,
+                force,
+            })
+        }
+        "uninstall" => {
+            let mut host = "all".to_string();
+            let mut scope = "project".to_string();
+            let mut repo_root = String::new();
+            let mut user_home = String::new();
+            let mut dry_run = false;
+            let mut i = 0usize;
+            while i < tail.len() {
+                let (flag, iv) = parse_opt(&tail[i]);
+                match flag {
+                    "--host" => host = take_val(tail, &mut i, "--host", iv, "HOOK_CLI_FAIL")?,
+                    "--scope" => scope = take_val(tail, &mut i, "--scope", iv, "HOOK_CLI_FAIL")?,
+                    "--repo-root" => {
+                        repo_root = take_val(tail, &mut i, "--repo-root", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--user-home" => {
+                        user_home = take_val(tail, &mut i, "--user-home", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--dry-run" if iv.is_none() => dry_run = true,
+                    "-h" | "--help" if iv.is_none() => {
+                        return Err(fail(
+                            "Usage: b3 hook uninstall [--host cursor|claude|codex|antigravity|git|all] [--scope project|global] [--repo-root <dir>] [--user-home <dir>] [--dry-run]",
+                            0,
+                        ));
+                    }
+                    other => {
+                        return Err(fail(format!("HOOK_CLI_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(HookSubcommand::Uninstall {
+                host,
+                scope,
+                repo_root,
+                user_home,
+                dry_run,
+            })
+        }
+        "verify" => {
+            let mut host = "all".to_string();
+            let mut scope = "project".to_string();
+            let mut repo_root = String::new();
+            let mut user_home = String::new();
+            let mut i = 0usize;
+            while i < tail.len() {
+                let (flag, iv) = parse_opt(&tail[i]);
+                match flag {
+                    "--host" => host = take_val(tail, &mut i, "--host", iv, "HOOK_CLI_FAIL")?,
+                    "--scope" => scope = take_val(tail, &mut i, "--scope", iv, "HOOK_CLI_FAIL")?,
+                    "--repo-root" => {
+                        repo_root = take_val(tail, &mut i, "--repo-root", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--user-home" => {
+                        user_home = take_val(tail, &mut i, "--user-home", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "-h" | "--help" if iv.is_none() => {
+                        return Err(fail(
+                            "Usage: b3 hook verify [--host cursor|claude|codex|antigravity|git|all] [--scope project|global] [--repo-root <dir>] [--user-home <dir>]",
+                            0,
+                        ));
+                    }
+                    other => {
+                        return Err(fail(format!("HOOK_CLI_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(HookSubcommand::Verify {
+                host,
+                scope,
+                repo_root,
+                user_home,
+            })
+        }
+        "status" => {
+            let mut repo_root = String::new();
+            let mut user_home = String::new();
+            let mut i = 0usize;
+            while i < tail.len() {
+                let (flag, iv) = parse_opt(&tail[i]);
+                match flag {
+                    "--repo-root" => {
+                        repo_root = take_val(tail, &mut i, "--repo-root", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "--user-home" => {
+                        user_home = take_val(tail, &mut i, "--user-home", iv, "HOOK_CLI_FAIL")?;
+                    }
+                    "-h" | "--help" if iv.is_none() => {
+                        return Err(fail(
+                            "Usage: b3 hook status [--repo-root <dir>] [--user-home <dir>]",
+                            0,
+                        ));
+                    }
+                    other => {
+                        return Err(fail(format!("HOOK_CLI_FAIL: unknown option '{other}'"), 1));
+                    }
+                }
+                i += 1;
+            }
+            Ok(HookSubcommand::Status {
+                repo_root,
+                user_home,
+            })
+        }
+        other => Err(fail(
+            format!("HOOK_CLI_FAIL: unknown hook subcommand '{other}'"),
+            1,
+        )),
+    }
 }
 
 fn parse_sync(rest: &[String]) -> Result<Command, B3Error> {

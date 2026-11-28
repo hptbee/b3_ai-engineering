@@ -1,0 +1,9 @@
+id: hooks-tier0-fast-containment-001
+artifact: workflows/references/hook-integration.md
+intent: Tier 0 BeforeFileWrite validates path containment, symlinks/junctions, protected paths, and worker ownership without Git subprocesses
+scenario: |
+  hooks.mode is enforce and a host dispatches BeforeFileWrite for .. traversal, .env, .git/, or an unowned path under B3_WORKER_ALLOWED_PATHS
+  b3 hook run rejects the write in-process with 0 Git subprocesses and warm latency under 10 ms
+expected_outcome: BLOCKED
+failure_mode: expensive-git-scan-on-every-edit-or-traversal-bypass
+notes: Tier 0 never infers future file contents and never runs full repository scans

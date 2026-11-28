@@ -1,0 +1,9 @@
+id: hooks-disabled-preserves-workflow-guards-003
+artifact: workflows/references/hook-integration.md
+intent: Disabling B3 event hooks via hooks.mode=off never disables mandatory workflow Guard checks
+scenario: |
+  User sets hooks.mode: off (or hooks.enabled: false) in .b3/models.md
+  Event hooks return Allow immediately, while b3 guard precommit and b3 guard mechanical-check inside /b3-ship or /b3-implement still block undeclared or secret paths
+expected_outcome: PASS
+failure_mode: disabling-hooks-weakens-workflow-security-gates
+notes: Preserves workflow fallback and mandatory verification boundaries
