@@ -2651,10 +2651,30 @@ fn zero_remote_gitlab_ledger_binding_and_json_hardening() {
         0
     );
     for (fname, body, expect_code, expect_pat) in [
-        (".b3/bad.json", "{ broken", 1, "legacy_policy_json_unsupported"),
-        (".b3/bad.toml", "auto_merge = \"unterminated\n", 1, "invalid_policy_toml"),
-        (".b3/nested.toml", "protected_paths = [[\"a\"]]\n", 1, "invalid_policy_toml"),
-        (".b3/num.toml", "auto_merge = 123\n", 1, "invalid_policy_toml"),
+        (
+            ".b3/bad.json",
+            "{ broken",
+            1,
+            "legacy_policy_json_unsupported",
+        ),
+        (
+            ".b3/bad.toml",
+            "auto_merge = \"unterminated\n",
+            1,
+            "invalid_policy_toml",
+        ),
+        (
+            ".b3/nested.toml",
+            "protected_paths = [[\"a\"]]\n",
+            1,
+            "invalid_policy_toml",
+        ),
+        (
+            ".b3/num.toml",
+            "auto_merge = 123\n",
+            1,
+            "invalid_policy_toml",
+        ),
         (
             ".b3/nl.toml",
             "auto_merge = \"disabled\"\nprotected_paths = [\"foo\\nauto_merge=authorized\"]\n",

@@ -21,7 +21,7 @@ Research-first delivery complementing [`ship.md`](ship.md); reads product profil
 Load [templates](references/research-ship-templates.md) on create; [gates](references/research-ship-gates.md) at E/H–K; [`references/context-routing.md`](references/context-routing.md) on demand for repo/G (`repo-evidence` only, [gates](references/research-ship-gates.md) §2).
 
 ### A. Preflight
-- **Out:** `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo), `PRODUCT_ROOT`, branch/HEAD, open PR on GitHub (`gh pr list --head <branch>`), `.b3/{research-profile.md,policy.toml}`, `--protected-paths`, `initial_dirty_paths`, Parent-once [static-analysis](references/static-analysis.md) (when checks/impl apply), `{RUN_DIR}` (`b3 guard new-run --namespace research-ship --slug <slug>`).
+- **Out:** `B3_HOME` (`B3_HOME`/`.b3/home`/fallback/repo), `PRODUCT_ROOT`, branch/HEAD, open PR on GitHub (`gh pr list --head <branch>`), `.b3/{research-profile.md,policy.toml}`, `--protected-paths`, `initial_dirty_paths`, [static-analysis](references/static-analysis.md) (when applicable), `{RUN_DIR}` (`b3 guard new-run --namespace research-ship --slug <slug>`).
 - **Gate:** preserve `research/`, decisions, evidence; run `b3 guard check-worktree --expected-root <root> --require-isolated` ONLY on `ISOLATED_WRITES` (never block `research-only`/`SHARED_READ_ONLY` in Phase A; fall back to `SEQUENTIAL` when safe per [dispatch](references/dispatch-naming.md)); missing `B3_HOME`, unsafe isolated worktree failure, or dirty overlap → `BLOCKED`.
 
 ### B. Research Planning

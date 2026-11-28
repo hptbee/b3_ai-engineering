@@ -1972,8 +1972,8 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
     );
 
     assert!(
-        !root.join("docs/model-preferences.md").exists(),
-        "obsolete docs/model-preferences.md must be removed"
+        !root.join("docs").join("model-preferences.md").exists(),
+        "obsolete model-preferences guide must be removed"
     );
     let cfg_doc =
         fs::read_to_string(root.join("docs/configuration.md")).expect("read docs/configuration.md");
