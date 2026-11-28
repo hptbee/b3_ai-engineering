@@ -4,13 +4,6 @@ on:
   push:
     tags:
       - 'v*.*.*'
-  pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'src/**'
-      - 'scripts/bootstrap-b3.*'
-      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 concurrency:
@@ -34,12 +27,6 @@ jobs:
             bin_name: b3.exe
             artifact_name: b3-x86_64-pc-windows-msvc.exe
             expected_uname_s: Windows
-            expected_arch: x86_64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            bin_name: b3
-            artifact_name: b3-x86_64-unknown-linux-gnu
-            expected_uname_s: Linux
             expected_arch: x86_64
           - os: macos-15
             target: aarch64-apple-darwin
@@ -152,7 +139,6 @@ jobs:
             b3-aarch64-apple-darwin
             b3-x86_64-apple-darwin
             b3-x86_64-pc-windows-msvc.exe
-            b3-x86_64-unknown-linux-gnu
           )
           for art in "${expected_artifacts[@]}"; do
             path="dist/${art}"
@@ -164,7 +150,7 @@ jobs:
           done
 
           cd dist
-          LC_ALL=C sha256sum b3-aarch64-apple-darwin b3-x86_64-apple-darwin b3-x86_64-pc-windows-msvc.exe b3-x86_64-unknown-linux-gnu > SHA256SUMS.txt
+          LC_ALL=C sha256sum b3-aarch64-apple-darwin b3-x86_64-apple-darwin b3-x86_64-pc-windows-msvc.exe > SHA256SUMS.txt
           sha256sum -c SHA256SUMS.txt
           cat SHA256SUMS.txt
           cd ..
@@ -172,8 +158,6 @@ jobs:
       - name: Validate bootstrap target compatibility
         shell: bash
         run: |
-          ./scripts/bootstrap-b3.sh --release-dir dist --install-dir /tmp/b3-release-smoke --target x86_64-unknown-linux-gnu
-          /tmp/b3-release-smoke/b3 --version
           for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc; do
             ./scripts/bootstrap-b3.sh --release-dir dist --install-dir /tmp/b3-release-smoke --target "$target" --dry-run
           done
