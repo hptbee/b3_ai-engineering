@@ -5,10 +5,10 @@ Canonical orchestration, [clarification](clarification-gate.md), and [hook](hook
 - **Canonical roles & aliases:** Keep `agents/b3-*.md` stems/`name:` stable (`b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer`). Prefer lowercase kebab-case spawn aliases when supported: `b3-impl-<task-id-lower>`, `b3-review-u<NN>-p<K>`, `b3-fix-p<K>`, `b3-research-<slug>`, `b3-verify-<slug>`; never block on naming.
 - **Session IDs & no nesting:** Store host agent IDs separately from aliases. Workers execute directly and **never** nest subagents (B3 subagents only, not product workers).
 
-## Model preferences
+## Model routing & preferences
 
-- Read once/dispatch: `.b3/config.toml` > `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`; `b3 config`, migrate `models.md`). User > project > personal > `auto` (`planning`, `debugging`, `implementation`, `b3-reviewer`, `b3-fixer`, specialists).
-- **Single-task fast-path:** 1-unit `XS` + `inline` runs inline on `main` when `implementation` is unset/`auto` (or matches `main`); dispatch `b3-impl-<task-id-lower>` if model differs, `>= S`, `notes`/`detailed`, or multi-unit. Never edit host settings, `agents/*.md` (`model: inherit`), or claim unverified switches.
+- Read once/dispatch via `b3 config` (`config.toml` > defaults); route subagents, tiers, fallback, and escalation (`--escalations <n> --trigger <t> --available-models <csv>`) via `b3 config get --route <role> --complexity <low|medium|high> --risk <LOW|MEDIUM|HIGH|CRITICAL> --host <host>`.
+- **Fast-path:** 1-unit `XS` + `inline` runs inline on `main` if `implementation` routes to `auto`/`main`; else `b3-impl-<task-id-lower>`. Never edit host settings, `agents/*.md` (`model: inherit`), or claim unverified switches (`INHERITED|UNKNOWN`).
 
 ## Continuous scheduling & safe integration contract
 

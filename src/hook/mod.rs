@@ -1,4 +1,3 @@
-pub mod config;
 pub(crate) mod dispatch;
 pub(crate) mod event;
 pub(crate) mod install;

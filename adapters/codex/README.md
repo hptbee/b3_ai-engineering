@@ -37,7 +37,7 @@ b3 sync --host codex --verify-only
 b3 install product --product-root /path/to/product --host codex
 ```
 
-Writes `.b3/home`, thin `AGENTS.md` (when missing), `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, `.b3/config.toml`, `.b3/models.md`, and `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `b3-ship`).
+Writes `.b3/home`, thin `AGENTS.md` (when missing), `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, `.b3/config.toml`, and `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `b3-ship`).
 
 ## Command and role routing
 

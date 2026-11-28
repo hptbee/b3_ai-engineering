@@ -12,8 +12,8 @@ This document defines the building blocks of the system. It is definitional. Ope
 | **Research** | Provenance; not production config | `research/` |
 | **Generated host activation** | Gitignored local host links/wrappers/manifests or global/product installs created by `b3 sync` / `b3 install` | `.cursor/{skills,commands,agents,rules}`, `.agents/skills.json`, `.agents/skills`, `.claude/{skills,agents}` |
 | **Templates & governance schema** | Copy-ready configuration and policy templates | `config/config.example.toml`, `config/policy.example.toml` |
-| **User-owned configuration** | Personal preferences or custom host rules/manifests; never silently overwritten without `--force` | `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`), `<project>/.b3/config.toml`, legacy `models.md`, unmanaged `.cursor/rules/*.mdc`, customized `.agents/skills.json` |
-| **Project governance policy** | Trunk-tracked repository merge/path governance resolved from canonical trunk | `<project>/.b3/policy.toml` (legacy `.b3/research-policy.json`) |
+| **User-owned configuration** | Personal preferences or custom host rules/manifests; never silently overwritten without `--force` | `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`), `<project>/.b3/config.toml`, unmanaged `.cursor/rules/*.mdc`, customized `.agents/skills.json` (any existing legacy `~/.b3/models.md` is preserved untouched and ignored) |
+| **Project governance policy** | Trunk-tracked repository merge/path governance resolved from canonical trunk | `<project>/.b3/policy.toml` (legacy `.b3/research-policy.json` fails closed) |
 
 Activation lifecycle:
 

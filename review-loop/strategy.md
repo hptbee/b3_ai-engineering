@@ -6,7 +6,7 @@
 
 ## Roles & dispatch (`b3-*` roles only)
 
-- **Lean loads:** [dispatch](../workflows/references/dispatch-naming.md) + `.b3/config.toml` **1x/loop**; [context-routing](../workflows/references/context-routing.md) `<=1x/loop` if triggered (`context_hint: tools=native cache=none` skips). Pass 1L `context_hint:`; cache IDs; no nested subagents.
+- **Lean loads:** [dispatch](../workflows/references/dispatch-naming.md) + `b3 config get --route` **1x/loop**; [context-routing](../workflows/references/context-routing.md) `<=1x/loop` if triggered (`context_hint: tools=native cache=none` skips). Pass 1L `context_hint:`; cache IDs; no nested subagents.
 - **Reviewer (`b3-reviewer` + specialists):** fresh, read-only; `agents/b3-reviewer.md` self-contained (skip `code-review/SKILL.md`/`review-template.md`). Fan out in `SHARED_READ_ONLY` (`dispatch-naming.md`); `risk_level` != size:
   - `LOW`: 0-tok checks + 1 `b3-reviewer`.
   - `MEDIUM`: `b3-reviewer` + triggered specialist (`b3-{security,architecture,performance}-reviewer`).

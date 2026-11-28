@@ -12,7 +12,7 @@ This is an **evolving** operating layer for AI coding agents. It is not a compan
 | Installation, 4-Host Compatibility & Sync (Diagram B) | [`adapters/README.md`](adapters/README.md) ([Cursor](adapters/cursor/README.md), [Codex](adapters/codex/README.md), [Claude](adapters/claude/README.md), [Antigravity](adapters/antigravity/README.md)) |
 | Commands, Skills & Subagent Roles | [`commands/README.md`](commands/README.md), [`skills/README.md`](skills/README.md), [`agents/README.md`](agents/README.md) |
 | Workflows, Adaptive Dispatch & Review Loop (Diagrams C–E) | [`docs/ship-and-review-guide.md`](docs/ship-and-review-guide.md), [`workflows/README.md`](workflows/README.md), [`review-loop/README.md`](review-loop/README.md) |
-| Configuration & Governance Policy (`config.toml` & `policy.toml`) | [`docs/configuration.md`](docs/configuration.md), [`docs/model-preferences.md`](docs/model-preferences.md) |
+| Configuration & Governance Policy (`config.toml` & `policy.toml`) | [`docs/configuration.md`](docs/configuration.md) |
 | Context Routing & Evidence Lifecycle (Diagram H) | [`docs/context-routing.md`](docs/context-routing.md) |
 | Native Guard Event Hooks (`b3 hook`) | [`docs/hooks.md`](docs/hooks.md), [`workflows/references/hook-integration.md`](workflows/references/hook-integration.md) |
 | Evaluation & Benchmark Methodology (Diagram F) | [`docs/evaluation.md`](docs/evaluation.md), [`evals/README.md`](evals/README.md) |
@@ -41,7 +41,7 @@ b3-ai-engineering/
 └── docs/                     Architecture, standards, contracts
 ```
 
-Catalogs: [`skills/README.md`](skills/README.md), [`docs/engineering-philosophy.md`](docs/engineering-philosophy.md), [`docs/architecture.md`](docs/architecture.md), [`docs/configuration.md`](docs/configuration.md), [`docs/model-preferences.md`](docs/model-preferences.md), [`docs/context-routing.md`](docs/context-routing.md). Universal map: [`AGENTS.md`](AGENTS.md).
+Catalogs: [`skills/README.md`](skills/README.md), [`docs/engineering-philosophy.md`](docs/engineering-philosophy.md), [`docs/architecture.md`](docs/architecture.md), [`docs/configuration.md`](docs/configuration.md), [`docs/context-routing.md`](docs/context-routing.md). Universal map: [`AGENTS.md`](AGENTS.md).
 
 ## Why it exists
 
@@ -61,14 +61,14 @@ Full per-host setup, coexistence guards, native binary distribution, and manual 
 
 - **Sole zero-Rust bootstrapper (`bootstrap-b3.{ps1,sh}`):** End users only need [`scripts/bootstrap-b3.ps1`](scripts/bootstrap-b3.ps1) / [`scripts/bootstrap-b3.sh`](scripts/bootstrap-b3.sh) once to obtain `b3`. It downloads and verifies `SHA256SUMS.txt` from GitHub Releases (or `--release-dir` / `-ReleaseDir` offline bundles) and installs `b3` atomically (with `--rollback` / `-Rollback` to `.prev`) without requiring Rust, Cargo, Node.js, Python, PowerShell, or Bash at runtime.
 - **Build from source (contributors):** `cargo build --release` produces `target/release/b3.exe` / `target/release/b3`.
-- **Native subcommands:** `b3 config <show|get|set|validate|init|migrate>`, `b3 guard <cmd>`, `b3 hook <install|uninstall|verify|status>`, `b3 pr <cmd>`, `b3 sync --host <host>`, `b3 install <product|cursor|antigravity|global>`, and `b3 context measure [--strict]`. End users need only `git` (and optional `gh` for PR commands).
+- **Native subcommands:** `b3 config <show|get|set|validate|init>`, `b3 guard <cmd>`, `b3 hook <install|uninstall|verify|status>`, `b3 pr <cmd>`, `b3 sync --host <host>`, `b3 install <product|cursor|antigravity|global>`, and `b3 context measure [--strict]`. End users need only `git` (and optional `gh` for PR commands).
 - **Machine-global install (Cursor & Antigravity):**
   ```bash
   b3 install global --action install --host all
   # or per-host: b3 install cursor | b3 install antigravity
   # actions: install, verify, update, uninstall (supports --dry-run, --force)
   ```
-  `b3 install global`, `b3 install product`, and `b3 sync` initialize missing `~/.b3/config.toml` from [`config/config.example.toml`](config/config.example.toml) (or defer with a migration hint when legacy `~/.b3/models.md` exists) without overwriting existing preferences (`docs/configuration.md`, `docs/model-preferences.md`).
+  `b3 install global`, `b3 install product`, and `b3 sync` initialize missing `~/.b3/config.toml` from [`config/config.example.toml`](config/config.example.toml) without overwriting existing preferences (`docs/configuration.md`).
 - **Inside this B3 checkout:**
   - Cursor / Codex / Claude Code / Antigravity: `b3 sync --host <cursor|codex|claude|antigravity>` generates gitignored local activation links or `.agents/skills.json` without mixing conflicting discovery roots (`b3 sync --host <host> --verify-only` checks existing activation).
 - **Attach a separate product repo:** `b3 install product --product-root <product-root> --host <host>` writes `.b3/home` + thin host bridge/links without copying `skills/` ([`decision-011`](research/decisions/decision-011-product-repo-attach.md), [`decision-013`](research/decisions/decision-013-host-neutral-multi-host-layout.md)).
@@ -85,7 +85,7 @@ Rules constrain → Skills provide methods → Commands start work
  → Lessons → Knowledge
 ```
 
-**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** map the canonical core onto Cursor, Codex, Claude Code, and Antigravity; they must not fork meaning. **Typed advisory preferences** live in Git-ignored `~/.b3/config.toml` (and optional `<project>/.b3/config.toml`) from [`config/config.example.toml`](config/config.example.toml), separated strictly from trunk-tracked governance policy in `<project>/.b3/policy.toml` ([`config/policy.example.toml`](config/policy.example.toml)); see [`docs/configuration.md`](docs/configuration.md) (legacy `models.md` bridge: [`docs/model-preferences.md`](docs/model-preferences.md)).
+**Profiles** add personal context and are not created yet (`knowledge/personal/` holds background). **Adapters** map the canonical core onto Cursor, Codex, Claude Code, and Antigravity; they must not fork meaning. **Typed advisory preferences** live in Git-ignored `~/.b3/config.toml` (and optional `<project>/.b3/config.toml`) from [`config/config.example.toml`](config/config.example.toml), separated strictly from trunk-tracked governance policy in `<project>/.b3/policy.toml` ([`config/policy.example.toml`](config/policy.example.toml)); see [`docs/configuration.md`](docs/configuration.md).
 
 ## Research → knowledge → skills
 

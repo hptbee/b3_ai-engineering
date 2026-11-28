@@ -173,7 +173,7 @@ sequenceDiagram
     P->>G: precommit --require-verify-receipt (T003 allowed-paths + expected-cmd) then commit T003
 
     opt Governed PR or /b3-research-ship merge gate
-        P->>G: merge-policy-check (trunk .b3/policy.toml or legacy .b3/research-policy.json, mode=local or optional --pr-number b3 pr verify)
+        P->>G: merge-policy-check (trunk .b3/policy.toml, mode=local or optional --pr-number b3 pr verify)
         G-->>P: PR_READY / LOCAL_ELIGIBLE_ONLY / MERGE_AUTHORIZED / MERGE_BLOCKED / PROVIDER_UNAVAILABLE
     end
 ```
@@ -306,7 +306,7 @@ The system separates **Deep reasoning**, **Standard execution**, **Fast surgical
 
 ## 7. Opt-In Event Hooks Alongside Workflows (`b3 hook`)
 
-When opted in via `b3 hook install` and `[hooks]` in `~/.b3/config.toml` / `<project>/.b3/config.toml` (with legacy `.b3/models.md` fallback), `b3 hook` adds `0`-token Tier 0 (`<10 ms`, `0` Git calls: secret paths, stray `.b3/` edits, high-risk commands) and Tier 1 (`BeforeCommit` → `guard::precommit` with `B3_VERIFY_RECEIPT` reuse, `BeforePush`/`BeforeMerge` → `guard::merge_policy`, `AfterFileWrite` staleness notices) protection around ad-hoc tool calls and Git operations. Heavy Tier 2 checks (`verify-run`, `review-inventory`, `review-ledger`, `symbol-check`, `check-wave`, `check-worktree`, `snapshot`) remain strictly inside `/b3-ship`, `/b3-research-ship`, and `/b3-review-loop`, and disabling event hooks (`hooks.mode = "off"`) never bypasses mandatory workflow `b3 guard` gates. Live IDE hook execution remains **`NOT_VERIFIED`**; see [`hooks.md`](hooks.md) and [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md).
+When opted in via `b3 hook install` and `[hooks]` in `~/.b3/config.toml` / `<project>/.b3/config.toml`, `b3 hook` adds `0`-token Tier 0 (`<10 ms`, `0` Git calls: secret paths, stray `.b3/` edits, high-risk commands) and Tier 1 (`BeforeCommit` → `guard::precommit` with `B3_VERIFY_RECEIPT` reuse, `BeforePush`/`BeforeMerge` → `guard::merge_policy`, `AfterFileWrite` staleness notices) protection around ad-hoc tool calls and Git operations. Heavy Tier 2 checks (`verify-run`, `review-inventory`, `review-ledger`, `symbol-check`, `check-wave`, `check-worktree`, `snapshot`) remain strictly inside `/b3-ship`, `/b3-research-ship`, and `/b3-review-loop`, and disabling event hooks (`hooks.mode = "off"`) never bypasses mandatory workflow `b3 guard` gates. Live IDE hook execution remains **`NOT_VERIFIED`**; see [`hooks.md`](hooks.md) and [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md).
 
 ---
 

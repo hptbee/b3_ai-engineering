@@ -6,4 +6,4 @@ scenario: |
   Field-level precedence (invocation > project > personal > built-in defaults (true, 96)) merges partial overrides to effective (false, 90), and an explicit per-invocation directive overrides either field without mutating files
 expected_outcome: PASS
 failure_mode: whole-file-override-drops-personal-fields-or-incorrect-precedence
-notes: Parent resolves planning preferences once per invocation in AI planning/dispatch layers per docs/model-preferences.md
+notes: Parent resolves planning preferences once per invocation in AI planning/dispatch layers per docs/configuration.md

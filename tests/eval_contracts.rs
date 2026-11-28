@@ -1823,11 +1823,10 @@ fn hook_integration_canonical_contract_and_no_duplication() {
 
     let config_ex = fs::read_to_string(root.join("config/config.example.toml"))
         .expect("read config.example.toml");
-    let parsed_hooks = b3::hook::config::parse_hook_config_from_toml(&config_ex)
-        .expect("parse config.example.toml hooks")
-        .expect("hooks section present");
-    assert_eq!(parsed_hooks.enabled, Some(true));
-    assert_eq!(parsed_hooks.mode, Some(b3::hook::config::HookMode::Enforce));
+    let (parsed_enabled, parsed_mode) = b3::config::parse_hooks_config_from_toml(&config_ex)
+        .expect("parse config.example.toml hooks");
+    assert_eq!(parsed_enabled, Some(true));
+    assert_eq!(parsed_mode, Some(b3::config::HookMode::Enforce));
     assert!(
         config_ex.contains("clarification_gate = true")
             && config_ex.contains("understanding_threshold = 96"),
@@ -1959,8 +1958,12 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         "config/policy.example.toml missing canonical governance policy defaults"
     );
 
-    let models_doc = fs::read_to_string(root.join("docs/model-preferences.md"))
-        .expect("read docs/model-preferences.md");
+    assert!(
+        !root.join("docs/model-preferences.md").exists(),
+        "obsolete docs/model-preferences.md must be removed"
+    );
+    let cfg_doc =
+        fs::read_to_string(root.join("docs/configuration.md")).expect("read docs/configuration.md");
     for required_doc_fragment in [
         "Field-level precedence:",
         "next valid layer",
@@ -1968,8 +1971,8 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         "clarification_gate = false",
     ] {
         assert!(
-            models_doc.contains(required_doc_fragment),
-            "docs/model-preferences.md missing '{required_doc_fragment}'"
+            cfg_doc.contains(required_doc_fragment),
+            "docs/configuration.md missing '{required_doc_fragment}'"
         );
     }
 

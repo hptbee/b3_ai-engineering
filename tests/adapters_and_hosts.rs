@@ -1,6 +1,6 @@
 //! Cross-platform native integration tests for B3 global & product adapters,
-//! `b3 sync`, smart `B3_HOME` auto-discovery, and `B3_MODELS_PERSONAL` /
-//! `B3_SKIP_MODEL_INIT` lifecycle with zero PowerShell/Bash script dependencies.
+//! `b3 sync`, smart `B3_HOME` auto-discovery, and `B3_CONFIG_PERSONAL` /
+//! `B3_SKIP_CONFIG_INIT` lifecycle with zero PowerShell/Bash script dependencies.
 
 mod common;
 
@@ -1653,7 +1653,7 @@ fn antigravity_plugin_and_unified_global_lifecycle() {
                 &uh_trail,
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         );
         assert_eq!(c, 0, "trailing-slash global {act}: {out}\n{err}");
@@ -1680,7 +1680,7 @@ fn antigravity_plugin_and_unified_global_lifecycle() {
         ],
         None,
         &[],
-        &["B3_SKIP_MODEL_INIT", "B3_MODELS_PERSONAL"],
+        &["B3_SKIP_CONFIG_INIT", "B3_CONFIG_PERSONAL"],
     );
     assert_eq!(c_mix, 1);
     assert!(out_mix.contains("host=cursor status=FAIL"));
@@ -1786,7 +1786,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     let (c_ag_unmanaged, out_ag_unmanaged, err_ag_unmanaged) = run_b3_env(
         &["sync", "--repo-root", sync_s, "--host", "antigravity"],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(c_ag_unmanaged, 1);
@@ -1810,7 +1810,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "--force"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -1820,7 +1820,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -1847,7 +1847,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "codex"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -1886,7 +1886,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -1900,7 +1900,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     let (c_nonempty, out_nonempty, err_nonempty) = run_b3_env(
         &["sync", "--repo-root", sync_s, "--host", "cursor"],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(c_nonempty, 1);
@@ -1915,7 +1915,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -1926,7 +1926,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2005,7 +2005,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2024,7 +2024,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2039,7 +2039,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2058,7 +2058,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2090,7 +2090,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2110,7 +2110,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2131,7 +2131,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     let (c_stale_mod, out_stale_mod, err_stale_mod) = run_b3_env(
         &["sync", "--repo-root", sync_s, "--host", "cursor"],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(
@@ -2179,7 +2179,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2189,7 +2189,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2268,7 +2268,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor", "--force"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2316,7 +2316,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "--force"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2331,7 +2331,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", cl_s, "--host", "claude"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2385,7 +2385,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "cursor"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2395,7 +2395,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     fs::remove_dir(prod.join(".agents")).unwrap();
 
     // .gitignore .b3/ upgrade + dedup
-    write_lf(&prod.join(".gitignore"), ".b3/\n.b3/models.md\n");
+    write_lf(&prod.join(".gitignore"), ".b3/\n.b3/config.toml\n");
     assert_eq!(
         run_b3_env(
             &[
@@ -2409,7 +2409,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "cursor"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2421,8 +2421,14 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .map(|l| l.trim().to_string())
         .collect();
     assert_eq!(gi_lines.iter().filter(|l| *l == ".b3/ship/").count(), 1);
-    assert_eq!(gi_lines.iter().filter(|l| *l == ".b3/models.md").count(), 1);
-    assert_eq!(git_in(&prod, &["check-ignore", "-q", ".b3/models.md"]), "");
+    assert_eq!(
+        gi_lines.iter().filter(|l| *l == ".b3/config.toml").count(),
+        1
+    );
+    assert_eq!(
+        git_in(&prod, &["check-ignore", "-q", ".b3/config.toml"]),
+        ""
+    );
     for new_cmd in ["b3-research", "b3-audit", "b3-refactor"] {
         assert!(
             prod.join(".cursor/commands")
@@ -2448,7 +2454,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "cursor"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2471,7 +2477,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "--force"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2494,7 +2500,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             "codex",
         ],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(c_emp, 1);
@@ -2517,7 +2523,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "--force",
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -2553,7 +2559,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         Some(&unrelated_cwd),
         &[
             ("B3_HOME", snap_env.to_str().unwrap()),
-            ("B3_SKIP_MODEL_INIT", "1"),
+            ("B3_SKIP_CONFIG_INIT", "1"),
         ],
         &[],
     );
@@ -2582,7 +2588,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             uh_ptr.to_str().unwrap(),
         ],
         Some(&cwd_ptr),
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &["B3_HOME"],
     );
     assert_eq!(c_ap, 0, "auto .b3/home pointer: {out_ap}");
@@ -2605,7 +2611,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     let exe_out = Command::new(&copied_bin)
         .current_dir(&unrelated_cwd)
         .env_remove("B3_HOME")
-        .env("B3_SKIP_MODEL_INIT", "1")
+        .env("B3_SKIP_CONFIG_INIT", "1")
         .args([
             "install",
             "cursor",
@@ -2628,7 +2634,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         to_forward_path(&snap_exe)
     );
 
-    // 4. B3_CONFIG_PERSONAL, B3_SKIP_CONFIG_INIT & legacy B3_SKIP_MODEL_INIT lifecycle across install product, install global, & sync
+    // 4. B3_CONFIG_PERSONAL, B3_SKIP_CONFIG_INIT & legacy B3_SKIP_CONFIG_INIT lifecycle across install product, install global, & sync
     let pers = tmp.path.join("home-pers/.b3/config.toml");
     let pers_s = pers.to_str().unwrap();
     let prod_m = tmp.path.join("prod-m");
@@ -2653,8 +2659,8 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[("B3_CONFIG_PERSONAL", pers_s)],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
-                "B3_MODELS_PERSONAL"
+                "B3_SKIP_CONFIG_INIT",
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2662,29 +2668,27 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
     );
     assert!(!pers.exists());
 
-    // B3_SKIP_CONFIG_INIT=1 and legacy B3_SKIP_MODEL_INIT=1 both skip creation
-    for skip_env in ["B3_SKIP_CONFIG_INIT", "B3_SKIP_MODEL_INIT"] {
-        assert_eq!(
-            run_b3_env(
-                &[
-                    "install",
-                    "product",
-                    "--product-root",
-                    prod_ms,
-                    "--b3-home",
-                    root_str,
-                    "--host",
-                    "cursor"
-                ],
-                None,
-                &[("B3_CONFIG_PERSONAL", pers_s), (skip_env, "1")],
-                &["B3_MODELS_PERSONAL"],
-            )
-            .0,
-            0
-        );
-        assert!(!pers.exists());
-    }
+    // B3_SKIP_CONFIG_INIT=1 skips creation
+    assert_eq!(
+        run_b3_env(
+            &[
+                "install",
+                "product",
+                "--product-root",
+                prod_ms,
+                "--b3-home",
+                root_str,
+                "--host",
+                "cursor"
+            ],
+            None,
+            &[("B3_CONFIG_PERSONAL", pers_s), ("B3_SKIP_CONFIG_INIT", "1")],
+            &[],
+        )
+        .0,
+        0
+    );
+    assert!(!pers.exists());
 
     // Normal install product creates B3_CONFIG_PERSONAL from config/config.example.toml (and NOT inside product/.b3/config.toml)
     assert_eq!(
@@ -2703,8 +2707,8 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[("B3_CONFIG_PERSONAL", pers_s)],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
-                "B3_MODELS_PERSONAL"
+                "B3_SKIP_CONFIG_INIT",
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2732,8 +2736,8 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[("B3_CONFIG_PERSONAL", pers_s)],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
-                "B3_MODELS_PERSONAL"
+                "B3_SKIP_CONFIG_INIT",
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2760,8 +2764,8 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[("B3_CONFIG_PERSONAL", sync_pers_s)],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
-                "B3_MODELS_PERSONAL"
+                "B3_SKIP_CONFIG_INIT",
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2776,8 +2780,8 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[("B3_CONFIG_PERSONAL", sync_pers_s)],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
-                "B3_MODELS_PERSONAL"
+                "B3_SKIP_CONFIG_INIT",
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2795,8 +2799,8 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[("B3_CONFIG_PERSONAL", sync_pers_s)],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
-                "B3_MODELS_PERSONAL"
+                "B3_SKIP_CONFIG_INIT",
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2826,9 +2830,9 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
+                "B3_SKIP_CONFIG_INIT",
                 "B3_CONFIG_PERSONAL",
-                "B3_MODELS_PERSONAL"
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2853,9 +2857,9 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
+                "B3_SKIP_CONFIG_INIT",
                 "B3_CONFIG_PERSONAL",
-                "B3_MODELS_PERSONAL"
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2876,9 +2880,9 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             &[],
             &[
                 "B3_SKIP_CONFIG_INIT",
-                "B3_SKIP_MODEL_INIT",
+                "B3_SKIP_CONFIG_INIT",
                 "B3_CONFIG_PERSONAL",
-                "B3_MODELS_PERSONAL"
+                "B3_CONFIG_PERSONAL"
             ],
         )
         .0,
@@ -2913,7 +2917,7 @@ fn b3_home_pointer_rejects_unc_and_reparse_parents() {
                 uh_unc.to_str().unwrap(),
             ],
             Some(&cwd_unc),
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &["B3_HOME"],
         );
         assert_eq!(
@@ -2950,7 +2954,7 @@ fn b3_home_pointer_rejects_unc_and_reparse_parents() {
             uh_junc.to_str().unwrap(),
         ],
         Some(&cwd_junc),
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &["B3_HOME"],
     );
     assert_eq!(
@@ -3018,7 +3022,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         run_b3_env(
             &["sync", "--repo-root", fx_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3030,7 +3034,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         run_b3_env(
             &["sync", "--repo-root", fx_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3061,7 +3065,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         run_b3_env(
             &["sync", "--repo-root", fx_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3077,7 +3081,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         run_b3_env(
             &["sync", "--repo-root", fx_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3120,7 +3124,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
     let (c_exact_noside, out_exact_noside, err_exact_noside) = run_b3_env(
         &["sync", "--repo-root", fx_s, "--host", "antigravity"],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(c_exact_noside, 1);
@@ -3154,7 +3158,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
                 "--force"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3165,7 +3169,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         run_b3_env(
             &["sync", "--repo-root", fx_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3198,7 +3202,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
     let (c_drift_sync, out_drift_sync, err_drift_sync) = run_b3_env(
         &["sync", "--repo-root", fx_s, "--host", "antigravity"],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(c_drift_sync, 1);
@@ -3249,7 +3253,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         run_b3_env(
             &["sync", "--repo-root", fx_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3305,7 +3309,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
     let (c_mod, out_mod, err_mod) = run_b3_env(
         &["sync", "--repo-root", fx_s, "--host", "antigravity"],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(c_mod, 1);
@@ -3323,7 +3327,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
     let (c_unk, out_unk, err_unk) = run_b3_env(
         &["sync", "--repo-root", fx_s, "--host", "antigravity"],
         None,
-        &[("B3_SKIP_MODEL_INIT", "1")],
+        &[("B3_SKIP_CONFIG_INIT", "1")],
         &[],
     );
     assert_eq!(c_unk, 1);
@@ -3344,7 +3348,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
                 "--force"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3364,7 +3368,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         run_b3_env(
             &["sync", "--repo-root", fx_s, "--host", "antigravity"],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3384,7 +3388,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
                 "--force"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3412,7 +3416,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
             run_b3_env(
                 &["sync", "--repo-root", fx_s, "--host", "antigravity"],
                 None,
-                &[("B3_SKIP_MODEL_INIT", "1")],
+                &[("B3_SKIP_CONFIG_INIT", "1")],
                 &[],
             )
             .0,
@@ -3436,7 +3440,7 @@ fn antigravity_manifest_upgrades_and_security_guards() {
                 "--force"
             ],
             None,
-            &[("B3_SKIP_MODEL_INIT", "1")],
+            &[("B3_SKIP_CONFIG_INIT", "1")],
             &[],
         )
         .0,
@@ -3445,14 +3449,14 @@ fn antigravity_manifest_upgrades_and_security_guards() {
 }
 
 #[test]
-fn legacy_models_md_reports_legacy_pending_and_gitignore_tracks_policy_toml() {
+fn legacy_models_md_is_preserved_untouched_and_config_toml_initializes() {
     let root = repo_root();
     let root_str = root.to_str().unwrap();
-    let tmp = TempDirGuard::new("legacy-pending-gi");
+    let tmp = TempDirGuard::new("toml-init-gi");
 
     // 1. When legacy ~/.b3/models.md exists and ~/.b3/config.toml does NOT exist:
-    //    `b3 install global`, `b3 install product`, and `b3 sync` report `legacy-pending`
-    //    without creating config.toml or overwriting models.md.
+    //    `b3 install global`, `b3 install product`, and `b3 sync` initialize config.toml
+    //    normally and leave existing ~/.b3/models.md untouched.
     let uh = tmp.path.join("user-home");
     let legacy_md = uh.join(".b3/models.md");
     let new_cfg = uh.join(".b3/config.toml");
@@ -3474,26 +3478,21 @@ fn legacy_models_md_reports_legacy_pending_and_gitignore_tracks_policy_toml() {
         ],
         None,
         &[],
-        &[
-            "B3_SKIP_CONFIG_INIT",
-            "B3_SKIP_MODEL_INIT",
-            "B3_CONFIG_PERSONAL",
-            "B3_MODELS_PERSONAL",
-        ],
+        &["B3_SKIP_CONFIG_INIT", "B3_CONFIG_PERSONAL"],
     );
     assert_eq!(cg, 0, "{out_g}\n{err_g}");
     assert!(
-        out_g.contains("config_preferences=legacy-pending:"),
-        "install global must report legacy-pending: {out_g}"
+        out_g.contains("created from example"),
+        "install global must initialize config.toml: {out_g}"
     );
-    assert!(
-        !new_cfg.exists(),
-        "must not create config.toml alongside models.md"
-    );
+    assert!(new_cfg.is_file(), "must create config.toml");
     assert_eq!(fs::read_to_string(&legacy_md).unwrap(), legacy_body);
 
-    // 1b. `b3 install product` + check .gitignore ignores `.b3/config.toml` and `.b3/models.md`
+    // 1b. `b3 install product` + check .gitignore ignores `.b3/config.toml` and `.b3/ship/`
     //     while leaving `.b3/policy.toml` and `.b3/home` trackable (`!check-ignore`)
+    let alt_cfg = tmp.path.join("alt-home/.b3/config.toml");
+    let alt_md = tmp.path.join("alt-home/.b3/models.md");
+    write_lf(&alt_md, legacy_body);
     let prod = tmp.path.join("prod");
     clone_seeded_git_repo(&prod);
     let (cp, out_p, err_p) = run_b3_env(
@@ -3508,26 +3507,17 @@ fn legacy_models_md_reports_legacy_pending_and_gitignore_tracks_policy_toml() {
             "cursor",
         ],
         None,
-        &[("B3_CONFIG_PERSONAL", new_cfg.to_str().unwrap())],
-        &[
-            "B3_SKIP_CONFIG_INIT",
-            "B3_SKIP_MODEL_INIT",
-            "B3_MODELS_PERSONAL",
-        ],
+        &[("B3_CONFIG_PERSONAL", alt_cfg.to_str().unwrap())],
+        &["B3_SKIP_CONFIG_INIT"],
     );
     assert_eq!(cp, 0, "{out_p}\n{err_p}");
     assert!(
-        out_p.contains("model_preferences=legacy-pending:"),
-        "install product must report legacy-pending: {out_p}"
+        alt_cfg.is_file(),
+        "install product must initialize B3_CONFIG_PERSONAL"
     );
-    assert!(
-        !new_cfg.exists(),
-        "install product must not create config.toml"
-    );
-    assert_eq!(fs::read_to_string(&legacy_md).unwrap(), legacy_body);
+    assert_eq!(fs::read_to_string(&alt_md).unwrap(), legacy_body);
 
-    // Verify git check-ignore status on `.b3/*` paths
-    for ignored_path in [".b3/config.toml", ".b3/models.md", ".b3/ship/x"] {
+    for ignored_path in [".b3/config.toml", ".b3/ship/x"] {
         let st = Command::new("git")
             .arg("-C")
             .arg(&prod)
@@ -3550,6 +3540,9 @@ fn legacy_models_md_reports_legacy_pending_and_gitignore_tracks_policy_toml() {
     }
 
     // 1c. `b3 sync`
+    let sync_cfg = tmp.path.join("sync-home/.b3/config.toml");
+    let sync_md = tmp.path.join("sync-home/.b3/models.md");
+    write_lf(&sync_md, legacy_body);
     let sync_fx = tmp.path.join("sync-fx");
     copy_b3_snapshot(&sync_fx, true);
     let (cs, out_s, err_s) = run_b3_env(
@@ -3561,18 +3554,10 @@ fn legacy_models_md_reports_legacy_pending_and_gitignore_tracks_policy_toml() {
             "antigravity",
         ],
         None,
-        &[("B3_CONFIG_PERSONAL", new_cfg.to_str().unwrap())],
-        &[
-            "B3_SKIP_CONFIG_INIT",
-            "B3_SKIP_MODEL_INIT",
-            "B3_MODELS_PERSONAL",
-        ],
+        &[("B3_CONFIG_PERSONAL", sync_cfg.to_str().unwrap())],
+        &["B3_SKIP_CONFIG_INIT"],
     );
     assert_eq!(cs, 0, "{out_s}\n{err_s}");
-    assert!(
-        out_s.contains("config_preferences=legacy-pending:"),
-        "b3 sync must report legacy-pending: {out_s}"
-    );
-    assert!(!new_cfg.exists(), "b3 sync must not create config.toml");
-    assert_eq!(fs::read_to_string(&legacy_md).unwrap(), legacy_body);
+    assert!(sync_cfg.is_file(), "b3 sync must create config.toml");
+    assert_eq!(fs::read_to_string(&sync_md).unwrap(), legacy_body);
 }

@@ -3203,7 +3203,7 @@ fn context_cache_evidence_check_and_product_smoke() {
     init_fresh_git_repo(&product);
     let p_str = product.to_str().unwrap();
     let home_str = b3_home.to_str().unwrap();
-    let models_iso = tmp.path.join("isolated-models.md");
+    let cfg_iso = tmp.path.join("isolated-config.toml");
     let (ic, iout, ierr) = run_b3_env(
         &[
             "install",
@@ -3217,8 +3217,8 @@ fn context_cache_evidence_check_and_product_smoke() {
         ],
         None,
         &[
-            ("B3_SKIP_MODEL_INIT", "1"),
-            ("B3_MODELS_PERSONAL", models_iso.to_str().unwrap()),
+            ("B3_SKIP_CONFIG_INIT", "1"),
+            ("B3_CONFIG_PERSONAL", cfg_iso.to_str().unwrap()),
         ],
         &[],
     );

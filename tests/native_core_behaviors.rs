@@ -889,8 +889,13 @@ fn core_precommit_adversarial_and_malformed_policy_guards() {
     assert_eq!(c, 1);
     git_in(&repo, &["reset", "-q", "--hard", "HEAD"]);
 
-    // 4. Malformed .b3/research-policy.json on trunk -> merge-policy-check fails closed (exit 1)
-    commit_file(&repo, ".b3/research-policy.json", "{bad json", "bad policy");
+    // 4. Legacy .b3/research-policy.json on trunk -> merge-policy-check fails closed (exit 1)
+    commit_file(
+        &repo,
+        ".b3/research-policy.json",
+        r#"{"auto_merge":"disabled"}"#,
+        "legacy json policy",
+    );
     let (c, out, _) = run_b3(&[
         "guard",
         "merge-policy-check",

@@ -2,6 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Hard resource bounds for zero-dependency strict TOML parsing.
+pub const MAX_TOML_BYTES: usize = 256 * 1024;
+pub const MAX_TABLE_SEGMENTS: usize = 6;
+pub const MAX_ARRAY_ITEMS: usize = 256;
+pub const MAX_TABLES: usize = 128;
+pub const MAX_KEYS_TOTAL: usize = 512;
+pub const MAX_STRING_BYTES: usize = 4096;
+
 /// Parsed TOML value for B3 configuration and governance policy files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TomlValue {
@@ -218,6 +226,11 @@ impl<'a> Parser<'a> {
             self.skip_hspace();
             let part = self.parse_bare_key()?;
             parts.push(part);
+            if parts.len() > MAX_TABLE_SEGMENTS {
+                return Err(self.err(format!(
+                    "table header exceeds maximum depth of {MAX_TABLE_SEGMENTS} segments"
+                )));
+            }
             self.skip_hspace();
             match self.peek() {
                 Some(b'.') => {
@@ -271,6 +284,11 @@ impl<'a> Parser<'a> {
                 }
                 c => out.push(c),
             }
+            if out.len() > MAX_STRING_BYTES {
+                return Err(self.err(format!(
+                    "string literal exceeds maximum length of {MAX_STRING_BYTES} bytes"
+                )));
+            }
         }
     }
 
@@ -308,14 +326,19 @@ impl<'a> Parser<'a> {
                 }
                 c => out.push(c),
             }
+            if out.len() > MAX_STRING_BYTES {
+                return Err(self.err(format!(
+                    "string literal exceeds maximum length of {MAX_STRING_BYTES} bytes"
+                )));
+            }
         }
     }
 
-    fn parse_value(&mut self) -> Result<TomlValue, String> {
+    fn parse_scalar_value(&mut self) -> Result<TomlValue, String> {
         match self.peek() {
             Some(b'"') => self.parse_basic_string().map(TomlValue::Str),
             Some(b'\'') => self.parse_literal_string().map(TomlValue::Str),
-            Some(b'[') => self.parse_array(),
+            Some(b'[') => Err(self.err("nested arrays are not supported")),
             Some(b't') if self.src[self.pos..].starts_with("true") => {
                 let after = self.bytes.get(self.pos + 4).copied();
                 if is_token_delimiter(after) {
@@ -335,7 +358,14 @@ impl<'a> Parser<'a> {
                 }
             }
             Some(b'+' | b'-' | b'0'..=b'9') => self.parse_int().map(TomlValue::Int),
-            _ => Err(self.err("expected TOML value")),
+            _ => Err(self.err("expected TOML scalar value")),
+        }
+    }
+
+    fn parse_value(&mut self) -> Result<TomlValue, String> {
+        match self.peek() {
+            Some(b'[') => self.parse_array(),
+            _ => self.parse_scalar_value(),
         }
     }
 
@@ -385,7 +415,12 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 return Ok(TomlValue::Array(items));
             }
-            let item = self.parse_value()?;
+            if items.len() >= MAX_ARRAY_ITEMS {
+                return Err(self.err(format!(
+                    "array exceeds maximum length of {MAX_ARRAY_ITEMS} items"
+                )));
+            }
+            let item = self.parse_scalar_value()?;
             items.push(item);
             self.skip_ws_and_comments();
             match self.peek() {
@@ -412,6 +447,11 @@ fn is_token_delimiter(b: Option<u8>) -> bool {
 fn parse_with_spans(
     src: &str,
 ) -> Result<(TomlDocument, Vec<ParsedAssignment>, Vec<ParsedTableSpan>), String> {
+    if src.len() > MAX_TOML_BYTES {
+        return Err(format!(
+            "TOML document exceeds maximum size of {MAX_TOML_BYTES} bytes"
+        ));
+    }
     let mut parser = Parser::new(src);
     let mut doc = TomlDocument::default();
     let mut seen_tables = BTreeSet::new();
@@ -433,6 +473,11 @@ fn parse_with_spans(
             if !seen_tables.insert(name.clone()) {
                 return Err(parser.err(format!("duplicate table header '[{name}]'")));
             }
+            if doc.tables.len() >= MAX_TABLES {
+                return Err(parser.err(format!(
+                    "TOML document exceeds maximum of {MAX_TABLES} tables"
+                )));
+            }
             doc.tables.entry(name.clone()).or_default();
             table_spans.push(ParsedTableSpan {
                 name: name.clone(),
@@ -443,6 +488,11 @@ fn parse_with_spans(
             continue;
         }
 
+        if assignments.len() >= MAX_KEYS_TOTAL {
+            return Err(parser.err(format!(
+                "TOML document exceeds maximum of {MAX_KEYS_TOTAL} keys"
+            )));
+        }
         let key = parser.parse_bare_key()?;
         parser.skip_hspace();
         if parser.peek() != Some(b'=') {
@@ -481,6 +531,11 @@ fn parse_with_spans(
 
 /// Strictly parses a UTF-8 TOML string into a [`TomlDocument`].
 pub fn parse_toml_strict(input: &str) -> Result<TomlDocument, String> {
+    if input.len() > MAX_TOML_BYTES {
+        return Err(format!(
+            "TOML document exceeds maximum size of {MAX_TOML_BYTES} bytes"
+        ));
+    }
     let (body, _) = strip_bom_slice(input);
     let (doc, _, _) = parse_with_spans(body)?;
     Ok(doc)
@@ -519,6 +574,36 @@ fn format_toml_str(s: &str) -> String {
     out
 }
 
+fn validate_write_value(val: &TomlValue) -> Result<(), String> {
+    match val {
+        TomlValue::Str(s) if s.len() > MAX_STRING_BYTES => Err(format!(
+            "string literal exceeds maximum length of {MAX_STRING_BYTES} bytes"
+        )),
+        TomlValue::Array(items) => {
+            if items.len() > MAX_ARRAY_ITEMS {
+                return Err(format!(
+                    "array exceeds maximum length of {MAX_ARRAY_ITEMS} items"
+                ));
+            }
+            for item in items {
+                match item {
+                    TomlValue::Array(_) => {
+                        return Err("nested arrays are not supported".to_string())
+                    }
+                    TomlValue::Str(s) if s.len() > MAX_STRING_BYTES => {
+                        return Err(format!(
+                            "string literal exceeds maximum length of {MAX_STRING_BYTES} bytes"
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Updates `key` inside `table` (`""` for root) while preserving existing comments,
 /// blank lines, key order, and inline trailing comments.
 pub fn set_toml_key_preserving_comments(
@@ -527,16 +612,25 @@ pub fn set_toml_key_preserving_comments(
     key: &str,
     val: &TomlValue,
 ) -> Result<String, String> {
+    if raw.len() > MAX_TOML_BYTES {
+        return Err(format!(
+            "TOML document exceeds maximum size of {MAX_TOML_BYTES} bytes"
+        ));
+    }
     if !key.bytes().all(is_bare_key_byte) || key.is_empty() {
         return Err(format!("invalid TOML key '{key}'"));
     }
-    if !table.is_empty()
-        && !table
-            .split('.')
-            .all(|seg| !seg.is_empty() && seg.bytes().all(is_bare_key_byte))
-    {
-        return Err(format!("invalid TOML table '{table}'"));
+    if !table.is_empty() {
+        let segs: Vec<&str> = table.split('.').collect();
+        if segs.len() > MAX_TABLE_SEGMENTS
+            || !segs
+                .iter()
+                .all(|seg| !seg.is_empty() && seg.bytes().all(is_bare_key_byte))
+        {
+            return Err(format!("invalid TOML table '{table}'"));
+        }
     }
+    validate_write_value(val)?;
 
     let (body, bom_len) = strip_bom_slice(raw);
     let (_, assignments, table_spans) = parse_with_spans(body)?;
@@ -702,5 +796,52 @@ mod tests {
             pol_doc.get("", "auto_merge_max_risk"),
             Some(&TomlValue::Str("LOW".to_string()))
         );
+    }
+
+    #[test]
+    fn enforces_parser_resource_and_type_bounds() {
+        // Document size cap
+        let too_big = format!("k = \"{}\"\n", "a".repeat(MAX_TOML_BYTES + 1));
+        assert!(parse_toml_strict(&too_big).is_err());
+
+        // String length cap
+        let long_str = format!("k = \"{}\"\n", "a".repeat(MAX_STRING_BYTES + 1));
+        assert!(parse_toml_strict(&long_str).is_err());
+
+        // Nested arrays rejected cleanly
+        assert!(parse_toml_strict("k = [[1]]\n").is_err());
+        assert!(parse_toml_strict("k = [[\"a\"], [\"b\"]]\n").is_err());
+
+        // Array item cap
+        let many_items = format!(
+            "k = [{}]\n",
+            (0..=MAX_ARRAY_ITEMS)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        assert!(parse_toml_strict(&many_items).is_err());
+
+        // Table segment depth cap
+        assert!(parse_toml_strict("[a.b.c.d.e.f]\nx = 1\n").is_ok());
+        assert!(parse_toml_strict("[a.b.c.d.e.f.g]\nx = 1\n").is_err());
+
+        // Max keys & max tables caps
+        let mut many_keys = String::new();
+        for i in 0..=MAX_KEYS_TOTAL {
+            many_keys.push_str(&format!("k{i} = 1\n"));
+        }
+        assert!(parse_toml_strict(&many_keys).is_err());
+
+        let mut many_tables = String::new();
+        for i in 0..=MAX_TABLES {
+            many_tables.push_str(&format!("[t{i}]\nx = 1\n"));
+        }
+        assert!(parse_toml_strict(&many_tables).is_err());
+
+        // Inline tables, multiline strings, array-of-tables rejected
+        assert!(parse_toml_strict("k = { a = 1 }\n").is_err());
+        assert!(parse_toml_strict("k = \"\"\"hello\"\"\"\n").is_err());
+        assert!(parse_toml_strict("[[arr]]\nx = 1\n").is_err());
     }
 }

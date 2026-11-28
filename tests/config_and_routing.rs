@@ -1,5 +1,5 @@
 //! Cross-platform integration and security tests for unified TOML configuration,
-//! 5-layer precedence, adaptive model routing, bounded escalation, and non-destructive migration.
+//! 5-layer precedence, adaptive model routing, bounded escalation, and TOML-only validation.
 
 mod common;
 
@@ -10,7 +10,6 @@ use std::path::Path;
 
 const ALL_CONFIG_ENVS: &[&str] = &[
     "B3_CONFIG_PERSONAL",
-    "B3_MODELS_PERSONAL",
     "B3_MODEL_ROUTING",
     "B3_MAX_CONCURRENCY",
     "B3_EXECUTION_MODE",
@@ -257,10 +256,8 @@ s_max_loc = 200
         .0,
         0
     );
-    write_lf(
-        &repo.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled"}"#,
-    );
+    let leg_pol_path = repo.join(".b3/research-policy.json");
+    write_lf(&leg_pol_path, r#"{"auto_merge":"disabled"}"#);
     let (c_dual, out_dual, err_dual) = run_cfg(
         &[
             "config",
@@ -280,6 +277,7 @@ s_max_loc = 200
         j_dual.get("valid").and_then(JsonValue::as_bool),
         Some(false)
     );
+    assert!(leg_pol_path.is_file(), "legacy JSON file must be preserved");
 
     // 4. `b3 config set --scope policy` and governance keys refused fail-closed with CONFIG_FORBIDDEN
     for args in [
@@ -1370,8 +1368,8 @@ security_reviewer = ["advanced"]
 }
 
 #[test]
-fn config_init_and_non_destructive_migration() {
-    let tmp = TempDirGuard::new("cfg-migrate");
+fn config_init_toml_only_and_fail_closed_legacy() {
+    let tmp = TempDirGuard::new("cfg-toml-only");
     let home = tmp.path.join("home");
     let repo = tmp.path.join("repo");
     fs::create_dir_all(&home).unwrap();
@@ -1454,30 +1452,11 @@ fn config_init_and_non_destructive_migration() {
     assert_eq!(c_force, 0);
     assert!(fs::read_to_string(&ih_cfg).unwrap().contains("[planning]"));
 
-    // 2. Non-destructive `b3 config migrate --scope personal`
-    let leg_models = home.join(".b3/models.md");
-    let leg_models_body = r#"# Model Preferences
-
-| Role | Preferred Model |
-| --- | --- |
-| `main` | `claude-sonnet-4` |
-| `b3-reviewer` | `gpt-5.4` |
-| `planning` | `auto` |
-
-```yaml
-planning:
-  clarification_gate: false
-  understanding_threshold: 88
-```
-"#;
-    write_lf(&leg_models, leg_models_body);
-
-    let (c_mp, out_mp, err_mp) = run_cfg(
+    // 2. Removed `b3 config migrate` subcommand fails closed cleanly
+    let (c_mig, out_mig, err_mig) = run_cfg(
         &[
             "config",
             "migrate",
-            "--scope",
-            "personal",
             "--repo-root",
             r_str,
             "--user-home",
@@ -1486,41 +1465,25 @@ planning:
         None,
         &[],
     );
-    assert_eq!(c_mp, 0, "{out_mp}\n{err_mp}");
-    assert!(out_mp.contains("migrated:"), "{out_mp}");
-    assert!(leg_models.is_file(), "legacy models.md must be preserved");
-    assert_eq!(fs::read_to_string(&leg_models).unwrap(), leg_models_body);
-
-    let dest_pers = home.join(".b3/config.toml");
-    assert!(dest_pers.is_file());
-    assert!(!fs::read(&dest_pers).unwrap().contains(&b'\r'));
-
-    let (c_get_main, out_gm, _) = run_cfg(
-        &["config", "get", "--user-home", h_str, "models.roles.main"],
-        None,
-        &[],
+    assert_eq!(c_mig, 1, "migrate must be rejected: {out_mig}\n{err_mig}");
+    assert!(
+        format!("{out_mig}\n{err_mig}").contains("CONFIG_FAIL"),
+        "{out_mig}\n{err_mig}"
     );
-    assert_eq!(c_get_main, 0);
-    assert_eq!(out_gm.trim(), "[\"claude-sonnet-4\"]");
 
-    let (c_get_rev, out_gr, _) = run_cfg(
+    // 3. Existing legacy models.md is ignored AND preserved untouched on disk
+    let leg_pers = home.join(".b3/models.md");
+    let leg_proj = repo.join(".b3/models.md");
+    let leg_body =
+        "| `main` | `legacy-model` |\n\n```yaml\nplanning:\n  understanding_threshold: 55\n```\n";
+    write_lf(&leg_pers, leg_body);
+    write_lf(&leg_proj, leg_body);
+    let (c_show_leg, out_show_leg, _) = run_cfg(
         &[
             "config",
             "get",
-            "--user-home",
-            h_str,
-            "models.roles.reviewer",
-        ],
-        None,
-        &[],
-    );
-    assert_eq!(c_get_rev, 0);
-    assert_eq!(out_gr.trim(), "[\"gpt-5.4\"]");
-
-    let (c_get_th, out_th, _) = run_cfg(
-        &[
-            "config",
-            "get",
+            "--repo-root",
+            r_str,
             "--user-home",
             h_str,
             "planning.understanding_threshold",
@@ -1528,186 +1491,135 @@ planning:
         None,
         &[],
     );
-    assert_eq!(c_get_th, 0);
-    assert_eq!(out_th.trim(), "88");
-
-    // Re-running migrate when destination exists fails closed with MIGRATE_CONFLICT
-    let (c_conf_p, out_cp, err_cp) = run_cfg(
-        &[
-            "config",
-            "migrate",
-            "--scope",
-            "personal",
-            "--repo-root",
-            r_str,
-            "--user-home",
-            h_str,
-        ],
-        None,
-        &[],
+    assert_eq!(c_show_leg, 0);
+    assert_eq!(
+        out_show_leg.trim(),
+        "96",
+        "legacy models.md must be ignored"
     );
-    assert_eq!(c_conf_p, 1, "{out_cp}\n{err_cp}");
-    assert!(
-        format!("{out_cp}\n{err_cp}").contains("MIGRATE_CONFLICT"),
-        "{out_cp}\n{err_cp}"
-    );
+    assert_eq!(fs::read_to_string(&leg_pers).unwrap(), leg_body);
+    assert_eq!(fs::read_to_string(&leg_proj).unwrap(), leg_body);
 
-    // 3. Non-destructive `b3 config migrate --scope policy`
+    // 4. `b3 config validate` fails closed if .b3/research-policy.json exists ALONE (preserving file)
     let leg_pol = repo.join(".b3/research-policy.json");
-    let leg_pol_body = r#"{"auto_merge":"authorized","protected_paths":["releases/","secrets/"],"allow_protected_paths":false,"allowed_target_branches":["main","release/*"],"require_ci":true,"require_review":true}"#;
+    let leg_pol_body = r#"{"auto_merge":"authorized","require_ci":true,"require_review":true}"#;
     write_lf(&leg_pol, leg_pol_body);
-
-    let (c_mpol, out_mpol, err_mpol) = run_cfg(
+    let (c_pol_alone, out_pa, err_pa) = run_cfg(
         &[
             "config",
-            "migrate",
-            "--scope",
-            "policy",
+            "validate",
             "--repo-root",
             r_str,
             "--user-home",
             h_str,
+            "--json",
         ],
         None,
         &[],
     );
-    assert_eq!(c_mpol, 0, "{out_mpol}\n{err_mpol}");
-    assert!(out_mpol.contains("migrated:"), "{out_mpol}");
-    assert!(
-        leg_pol.is_file(),
-        "legacy research-policy.json must be preserved"
-    );
+    assert_eq!(c_pol_alone, 1, "{out_pa}\n{err_pa}");
+    assert!(out_pa.contains("research-policy.json"), "{out_pa}");
     assert_eq!(fs::read_to_string(&leg_pol).unwrap(), leg_pol_body);
 
-    let dest_pol = repo.join(".b3/policy.toml");
-    assert!(dest_pol.is_file());
-    let pol_txt = fs::read_to_string(&dest_pol).unwrap();
-    assert!(!pol_txt.contains('\r'));
-    assert!(pol_txt.contains("auto_merge = \"authorized\""), "{pol_txt}");
-    assert!(
-        pol_txt.contains("auto_merge_max_risk = \"CRITICAL\""),
-        "{pol_txt}"
-    );
-    assert!(pol_txt.contains("\"releases/\""), "{pol_txt}");
-    assert!(pol_txt.contains("\"release/*\""), "{pol_txt}");
-
-    // Re-running migrate --scope policy fails closed with MIGRATE_CONFLICT without overwriting
-    let (c_conf_pol, out_cpol, err_cpol) = run_cfg(
-        &[
-            "config",
-            "migrate",
-            "--scope",
-            "policy",
-            "--repo-root",
-            r_str,
-            "--user-home",
-            h_str,
-        ],
-        None,
-        &[],
-    );
-    assert_eq!(c_conf_pol, 1, "{out_cpol}\n{err_cpol}");
-    assert!(
-        format!("{out_cpol}\n{err_cpol}").contains("MIGRATE_CONFLICT"),
-        "{out_cpol}\n{err_cpol}"
-    );
-    assert_eq!(fs::read_to_string(&dest_pol).unwrap(), pol_txt);
-
-    // 4. `b3 config migrate --scope all` cleanly migrates a fresh pair without deleting originals
-    let home_all = tmp.path.join("home-all");
-    let repo_all = tmp.path.join("repo-all");
-    fs::create_dir_all(&home_all).unwrap();
-    clone_seeded_git_repo(&repo_all);
-    write_lf(&home_all.join(".b3/models.md"), "| `main` | `balanced` |\n");
+    // 5. Bounded TOML parser limits: oversized (>256 KiB) & nested arrays warn in show and fail validate
+    let big_home = tmp.path.join("big-home");
+    fs::create_dir_all(big_home.join(".b3")).unwrap();
     write_lf(
-        &repo_all.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","require_ci":true,"require_review":true}"#,
+        &big_home.join(".b3/config.toml"),
+        &format!("[models.tiers]\neconomy = \"{}\"\n", "a".repeat(265 * 1024)),
     );
-    let (c_all, out_all, err_all) = run_cfg(
+    let (c_big_val, _, _) = run_cfg(
         &[
             "config",
-            "migrate",
-            "--scope",
-            "all",
-            "--repo-root",
-            repo_all.to_str().unwrap(),
+            "validate",
             "--user-home",
-            home_all.to_str().unwrap(),
+            big_home.to_str().unwrap(),
         ],
         None,
         &[],
     );
-    assert_eq!(c_all, 0, "{out_all}\n{err_all}");
-    assert!(home_all.join(".b3/config.toml").is_file());
-    assert!(home_all.join(".b3/models.md").is_file());
-    assert!(repo_all.join(".b3/policy.toml").is_file());
-    assert!(repo_all.join(".b3/research-policy.json").is_file());
-    let pol_all = fs::read_to_string(repo_all.join(".b3/policy.toml")).unwrap();
-    assert!(
-        pol_all.contains("auto_merge_max_risk = \"LOW\""),
-        "{pol_all}"
+    assert_eq!(c_big_val, 1);
+    let (c_big_show, out_big_show, _) = run_cfg(
+        &[
+            "config",
+            "show",
+            "--json",
+            "--user-home",
+            big_home.to_str().unwrap(),
+        ],
+        None,
+        &[],
     );
+    assert_eq!(c_big_show, 0);
+    let j_big = parse_json_output(&out_big_show);
+    assert!(j_big
+        .get("warnings")
+        .and_then(JsonValue::as_array)
+        .is_some_and(|w| !w.is_empty()));
 
-    // 5. Strict legacy policy migration failure on mistyped JSON fields (#2) & `auto` preservation in project models.md (#5)
-    let bad_pol_repo = tmp.path.join("bad-pol-repo");
-    clone_seeded_git_repo(&bad_pol_repo);
     write_lf(
-        &bad_pol_repo.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":"Cargo.lock"}"#,
-    );
-    let (c_bad_pol, out_bp, err_bp) = run_cfg(
-        &[
-            "config",
-            "migrate",
-            "--scope",
-            "policy",
-            "--repo-root",
-            bad_pol_repo.to_str().unwrap(),
-            "--user-home",
-            home_all.to_str().unwrap(),
-        ],
-        None,
-        &[],
+        &big_home.join(".b3/config.toml"),
+        "[models.roles]\nplanning = [[\"economy\"]]\n",
     );
     assert_eq!(
-        c_bad_pol, 1,
-        "mistyped research-policy.json must fail cleanly: {out_bp}\n{err_bp}"
-    );
-    assert!(
-        format!("{out_bp}\n{err_bp}").contains("MIGRATE_FAIL"),
-        "{out_bp}\n{err_bp}"
+        run_cfg(
+            &[
+                "config",
+                "validate",
+                "--user-home",
+                big_home.to_str().unwrap()
+            ],
+            None,
+            &[],
+        )
+        .0,
+        1
     );
 
-    let auto_proj_repo = tmp.path.join("auto-proj-repo");
-    clone_seeded_git_repo(&auto_proj_repo);
+    // 6. `--route --escalations 1 --trigger design_contradiction` advances 1 -> 2 and respects max_escalations
+    let route_home = tmp.path.join("route-home");
+    fs::create_dir_all(route_home.join(".b3")).unwrap();
     write_lf(
-        &auto_proj_repo.join(".b3/models.md"),
-        "| `planning` | `auto` |\n",
+        &route_home.join(".b3/config.toml"),
+        "[models]\nrouting = \"adaptive\"\nauto_escalate = true\nmax_escalations = 2\n[models.tiers]\neconomy = \"m-l1\"\nbalanced = \"m-l2\"\nadvanced = \"m-l3\"\n",
     );
-    let (c_ap, out_ap, err_ap) = run_cfg(
+    let (c_esc2, out_esc2, _) = run_cfg(
         &[
             "config",
-            "migrate",
-            "--scope",
-            "project",
-            "--repo-root",
-            auto_proj_repo.to_str().unwrap(),
+            "get",
             "--user-home",
-            home_all.to_str().unwrap(),
+            route_home.to_str().unwrap(),
+            "--route",
+            "implementation",
+            "--complexity",
+            "low",
+            "--risk",
+            "LOW",
+            "--host",
+            "codex",
+            "--escalations",
+            "1",
+            "--trigger",
+            "design_contradiction",
+            "--json",
         ],
         None,
         &[],
     );
-    assert_eq!(c_ap, 0, "{out_ap}\n{err_ap}");
-    let proj_toml = fs::read_to_string(auto_proj_repo.join(".b3/config.toml")).unwrap();
-    assert!(
-        proj_toml.contains("planning = [\"auto\"]"),
-        "project models.md explicit `auto` must be preserved:\n{proj_toml}"
+    assert_eq!(c_esc2, 0);
+    let j_esc2 = parse_json_output(&out_esc2);
+    assert_eq!(
+        j_esc2.get("escalation_count").and_then(|v| v.as_i64()),
+        Some(2)
+    );
+    assert_eq!(
+        j_esc2.get("requested_model").and_then(JsonValue::as_str),
+        Some("m-l3")
     );
 }
 
 #[test]
-fn hooks_config_precedence_env_set_and_migration() {
+fn hooks_config_precedence_and_env_override() {
     let tmp = TempDirGuard::new("cfg-hooks");
     let home = tmp.path.join("home");
     let repo = tmp.path.join("repo");
@@ -1842,36 +1754,4 @@ fn hooks_config_precedence_env_set_and_migration() {
         .is_some_and(|w| w
             .iter()
             .any(|x| x.as_str().is_some_and(|s| s.contains("B3_HOOK_MODE")))));
-
-    // 3. Migrate legacy models.md with hooks: YAML block into config.toml
-    let mig_home = tmp.path.join("mig-home");
-    let mig_repo = tmp.path.join("mig-repo");
-    clone_seeded_git_repo(&mig_repo);
-    fs::create_dir_all(mig_home.join(".b3")).unwrap();
-    write_lf(
-        &mig_home.join(".b3/models.md"),
-        "| `planning` | `balanced` |\n\n```yaml\nhooks:\n  enabled: false\n  mode: audit\n```\n",
-    );
-    let (c_mig, out_mig, err_mig) = run_cfg(
-        &[
-            "config",
-            "migrate",
-            "--scope",
-            "personal",
-            "--repo-root",
-            mig_repo.to_str().unwrap(),
-            "--user-home",
-            mig_home.to_str().unwrap(),
-        ],
-        None,
-        &[],
-    );
-    assert_eq!(c_mig, 0, "{out_mig}\n{err_mig}");
-    let migrated_toml = fs::read_to_string(mig_home.join(".b3/config.toml")).unwrap();
-    assert!(
-        migrated_toml.contains("[hooks]")
-            && migrated_toml.contains("enabled = false")
-            && migrated_toml.contains("mode = \"audit\""),
-        "migrated personal config.toml missing [hooks]:\n{migrated_toml}"
-    );
 }

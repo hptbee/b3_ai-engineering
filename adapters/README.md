@@ -95,7 +95,7 @@ b3 install product --product-root /path/to/product --host claude
 b3 install product --product-root /path/to/product --host antigravity
 ```
 
-Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), and `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, `.b3/config.toml`, and `.b3/models.md` in `.gitignore` (track `.b3/home` and `.b3/policy.toml`; supports `--b3-home <dir>`, `--dry-run`, and `--force`). Host specifics:
+Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), and `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, and `.b3/config.toml` in `.gitignore` (track `.b3/home` and `.b3/policy.toml`; supports `--b3-home <dir>`, `--dry-run`, and `--force`). Host specifics:
 - **cursor:** refuses existing `.agents/skills` or `.claude/skills` (unless `--force`); writes `.cursor/commands/*.md` (refreshed idempotently when unmodified) and `.cursor/README.md`.
 - **codex / antigravity:** writes gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`); does not touch `.cursor/`.
 - **claude:** writes thin `CLAUDE.md` (`@AGENTS.md`, when missing), gitignored flattened `.claude/skills/<name>`, and gitignored `.claude/agents` → `{B3_HOME}/agents`; does not touch `.cursor/`.
@@ -115,7 +115,7 @@ Host-specific commands (`b3 install cursor` and `b3 install antigravity`) stay i
 
 ## Opt-in Event Hooks (`b3 hook install`)
 
-B3 supports optional, opt-in native event hooks (`b3 hook install [--dry-run]`, `verify`, `status`, `uninstall`) backed directly by canonical `src/guard/*` primitives and configured via `[hooks]` in `~/.b3/config.toml` / `<project>/.b3/config.toml` (`"enforce"` | `"audit"` | `"off"`, with legacy `.b3/models.md` fallback).
+B3 supports optional, opt-in native event hooks (`b3 hook install [--dry-run]`, `verify`, `status`, `uninstall`) backed directly by canonical `src/guard/*` primitives and configured via `[hooks]` in `~/.b3/config.toml` / `<project>/.b3/config.toml` (`"enforce"` | `"audit"` | `"off"`).
 
 - **Cursor (`.cursor/hooks.json`), Claude Code (`.claude/settings.json`), Codex (`.codex/hooks.json`), and Antigravity (`.agents/hooks.json` / `~/.gemini/config/hooks.json`):** Support opt-in Tier 0 pre-tool/file/command guards (`<10 ms`, `0` Git calls) and Tier 1 advisory/completion hooks via native host protocols; live IDE runtime execution remains **`NOT_VERIFIED`**.
 - **Local Git hooks (`pre-commit`, `pre-push`, `pre-merge-commit`):** Installed in repo-contained local `core.hooksPath` or `<git-common-dir>/hooks/` (never mutating global `core.hooksPath`), chaining user hooks via `<hook>.b3-user` and delegating to `guard::precommit` and `guard::merge_policy`; local hooks do not replace server-side branch protection. Setting `hooks.mode: off` never bypasses mandatory workflow `b3 guard` gates.

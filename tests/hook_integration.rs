@@ -72,7 +72,6 @@ fn run_hook_stdin(
         ("B3_HOOK_ACTIVE", ""),
         ("B3_HOOK_MODE", ""),
         ("B3_CONFIG_PERSONAL", ""),
-        ("B3_MODELS_PERSONAL", ""),
     ];
     full_envs.extend_from_slice(envs);
     run_cmd_stdin(b3_bin(), &args, cwd, stdin_data, &full_envs)
@@ -176,11 +175,11 @@ fn setup_remote_repo(tmp: &TempDirGuard, name: &str, governed: bool) -> (PathBuf
     let _ = init_fresh_git_repo(&repo);
     if governed {
         write_lf(
-            &repo.join(".b3/research-policy.json"),
-            r#"{"auto_merge":"disabled","protected_paths":["locked/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+            &repo.join(".b3/policy.toml"),
+            "auto_merge = \"disabled\"\nauto_merge_max_risk = \"LOW\"\nprotected_paths = [\"locked/\"]\nallow_protected_paths = false\nrequire_ci = false\nrequire_review = false\n",
         );
-        git_in(&repo, &["add", ".b3/research-policy.json"]);
-        git_in(&repo, &["commit", "-m", "add research policy"]);
+        git_in(&repo, &["add", ".b3/policy.toml"]);
+        git_in(&repo, &["commit", "-m", "add policy.toml"]);
     }
     git_in(&repo, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git_in(&repo, &["push", "-u", "origin", "main"]);
@@ -332,8 +331,8 @@ fn host_protocol_fixtures_and_core_blocking_advisory_scenarios() {
     }
     let other_dir = tmp.path.join("untrusted-off-repo");
     write_lf(
-        &other_dir.join(".b3/models.md"),
-        "```yaml\nhooks:\n  enabled: false\n  mode: off\n```\n",
+        &other_dir.join(".b3/config.toml"),
+        "[hooks]\nenabled = false\nmode = \"off\"\n",
     );
     let spoof = format!(
         r#"{{"hook_event_name":"preToolUse","tool_name":"Write","tool_input":{{"file_path":".env"}},"project_root":{},"cwd":{}}}"#,
@@ -464,7 +463,7 @@ fn f02_f03_git_remote_governance_and_worktree_enforcement() {
         0
     );
 
-    // (b) Governed repo with .b3/research-policy.json on origin/main
+    // (b) Governed repo with .b3/policy.toml on origin/main
     let (gov, _) = setup_remote_repo(&tmp, "gov", true);
     git_in(&gov, &["checkout", "-b", "feat/clean"]);
     write_lf(&gov.join("src/app.txt"), "clean feature\n");
@@ -475,10 +474,10 @@ fn f02_f03_git_remote_governance_and_worktree_enforcement() {
         0
     );
 
-    // Editing or deleting WT .b3/research-policy.json -> blocked
+    // Editing or deleting WT .b3/policy.toml -> blocked
     write_lf(
-        &gov.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized"}"#,
+        &gov.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\n",
     );
     let (c_ed, _, err_ed) = git_iso_status(
         &tmp,
@@ -489,7 +488,7 @@ fn f02_f03_git_remote_governance_and_worktree_enforcement() {
         c_ed != 0 && err_ed.contains("policy_modified_in_pr"),
         "{err_ed}"
     );
-    fs::remove_file(gov.join(".b3/research-policy.json")).unwrap();
+    fs::remove_file(gov.join(".b3/policy.toml")).unwrap();
     let (c_del, _, err_del) = git_iso_status(
         &tmp,
         &gov,
@@ -499,15 +498,15 @@ fn f02_f03_git_remote_governance_and_worktree_enforcement() {
         c_del != 0 && err_del.contains("policy_modified_in_pr"),
         "{err_del}"
     );
-    git_in(&gov, &["checkout", "--", ".b3/research-policy.json"]);
+    git_in(&gov, &["checkout", "--", ".b3/policy.toml"]);
 
     // Commit tampering policy or touching locked/secret.txt -> blocked
     git_in(&gov, &["checkout", "-b", "feat/bad-pol", "main"]);
     write_lf(
-        &gov.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized"}"#,
+        &gov.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\n",
     );
-    git_in(&gov, &["add", ".b3/research-policy.json"]);
+    git_in(&gov, &["add", ".b3/policy.toml"]);
     git_in(&gov, &["commit", "-m", "tamper policy"]);
     let (c_bp, _, err_bp) = git_iso_status(&tmp, &gov, &["push", "origin", "feat/bad-pol"]);
     assert!(
@@ -525,10 +524,10 @@ fn f02_f03_git_remote_governance_and_worktree_enforcement() {
         "{err_bprot}"
     );
 
-    // SEC-2: Orphan commit dropping .b3/research-policy.json must block push (policy_modified_in_pr)
+    // SEC-2: Orphan commit dropping .b3/policy.toml must block push (policy_modified_in_pr)
     git_in(&gov, &["checkout", "--orphan", "feat/orphan-drop"]);
     git_in(&gov, &["rm", "-rf", "--cached", "."]);
-    let _ = fs::remove_file(gov.join(".b3/research-policy.json"));
+    let _ = fs::remove_file(gov.join(".b3/policy.toml"));
     write_lf(&gov.join("src/orphan.txt"), "orphan\n");
     git_in(&gov, &["add", "src/orphan.txt"]);
     git_in(&gov, &["commit", "-m", "orphan without policy"]);
@@ -586,7 +585,7 @@ fn f02_f03_git_remote_governance_and_worktree_enforcement() {
     write_lf(&wt_dir.join("locked/wt.txt"), "wt\n");
     git_in(&wt_dir, &["add", "locked/wt.txt"]);
     git_in(&wt_dir, &["commit", "-m", "wt locked"]);
-    fs::remove_file(wt_dir.join(".b3/research-policy.json")).unwrap();
+    fs::remove_file(wt_dir.join(".b3/policy.toml")).unwrap();
     let (c_wtp, _, err_wtp) = git_iso_status(&tmp, &wt_dir, &["push", "origin", "feat/wt-bad"]);
     assert!(
         c_wtp != 0 && err_wtp.contains("policy_modified_in_pr"),
@@ -624,7 +623,7 @@ fn f02_f03_git_remote_governance_and_worktree_enforcement() {
         .0,
         0
     );
-    fs::remove_file(wt_merge.join(".b3/research-policy.json")).unwrap();
+    fs::remove_file(wt_merge.join(".b3/policy.toml")).unwrap();
     let (c_pmc, _, err_pmc) = run_hook_stdin(
         "git",
         Some("pre-merge-commit"),
@@ -758,8 +757,8 @@ fn f04_f07_tier0_zero_git_worktree_containment_and_guard_coexistence() {
     git_in(&main_repo, &["add", "src/app.txt"]);
     for (idx, mode) in ["enforce", "off"].iter().enumerate() {
         write_lf(
-            &main_repo.join(".b3/models.md"),
-            &format!("```yaml\nhooks:\n  enabled: true\n  mode: {mode}\n```\n"),
+            &main_repo.join(".b3/config.toml"),
+            &format!("[hooks]\nenabled = true\nmode = \"{mode}\"\n"),
         );
         let slug = format!("coexist-{idx}");
         let rec = format!(".b3/ship/verify/{slug}.verify");
@@ -777,7 +776,7 @@ fn f04_f07_tier0_zero_git_worktree_containment_and_guard_coexistence() {
                 &base_sha,
                 "--partition",
                 "--ignore-dirty-paths",
-                ".b3/models.md",
+                ".b3/config.toml",
                 "--verified-dirty-paths",
                 "src/app.txt",
                 "--wave-specs",
@@ -798,7 +797,7 @@ fn f04_f07_tier0_zero_git_worktree_containment_and_guard_coexistence() {
                 "--allowed-paths",
                 "src/app.txt",
                 "--ignore-dirty-paths",
-                ".b3/models.md"
+                ".b3/config.toml"
             ])
             .0,
             0
@@ -893,10 +892,10 @@ fn f05_mode_matrix_enforce_audit_off() {
         if host == "cursor" { assert!(outo.contains(r#""permission":"allow""#), "{label}"); }
     }
 
-    // Malformed .b3/models.md warns in audit without blocking, and never blocks off
+    // Malformed .b3/config.toml warns in audit without blocking, and never blocks off
     write_lf(
-        &repo.join(".b3/models.md"),
-        "```yaml\nhooks:\n  mode: invalid\n```\n",
+        &repo.join(".b3/config.toml"),
+        "[hooks]\nmode = \"invalid\"\n",
     );
     let ok_p = cursor_write(".env", r);
     let (c_ma, _, err_ma) = run_hook_stdin(
@@ -1194,10 +1193,10 @@ fn r02_remote_policy_authority_scenarios() {
     git_in(&admin, &["config", "user.email", "t@example.com"]);
     git_in(&admin, &["config", "user.name", "Test"]);
     write_lf(
-        &admin.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":["locked/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+        &admin.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\nprotected_paths = [\"locked/\"]\nallow_protected_paths = false\nrequire_ci = false\nrequire_review = false\n",
     );
-    git_in(&admin, &["add", ".b3/research-policy.json"]);
+    git_in(&admin, &["add", ".b3/policy.toml"]);
     git_in(&admin, &["commit", "-m", "remote adds policy"]);
     git_in(&admin, &["push", "origin", "main"]);
 
@@ -1240,10 +1239,10 @@ fn r02_remote_policy_authority_scenarios() {
     let _ = init_fresh_git_repo(&up_seed);
     git_in(&up_seed, &["branch", "-M", "trunk"]);
     write_lf(
-        &up_seed.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":["sec/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+        &up_seed.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\nprotected_paths = [\"sec/\"]\nallow_protected_paths = false\nrequire_ci = false\nrequire_review = false\n",
     );
-    git_in(&up_seed, &["add", ".b3/research-policy.json"]);
+    git_in(&up_seed, &["add", ".b3/policy.toml"]);
     git_in(&up_seed, &["commit", "-m", "trunk policy"]);
     git_in(
         &up_seed,
@@ -1515,10 +1514,10 @@ fn r02_remote_policy_authority_scenarios() {
     git_in(&n01_admin, &["config", "user.name", "Test"]);
     git_in(&n01_admin, &["checkout", "-b", "trunk"]);
     write_lf(
-        &n01_admin.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":["sec/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+        &n01_admin.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\nprotected_paths = [\"sec/\"]\nallow_protected_paths = false\nrequire_ci = false\nrequire_review = false\n",
     );
-    git_in(&n01_admin, &["add", ".b3/research-policy.json"]);
+    git_in(&n01_admin, &["add", ".b3/policy.toml"]);
     git_in(&n01_admin, &["commit", "-m", "trunk policy"]);
     git_in(&n01_admin, &["push", "origin", "trunk"]);
 
@@ -1546,10 +1545,10 @@ fn r02_remote_policy_authority_scenarios() {
     // Conflicting policy blobs across origin/main and origin/trunk with unset origin/HEAD fail closed
     git_in(&n01_admin, &["checkout", "main"]);
     write_lf(
-        &n01_admin.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":["other/"],"allow_protected_paths":false,"require_ci":false,"require_review":false}"#,
+        &n01_admin.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\nprotected_paths = [\"other/\"]\nallow_protected_paths = false\nrequire_ci = false\nrequire_review = false\n",
     );
-    git_in(&n01_admin, &["add", ".b3/research-policy.json"]);
+    git_in(&n01_admin, &["add", ".b3/policy.toml"]);
     git_in(&n01_admin, &["commit", "-m", "conflicting main policy"]);
     git_in(&n01_admin, &["push", "origin", "main"]);
     git_in(&n01_repo, &["fetch", "origin"]);
@@ -1575,24 +1574,24 @@ fn r04_and_section6_subdir_discovery_lossless_shim_and_precommit() {
 
     // 1. Subdirectory cwd + omitted --repo-root + malformed JSON honors audit / off / enforce
     write_lf(
-        &repo.join(".b3/models.md"),
-        "```yaml\nhooks:\n  enabled: true\n  mode: audit\n```\n",
+        &repo.join(".b3/config.toml"),
+        "[hooks]\nenabled = true\nmode = \"audit\"\n",
     );
     let (c_aud, _, err_aud) =
         run_hook_stdin("cursor", None, None, None, Some(&nested), "{not-json", &[]);
     assert!(c_aud == 0 && err_aud.contains("[audit]"), "{err_aud}");
 
     write_lf(
-        &repo.join(".b3/models.md"),
-        "```yaml\nhooks:\n  enabled: false\n  mode: enforce\n```\n",
+        &repo.join(".b3/config.toml"),
+        "[hooks]\nenabled = false\nmode = \"enforce\"\n",
     );
     let (c_off, _, err_off) =
         run_hook_stdin("cursor", None, None, None, Some(&nested), "{not-json", &[]);
     assert_eq!((c_off, err_off.as_str()), (0, ""));
 
     write_lf(
-        &repo.join(".b3/models.md"),
-        "```yaml\nhooks:\n  enabled: true\n  mode: enforce\n```\n",
+        &repo.join(".b3/config.toml"),
+        "[hooks]\nenabled = true\nmode = \"enforce\"\n",
     );
     let (c_enf, out_enf, _) =
         run_hook_stdin("cursor", None, None, None, Some(&nested), "{not-json", &[]);
@@ -1664,13 +1663,21 @@ fn toml_hooks_config_and_policy_toml_enforcement() {
     fs::create_dir_all(repo.join(".b3")).unwrap();
     let r = repo.to_str().unwrap();
 
-    // 1. Project .b3/config.toml [hooks] controls hook execution and overrides legacy models.md
+    // 1. Legacy .b3/models.md is ignored cleanly and preserved untouched, while .b3/config.toml controls [hooks]
     let nested = repo.join("sub/dir");
     fs::create_dir_all(&nested).unwrap();
-    write_lf(
-        &repo.join(".b3/models.md"),
-        "```yaml\nhooks:\n  enabled: true\n  mode: enforce\n```\n",
+    let legacy_md = repo.join(".b3/models.md");
+    let legacy_body = "```yaml\nhooks:\n  enabled: false\n  mode: off\n```\n";
+    write_lf(&legacy_md, legacy_body);
+    // Without .b3/config.toml, legacy models.md must NOT disable hooks!
+    let (c_leg_ignored, out_leg, _) =
+        run_hook_stdin("cursor", None, None, None, Some(&nested), "{not-json", &[]);
+    assert_eq!(
+        c_leg_ignored, 2,
+        "legacy models.md must not disable hooks: {out_leg}"
     );
+    assert_eq!(fs::read_to_string(&legacy_md).unwrap(), legacy_body);
+
     write_lf(
         &repo.join(".b3/config.toml"),
         "[hooks]\nenabled = true\nmode = \"audit\"\n",
@@ -1711,7 +1718,7 @@ fn toml_hooks_config_and_policy_toml_enforcement() {
         "expected .b3/policy.toml write block: c={c_bw} out={out_bw}"
     );
 
-    // 3. Git pre-push & pre-merge-commit enforce trunk .b3/policy.toml protection & dual-format fail-closed
+    // 3. Git pre-push & pre-merge-commit enforce trunk .b3/policy.toml protection & reject legacy JSON fail-closed
     let admin = tmp.path.join("admin-toml");
     let bare = tmp.path.join("bare-toml.git");
     git_in(&tmp.path, &["init", "--bare", bare.to_str().unwrap()]);
@@ -1772,13 +1779,13 @@ fn toml_hooks_config_and_policy_toml_enforcement() {
         .args(["merge", "--abort"])
         .output();
 
-    // Dual-format staged/WT conflict fails closed
+    // Legacy research-policy.json alongside policy.toml fails closed
     git_in(&wt, &["checkout", "-b", "feat/dual", "origin/main"]);
     write_lf(&wt.join(".b3/research-policy.json"), "{}");
     let (c_dual, _, err_dual) = git_iso_status(&tmp, &wt, &["push", "-u", "origin", "feat/dual"]);
     assert!(
-        c_dual != 0 && err_dual.contains("policy_conflict_dual_format"),
-        "dual policy.toml + research-policy.json must fail closed: {err_dual}"
+        c_dual != 0 && err_dual.contains("legacy_policy_json_unsupported"),
+        "legacy research-policy.json must fail closed: {err_dual}"
     );
 }
 

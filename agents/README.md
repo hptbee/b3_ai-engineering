@@ -12,7 +12,7 @@ Canonical role definitions live here (`agents/`). Cursor maps them via `.cursor/
 | [`b3-architecture-reviewer.md`](b3-architecture-reviewer.md) | Boundaries, unjustified complexity | Isolation from the author of the design |
 | [`b3-performance-reviewer.md`](b3-performance-reviewer.md) | Material perf risks/regressions; evidence before optimize | Isolation on **hot-path** diffs only |
 
-Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`, domain performance skills). Model slots: [`review-loop/models.md`](../review-loop/models.md) (4-tier escalation); optional TOML preferences: [`docs/model-preferences.md`](../docs/model-preferences.md) ([`config/config.example.toml`](../config/config.example.toml) + `~/.b3/config.toml`, `b3 config init` / `migrate` for legacy `models.md`). Committed default is `model: inherit` on these files. Host model-slot setup (Cursor): [`adapters/cursor/README.md`](../adapters/cursor/README.md).
+Skills stay shared (`api-security`, `simplest-correct`, `code-review`, `verification`, domain performance skills). Model slots: [`review-loop/models.md`](../review-loop/models.md) (4-tier escalation); optional TOML preferences: [`docs/configuration.md`](../docs/configuration.md) ([`config/config.example.toml`](../config/config.example.toml) + `~/.b3/config.toml`, `b3 config init` / `get --route`). Committed default is `model: inherit` on these files. Host model-slot setup (Cursor): [`adapters/cursor/README.md`](../adapters/cursor/README.md).
 
 Backlog (not created): frontend/test/UX reviewers — use `code-review` dimensions until isolation is needed in real use.
 

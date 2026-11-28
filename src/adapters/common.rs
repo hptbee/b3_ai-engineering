@@ -538,16 +538,14 @@ fn personal_config_err(
 
 /// Initializes optional personal `~/.b3/config.toml` from `config/config.example.toml`
 /// (falling back to `DEFAULT_CONFIG_TEMPLATE`), never overwriting existing files and
-/// deferring when legacy `models.md` exists pending `b3 config migrate`.
+/// leaving any legacy `~/.b3/models.md` untouched on disk.
 pub fn initialize_personal_config_file(
     b3_home: &Path,
     user_home: Option<&Path>,
     dry_run: bool,
     non_fatal: bool,
 ) -> Result<String, B3Error> {
-    if std::env::var("B3_SKIP_CONFIG_INIT").ok().as_deref() == Some("1")
-        || std::env::var("B3_SKIP_MODEL_INIT").ok().as_deref() == Some("1")
-    {
+    if std::env::var("B3_SKIP_CONFIG_INIT").ok().as_deref() == Some("1") {
         return Ok("skipped".to_string());
     }
 
@@ -586,27 +584,6 @@ pub fn initialize_personal_config_file(
 
     if path_exists_or_link(&dest) {
         return Ok(format!("kept:{dest_str}"));
-    }
-
-    let legacy_models = match std::env::var("B3_MODELS_PERSONAL") {
-        Ok(val) => {
-            let t = val.trim();
-            if !t.is_empty() && !has_control_chars(t) && !is_unc_or_network_path(t, Path::new(t)) {
-                PathBuf::from(t)
-            } else {
-                dest.with_file_name("models.md")
-            }
-        }
-        Err(_) => dest.with_file_name("models.md"),
-    };
-    if path_exists_or_link(&legacy_models) {
-        let legacy_str = legacy_models.to_string_lossy().into_owned();
-        if !dry_run {
-            eprintln!(
-                "HINT: legacy models.md found at {legacy_str}; run 'b3 config migrate' to migrate to config.toml without overwriting"
-            );
-        }
-        return Ok(format!("legacy-pending:{legacy_str}"));
     }
 
     if dry_run {
@@ -706,10 +683,6 @@ pub fn format_personal_config_status(
         ))
     } else if let Some(rest) = status.strip_prefix("created:") {
         Some(format!("config_preferences={rest} (created from example)"))
-    } else if let Some(rest) = status.strip_prefix("legacy-pending:") {
-        Some(format!(
-            "config_preferences=legacy-pending:{rest} (run 'b3 config migrate')"
-        ))
     } else if emit_error && status.starts_with("error:") {
         Some(format!("config_preferences={status}"))
     } else {

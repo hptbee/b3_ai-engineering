@@ -16,7 +16,6 @@ use crate::guard::ledger::{invoke_review_ledger_check, ReviewLedger};
 use crate::guard::push_unique_str;
 use crate::guard::scope::{collect_scope_data, eval_risk_for_subset};
 use crate::guard::verify::{test_verify_receipt, validate_receipt_covers_paths};
-use crate::json::{parse_json, JsonValue};
 use crate::process::run_command_timeout;
 use crate::toml_lite::{parse_toml_strict, TomlValue};
 
@@ -290,24 +289,17 @@ fn resolve_default_policy_path(
     }
     let def_pol_toml_raw = repo_root.join(".b3").join("policy.toml");
     let def_pol_json_raw = repo_root.join(".b3").join("research-policy.json");
-    let has_wt_toml = def_pol_toml_raw.exists() || is_reparse_or_symlink(&def_pol_toml_raw);
-    let has_wt_json = def_pol_json_raw.exists() || is_reparse_or_symlink(&def_pol_json_raw);
-    if has_wt_toml && has_wt_json {
-        return Err(fail("MERGE_BLOCKED: policy_conflict_dual_format", 1));
+    if def_pol_json_raw.exists() || is_reparse_or_symlink(&def_pol_json_raw) {
+        return Err(fail("MERGE_BLOCKED: legacy_policy_json_unsupported", 1));
     }
-    if has_wt_toml || has_wt_json {
-        let rel = if has_wt_toml {
-            POLICY_TOML_REL
-        } else {
-            LEGACY_POLICY_JSON_REL
-        };
-        let Some((full, _)) = test_contained_repo_path(repo_root, rel) else {
+    if def_pol_toml_raw.exists() || is_reparse_or_symlink(&def_pol_toml_raw) {
+        let Some((full, _)) = test_contained_repo_path(repo_root, POLICY_TOML_REL) else {
             return Err(fail("MERGE_BLOCKED: invalid_policy_path", 1));
         };
         if !full.is_file() || is_reparse_or_symlink(&full) {
             return Err(fail("MERGE_BLOCKED: invalid_policy_path", 1));
         }
-        Ok(Some((rel, full)))
+        Ok(Some((POLICY_TOML_REL, full)))
     } else {
         Ok(None)
     }
@@ -664,7 +656,7 @@ fn enforce_auto_merge_max_risk(
 }
 
 fn is_default_policy_rel(rel: &str) -> bool {
-    rel.eq_ignore_ascii_case(POLICY_TOML_REL) || rel.eq_ignore_ascii_case(LEGACY_POLICY_JSON_REL)
+    rel.eq_ignore_ascii_case(POLICY_TOML_REL)
 }
 
 fn validate_target_branch_entry(bp: &str) -> Option<String> {
@@ -801,124 +793,8 @@ fn parse_merge_policy_toml_text(raw: &str) -> Result<MergePolicyConfig, B3Error>
     })
 }
 
-fn parse_merge_policy_json_text(raw_json: &str) -> Result<MergePolicyConfig, B3Error> {
-    let val = parse_json(raw_json).map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?;
-    if !matches!(val, JsonValue::Object(_)) {
-        return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-    }
-
-    let mut cfg = MergePolicyConfig {
-        auto_merge: "disabled".to_string(),
-        // Preserve pre-existing legacy `.b3/research-policy.json` behavior when omitted.
-        auto_merge_max_risk: "CRITICAL".to_string(),
-        allow_protected: false,
-        require_ci: true,
-        require_review: true,
-        protected_paths: Vec::new(),
-        allowed_target_branches: Vec::new(),
-    };
-
-    if let Some(v) = val
-        .get_exact_unique("auto_merge")
-        .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?
-    {
-        let JsonValue::String(s) = v else {
-            return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-        };
-        if has_control_chars(s) {
-            return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-        }
-        let am_val = s.trim();
-        if am_val != "disabled" && am_val != "authorized" {
-            return Err(fail(
-                format!("MERGE_BLOCKED: invalid_auto_merge={am_val}"),
-                1,
-            ));
-        }
-        cfg.auto_merge = am_val.to_string();
-    }
-
-    if let Some(v) = val
-        .get_exact_unique("auto_merge_max_risk")
-        .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?
-    {
-        let JsonValue::String(s) = v else {
-            return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-        };
-        if has_control_chars(s) {
-            return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-        }
-        let rk = s.trim();
-        if risk_tier_rank_strict(rk).is_none() {
-            return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-        }
-        cfg.auto_merge_max_risk = rk.to_string();
-    }
-
-    for (key, target) in [
-        ("allow_protected_paths", &mut cfg.allow_protected),
-        ("require_ci", &mut cfg.require_ci),
-        ("require_review", &mut cfg.require_review),
-    ] {
-        if let Some(v) = val
-            .get_exact_unique(key)
-            .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?
-        {
-            let JsonValue::Bool(b) = v else {
-                return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-            };
-            *target = *b;
-        }
-    }
-
-    if let Some(v) = val
-        .get_exact_unique("protected_paths")
-        .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?
-    {
-        let JsonValue::Array(arr) = v else {
-            return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-        };
-        for item in arr {
-            let JsonValue::String(pp) = item else {
-                return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-            };
-            if pp.contains(['\r', '\n', '\0']) {
-                return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-            }
-            let Some(np) = normalize_merge_policy_path(pp) else {
-                return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-            };
-            push_unique_str(&mut cfg.protected_paths, np);
-        }
-    }
-
-    if let Some(v) = val
-        .get_exact_unique("allowed_target_branches")
-        .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_json", 1))?
-    {
-        let JsonValue::Array(arr) = v else {
-            return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-        };
-        for item in arr {
-            let JsonValue::String(bp) = item else {
-                return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-            };
-            let Some(b_trim) = validate_target_branch_entry(bp) else {
-                return Err(fail("MERGE_BLOCKED: invalid_policy_json", 1));
-            };
-            push_unique_str(&mut cfg.allowed_target_branches, b_trim);
-        }
-    }
-
-    Ok(cfg)
-}
-
-fn parse_policy_by_rel_path(rel: &str, raw: &str) -> Result<MergePolicyConfig, B3Error> {
-    if rel.to_ascii_lowercase().ends_with(".toml") {
-        parse_merge_policy_toml_text(raw)
-    } else {
-        parse_merge_policy_json_text(raw)
-    }
+fn reject_legacy_policy_json(err_prefix: &str) -> B3Error {
+    fail(format!("{err_prefix}: legacy_policy_json_unsupported"), 1)
 }
 
 fn match_wildcard_glob(pattern: &str, text: &str) -> bool {
@@ -1288,7 +1164,7 @@ fn check_policy_blob_in_tree(root: &Path, commit_sha: &str) -> Result<bool, B3Er
         return Ok(false);
     }
     let stdout = String::from_utf8_lossy(&ls.stdout);
-    let mut found: Vec<&'static str> = Vec::new();
+    let mut has_toml = false;
     for raw_ln in stdout.lines() {
         let ln = raw_ln.trim();
         if ln.is_empty() {
@@ -1297,14 +1173,12 @@ fn check_policy_blob_in_tree(root: &Path, commit_sha: &str) -> Result<bool, B3Er
         let Some(rel) = is_policy_ls_tree_entry(ln) else {
             return Err(fail("MERGE_BLOCKED: invalid_policy_path", 1));
         };
-        if !found.contains(&rel) {
-            found.push(rel);
+        if rel == LEGACY_POLICY_JSON_REL {
+            return Err(reject_legacy_policy_json("MERGE_BLOCKED"));
         }
+        has_toml = true;
     }
-    if found.len() > 1 {
-        return Err(fail("MERGE_BLOCKED: policy_conflict_dual_format", 1));
-    }
-    Ok(!found.is_empty())
+    Ok(has_toml)
 }
 
 fn resolve_policy_in_tree(
@@ -1330,7 +1204,7 @@ fn resolve_policy_in_tree(
         return Err(fail(format!("{err_prefix}: {missing_tree_err}"), 1));
     }
     let stdout = String::from_utf8_lossy(&ls.stdout);
-    let mut found: Vec<&'static str> = Vec::new();
+    let mut has_toml = false;
     for raw_ln in stdout.lines() {
         let ln = raw_ln.trim();
         if ln.is_empty() {
@@ -1339,23 +1213,18 @@ fn resolve_policy_in_tree(
         let Some(rel) = is_policy_ls_tree_entry(ln) else {
             return Err(fail(format!("{err_prefix}: invalid_policy_path"), 1));
         };
-        if !found.contains(&rel) {
-            found.push(rel);
+        if rel == LEGACY_POLICY_JSON_REL {
+            return Err(reject_legacy_policy_json(err_prefix));
         }
+        has_toml = true;
     }
-    if found.len() > 1 {
-        return Err(fail(
-            format!("{err_prefix}: policy_conflict_dual_format"),
-            1,
-        ));
-    }
-    let Some(&rel) = found.first() else {
+    if !has_toml {
         return Ok(None);
-    };
-    let Some(content) = show_commit_file(root, commit_sha, rel)? else {
+    }
+    let Some(content) = show_commit_file(root, commit_sha, POLICY_TOML_REL)? else {
         return Err(fail(format!("{err_prefix}: policy_not_in_authority"), 1));
     };
-    Ok(Some((rel, content)))
+    Ok(Some((POLICY_TOML_REL, content)))
 }
 
 fn show_commit_file(
@@ -1377,7 +1246,7 @@ fn map_policy_parse_err(e: B3Error, post_merge: bool) -> B3Error {
         if let Some(detail) = e.message.strip_prefix("MERGE_BLOCKED: ") {
             return fail(format!("POST_MERGE_FAILED: {detail}"), 1);
         }
-        return fail("POST_MERGE_FAILED: invalid_policy_json", 1);
+        return fail("POST_MERGE_FAILED: invalid_policy_toml", 1);
     }
     e
 }
@@ -1646,13 +1515,13 @@ pub fn run(
                 return Err(fail("POST_MERGE_FAILED: policy_authority_not_fetched", 1));
             }
             let no_env: [(&str, &str); 0] = [];
-            if let Some((rel, pol_txt)) = resolve_policy_in_tree(
+            if let Some((_rel, pol_txt)) = resolve_policy_in_tree(
                 &repo_root,
                 gh_pm_auth_sha,
                 "POST_MERGE_FAILED",
                 "policy_authority_not_fetched",
             )? {
-                let pol_obj = parse_policy_by_rel_path(rel, &pol_txt)
+                let pol_obj = parse_merge_policy_toml_text(&pol_txt)
                     .map_err(|e| map_policy_parse_err(e, true))?;
                 if !pol_obj.allowed_target_branches.is_empty()
                     && !test_branch_pattern_match(gh_base_ref, &pol_obj.allowed_target_branches)
@@ -1753,13 +1622,13 @@ pub fn run(
         let pm_trunk = get_canonical_trunk_authority(&repo_root, has_origin_pm, true)?;
         let mut pm_allowed_branches = Vec::new();
         if !pm_trunk.sha.is_empty() {
-            if let Some((rel, pol_txt)) = resolve_policy_in_tree(
+            if let Some((_rel, pol_txt)) = resolve_policy_in_tree(
                 &repo_root,
                 &pm_trunk.sha,
                 "POST_MERGE_FAILED",
                 "policy_authority_not_fetched",
             )? {
-                let pol_obj = parse_policy_by_rel_path(rel, &pol_txt)
+                let pol_obj = parse_merge_policy_toml_text(&pol_txt)
                     .map_err(|e| map_policy_parse_err(e, true))?;
                 pm_allowed_branches = pol_obj.allowed_target_branches;
             }
@@ -1966,6 +1835,14 @@ pub fn run(
         let Some((full, rel)) = test_contained_repo_path(&repo_root, policy_path) else {
             return Err(fail("MERGE_BLOCKED: invalid_policy_path", 1));
         };
+        if rel.eq_ignore_ascii_case(LEGACY_POLICY_JSON_REL)
+            || rel.to_ascii_lowercase().ends_with(".json")
+        {
+            return Err(reject_legacy_policy_json("MERGE_BLOCKED"));
+        }
+        if !rel.to_ascii_lowercase().ends_with(".toml") {
+            return Err(fail("MERGE_BLOCKED: invalid_policy_toml", 1));
+        }
         if !full.is_file() {
             return Err(fail("MERGE_BLOCKED: missing_policy", 1));
         }
@@ -2103,9 +1980,14 @@ pub fn run(
         let p_full = pol_file_full
             .as_ref()
             .expect("pol_file_full set when pol_explicit");
+        let meta = std::fs::symlink_metadata(p_full)
+            .map_err(|_| fail("MERGE_BLOCKED: missing_policy", 1))?;
+        if !meta.is_file() || meta.len() > crate::toml_lite::MAX_TOML_BYTES as u64 {
+            return Err(fail("MERGE_BLOCKED: invalid_policy_toml", 1));
+        }
         let pol_txt = std::fs::read_to_string(p_full)
             .map_err(|_| fail("MERGE_BLOCKED: missing_policy", 1))?;
-        let pol_parsed = parse_policy_by_rel_path(&effective_pol_rel, &pol_txt)?;
+        let pol_parsed = parse_merge_policy_toml_text(&pol_txt)?;
         auto_merge = pol_parsed.auto_merge;
         allow_protected = pol_parsed.allow_protected;
         require_ci = pol_parsed.require_ci;
@@ -2113,13 +1995,13 @@ pub fn run(
         pol_protected_paths = pol_parsed.protected_paths;
         _allowed_target_branches = pol_parsed.allowed_target_branches;
         if !is_github_pr_mode && !inspect_auth_sha.is_empty() {
-            if let Some((t_rel, t_txt)) = resolve_policy_in_tree(
+            if let Some((_t_rel, t_txt)) = resolve_policy_in_tree(
                 &repo_root,
                 &inspect_auth_sha,
                 "MERGE_BLOCKED",
                 "policy_authority_not_fetched",
             )? {
-                let trunk_pol = parse_policy_by_rel_path(t_rel, &t_txt)?;
+                let trunk_pol = parse_merge_policy_toml_text(&t_txt)?;
                 require_ci = require_ci || trunk_pol.require_ci;
                 require_review = require_review || trunk_pol.require_review;
                 if !trunk_pol.protected_paths.is_empty() {
@@ -2135,14 +2017,14 @@ pub fn run(
     } else if !is_github_pr_mode {
         let mut auth_has_committed_pol = false;
         if !inspect_auth_sha.is_empty() {
-            if let Some((a_rel, a_txt)) = resolve_policy_in_tree(
+            if let Some((_a_rel, a_txt)) = resolve_policy_in_tree(
                 &repo_root,
                 &inspect_auth_sha,
                 "MERGE_BLOCKED",
                 "policy_authority_not_fetched",
             )? {
                 auth_has_committed_pol = true;
-                let pol_parsed = parse_policy_by_rel_path(a_rel, &a_txt)?;
+                let pol_parsed = parse_merge_policy_toml_text(&a_txt)?;
                 auto_merge = pol_parsed.auto_merge;
                 allow_protected = pol_parsed.allow_protected;
                 require_ci = pol_parsed.require_ci;
@@ -2255,14 +2137,15 @@ pub fn run(
             if def_pol_file.is_some() {
                 return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
             }
-        } else if let Some((dp_rel, ref dp_full)) = def_pol_file {
-            let err_code = if dp_rel == POLICY_TOML_REL {
-                "MERGE_BLOCKED: invalid_policy_toml"
-            } else {
-                "MERGE_BLOCKED: invalid_policy_json"
-            };
-            let wt_txt = std::fs::read_to_string(dp_full).map_err(|_| fail(err_code, 1))?;
-            let wt_pol = parse_policy_by_rel_path(dp_rel, &wt_txt)?;
+        } else if let Some((_dp_rel, ref dp_full)) = def_pol_file {
+            let meta = std::fs::symlink_metadata(dp_full)
+                .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_toml", 1))?;
+            if !meta.is_file() || meta.len() > crate::toml_lite::MAX_TOML_BYTES as u64 {
+                return Err(fail("MERGE_BLOCKED: invalid_policy_toml", 1));
+            }
+            let wt_txt = std::fs::read_to_string(dp_full)
+                .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_toml", 1))?;
+            let wt_pol = parse_merge_policy_toml_text(&wt_txt)?;
             if wt_pol.auto_merge == "authorized" {
                 return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
             }
@@ -2464,8 +2347,8 @@ pub fn run(
             "policy_authority_not_fetched",
         )?;
         let auth_has_policy = resolved_auth.is_some();
-        let auth_pol = if let Some((a_rel, a_txt)) = resolved_auth {
-            parse_policy_by_rel_path(a_rel, &a_txt)?
+        let auth_pol = if let Some((_a_rel, a_txt)) = resolved_auth {
+            parse_merge_policy_toml_text(&a_txt)?
         } else {
             if pol_explicit || def_pol_file.is_some() {
                 return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
@@ -2678,7 +2561,7 @@ pub fn run(
     if eff_auth_sha.is_empty() {
         return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
     }
-    let Some((auth_loc_rel, auth_loc_txt)) = resolve_policy_in_tree(
+    let Some((_auth_loc_rel, auth_loc_txt)) = resolve_policy_in_tree(
         &repo_root,
         &eff_auth_sha,
         "MERGE_BLOCKED",
@@ -2687,7 +2570,7 @@ pub fn run(
     else {
         return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
     };
-    let auth_loc_pol = parse_policy_by_rel_path(auth_loc_rel, &auth_loc_txt)?;
+    let auth_loc_pol = parse_merge_policy_toml_text(&auth_loc_txt)?;
     if auth_loc_pol.auto_merge != "authorized" {
         return Err(fail("PR_READY: auto_merge=disabled", 2));
     }
@@ -3231,15 +3114,12 @@ fn resolve_remote_tracking_authority(
             };
             let toml_oid = parse_batch_blob(toml_ln);
             let json_oid = parse_batch_blob(json_ln);
-            if toml_oid.is_some() && json_oid.is_some() {
-                return Err(fail("MERGE_BLOCKED: policy_conflict_dual_format", 1));
+            if json_oid.is_some() {
+                return Err(reject_legacy_policy_json("MERGE_BLOCKED"));
             }
-            if let Some((rel, oid)) = toml_oid
-                .map(|o| (POLICY_TOML_REL, o))
-                .or_else(|| json_oid.map(|o| (LEGACY_POLICY_JSON_REL, o)))
-            {
+            if let Some(oid) = toml_oid {
                 if check_policy_blob_in_tree(repo_root, &t.sha)? {
-                    policy_refs.push((t, format!("{rel}:{oid}")));
+                    policy_refs.push((t, format!("{POLICY_TOML_REL}:{oid}")));
                 }
             }
         }
@@ -3361,15 +3241,15 @@ fn check_policy_staged_in_index(repo_root: &Path) -> Result<Option<&'static str>
             && is_valid_git_oid_hex(parts[1])
             && matches!(parts[2], "0" | "1" | "2" | "3")
         {
+            if canon == LEGACY_POLICY_JSON_REL {
+                return Err(reject_legacy_policy_json("MERGE_BLOCKED"));
+            }
             if !found.contains(&canon) {
                 found.push(canon);
             }
         } else {
             return Err(fail("MERGE_BLOCKED: invalid_policy_path", 1));
         }
-    }
-    if found.len() > 1 {
-        return Err(fail("MERGE_BLOCKED: policy_conflict_dual_format", 1));
     }
     Ok(found.first().copied())
 }
@@ -3400,7 +3280,7 @@ fn load_hook_policy_config(
 ) -> Result<MergePolicyConfig, B3Error> {
     let no_env: [(&str, &str); 0] = [];
     if trunk_has_policy {
-        let Some((a_rel, a_txt)) = resolve_policy_in_tree(
+        let Some((_a_rel, a_txt)) = resolve_policy_in_tree(
             repo_root,
             trunk_sha,
             "MERGE_BLOCKED",
@@ -3409,7 +3289,7 @@ fn load_hook_policy_config(
         else {
             return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
         };
-        let parsed = parse_policy_by_rel_path(a_rel, &a_txt)?;
+        let parsed = parse_merge_policy_toml_text(&a_txt)?;
         let wt_pol_status = run_git_paths_z(
             repo_root,
             &[
@@ -3430,7 +3310,7 @@ fn load_hook_policy_config(
         return Ok(parsed);
     }
     if let Some(rem_pol_sha) = remote_obj_policy_sha {
-        let Some((r_rel, r_txt)) = resolve_policy_in_tree(
+        let Some((_r_rel, r_txt)) = resolve_policy_in_tree(
             repo_root,
             rem_pol_sha,
             "MERGE_BLOCKED",
@@ -3439,7 +3319,7 @@ fn load_hook_policy_config(
         else {
             return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
         };
-        return parse_policy_by_rel_path(r_rel, &r_txt);
+        return parse_merge_policy_toml_text(&r_txt);
     }
     if !trunk_sha.is_empty() {
         return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
@@ -3469,25 +3349,29 @@ fn load_hook_policy_config(
         let c_sha = commit_pol_sha
             .or(first_candidate_policy_sha)
             .expect("checked above");
-        let Some((c_rel, c_txt)) =
+        let Some((_c_rel, c_txt)) =
             resolve_policy_in_tree(repo_root, c_sha, "MERGE_BLOCKED", "policy_not_in_authority")?
         else {
             return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
         };
-        parse_policy_by_rel_path(c_rel, &c_txt)?
-    } else if let Some((wt_rel, wt_path)) = wt_pol {
-        let err_code = if wt_rel == POLICY_TOML_REL {
-            "MERGE_BLOCKED: invalid_policy_toml"
-        } else {
-            "MERGE_BLOCKED: invalid_policy_json"
-        };
-        let wt_txt = std::fs::read_to_string(wt_path).map_err(|_| fail(err_code, 1))?;
-        parse_policy_by_rel_path(wt_rel, &wt_txt)?
+        parse_merge_policy_toml_text(&c_txt)?
+    } else if let Some((_wt_rel, wt_path)) = wt_pol {
+        let meta = std::fs::symlink_metadata(wt_path)
+            .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_toml", 1))?;
+        if !meta.is_file() || meta.len() > crate::toml_lite::MAX_TOML_BYTES as u64 {
+            return Err(fail("MERGE_BLOCKED: invalid_policy_toml", 1));
+        }
+        let wt_txt = std::fs::read_to_string(wt_path)
+            .map_err(|_| fail("MERGE_BLOCKED: invalid_policy_toml", 1))?;
+        parse_merge_policy_toml_text(&wt_txt)?
     } else if let Some(s_rel) = staged_pol_rel {
+        if s_rel == LEGACY_POLICY_JSON_REL {
+            return Err(reject_legacy_policy_json("MERGE_BLOCKED"));
+        }
         let Some(s_txt) = show_staged_policy_file(repo_root, s_rel)? else {
             return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
         };
-        parse_policy_by_rel_path(s_rel, &s_txt)?
+        parse_merge_policy_toml_text(&s_txt)?
     } else {
         return Err(fail("MERGE_BLOCKED: policy_not_in_authority", 1));
     };
@@ -3598,7 +3482,7 @@ fn resolve_fallback_hook_trunk_authority(
 }
 
 /// Validates Git `pre-push` (`is_push == true`) or `pre-merge-commit` (`is_push == false`)
-/// against canonical trunk authority and `.b3/policy.toml` (or legacy `.b3/research-policy.json`).
+/// against canonical trunk authority and `.b3/policy.toml`.
 ///
 /// Returns `Ok(None)` for clean allow, `Ok(Some(advisory))` for non-blocking advisory
 /// warnings emitted to stderr, and `Err(B3Error)` for blocked operations.

@@ -1,4 +1,4 @@
-//! Unified, typed TOML configuration resolver, adaptive model router, CLI, and migrator.
+//! Unified, typed TOML configuration resolver, adaptive model router, and CLI.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -11,14 +11,49 @@ use crate::fs::{
     is_reparse_or_symlink, is_unc_or_network_path, normalize_repo_root, resolve_unresolved_path,
     write_atomic_lf,
 };
-use crate::hook::config::{parse_hook_config_from_markdown, HookMode};
-use crate::json::{parse_json, JsonValue};
+use crate::json::JsonValue;
 use crate::toml_lite::{
-    format_toml_value, parse_toml_strict, set_toml_key_preserving_comments, TomlDocument, TomlValue,
+    format_toml_value, parse_toml_strict, set_toml_key_preserving_comments, TomlDocument,
+    TomlValue, MAX_TOML_BYTES,
 };
 
 pub const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../config/config.example.toml");
 pub const DEFAULT_POLICY_TEMPLATE: &str = include_str!("../config/policy.example.toml");
+
+/// Enforcement mode for B3 host-native guard hooks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HookMode {
+    #[default]
+    Enforce,
+    Audit,
+    Off,
+}
+
+impl HookMode {
+    /// Strictly parses `enforce`, `audit`, or `off`.
+    pub fn parse(raw: &str) -> Result<Self, B3Error> {
+        match raw.trim() {
+            "enforce" => Ok(Self::Enforce),
+            "audit" => Ok(Self::Audit),
+            "off" => Ok(Self::Off),
+            other => Err(fail(
+                format!(
+                    "HOOK_CONFIG_INVALID: invalid hook mode '{other}'; expected enforce, audit, or off"
+                ),
+                1,
+            )),
+        }
+    }
+
+    /// Returns the canonical lowercase string form of the mode.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enforce => "enforce",
+            Self::Audit => "audit",
+            Self::Off => "off",
+        }
+    }
+}
 
 const ROLE_NAMES: [&str; 10] = [
     "main",
@@ -279,10 +314,30 @@ pub struct ReviewConfig {
     pub sizing: ReviewSizingConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HooksConfig {
     pub enabled: bool,
     pub mode: HookMode,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: HookMode::Enforce,
+        }
+    }
+}
+
+impl HooksConfig {
+    /// Returns the effective hook mode taking `enabled` into account.
+    pub fn effective_mode(self) -> HookMode {
+        if self.enabled {
+            self.mode
+        } else {
+            HookMode::Off
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,9 +563,18 @@ fn read_toml_if_safe(path: &Path, label: &str) -> Option<Result<TomlDocument, St
             path.display()
         )));
     }
-    if !path.is_file() {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return None;
+    };
+    if !meta.is_file() {
         return Some(Err(format!(
             "ignoring {label} at {} (not a regular file)",
+            path.display()
+        )));
+    }
+    if meta.len() > MAX_TOML_BYTES as u64 {
+        return Some(Err(format!(
+            "ignoring {label} at {} (exceeds max size of {MAX_TOML_BYTES} bytes)",
             path.display()
         )));
     }
@@ -527,6 +591,145 @@ fn read_toml_if_safe(path: &Path, label: &str) -> Option<Result<TomlDocument, St
             path.display()
         ))),
     }
+}
+
+fn apply_hooks_table(
+    tbl: &BTreeMap<String, TomlValue>,
+    layer: ConfigSource,
+    label: &str,
+    hooks: &mut HooksConfig,
+    mut sources: Option<&mut BTreeMap<String, ConfigSource>>,
+    warnings: &mut Vec<String>,
+) {
+    for (k, v) in tbl {
+        match k.as_str() {
+            "enabled" => {
+                if let Some(b) = v.as_bool() {
+                    hooks.enabled = b;
+                    if let Some(ref mut s) = sources {
+                        s.insert("hooks.enabled".to_string(), layer);
+                    }
+                } else {
+                    warnings.push(format!(
+                        "{label}: invalid hooks.enabled; keeping previous value"
+                    ));
+                }
+            }
+            "mode" => {
+                if let Some(Ok(m)) = v.as_str().map(HookMode::parse) {
+                    hooks.mode = m;
+                    if let Some(ref mut s) = sources {
+                        s.insert("hooks.mode".to_string(), layer);
+                    }
+                } else {
+                    warnings.push(format!(
+                        "{label}: invalid hooks.mode (expected enforce|audit|off); keeping previous value"
+                    ));
+                }
+            }
+            other => warnings.push(format!("{label}: unknown key hooks.{other}")),
+        }
+    }
+}
+
+/// Strictly parses `[hooks]` keys (`enabled`, `mode`) from canonical TOML config text.
+pub fn parse_hooks_config_from_toml(
+    raw: &str,
+) -> Result<(Option<bool>, Option<HookMode>), B3Error> {
+    let doc = parse_toml_strict(raw)
+        .map_err(|e| fail(format!("HOOK_CONFIG_INVALID: invalid TOML: {e}"), 1))?;
+    let Some(tbl) = doc.tables.get("hooks") else {
+        return Ok((None, None));
+    };
+    let mut enabled = None;
+    let mut mode = None;
+    for (k, v) in tbl {
+        match k.as_str() {
+            "enabled" => {
+                enabled = Some(v.as_bool().ok_or_else(|| {
+                    fail(
+                        "HOOK_CONFIG_INVALID: hooks.enabled must be boolean".to_string(),
+                        1,
+                    )
+                })?);
+            }
+            "mode" => {
+                let s = v.as_str().ok_or_else(|| {
+                    fail(
+                        "HOOK_CONFIG_INVALID: hooks.mode must be string".to_string(),
+                        1,
+                    )
+                })?;
+                mode = Some(HookMode::parse(s)?);
+            }
+            other => {
+                return Err(fail(
+                    format!("HOOK_CONFIG_INVALID: unknown key hooks.{other}"),
+                    1,
+                ));
+            }
+        }
+    }
+    Ok((enabled, mode))
+}
+
+/// Fast hot-path `[hooks]` resolver (0 Git calls, bounded TOML reads) using canonical config rules.
+pub fn resolve_hooks_config_from_paths(
+    project_toml: Option<&Path>,
+    personal_toml: Option<&Path>,
+    cli_mode: Option<HookMode>,
+) -> (HooksConfig, Vec<String>) {
+    let mut hooks = HooksConfig::default();
+    let mut warnings = Vec::new();
+
+    for (path_opt, layer, label) in [
+        (personal_toml, ConfigSource::Personal, "personal config"),
+        (project_toml, ConfigSource::Project, "project config"),
+    ] {
+        if let Some(p) = path_opt {
+            if let Some(res) = read_toml_if_safe(p, label) {
+                match res {
+                    Ok(doc) => {
+                        if let Some(tbl) = doc.tables.get("hooks") {
+                            apply_hooks_table(tbl, layer, label, &mut hooks, None, &mut warnings);
+                        }
+                    }
+                    Err(e) => warnings.push(e),
+                }
+            }
+        }
+    }
+
+    if let Ok(val) = std::env::var("B3_HOOK_MODE") {
+        let trimmed = val.trim();
+        if !trimmed.is_empty() {
+            if has_control_chars(trimmed) {
+                warnings.push("B3_HOOK_MODE: ignoring value with control characters".to_string());
+            } else if let Ok(mode) = HookMode::parse(trimmed) {
+                hooks.mode = mode;
+                hooks.enabled = mode != HookMode::Off;
+            } else {
+                warnings.push(format!("B3_HOOK_MODE: invalid hooks.mode='{trimmed}'"));
+            }
+        }
+    }
+
+    if let Some(mode) = cli_mode {
+        hooks.mode = mode;
+        hooks.enabled = mode != HookMode::Off;
+    }
+
+    let prefixed = warnings
+        .into_iter()
+        .map(|w| {
+            if w.starts_with("HOOK_CONFIG_WARN:") {
+                w
+            } else {
+                format!("HOOK_CONFIG_WARN: {w}")
+            }
+        })
+        .collect();
+    (hooks, prefixed)
 }
 
 fn validate_role_list(arr: &[TomlValue]) -> Result<Vec<String>, String> {
@@ -857,31 +1060,7 @@ fn apply_doc(
                 }
             }
             "hooks" => {
-                for (k, v) in tbl {
-                    match k.as_str() {
-                        "enabled" => {
-                            if let Some(b) = v.as_bool() {
-                                cfg.hooks.enabled = b;
-                                sources.insert("hooks.enabled".to_string(), layer);
-                            } else {
-                                warnings.push(format!(
-                                    "{label}: invalid hooks.enabled; keeping previous value"
-                                ));
-                            }
-                        }
-                        "mode" => {
-                            if let Some(Ok(m)) = v.as_str().map(HookMode::parse) {
-                                cfg.hooks.mode = m;
-                                sources.insert("hooks.mode".to_string(), layer);
-                            } else {
-                                warnings.push(format!(
-                                    "{label}: invalid hooks.mode (expected enforce|audit|off); keeping previous value"
-                                ));
-                            }
-                        }
-                        other => warnings.push(format!("{label}: unknown key hooks.{other}")),
-                    }
-                }
+                apply_hooks_table(tbl, layer, label, &mut cfg.hooks, Some(sources), warnings);
             }
             other => {
                 let disp = if other.is_empty() { "<root>" } else { other };
@@ -902,133 +1081,22 @@ fn apply_string_override(
 ) {
     let k = key.trim();
     let v = raw_val.trim();
-    match k {
-        "models.routing" => {
-            if let Some(m) = ModelRoutingMode::parse(v) {
-                cfg.models.routing = m;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
+    match parse_cli_value_for_key(k, v) {
+        Ok(toml_val) => {
+            let mut mini_doc = TomlDocument::default();
+            let (tbl, fld) = k.rsplit_once('.').unwrap_or(("", k));
+            mini_doc
+                .tables
+                .entry(tbl.to_string())
+                .or_default()
+                .insert(fld.to_string(), toml_val);
+            apply_doc(&mini_doc, layer, label, cfg, sources, warnings);
+            if k == "hooks.mode" && matches!(layer, ConfigSource::Invocation | ConfigSource::Env) {
+                cfg.hooks.enabled = cfg.hooks.mode != HookMode::Off;
+                sources.insert("hooks.enabled".to_string(), layer);
             }
         }
-        "models.auto_escalate" => {
-            if let Ok(b) = v.to_ascii_lowercase().parse::<bool>() {
-                cfg.models.auto_escalate = b;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "models.max_escalations" => {
-            if let Some(n) = v.parse::<u8>().ok().filter(|n| *n <= 2) {
-                cfg.models.max_escalations = n;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "models.fallback" => {
-            if let Some(f) = ModelFallback::parse(v) {
-                cfg.models.fallback = f;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "planning.clarification_gate" => {
-            if let Ok(b) = v.to_ascii_lowercase().parse::<bool>() {
-                cfg.planning.clarification_gate = b;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "planning.understanding_threshold" => {
-            if let Some(n) = v.parse::<u8>().ok().filter(|n| (1..=100).contains(n)) {
-                cfg.planning.understanding_threshold = n;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "parallel.max_concurrency" => {
-            if let Some(mc) = MaxConcurrency::parse_str(v) {
-                cfg.parallel.max_concurrency = mc;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "parallel.execution_mode" => {
-            if let Some(em) = ExecutionMode::parse(v) {
-                cfg.parallel.execution_mode = em;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "review.max_iterations" => {
-            if let Some(n) = v.parse::<u32>().ok().filter(|n| (1..=20).contains(n)) {
-                cfg.review.max_iterations = n;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "review.max_loc_per_unit" => {
-            if let Some(n) = v
-                .parse::<usize>()
-                .ok()
-                .filter(|n| (100..=50_000).contains(n))
-            {
-                cfg.review.max_loc_per_unit = n;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "review.max_files_per_unit" => {
-            if let Some(n) = v.parse::<usize>().ok().filter(|n| (5..=1000).contains(n)) {
-                cfg.review.max_files_per_unit = n;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "hooks.enabled" => {
-            if let Ok(b) = v.to_ascii_lowercase().parse::<bool>() {
-                cfg.hooks.enabled = b;
-                sources.insert(k.to_string(), layer);
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        "hooks.mode" => {
-            if let Ok(m) = HookMode::parse(v) {
-                cfg.hooks.mode = m;
-                sources.insert(k.to_string(), layer);
-                if matches!(layer, ConfigSource::Invocation | ConfigSource::Env) {
-                    cfg.hooks.enabled = m != HookMode::Off;
-                    sources.insert("hooks.enabled".to_string(), layer);
-                }
-            } else {
-                warnings.push(format!("{label}: invalid {k}='{v}'"));
-            }
-        }
-        _ => {
-            if let Ok(toml_val) = parse_cli_value_for_key(k, v) {
-                let mut mini_doc = TomlDocument::default();
-                let (tbl, fld) = k.rsplit_once('.').unwrap_or(("", k));
-                mini_doc
-                    .tables
-                    .entry(tbl.to_string())
-                    .or_default()
-                    .insert(fld.to_string(), toml_val);
-                apply_doc(&mini_doc, layer, label, cfg, sources, warnings);
-            } else {
-                warnings.push(format!("{label}: invalid override {k}='{v}'"));
-            }
-        }
+        Err(_) => warnings.push(format!("{label}: invalid {k}='{v}'")),
     }
 }
 
@@ -1919,128 +1987,6 @@ fn load_config_template(repo_root: Option<&Path>) -> String {
     DEFAULT_CONFIG_TEMPLATE.replace("\r\n", "\n")
 }
 
-/// Parses legacy `models.md` (`Role | Preferred Model` table + optional `planning:`/`hooks:` YAML blocks).
-struct ParsedLegacyModelsMd {
-    roles: BTreeMap<String, String>,
-    clarification_gate: Option<bool>,
-    understanding_threshold: Option<u8>,
-    hooks_enabled: Option<bool>,
-    hooks_mode: Option<HookMode>,
-}
-
-fn apply_migrated_models_md(
-    parsed: ParsedLegacyModelsMd,
-    mut out_toml: String,
-) -> Result<String, B3Error> {
-    for (r, m) in parsed.roles {
-        out_toml = set_toml_key_preserving_comments(
-            &out_toml,
-            "models.roles",
-            &r,
-            &TomlValue::Array(vec![TomlValue::Str(m)]),
-        )
-        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-    }
-    if let Some(cg) = parsed.clarification_gate {
-        out_toml = set_toml_key_preserving_comments(
-            &out_toml,
-            "planning",
-            "clarification_gate",
-            &TomlValue::Bool(cg),
-        )
-        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-    }
-    if let Some(th) = parsed.understanding_threshold {
-        out_toml = set_toml_key_preserving_comments(
-            &out_toml,
-            "planning",
-            "understanding_threshold",
-            &TomlValue::Int(th as i64),
-        )
-        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-    }
-    if let Some(enabled) = parsed.hooks_enabled {
-        out_toml = set_toml_key_preserving_comments(
-            &out_toml,
-            "hooks",
-            "enabled",
-            &TomlValue::Bool(enabled),
-        )
-        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-    }
-    if let Some(mode) = parsed.hooks_mode {
-        out_toml = set_toml_key_preserving_comments(
-            &out_toml,
-            "hooks",
-            "mode",
-            &TomlValue::Str(mode.as_str().to_string()),
-        )
-        .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-    }
-    Ok(out_toml)
-}
-
-fn parse_legacy_models_md(raw: &str) -> ParsedLegacyModelsMd {
-    let mut roles = BTreeMap::new();
-    let mut clarification_gate = None;
-    let mut understanding_threshold = None;
-    let mut in_planning_yaml = false;
-
-    for line in raw.replace("\r\n", "\n").lines() {
-        let t = line.trim();
-        if t.starts_with('|') {
-            let cols: Vec<&str> = t.trim_matches('|').split('|').map(str::trim).collect();
-            if cols.len() >= 2 {
-                let raw_role = cols[0].trim_matches('`').trim();
-                let raw_val = cols[1].trim_matches('`').trim();
-                if let Some(canon) = canonical_role_key(raw_role) {
-                    if !raw_val.is_empty() && raw_val != "---" {
-                        roles.insert(canon.to_string(), raw_val.to_string());
-                    }
-                }
-            }
-        } else if t == "planning:" {
-            in_planning_yaml = true;
-        } else if in_planning_yaml {
-            if t.starts_with("```")
-                || (!line.starts_with(' ') && !line.starts_with('\t') && !t.is_empty())
-            {
-                in_planning_yaml = false;
-                continue;
-            }
-            if let Some((k, v)) = t.split_once(':') {
-                let val_clean = v.split('#').next().unwrap_or("").trim();
-                match k.trim() {
-                    "clarification_gate" => {
-                        if let Ok(b) = val_clean.to_ascii_lowercase().parse::<bool>() {
-                            clarification_gate = Some(b);
-                        }
-                    }
-                    "understanding_threshold" => {
-                        if let Some(n) = val_clean
-                            .parse::<u8>()
-                            .ok()
-                            .filter(|n| (1..=100).contains(n))
-                        {
-                            understanding_threshold = Some(n);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let hooks_ov = parse_hook_config_from_markdown(raw).ok().flatten();
-    ParsedLegacyModelsMd {
-        roles,
-        clarification_gate,
-        understanding_threshold,
-        hooks_enabled: hooks_ov.and_then(|h| h.enabled),
-        hooks_mode: hooks_ov.and_then(|h| h.mode),
-    }
-}
-
 fn write_config_new_safe(dest: &Path, body: &str, force: bool) -> Result<(), B3Error> {
     if path_has_reparse(dest) {
         return Err(fail(
@@ -2097,7 +2043,7 @@ fn write_config_new_safe(dest: &Path, body: &str, force: bool) -> Result<(), B3E
     Ok(())
 }
 
-/// CLI entrypoint for `b3 config <show|get|set|validate|init|migrate>`.
+/// CLI entrypoint for `b3 config <show|get|set|validate|init>`.
 #[allow(clippy::too_many_arguments)]
 pub fn run_config_cli(
     action: &str,
@@ -2227,11 +2173,19 @@ pub fn run_config_cli(
                 let eff_escalations = if let Some(tr_raw) = route_trigger {
                     let tr = EscalationTrigger::parse(tr_raw)
                         .map_err(|e| fail(format!("CONFIG_FAIL: {e}"), 1))?;
-                    let (ok, _) = evaluate_escalation(&resolved.config.models, role, host, 0, tr);
+                    let (ok, _) = evaluate_escalation(
+                        &resolved.config.models,
+                        role,
+                        host,
+                        route_escalations,
+                        tr,
+                    );
                     if ok {
-                        route_escalations.max(1)
+                        route_escalations
+                            .saturating_add(1)
+                            .min(resolved.config.models.max_escalations)
                     } else {
-                        0
+                        route_escalations.min(resolved.config.models.max_escalations)
                     }
                 } else {
                     route_escalations
@@ -2492,26 +2446,39 @@ pub fn run_config_cli(
                 let pol_json = root.join(".b3").join("research-policy.json");
                 let has_toml = pol_toml.exists() || is_reparse_or_symlink(&pol_toml);
                 let has_json = pol_json.exists() || is_reparse_or_symlink(&pol_json);
-                if has_toml && has_json {
+                if has_json {
                     errors.push(
-                        "policy conflict: both .b3/policy.toml and .b3/research-policy.json exist"
+                        "legacy .b3/research-policy.json is unsupported; use canonical .b3/policy.toml and remove legacy JSON"
                             .to_string(),
                     );
-                } else if has_toml {
-                    if path_has_reparse(&pol_toml) || !pol_toml.is_file() {
+                }
+                if has_toml {
+                    if path_has_reparse(&pol_toml) {
                         errors.push(format!("invalid policy path {}", pol_toml.display()));
-                    } else {
-                        match fs::read_to_string(&pol_toml) {
-                            Ok(raw) => {
-                                match crate::guard::merge_policy::validate_policy_toml_text(&raw) {
-                                    Ok(()) => {
-                                        checked.push(format!("policy:{}", pol_toml.display()))
+                    } else if let Ok(meta) = fs::symlink_metadata(&pol_toml) {
+                        if !meta.is_file() {
+                            errors.push(format!("invalid policy path {}", pol_toml.display()));
+                        } else if meta.len() > MAX_TOML_BYTES as u64 {
+                            errors.push(format!(
+                                "policy.toml exceeds max size of {MAX_TOML_BYTES} bytes"
+                            ));
+                        } else {
+                            match fs::read_to_string(&pol_toml) {
+                                Ok(raw) => {
+                                    match crate::guard::merge_policy::validate_policy_toml_text(
+                                        &raw,
+                                    ) {
+                                        Ok(()) => {
+                                            checked.push(format!("policy:{}", pol_toml.display()))
+                                        }
+                                        Err(e) => errors.push(format!("policy.toml: {e}")),
                                     }
-                                    Err(e) => errors.push(format!("policy.toml: {e}")),
                                 }
+                                Err(e) => errors.push(format!("cannot read policy.toml: {e}")),
                             }
-                            Err(e) => errors.push(format!("cannot read policy.toml: {e}")),
                         }
+                    } else {
+                        errors.push(format!("invalid policy path {}", pol_toml.display()));
                     }
                 }
             }
@@ -2600,319 +2567,11 @@ pub fn run_config_cli(
                 )),
             }
         }
-        "migrate" => {
-            let target_scope = scope.unwrap_or("all");
-            if !matches!(target_scope, "personal" | "project" | "policy" | "all") {
-                return Err(fail(
-                    format!("CONFIG_FAIL: invalid --scope '{target_scope}'; expected personal|project|policy|all"),
-                    1,
-                ));
-            }
-
-            let mut actions = Vec::new();
-            let tpl = load_config_template(repo_root.as_deref());
-            let home_dir = resolve_user_home_checked(user_home_ref)
-                .map_err(|e| fail(format!("CONFIG_FAIL: {e}"), 1))?;
-
-            if matches!(target_scope, "personal" | "all") {
-                let legacy_models = std::env::var("B3_MODELS_PERSONAL")
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty() && !is_unc_or_control(s))
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| home_dir.join(".b3").join("models.md"));
-                let dest_toml = resolve_personal_config_path(user_home_ref)
-                    .map_err(|e| fail(format!("CONFIG_FAIL: {e}"), 1))?;
-
-                if legacy_models.exists() || is_reparse_or_symlink(&legacy_models) {
-                    if path_has_reparse(&legacy_models) || !legacy_models.is_file() {
-                        return Err(fail(
-                            format!(
-                                "MIGRATE_FAIL: unsafe legacy path {}",
-                                legacy_models.display()
-                            ),
-                            1,
-                        ));
-                    }
-                    if dest_toml.exists() || is_reparse_or_symlink(&dest_toml) {
-                        return Err(fail(
-                            format!(
-                                "MIGRATE_CONFLICT: both {} and {} exist; review differences and migrate manually without silent overwrite",
-                                legacy_models.display(),
-                                dest_toml.display()
-                            ),
-                            1,
-                        ));
-                    }
-                    let raw = fs::read_to_string(&legacy_models).map_err(|e| {
-                        fail(
-                            format!("MIGRATE_FAIL: cannot read {}: {e}", legacy_models.display()),
-                            1,
-                        )
-                    })?;
-                    let parsed = parse_legacy_models_md(&raw);
-                    let out_toml = apply_migrated_models_md(parsed, tpl.clone())?;
-                    if dry_run {
-                        actions.push(format!(
-                            "dry-run: migrate {} -> {}",
-                            legacy_models.display(),
-                            dest_toml.display()
-                        ));
-                    } else {
-                        write_config_new_safe(&dest_toml, &out_toml, false)?;
-                        actions.push(format!(
-                            "migrated: {} -> {} (legacy file preserved)",
-                            legacy_models.display(),
-                            dest_toml.display()
-                        ));
-                    }
-                } else {
-                    actions.push("personal: nothing to migrate".to_string());
-                }
-            }
-
-            if matches!(target_scope, "project" | "all") {
-                if let Some(ref root) = repo_root {
-                    let leg_proj = root.join(".b3").join("models.md");
-                    let dest_proj = root.join(".b3").join("config.toml");
-                    if leg_proj.exists() || is_reparse_or_symlink(&leg_proj) {
-                        if path_has_reparse(&leg_proj) || !leg_proj.is_file() {
-                            return Err(fail(
-                                format!("MIGRATE_FAIL: unsafe legacy path {}", leg_proj.display()),
-                                1,
-                            ));
-                        }
-                        if dest_proj.exists() || is_reparse_or_symlink(&dest_proj) {
-                            return Err(fail(
-                                format!(
-                                    "MIGRATE_CONFLICT: both {} and {} exist; resolve manually without silent overwrite",
-                                    leg_proj.display(),
-                                    dest_proj.display()
-                                ),
-                                1,
-                            ));
-                        }
-                        let raw = fs::read_to_string(&leg_proj).map_err(|e| {
-                            fail(
-                                format!("MIGRATE_FAIL: cannot read {}: {e}", leg_proj.display()),
-                                1,
-                            )
-                        })?;
-                        let parsed = parse_legacy_models_md(&raw);
-                        let out_toml = apply_migrated_models_md(
-                            parsed,
-                            "# Project-local B3 preference overrides (Git-ignored)\n".to_string(),
-                        )?;
-                        if dry_run {
-                            actions.push(format!(
-                                "dry-run: migrate {} -> {}",
-                                leg_proj.display(),
-                                dest_proj.display()
-                            ));
-                        } else {
-                            write_config_new_safe(&dest_proj, &out_toml, false)?;
-                            actions.push(format!(
-                                "migrated: {} -> {} (legacy file preserved)",
-                                leg_proj.display(),
-                                dest_proj.display()
-                            ));
-                        }
-                    } else {
-                        actions.push("project: nothing to migrate".to_string());
-                    }
-                }
-            }
-
-            if matches!(target_scope, "policy" | "all") {
-                if let Some(ref root) = repo_root {
-                    let leg_pol = root.join(".b3").join("research-policy.json");
-                    let dest_pol = root.join(".b3").join("policy.toml");
-                    if leg_pol.exists() || is_reparse_or_symlink(&leg_pol) {
-                        if path_has_reparse(&leg_pol) || !leg_pol.is_file() {
-                            return Err(fail(
-                                format!(
-                                    "MIGRATE_FAIL: unsafe legacy policy path {}",
-                                    leg_pol.display()
-                                ),
-                                1,
-                            ));
-                        }
-                        if dest_pol.exists() || is_reparse_or_symlink(&dest_pol) {
-                            return Err(fail(
-                                format!(
-                                    "MIGRATE_CONFLICT: both {} and {} exist; reconcile and remove legacy JSON manually before committing",
-                                    leg_pol.display(),
-                                    dest_pol.display()
-                                ),
-                                1,
-                            ));
-                        }
-                        let raw_json = fs::read_to_string(&leg_pol).map_err(|e| {
-                            fail(
-                                format!("MIGRATE_FAIL: cannot read {}: {e}", leg_pol.display()),
-                                1,
-                            )
-                        })?;
-                        let pol_toml_text = convert_legacy_policy_json_to_toml(&raw_json, root)?;
-                        if dry_run {
-                            actions.push(format!(
-                                "dry-run: migrate {} -> {}",
-                                leg_pol.display(),
-                                dest_pol.display()
-                            ));
-                        } else {
-                            write_config_new_safe(&dest_pol, &pol_toml_text, false)?;
-                            actions.push(format!(
-                                "migrated: {} -> {} (verify and remove legacy JSON in governance commit)",
-                                leg_pol.display(),
-                                dest_pol.display()
-                            ));
-                        }
-                    } else {
-                        actions.push("policy: nothing to migrate".to_string());
-                    }
-                }
-            }
-
-            Ok((actions.join("\n"), 0))
-        }
         other => Err(fail(
             format!("CONFIG_FAIL: unknown subcommand '{other}'"),
             1,
         )),
     }
-}
-
-fn convert_legacy_policy_json_to_toml(raw_json: &str, repo_root: &Path) -> Result<String, B3Error> {
-    let parsed = parse_json(raw_json)
-        .map_err(|_| fail("MIGRATE_FAIL: invalid legacy .b3/research-policy.json", 1))?;
-    if !matches!(parsed, JsonValue::Object(_)) {
-        return Err(fail(
-            "MIGRATE_FAIL: legacy .b3/research-policy.json must be a JSON object",
-            1,
-        ));
-    }
-
-    let pol_tpl_path = repo_root.join("config").join("policy.example.toml");
-    let mut out = if pol_tpl_path.is_file() && !path_has_reparse(&pol_tpl_path) {
-        fs::read_to_string(&pol_tpl_path)
-            .unwrap_or_else(|_| DEFAULT_POLICY_TEMPLATE.to_string())
-            .replace("\r\n", "\n")
-    } else {
-        DEFAULT_POLICY_TEMPLATE.replace("\r\n", "\n")
-    };
-
-    let auto_merge = match parsed
-        .get_exact_unique("auto_merge")
-        .map_err(|_| fail("MIGRATE_FAIL: duplicate auto_merge", 1))?
-    {
-        None => "disabled".to_string(),
-        Some(JsonValue::String(s)) => s.trim().to_string(),
-        Some(_) => return Err(fail("MIGRATE_FAIL: auto_merge must be a string", 1)),
-    };
-    if auto_merge != "disabled" && auto_merge != "authorized" {
-        return Err(fail(
-            format!("MIGRATE_FAIL: invalid auto_merge '{auto_merge}'"),
-            1,
-        ));
-    }
-
-    let explicit_max_risk = match parsed
-        .get_exact_unique("auto_merge_max_risk")
-        .map_err(|_| fail("MIGRATE_FAIL: duplicate auto_merge_max_risk", 1))?
-    {
-        None => None,
-        Some(JsonValue::String(s)) => Some(s.trim().to_ascii_uppercase()),
-        Some(_) => {
-            return Err(fail(
-                "MIGRATE_FAIL: auto_merge_max_risk must be a string",
-                1,
-            ));
-        }
-    };
-
-    // Preserve legacy semantics faithfully: previously-authorized legacy policies had no risk ceiling
-    // ("CRITICAL"), whereas disabled policies default safely to "LOW".
-    let max_risk = if let Some(r) = explicit_max_risk {
-        RiskTier::parse(&r).map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-        r
-    } else if auto_merge == "authorized" {
-        "CRITICAL".to_string()
-    } else {
-        "LOW".to_string()
-    };
-
-    let parse_opt_bool = |key: &str, default_val: bool| -> Result<bool, B3Error> {
-        match parsed
-            .get_exact_unique(key)
-            .map_err(|_| fail(format!("MIGRATE_FAIL: duplicate {key}"), 1))?
-        {
-            None => Ok(default_val),
-            Some(JsonValue::Bool(b)) => Ok(*b),
-            Some(_) => Err(fail(format!("MIGRATE_FAIL: {key} must be a boolean"), 1)),
-        }
-    };
-    let allow_protected = parse_opt_bool("allow_protected_paths", false)?;
-    let require_ci = parse_opt_bool("require_ci", true)?;
-    let require_review = parse_opt_bool("require_review", true)?;
-
-    let mut prot_paths = Vec::new();
-    match parsed
-        .get_exact_unique("protected_paths")
-        .map_err(|_| fail("MIGRATE_FAIL: duplicate protected_paths", 1))?
-    {
-        None => {}
-        Some(JsonValue::Array(arr)) => {
-            for item in arr {
-                let s = item
-                    .as_str()
-                    .ok_or_else(|| fail("MIGRATE_FAIL: invalid protected_paths item", 1))?;
-                prot_paths.push(TomlValue::Str(s.to_string()));
-            }
-        }
-        Some(_) => {
-            return Err(fail("MIGRATE_FAIL: protected_paths must be an array", 1));
-        }
-    }
-
-    let mut target_branches = Vec::new();
-    match parsed
-        .get_exact_unique("allowed_target_branches")
-        .map_err(|_| fail("MIGRATE_FAIL: duplicate allowed_target_branches", 1))?
-    {
-        None => {}
-        Some(JsonValue::Array(arr)) => {
-            for item in arr {
-                let s = item
-                    .as_str()
-                    .ok_or_else(|| fail("MIGRATE_FAIL: invalid allowed_target_branches item", 1))?;
-                target_branches.push(TomlValue::Str(s.to_string()));
-            }
-        }
-        Some(_) => {
-            return Err(fail(
-                "MIGRATE_FAIL: allowed_target_branches must be an array",
-                1,
-            ));
-        }
-    }
-
-    for (k, val) in [
-        ("auto_merge", TomlValue::Str(auto_merge)),
-        ("auto_merge_max_risk", TomlValue::Str(max_risk)),
-        ("protected_paths", TomlValue::Array(prot_paths)),
-        ("allow_protected_paths", TomlValue::Bool(allow_protected)),
-        ("allowed_target_branches", TomlValue::Array(target_branches)),
-        ("require_ci", TomlValue::Bool(require_ci)),
-        ("require_review", TomlValue::Bool(require_review)),
-    ] {
-        out = set_toml_key_preserving_comments(&out, "", k, &val)
-            .map_err(|e| fail(format!("MIGRATE_FAIL: {e}"), 1))?;
-    }
-
-    crate::guard::merge_policy::validate_policy_toml_text(&out)
-        .map_err(|e| fail(format!("MIGRATE_FAIL: converted policy invalid: {e}"), 1))?;
-    Ok(out)
 }
 
 #[cfg(test)]

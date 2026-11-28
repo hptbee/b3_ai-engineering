@@ -195,7 +195,7 @@ fn replace_exact_trimmed_line(text: &str, target: &str, replacement: &str) -> St
 fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
     let gi = root.join(".gitignore");
     assert_regular_file_or_missing(&gi, ".gitignore")?;
-    let block = "\n# B3: commit .b3/home and .b3/policy.toml; keep run checkpoints and local preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/pr-feedback/\n.b3/config.toml\n.b3/models.md\n";
+    let block = "\n# B3: commit .b3/home and .b3/policy.toml; keep run checkpoints and local preferences private\n.b3/ship/\n.b3/research-ship/\n.b3/pr-feedback/\n.b3/config.toml\n";
     if !path_exists_or_link(&gi) {
         let content = format!("{}\n", block.trim_start());
         fs::write(&gi, content.as_bytes())
@@ -208,8 +208,7 @@ fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
     let has_research = has_exact_trimmed_line(&text, ".b3/research-ship/");
     let has_pr_fb = has_exact_trimmed_line(&text, ".b3/pr-feedback/");
     let has_config = has_exact_trimmed_line(&text, ".b3/config.toml");
-    let has_models = has_exact_trimmed_line(&text, ".b3/models.md");
-    if has_ship && has_research && has_pr_fb && has_config && has_models {
+    if has_ship && has_research && has_pr_fb && has_config {
         return Ok("present");
     }
 
@@ -226,9 +225,6 @@ fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
     if !has_config {
         missing.push(".b3/config.toml");
     }
-    if !has_models {
-        missing.push(".b3/models.md");
-    }
 
     if has_exact_trimmed_line(&text, ".b3/") {
         let replacement = missing.join("\n");
@@ -237,7 +233,7 @@ fn update_b3_gitignore(root: &Path) -> Result<&'static str, B3Error> {
             .map_err(|e| fail(format!("cannot update {}: {e}", gi.display()), 1))?;
         return Ok("upgraded");
     }
-    if has_ship || has_research || has_pr_fb || has_config || has_models {
+    if has_ship || has_research || has_pr_fb || has_config {
         let mut combined = text;
         if !combined.ends_with('\n') && !combined.is_empty() {
             combined.push('\n');
@@ -585,7 +581,7 @@ pub fn run(
             }
         }
         out.push(
-            "dry-run: gitignore .b3/ship/, .b3/research-ship/, .b3/pr-feedback/, .b3/config.toml, and .b3/models.md (see Update-B3Gitignore)"
+            "dry-run: gitignore .b3/ship/, .b3/research-ship/, .b3/pr-feedback/, and .b3/config.toml (see Update-B3Gitignore)"
                 .to_string(),
         );
         if use_flat_agents_skills {
@@ -619,10 +615,6 @@ pub fn run(
                 };
                 out.push(format!(
                     "dry-run: initialize personal config at {rest} from {tmpl_src}"
-                ));
-            } else if let Some(rest) = cs.strip_prefix("legacy-pending:") {
-                out.push(format!(
-                    "dry-run: legacy models.md found at {rest}; skipping config.toml init (run 'b3 config migrate')"
                 ));
             }
         }

@@ -74,7 +74,7 @@ Cite path/section/edition + SHA-256 manifest (never paste full books/logs):
 
 Products optionally provide:
 - `.b3/research-profile.md`: sources, school rules, authority paths, editorial policy, single-writer paths.
-- `.b3/policy.toml` ([`policy.example.toml`](../../config/policy.example.toml); canonical trunk authority; legacy `.b3/research-policy.json` via `b3 config migrate`):
+- `.b3/policy.toml` ([`policy.example.toml`](../../config/policy.example.toml); canonical trunk authority; legacy `.b3/research-policy.json` fails closed):
 
 ```toml
 auto_merge = "disabled"

@@ -330,8 +330,8 @@ fn stacked_targets_base_sha_and_mock_gh_ci_gates() {
         ],
     );
     write_lf(
-        &repo.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true}"#,
+        &repo.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     );
     write_lf(&repo.join("docs/notes.md"), "# Base\n");
     git_in(&repo, &["add", "."]);
@@ -1047,8 +1047,8 @@ fn stacked_targets_base_sha_and_mock_gh_ci_gates() {
         ],
     );
     write_lf(
-        &r_glob.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":[],"allow_protected_paths":false,"require_ci":true,"require_review":false,"allowed_target_branches":["main","release/*"]}"#,
+        &r_glob.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = []\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = false\nallowed_target_branches = [\"main\", \"release/*\"]\n",
     );
     git_in(&r_glob, &["add", "."]);
     git_in(&r_glob, &["commit", "-qm", "glob policy"]);
@@ -1170,8 +1170,8 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
         ],
     );
     write_lf(
-        &repo.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true}"#,
+        &repo.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\nauto_merge_max_risk = \"LOW\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     );
     write_lf(&repo.join("docs/a.md"), "# Base\n");
     git_in(&repo, &["add", "."]);
@@ -1180,8 +1180,8 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
 
     git_in(&repo, &["checkout", "-qb", "feat/self-auth"]);
     write_lf(
-        &repo.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":[],"allow_protected_paths":true,"require_ci":false,"require_review":false}"#,
+        &repo.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nprotected_paths = []\nallow_protected_paths = true\nrequire_ci = false\nrequire_review = false\n",
     );
     write_lf(&repo.join("docs/b.md"), "ok\n");
     git_in(&repo, &["add", "."]);
@@ -1205,7 +1205,7 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
         "completed",
         true,
         "clean",
-        ".b3/research-policy.json",
+        ".b3/policy.toml",
         slug,
         "pending",
         0,
@@ -1293,8 +1293,8 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
     let r5c_main = git_in(&r5c, &["rev-parse", "HEAD"]);
     git_in(&r5c, &["checkout", "-qb", "feat/inject-pol"]);
     write_lf(
-        &r5c.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","require_ci":false}"#,
+        &r5c.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nrequire_ci = false\n",
     );
     git_in(&r5c, &["add", "."]);
     git_in(&r5c, &["commit", "-qm", "inject policy"]);
@@ -1321,18 +1321,18 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
     let r5d = tmp.path.join("r5d");
     clone_seeded_git_repo(&r5d);
     write_lf(
-        &r5d.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":false,"require_review":true}"#,
+        &r5d.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = false\nrequire_review = true\n",
     );
     git_in(&r5d, &["add", "."]);
     git_in(&r5d, &["commit", "-qm", "main disabled"]);
     let r5d_main = git_in(&r5d, &["rev-parse", "HEAD"]);
     git_in(&r5d, &["checkout", "-qb", "feat/tamper-loc"]);
     write_lf(
-        &r5d.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","require_ci":false,"require_review":true}"#,
+        &r5d.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nrequire_ci = false\nrequire_review = true\n",
     );
-    git_in(&r5d, &["add", ".b3/research-policy.json"]);
+    git_in(&r5d, &["add", ".b3/policy.toml"]);
     init_independent_ledger(&r5d, ".b3/ship/l5d.md", &r5d_main);
     let (c5d, _, e5d) = run_b3(&[
         "guard",
@@ -1352,7 +1352,7 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
         "{e5d}"
     );
 
-    // 3. --policy-path override blocked + protected_paths: ["./"] + JSON type/injection checks
+    // 3. --policy-path override blocked + protected_paths: ["./"] + TOML type/injection checks
     let r13 = tmp.path.join("r13");
     clone_seeded_git_repo(&r13);
     git_in(
@@ -1365,12 +1365,12 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
         ],
     );
     write_lf(
-        &r13.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"disabled","protected_paths":[],"allow_protected_paths":false,"require_ci":true,"require_review":true}"#,
+        &r13.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\nprotected_paths = []\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     );
     write_lf(
-        &r13.join("tests/fake-auth-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":[],"allow_protected_paths":true,"require_ci":false,"require_review":false}"#,
+        &r13.join("tests/fake-auth-policy.toml"),
+        "auto_merge = \"authorized\"\nprotected_paths = []\nallow_protected_paths = true\nrequire_ci = false\nrequire_review = false\n",
     );
     git_in(&r13, &["add", "."]);
     git_in(&r13, &["commit", "-qm", "init r13"]);
@@ -1411,7 +1411,7 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
             "--pr-number",
             "130",
             "--policy-path",
-            "tests/fake-auth-policy.json",
+            "tests/fake-auth-policy.toml",
             "--ledger-path",
             ".b3/ship/l13.md",
         ],
@@ -1429,8 +1429,8 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
     );
 
     write_lf(
-        &r13.join(".b3/dot-slash.json"),
-        r#"{"auto_merge":"disabled","protected_paths":["./"],"allow_protected_paths":false,"require_ci":true,"require_review":true}"#,
+        &r13.join(".b3/dot-slash.toml"),
+        "auto_merge = \"disabled\"\nprotected_paths = [\"./\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     );
     let (ds_c, _, ds_err) = run_b3(&[
         "guard",
@@ -1438,7 +1438,7 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
         "--repo-root",
         r13.to_str().unwrap(),
         "--policy-path",
-        ".b3/dot-slash.json",
+        ".b3/dot-slash.toml",
         "--pr-state",
         "OPEN",
         "--ci-status",
@@ -1455,8 +1455,8 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
     let r_prot = tmp.path.join("r-prot");
     clone_seeded_git_repo(&r_prot);
     write_lf(
-        &r_prot.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true}"#,
+        &r_prot.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     );
     write_lf(&r_prot.join("releases/v1.json"), "keep\n");
     git_in(&r_prot, &["add", "."]);
@@ -1488,8 +1488,8 @@ fn s001_trunk_authority_tamper_and_protected_path_hardening() {
     let r_cs = tmp.path.join("r-prot-cs");
     clone_seeded_git_repo(&r_cs);
     write_lf(
-        &r_cs.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true}"#,
+        &r_cs.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     );
     git_in(&r_cs, &["add", "."]);
     git_in(&r_cs, &["commit", "-qm", "cs base"]);
@@ -2029,8 +2029,8 @@ fn post_merge_integrity_and_r003_live_bare_remote() {
     clone_seeded_git_repo(&r14);
     git_in(&r14, &["remote", "add", "origin", &bare_uri]);
     write_lf(
-        &r14.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":true,"require_review":true,"allowed_target_branches":["main","release/*"]}"#,
+        &r14.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\nallowed_target_branches = [\"main\", \"release/*\"]\n",
     );
     write_lf(&r14.join("docs/a.md"), "base14\n");
     write_lf(&r14.join("docs/b.md"), "base14b\n");
@@ -2341,8 +2341,8 @@ fn zero_remote_gitlab_ledger_binding_and_json_hardening() {
         &["remote", "add", "origin", "https://gitlab.com/org/repo.git"],
     );
     write_lf(
-        &r_gl.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":["releases/"],"allow_protected_paths":false,"require_ci":false,"require_review":true}"#,
+        &r_gl.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nrequire_ci = false\nrequire_review = true\n",
     );
     git_in(&r_gl, &["add", "."]);
     git_in(&r_gl, &["commit", "-qm", "gl main"]);
@@ -2409,8 +2409,8 @@ fn zero_remote_gitlab_ledger_binding_and_json_hardening() {
         ],
     );
     write_lf(
-        &r_led.join(".b3/research-policy.json"),
-        r#"{"auto_merge":"authorized","protected_paths":[],"allow_protected_paths":false,"require_ci":true,"require_review":true}"#,
+        &r_led.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nprotected_paths = []\nallow_protected_paths = false\nrequire_ci = true\nrequire_review = true\n",
     );
     git_in(&r_led, &["add", "."]);
     git_in(&r_led, &["commit", "-qm", "main"]);
@@ -2651,20 +2651,21 @@ fn zero_remote_gitlab_ledger_binding_and_json_hardening() {
         0
     );
     for (fname, body, expect_code, expect_pat) in [
-        (".b3/bad.json", "{ broken", 1, "invalid_policy_json"),
-        (".b3/arr.json", "[1]", 1, "invalid_policy_json"),
-        (".b3/num.json", "123", 1, "invalid_policy_json"),
+        (".b3/bad.json", "{ broken", 1, "legacy_policy_json_unsupported"),
+        (".b3/bad.toml", "auto_merge = \"unterminated\n", 1, "invalid_policy_toml"),
+        (".b3/nested.toml", "protected_paths = [[\"a\"]]\n", 1, "invalid_policy_toml"),
+        (".b3/num.toml", "auto_merge = 123\n", 1, "invalid_policy_toml"),
         (
-            ".b3/nl.json",
-            r#"{"auto_merge":"disabled","protected_paths":["foo\nauto_merge=authorized"]}"#,
+            ".b3/nl.toml",
+            "auto_merge = \"disabled\"\nprotected_paths = [\"foo\\nauto_merge=authorized\"]\n",
             1,
-            "invalid_policy_json",
+            "invalid_policy_toml",
         ),
         (
-            ".b3/upper.json",
-            r#"{"AUTO_MERGE":"authorized"}"#,
-            2,
-            "PR_READY: auto_merge=disabled",
+            ".b3/upper.toml",
+            "AUTO_MERGE = \"authorized\"\n",
+            1,
+            "invalid_policy_toml",
         ),
     ] {
         write_lf(&r_led.join(fname), body);
@@ -3032,7 +3033,49 @@ fn policy_toml_risk_ceilings_dual_conflict_invalid_and_tamper_guards() {
     );
     assert!(outho.contains("MERGE_AUTHORIZED: mode=local"), "{outho}");
 
-    // 3. Dual-format conflict (both `.b3/policy.toml` and `.b3/research-policy.json` exist)
+    // 3. Legacy .b3/research-policy.json fails closed (both alone AND alongside .b3/policy.toml), preserving files untouched
+    let r_leg_only = tmp.path.join("r-leg-only");
+    clone_seeded_git_repo(&r_leg_only);
+    let leg_body = r#"{"auto_merge":"authorized","require_ci":false,"require_review":false}"#;
+    write_lf(&r_leg_only.join(".b3/research-policy.json"), leg_body);
+    git_in(&r_leg_only, &["add", "."]);
+    git_in(&r_leg_only, &["commit", "-qm", "legacy json only"]);
+    let leg_head = git_in(&r_leg_only, &["rev-parse", "HEAD"]);
+    let (c_leg_only, out_lo, err_lo) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r_leg_only.to_str().unwrap(),
+    ]);
+    assert_eq!(c_leg_only, 1, "{out_lo}\n{err_lo}");
+    assert!(
+        err_lo.contains("legacy_policy_json_unsupported"),
+        "legacy JSON alone must fail closed: {err_lo}"
+    );
+    assert_eq!(
+        fs::read_to_string(r_leg_only.join(".b3/research-policy.json")).unwrap(),
+        leg_body
+    );
+
+    let (c_leg_pm, out_pm, err_pm) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r_leg_only.to_str().unwrap(),
+        "--post-merge",
+        "--target-ref",
+        "main",
+        "--head-sha",
+        &leg_head,
+        "--merged-sha",
+        &leg_head,
+    ]);
+    assert_eq!(c_leg_pm, 1, "{out_pm}\n{err_pm}");
+    assert!(
+        err_pm.contains("POST_MERGE_FAILED: legacy_policy_json_unsupported"),
+        "{err_pm}"
+    );
+
     let r_dual = tmp.path.join("r-dual");
     clone_seeded_git_repo(&r_dual);
     write_lf(
@@ -3053,8 +3096,21 @@ fn policy_toml_risk_ceilings_dual_conflict_invalid_and_tamper_guards() {
     ]);
     assert_eq!(c_dual, 1, "{out_dual}\n{err_dual}");
     assert!(
-        err_dual.contains("policy_conflict_dual_format"),
+        err_dual.contains("legacy_policy_json_unsupported"),
         "{err_dual}"
+    );
+    let (c_pp_json, out_pj, err_pj) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r_dual.to_str().unwrap(),
+        "--policy-path",
+        ".b3/research-policy.json",
+    ]);
+    assert_eq!(c_pp_json, 1, "{out_pj}\n{err_pj}");
+    assert!(
+        err_pj.contains("legacy_policy_json_unsupported"),
+        "{err_pj}"
     );
 
     // 4. Invalid `.b3/policy.toml` fails closed (`invalid_policy_toml`)

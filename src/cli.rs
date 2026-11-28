@@ -334,7 +334,7 @@ b3 - B3 AI Engineering deterministic native core
 USAGE:
   b3 --version | --help
   b3 context measure [--repo-root <path>] [--strict]
-  b3 config <show|get|set|validate|init|migrate> [args] [flags]
+  b3 config <show|get|set|validate|init> [args] [flags]
   b3 pr <verify|fetch|reconcile|reply|resolve|comment> [flags]
   b3 sync --host cursor|codex|claude|antigravity [--repo-root <dir>] [--dry-run] [--verify-only] [--force]
   b3 install <product|cursor|antigravity|global> [flags]
@@ -413,9 +413,7 @@ fn parse_config(args: &[String]) -> Result<ConfigCommand, B3Error> {
         ("show".to_string(), args)
     } else {
         match args[0].as_str() {
-            sub @ ("show" | "get" | "set" | "validate" | "init" | "migrate") => {
-                (sub.to_string(), &args[1..])
-            }
+            sub @ ("show" | "get" | "set" | "validate" | "init") => (sub.to_string(), &args[1..]),
             other => {
                 return Err(fail(
                     format!("CONFIG_FAIL: unknown config subcommand '{other}'"),

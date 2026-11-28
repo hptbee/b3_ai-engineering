@@ -7,15 +7,13 @@ use crate::adapters::common::{
     assert_regular_dir_or_missing, assert_regular_file_or_missing, normalize_abs_path_str,
     resolve_user_home_dir,
 };
+use crate::config::{resolve_hooks_config_from_paths, resolve_personal_config_path};
 use crate::error::{fail, B3Error};
 use crate::fs::{
     has_control_chars, is_reparse_or_symlink, next_tmp_suffix, resolve_unresolved_path,
     write_atomic_lf,
 };
 use crate::git::run_git;
-use crate::hook::config::{
-    default_global_preferences_path, default_project_preferences_path, resolve_hook_config,
-};
 use crate::hook::norm_cmp_path;
 use crate::json::{parse_json, JsonValue};
 
@@ -1379,9 +1377,11 @@ pub(crate) fn status_hooks(
             .ok()
             .map(|p| PathBuf::from(normalize_abs_path_str(&p))),
     };
-    let project_pref = proj.as_deref().map(default_project_preferences_path);
-    let global_pref = default_global_preferences_path(Some(&home));
-    let (cfg, warnings) = resolve_hook_config(project_pref.as_deref(), Some(&global_pref), None);
+    let project_pref = proj.as_deref().map(|p| p.join(".b3").join("config.toml"));
+    let global_pref = resolve_personal_config_path(Some(&home))
+        .unwrap_or_else(|_| home.join(".b3").join("config.toml"));
+    let (cfg, warnings) =
+        resolve_hooks_config_from_paths(project_pref.as_deref(), Some(&global_pref), None);
 
     let mut lines = vec![format!(
         "HOOK_CONFIG: enabled={} mode={}",

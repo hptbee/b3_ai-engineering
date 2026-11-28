@@ -10,7 +10,7 @@ clarification_gate = true
 understanding_threshold = 96   # integer 1..=100
 ```
 
-- **Defaults & precedence:** `per-invocation override > <project>/.b3/config.toml > ~/.b3/config.toml (B3_CONFIG_PERSONAL) > built-in defaults (true, 96)` (legacy `.b3/models.md` supported via `b3 config migrate`).
+- **Defaults & precedence:** `per-invocation override > <project>/.b3/config.toml > ~/.b3/config.toml (B3_CONFIG_PERSONAL) > built-in defaults (true, 96)`.
 - **Resolve once & per-field fallback:** Parent resolves `[planning]` **once per invocation** without mutating config or host files. Missing, partial, or invalid fields/files fall back **per field to the next valid layer**, then defaults—bad project fields never drop valid personal fields, and bad config never blocks on Cursor, Codex, Claude Code, or Antigravity.
 
 ## Risk-Based Proportionality & Assessment

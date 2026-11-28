@@ -2,7 +2,7 @@ id: research-ship-pr-ready-auto-merge-disabled-001
 artifact: workflows/references/research-ship-gates.md
 intent: Passing PR with default or disabled auto_merge must stop at PR_READY and never merge autonomously
 scenario: |
-  PR is OPEN, CI=PASS, Review=PASS, BlockingFindings=0, Governance=CLEAR, and .b3/policy.toml (or legacy .b3/research-policy.json) omits auto_merge or sets auto_merge=disabled.
+  PR is OPEN, CI=PASS, Review=PASS, BlockingFindings=0, Governance=CLEAR, and .b3/policy.toml omits auto_merge or sets auto_merge = "disabled".
   b3 guard merge-policy-check exits 2 with PR_READY: auto_merge=disabled, stopping cleanly at PR_READY without merging.
 expected_outcome: PASS
 failure_mode: unauthorized-auto-merge-from-write-access

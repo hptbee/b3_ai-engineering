@@ -867,11 +867,7 @@ fn extract_exact_fm_name(raw: &str) -> Option<String> {
 }
 
 fn sync_personal_config(home_dir: &Path, dry_run: bool, verify_only: bool, out: &mut Vec<String>) {
-    if dry_run
-        || verify_only
-        || std::env::var("B3_SKIP_CONFIG_INIT").ok().as_deref() == Some("1")
-        || std::env::var("B3_SKIP_MODEL_INIT").ok().as_deref() == Some("1")
-    {
+    if dry_run || verify_only || std::env::var("B3_SKIP_CONFIG_INIT").ok().as_deref() == Some("1") {
         return;
     }
     if let Ok(status) = initialize_personal_config_file(home_dir, None, false, true) {

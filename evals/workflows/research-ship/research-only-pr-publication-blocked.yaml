@@ -2,7 +2,7 @@ id: research-ship-only-pr-pub-blocked-001
 artifact: research/validation/research-ship-pilot-notes.md
 intent: Research-only PR modifying non-protected research docs may reach PR_READY even while protected publication artifacts remain locked
 scenario: |
-  Product .b3/policy.toml (or legacy .b3/research-policy.json) protects releases/ with allow_protected_paths=false.
+  Product .b3/policy.toml protects releases/ with allow_protected_paths = false.
   A research-only PR edits only docs/notes.md while publication remains blocked elsewhere; merge-policy-check reports PR_READY (exit 2) for the non-protected research PR while a PR touching releases/ fails with MERGE_BLOCKED (exit 1).
 expected_outcome: PASS
 failure_mode: research-pr-blocked-or-protected-release-leaked
