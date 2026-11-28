@@ -1,0 +1,9 @@
+id: clarify-enabled-clear-proceeds-001
+artifact: workflows/references/clarification-gate.md
+intent: Enabled clarification gate proceeds autonomously without asking questions when requirements are clear and >= 96% understood
+scenario: |
+  clarification_gate is true (default) and understanding_threshold is 96
+  User provides clear feature requirements with explicit target files, behavior, and acceptance criteria, and zero critical ambiguities remain
+expected_outcome: PASS
+failure_mode: unnecessary-clarification-question-when-requirements-are-clear
+notes: Gate must execute autonomously without interrupting the user for routine or already-clear specifications

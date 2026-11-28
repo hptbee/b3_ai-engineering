@@ -1,0 +1,9 @@
+id: clarify-all-commands-inherit-policy-012
+artifact: rules/engineering-principles.md
+intent: All 14 existing and future B3 commands inherit the canonical Clarification Gate policy proportionally
+scenario: |
+  Inspect rules/engineering-principles.md, workflows/references/dispatch-naming.md, and workflows/references/clarification-gate.md
+  Global rule Rule 1 and canonical dispatch contract cover b3-plan, b3-implement, b3-debug, b3-research, b3-audit, b3-review, b3-refactor, b3-verify, b3-review-loop, b3-ship, b3-research-ship, b3-pr-resolve, b3-pr-reply, b3-pr-comment, and future commands proportionally
+expected_outcome: PASS
+failure_mode: command-omits-or-diverges-from-global-clarification-policy
+notes: Inheritance works through the global rule and shared dispatch reference without duplicating text in every command

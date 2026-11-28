@@ -8,7 +8,7 @@ Scope → Plan → Build → Verify → Review → Fix → Verify
 
 | Step | Use |
 | --- | --- |
-| Scope | Read known targets directly (short-circuit) or load [`references/context-routing.md`](references/context-routing.md) on demand for unfamiliar architecture/symbols (optional MCP acceleration, native fallback); inspect callers and constraints |
+| Scope | Read known targets directly (short-circuit) or load [`references/context-routing.md`](references/context-routing.md) on demand for unfamiliar architecture/symbols (optional MCP acceleration, native fallback); inspect callers, constraints, and apply proportional clarity check ([`references/clarification-gate.md`](references/clarification-gate.md) on demand for non-trivial/ambiguous work) |
 | Plan | `skills/engineering/planning` when multi-step; else a short plan in-place |
 | Build | `problem-solving` + smallest domain skill (`XS`+`inline` runs inline when `implementation` model in `.b3/models.md` is unset/`auto` or matches `main`; multi-slice work validates disjoint impl/test/doc slices via `b3 guard check-wave --partition` and dispatches `b3-impl-t00N` per [`references/dispatch-naming.md`](references/dispatch-naming.md)) |
 | Verify | `verification` (executed checks; `b3 guard verify-run` for non-trivial changes/handoffs) |

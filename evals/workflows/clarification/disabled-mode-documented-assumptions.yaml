@@ -1,0 +1,9 @@
+id: clarify-disabled-documented-assumptions-006
+artifact: workflows/references/clarification-gate.md
+intent: Disabled clarification gate proceeds autonomously using repository conventions and documents material assumptions
+scenario: |
+  clarification_gate is set to false in project or per-invocation configuration
+  Ordinary non-critical ambiguity exists; agent picks a reversible, low-risk repository-consistent option, continues autonomously, and records the assumption in the plan or delivery report
+expected_outcome: PASS
+failure_mode: disabled-gate-still-interrupts-or-hides-assumptions
+notes: Disabled mode minimizes interruptions while keeping material assumptions explicit and reversible
