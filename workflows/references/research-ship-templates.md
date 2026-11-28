@@ -74,15 +74,14 @@ Cite path/section/edition + SHA-256 manifest (never paste full books/logs):
 
 Products optionally provide:
 - `.b3/research-profile.md`: sources, school rules, authority paths, editorial policy, single-writer paths.
-- `.b3/research-policy.json` (read from canonical trunk authority for merge authorization):
+- `.b3/policy.toml` ([`policy.example.toml`](../../config/policy.example.toml); canonical trunk authority; legacy `.b3/research-policy.json` via `b3 config migrate`):
 
-```json
-{
-  "auto_merge": "disabled",
-  "protected_paths": ["docs/authority/", "releases/"],
-  "allow_protected_paths": false,
-  "allowed_target_branches": ["main"],
-  "require_ci": true,
-  "require_review": true
-}
+```toml
+auto_merge = "disabled"
+auto_merge_max_risk = "LOW"
+protected_paths = ["docs/authority/", "releases/"]
+allow_protected_paths = false
+allowed_target_branches = ["main"]
+require_ci = true
+require_review = true
 ```

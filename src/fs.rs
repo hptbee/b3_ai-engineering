@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{fail, B3Error};
@@ -673,6 +673,16 @@ pub fn test_no_reparse_segments(root: &Path, rel_slash: &str) -> bool {
     true
 }
 
+fn is_nonexempt_reparse(p: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if p == Path::new("/var") || p == Path::new("/tmp") {
+            return false;
+        }
+    }
+    is_reparse_or_symlink(p)
+}
+
 /// Scans each component of an absolute path `abs_path` and returns the first
 /// symlink/reparse segment if found.
 pub fn find_reparse_in_path_hierarchy(abs_path: &Path) -> Option<PathBuf> {
@@ -687,19 +697,80 @@ pub fn find_reparse_in_path_hierarchy(abs_path: &Path) -> Option<PathBuf> {
             }
             Component::Normal(seg) => {
                 cur.push(seg);
-                #[cfg(target_os = "macos")]
-                {
-                    if cur == Path::new("/var") || cur == Path::new("/tmp") {
-                        continue;
-                    }
-                }
-                if is_reparse_or_symlink(&cur) {
+                if is_nonexempt_reparse(&cur) {
                     return Some(cur);
                 }
             }
         }
     }
     None
+}
+
+/// Returns true if a string or path looks like a UNC, network, or Windows NT namespace path.
+pub fn is_unc_or_network_path(raw: &str, p: &Path) -> bool {
+    let raw_trimmed = raw.trim();
+    let raw_bs = raw_trimmed.replace('/', "\\");
+    if raw_bs.starts_with("\\\\") || raw_bs.to_ascii_uppercase().starts_with("\\??\\") {
+        return true;
+    }
+    let s = p.to_string_lossy();
+    let s_bs = s.replace('/', "\\");
+    if s_bs.starts_with("\\\\") || s_bs.to_ascii_uppercase().starts_with("\\??\\") {
+        return true;
+    }
+    p.components().any(|c| {
+        matches!(
+            c,
+            Component::Prefix(pfx)
+                if matches!(
+                    pfx.kind(),
+                    Prefix::UNC(..) | Prefix::VerbatimUNC(..) | Prefix::DeviceNS(..)
+                )
+        )
+    })
+}
+
+/// Returns true if `path` or any traversed step (including uncollapsed `sym/..` prefixes and
+/// resolved ancestors above `base`) is a non-exempt symlink or reparse point.
+pub fn has_reparse_in_path_steps(base: &Path, path: &Path) -> bool {
+    if is_nonexempt_reparse(path) {
+        return true;
+    }
+    let s = path.to_string_lossy();
+    let s_norm = if cfg!(windows) {
+        s.replace('/', "\\")
+    } else {
+        s.into_owned()
+    };
+    let p_norm = PathBuf::from(&s_norm);
+    let joined = if p_norm.is_absolute() {
+        p_norm
+    } else {
+        base.join(&p_norm)
+    };
+    let mut cur = PathBuf::new();
+    for comp in joined.components() {
+        match comp {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                cur.push(comp.as_os_str());
+                if is_nonexempt_reparse(&cur) {
+                    return true;
+                }
+            }
+            Component::ParentDir => {
+                if !cur.as_os_str().is_empty() && is_nonexempt_reparse(&cur) {
+                    return true;
+                }
+                cur.push("..");
+                if is_nonexempt_reparse(&cur) {
+                    return true;
+                }
+            }
+            Component::CurDir => {}
+        }
+    }
+    let resolved = resolve_unresolved_path(base, &s_norm);
+    is_nonexempt_reparse(&resolved) || find_reparse_in_path_hierarchy(&resolved).is_some()
 }
 
 /// Validates repo-relative segments (optional `.git` blocking), matching

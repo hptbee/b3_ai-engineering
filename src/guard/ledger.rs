@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::config::resolve_config;
 use crate::error::{fail, B3Error};
 use crate::fs::{
     normalize_path_value, normalize_repo_root, resolve_safe_repo_write_path, sort_ordinal,
@@ -11,10 +12,10 @@ use crate::git::{
     assert_valid_git_rev, git_err_detail, git_hash_text, is_hex40, resolve_scope_target_and_base,
     run_git,
 };
-use crate::guard::inventory::{build_inventory, eval_level1_dispatch, is_oversized_unit};
+use crate::guard::inventory::{eval_level1_dispatch, is_oversized_unit_with};
 use crate::guard::scope::{
-    collect_scope_data, eval_risk_for_subset, get_tshirt_size, normalize_size_class,
-    test_contract_path, test_doc_or_asset_path,
+    collect_scope_data, eval_risk_for_subset, get_tshirt_size_with_thresholds,
+    normalize_size_class, test_contract_path, test_doc_or_asset_path,
 };
 use crate::guard::snapshot::resolve_or_create_snapshot_sha;
 use crate::guard::verify::{
@@ -22,7 +23,7 @@ use crate::guard::verify::{
     valid_receipt_rel_list, validate_receipt_covers_paths, TreeFingerprintMaps,
     VerifyReceiptResult,
 };
-use crate::guard::wave::resolve_concurrency;
+use crate::guard::wave::{resolve_concurrency, resolve_concurrency_with_config};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerUnit {
@@ -159,7 +160,11 @@ impl RepoTreeSnapshot {
     }
 }
 
-pub(crate) fn get_default_max_passes(size_class: &str, unit_count: usize) -> i64 {
+pub(crate) fn get_default_max_passes_with(
+    size_class: &str,
+    unit_count: usize,
+    standard_iterations: i64,
+) -> i64 {
     match normalize_size_class(size_class).unwrap_or("") {
         "L" | "XL" => 12,
         "XXL" => {
@@ -167,7 +172,7 @@ pub(crate) fn get_default_max_passes(size_class: &str, unit_count: usize) -> i64
             let scaled = ((5 * u + 1) / 2) + 2;
             scaled.max(24)
         }
-        _ => 5,
+        _ => standard_iterations.max(1),
     }
 }
 
@@ -569,6 +574,17 @@ pub(crate) fn invoke_review_ledger_check(
     ledger_rel: &str,
     ign_paths: &[String],
 ) -> Result<LedgerCheckResult, B3Error> {
+    let cfg = resolve_config(Some(root), None, &[]).config;
+    invoke_review_ledger_check_with_cfg(root, ledger_full, ledger_rel, ign_paths, &cfg)
+}
+
+pub(crate) fn invoke_review_ledger_check_with_cfg(
+    root: &Path,
+    ledger_full: &Path,
+    ledger_rel: &str,
+    ign_paths: &[String],
+    cfg: &crate::config::B3Config,
+) -> Result<LedgerCheckResult, B3Error> {
     if !ledger_full.is_file() {
         return Err(fail(format!("LEDGER_MISSING: {ledger_rel}"), 1));
     }
@@ -621,7 +637,12 @@ pub(crate) fn invoke_review_ledger_check(
         ));
     }
     for u in &ledger.units {
-        if is_oversized_unit(u.files_cnt, u.lines_cnt) {
+        if is_oversized_unit_with(
+            u.files_cnt,
+            u.lines_cnt,
+            cfg.review.max_loc_per_unit,
+            cfg.review.max_files_per_unit,
+        ) {
             return Err(fail(
                 format!(
                     "LEDGER_INCOMPLETE: oversized unit {} ({}f, {}L)",
@@ -683,7 +704,11 @@ pub(crate) fn invoke_review_ledger_check(
         return Err(fail("LEDGER_INCOMPLETE: empty diff target", 2));
     }
 
-    let live_size = get_tshirt_size(live_scope.review_files.len(), live_scope.total_lines);
+    let live_size = get_tshirt_size_with_thresholds(
+        live_scope.review_files.len(),
+        live_scope.total_lines,
+        &cfg.review.sizing,
+    );
     if get_size_rank(live_size) > get_size_rank(&norm_size) {
         return Err(fail(
             format!("LEDGER_STALE: size_class escalated ({norm_size}->{live_size})"),
@@ -701,6 +726,37 @@ pub(crate) fn invoke_review_ledger_check(
         Some(&live_scope.file_signals),
         Some(&live_scope.file_lines),
     );
+    let recorded_risk_rank = match ledger.meta["risk_level"]
+        .trim()
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "LOW" => 1u8,
+        "MEDIUM" => 2u8,
+        "HIGH" => 3u8,
+        "CRITICAL" => 4u8,
+        other => {
+            return Err(fail(
+                format!("LEDGER_CORRUPT: invalid risk_level '{other}'"),
+                1,
+            ));
+        }
+    };
+    let live_overall_rank = match live_overall_risk.risk_level {
+        "LOW" => 1u8,
+        "MEDIUM" => 2u8,
+        "HIGH" => 3u8,
+        _ => 4u8,
+    };
+    if live_overall_rank > recorded_risk_rank {
+        return Err(fail(
+            format!(
+                "LEDGER_STALE: overall risk escalated ({}->{})",
+                ledger.meta["risk_level"], live_overall_risk.risk_level
+            ),
+            2,
+        ));
+    }
     let rev_indep = ledger.meta["review_independence"].clone();
     if rev_indep == "SINGLE_AGENT_LIMIT"
         && matches!(live_overall_risk.risk_level, "HIGH" | "CRITICAL")
@@ -850,7 +906,12 @@ pub(crate) fn invoke_review_ledger_check(
             .iter()
             .filter_map(|f| live_scope.file_lines.get(f))
             .sum();
-        if is_oversized_unit(live_u_files, live_u_lines) {
+        if is_oversized_unit_with(
+            live_u_files,
+            live_u_lines,
+            cfg.review.max_loc_per_unit,
+            cfg.review.max_files_per_unit,
+        ) {
             return Err(fail(
                 format!(
                     "LEDGER_INCOMPLETE: oversized unit {uid} ({live_u_files}f, {live_u_lines}L)"
@@ -1081,9 +1142,8 @@ pub fn run(
             1,
         ));
     }
-    let max_concurrency = resolve_concurrency(max_concurrency, "LEDGER_FAIL")?;
-
     if act == "normalize" && ledger_path.trim().is_empty() {
+        let _ = resolve_concurrency(max_concurrency, "LEDGER_FAIL")?;
         if scope.trim().is_empty() {
             return Err(fail(
                 "LEDGER_FAIL: -LedgerPath or -Scope required for normalize",
@@ -1119,6 +1179,9 @@ pub fn run(
     }
 
     if act == "init" {
+        let cfg = resolve_config(Some(&repo_root), None, &[]).config;
+        let max_concurrency =
+            resolve_concurrency_with_config(max_concurrency, &cfg, "LEDGER_FAIL")?;
         if ledger_full.is_dir() {
             return Err(fail("LEDGER_FAIL: -LedgerPath is a directory", 1));
         }
@@ -1183,12 +1246,13 @@ pub fn run(
             }
         }
 
-        let inv = build_inventory(
+        let inv = crate::guard::inventory::build_inventory_with_cfg(
             &repo_root,
             &resolved_base,
             &target_commit_sha,
             &ignored,
             max_concurrency,
+            &cfg,
             "LEDGER_FAIL",
         )?;
         if inv.is_empty {
@@ -1197,8 +1261,13 @@ pub fn run(
         if let Some(pe) = inv.partition_error {
             return Err(fail(pe, 2));
         }
-        let effective_max_passes =
-            max_passes.unwrap_or_else(|| get_default_max_passes(inv.size_class, inv.units.len()));
+        let effective_max_passes = max_passes.unwrap_or_else(|| {
+            get_default_max_passes_with(
+                inv.size_class,
+                inv.units.len(),
+                cfg.review.max_iterations as i64,
+            )
+        });
 
         let snap_sha = if !target_commit_sha.is_empty() {
             target_commit_sha.clone()

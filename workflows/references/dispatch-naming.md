@@ -7,8 +7,8 @@ Single canonical orchestration & proportional [clarification](clarification-gate
 
 ## Optional model preferences
 
-- Read once per dispatch: `<project>/.b3/models.md`, then `~/.b3/models.md` (`B3_MODELS_PERSONAL`). Precedence: user > project > personal > `auto` across `planning`, `debugging`, `implementation`, `b3-reviewer`, `b3-fixer`, and specialists.
-- **Single-task fast-path:** 1-unit `XS` + `inline` runs inline on `main` when `implementation` is unset/`auto` (or matches `main`); dispatch `b3-impl-<task-id-lower>` when model differs, size `>= S`, `notes`/`detailed`, or multi-unit. Never edit host settings or `agents/*.md` (`model: inherit`) or claim unverified switches.
+- Read once/dispatch: `.b3/config.toml` > `~/.b3/config.toml` (`B3_CONFIG_PERSONAL`; `b3 config`, migrate `models.md`). User > project > personal > `auto` (`planning`, `debugging`, `implementation`, `b3-reviewer`, `b3-fixer`, specialists).
+- **Single-task fast-path:** 1-unit `XS` + `inline` runs inline on `main` when `implementation` is unset/`auto` (or matches `main`); dispatch `b3-impl-<task-id-lower>` if model differs, `>= S`, `notes`/`detailed`, or multi-unit. Never edit host settings, `agents/*.md` (`model: inherit`), or claim unverified switches.
 
 ## Continuous scheduling & safe integration contract
 
@@ -18,7 +18,7 @@ Single canonical orchestration & proportional [clarification](clarification-gate
   - `SHARED_READ_ONLY` / research: artifact written, validated (`evidence-check` if applicable), and recorded (`output_ready`).
   - `SHARED_DISJOINT_WRITES`: `A`'s scoped verification passed and files exist stably in the shared WT (`output_ready`). **Never `git commit` (advancing `HEAD`) in a shared WT while peer `SHARED_DISJOINT_WRITES` workers remain active**; pass `A`'s uncommitted verified files via `--verified-dirty-paths` until a commit-safe quiescent window.
   - `ISOLATED_WRITES`: `A` is **not** ready for dependents merely by passing inside `wt-a`; Parent must first integrate `A` into the integration branch (`integrated`) so `B` starts from integrated state.
-- **Adaptive concurrency & lean packets:** Scale concurrency by independent work, context/CPU/memory/rate budgets, host limits, and throughput (no fixed `3`/`4` caps; `check-wave --partition` defaults to `available_parallelism` `4..=16`, explicit `--max-concurrency 1..64`; fall back to conservative `--max-concurrency` or `1` on `SINGLE_AGENT_LIMIT` if host limits unknown). Pass `<=25L` packets (`approach`/targets minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, matched skill; no orchestrator docs). Reuse healthy MCPs (`context-routing.md`) optionally; reuse subsystem workers unless independence is needed (always fresh workers for reviews). Parent owns clarification, shared state, integration, commits, and PR mutations.
+- **Adaptive concurrency & lean packets:** Scale concurrency by independent work, context/CPU/memory/rate budgets, host limits, and throughput (`check-wave --partition` reads `parallel.max_concurrency` — def `4..=16`, explicit `1..64` — and `parallel.execution_mode`; honor `SEQUENTIAL`/`ISOLATED_WRITES` preference when safe, or fall back to `1` on `SINGLE_AGENT_LIMIT`). Pass `<=25L` packets (`approach`/targets minus `## Inspected`, `files`/`read_only_deps`, 1L `context_hint:`, matched skill; no orchestrator docs). Reuse healthy MCPs (`context-routing.md`) optionally; reuse subsystem workers unless independence is needed (always fresh for reviews). Parent owns clarification, shared state, integration, commits, and PR mutations.
 
 ## 4 adaptive isolation modes (least-expensive-safe)
 

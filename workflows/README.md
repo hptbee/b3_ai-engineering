@@ -13,7 +13,7 @@ Workflows are multi-step orchestration. They answer: **in what order should thin
 Progressive-disclosure references for `/b3-ship` and `/b3-research-ship` (opened only on demand):
 - [`references/ship-templates.md`](references/ship-templates.md) — `master-plan.md` (`Shared contracts`), `progress.md` (`impl_agent`), risk-adaptive `detailed` matrices (`failure_matrix`, `write_paths`, `io_budget`), Context Packets (omitting `## Inspected`), and `approach/T00N.md` schemas
 - [`references/ship-resume.md`](references/ship-resume.md) — Scenario C Git-verified resume, `check-freshness`/`verify-check` validation, and legacy `.b3/ship/progress.md` support
-- [`references/research-ship-templates.md`](references/research-ship-templates.md) — `.b3/research-ship/` `progress.md`, `research-plan.md`, `evidence-index.md`, and `.b3/research-policy.json` schema
+- [`references/research-ship-templates.md`](references/research-ship-templates.md) — `.b3/research-ship/` `progress.md`, `research-plan.md`, `evidence-index.md`, and `.b3/policy.toml` (legacy `.b3/research-policy.json`) schema
 - [`references/research-ship-resume.md`](references/research-ship-resume.md) — `.b3/research-ship/` Git, branch/PR, and `evidence-check` freshness resume + read-only `status`
 - [`references/research-ship-gates.md`](references/research-ship-gates.md) — independent source verification, dual technical/editorial gates, provider-neutral branch/PR lifecycle, and `merge-policy-check` / post-merge checks
 - [`references/dispatch-naming.md`](references/dispatch-naming.md) — subagent logical aliases, optional model preferences, adaptive concurrency & continuous dispatch, 4 isolation modes, and canonical `mechanical-check` ownership contract

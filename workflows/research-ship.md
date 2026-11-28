@@ -21,7 +21,7 @@ Research-first delivery complementing [`ship.md`](ship.md); reads product profil
 Load [templates](references/research-ship-templates.md) on create; [gates](references/research-ship-gates.md) at E/H–K; [`references/context-routing.md`](references/context-routing.md) on demand for repo/G (`repo-evidence` only, [gates](references/research-ship-gates.md) §2).
 
 ### A. Preflight
-- **Out:** `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo), `PRODUCT_ROOT`, branch/HEAD, open PR on GitHub (`gh pr list --head <branch>`), `.b3/research-{profile.md,policy.json}`, `--protected-paths`, `initial_dirty_paths`, `{RUN_DIR}` (`b3 guard new-run --namespace research-ship --slug <slug>`).
+- **Out:** `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo), `PRODUCT_ROOT`, branch/HEAD, open PR on GitHub (`gh pr list --head <branch>`), `.b3/{research-profile.md,policy.toml}`, `--protected-paths`, `initial_dirty_paths`, `{RUN_DIR}` (`b3 guard new-run --namespace research-ship --slug <slug>`).
 - **Gate:** preserve `research/`, decisions, evidence; run `b3 guard check-worktree --expected-root <root> --require-isolated` ONLY on `ISOLATED_WRITES` (never block `research-only`/`SHARED_READ_ONLY` in Phase A; fall back to `SEQUENTIAL` when safe per [dispatch](references/dispatch-naming.md)); missing `B3_HOME`, unsafe isolated worktree failure, or dirty overlap → `BLOCKED`.
 
 ### B. Research Planning
@@ -55,7 +55,7 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 - **Gate:** confirm 0 blockers + green checks. Local/non-GitHub repos proceed to Phase J; on GitHub when publishing, reuse/open PR (`gh pr list --head <branch>`) and handle authorized PR feedback via `pr-feedback/SKILL.md` (thread resolve != editorial/release approval).
 
 ### J. Merge Eligibility Evaluation
-- **Gate:** run `b3 guard merge-policy-check` against canonical trunk `.b3/research-policy.json` ([gates](references/research-ship-gates.md) §4 for flags/CI-receipt rules): `auto_merge: disabled` → `PR_READY` (`exit 2`); unverified remote / local-only mode → `LOCAL_ELIGIBLE_ONLY` (`exit 2`); provider outage → `PROVIDER_UNAVAILABLE` (`exit 2`); caller-only `CiStatus=PASS`, stale ref, unmet policy/CI/clean-tree/`INDEPENDENT` ledger (`SINGLE_AGENT_LIMIT`/`UNKNOWN`) → `MERGE_BLOCKED` (`exit 1`); all green under `auto_merge: authorized` → `MERGE_AUTHORIZED` (`mode=local|github`, `exit 0`).
+- **Gate:** run `b3 guard merge-policy-check` against canonical trunk `.b3/policy.toml` (legacy `.b3/research-policy.json`; [gates](references/research-ship-gates.md) §4 for flags/CI-receipt rules): `auto_merge: disabled` → `PR_READY` (`exit 2`); unverified remote / local-only mode → `LOCAL_ELIGIBLE_ONLY` (`exit 2`); provider outage → `PROVIDER_UNAVAILABLE` (`exit 2`); caller-only `CiStatus=PASS`, stale ref, unmet policy/CI/clean-tree/`INDEPENDENT` ledger (`SINGLE_AGENT_LIMIT`/`UNKNOWN`) → `MERGE_BLOCKED` (`exit 1`); all green under `auto_merge: authorized` → `MERGE_AUTHORIZED` (`mode=local|github`, `exit 0`).
 
 ### K. Authorized Auto-Merge & Post-Merge Verification
 - **Gate:** on `MERGE_AUTHORIZED` (`exit 0`), merge and run `b3 guard merge-policy-check --post-merge` ([gates](references/research-ship-gates.md) §4 for `mode=github|local` flags), requiring `POST_MERGE_VERIFIED` (`mode=local|github`, `exit 0`). Reconcile artifacts/authority + `b3 guard evidence-check`; report `MERGED_VERIFIED` (`pr_status=PR_MERGED` when PR-backed, `runtime_served=NOT_VERIFIED`, `deployed=NOT_VERIFIED` unless verified).

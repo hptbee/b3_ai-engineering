@@ -2628,8 +2628,8 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         to_forward_path(&snap_exe)
     );
 
-    // 4. B3_MODELS_PERSONAL & B3_SKIP_MODEL_INIT native lifecycle across install product, install global, & sync
-    let pers = tmp.path.join("home-pers/.b3/models.md");
+    // 4. B3_CONFIG_PERSONAL, B3_SKIP_CONFIG_INIT & legacy B3_SKIP_MODEL_INIT lifecycle across install product, install global, & sync
+    let pers = tmp.path.join("home-pers/.b3/config.toml");
     let pers_s = pers.to_str().unwrap();
     let prod_m = tmp.path.join("prod-m");
     clone_seeded_git_repo(&prod_m);
@@ -2650,15 +2650,43 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "--dry-run"
             ],
             None,
-            &[("B3_MODELS_PERSONAL", pers_s)],
-            &["B3_SKIP_MODEL_INIT"],
+            &[("B3_CONFIG_PERSONAL", pers_s)],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
     );
     assert!(!pers.exists());
 
-    // B3_SKIP_MODEL_INIT=1 skips creation
+    // B3_SKIP_CONFIG_INIT=1 and legacy B3_SKIP_MODEL_INIT=1 both skip creation
+    for skip_env in ["B3_SKIP_CONFIG_INIT", "B3_SKIP_MODEL_INIT"] {
+        assert_eq!(
+            run_b3_env(
+                &[
+                    "install",
+                    "product",
+                    "--product-root",
+                    prod_ms,
+                    "--b3-home",
+                    root_str,
+                    "--host",
+                    "cursor"
+                ],
+                None,
+                &[("B3_CONFIG_PERSONAL", pers_s), (skip_env, "1")],
+                &["B3_MODELS_PERSONAL"],
+            )
+            .0,
+            0
+        );
+        assert!(!pers.exists());
+    }
+
+    // Normal install product creates B3_CONFIG_PERSONAL from config/config.example.toml (and NOT inside product/.b3/config.toml)
     assert_eq!(
         run_b3_env(
             &[
@@ -2672,41 +2700,22 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "cursor"
             ],
             None,
-            &[("B3_MODELS_PERSONAL", pers_s), ("B3_SKIP_MODEL_INIT", "1")],
-            &[],
-        )
-        .0,
-        0
-    );
-    assert!(!pers.exists());
-
-    // Normal install product creates B3_MODELS_PERSONAL from config/models.example.md (and NOT inside product/.b3/models.md)
-    assert_eq!(
-        run_b3_env(
+            &[("B3_CONFIG_PERSONAL", pers_s)],
             &[
-                "install",
-                "product",
-                "--product-root",
-                prod_ms,
-                "--b3-home",
-                root_str,
-                "--host",
-                "cursor"
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_MODELS_PERSONAL"
             ],
-            None,
-            &[("B3_MODELS_PERSONAL", pers_s)],
-            &["B3_SKIP_MODEL_INIT"],
         )
         .0,
         0
     );
-    assert!(fs::read_to_string(&pers)
-        .unwrap()
-        .contains("B3 Model Preferences"));
-    assert!(!prod_m.join(".b3/models.md").exists());
+    let seeded_pers = fs::read_to_string(&pers).unwrap();
+    assert!(seeded_pers.contains("[models]") && seeded_pers.contains("[planning]"));
+    assert!(!prod_m.join(".b3/config.toml").exists());
 
     // Custom edit preserved on subsequent install product & b3 sync
-    write_lf(&pers, "# Custom\n| `planning` | custom-reasoner |\n");
+    write_lf(&pers, "[models.roles]\nplanning = [\"custom-reasoner\"]\n");
     assert_eq!(
         run_b3_env(
             &[
@@ -2720,8 +2729,12 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "cursor"
             ],
             None,
-            &[("B3_MODELS_PERSONAL", pers_s)],
-            &["B3_SKIP_MODEL_INIT"],
+            &[("B3_CONFIG_PERSONAL", pers_s)],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
@@ -2730,7 +2743,7 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .unwrap()
         .contains("custom-reasoner"));
 
-    let sync_pers = tmp.path.join("sync-pers/.b3/models.md");
+    let sync_pers = tmp.path.join("sync-pers/.b3/config.toml");
     let sync_pers_s = sync_pers.to_str().unwrap();
     // --verify-only does not create
     assert_eq!(
@@ -2744,8 +2757,12 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
                 "--verify-only"
             ],
             None,
-            &[("B3_MODELS_PERSONAL", sync_pers_s)],
-            &["B3_SKIP_MODEL_INIT"],
+            &[("B3_CONFIG_PERSONAL", sync_pers_s)],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
@@ -2756,20 +2773,31 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_MODELS_PERSONAL", sync_pers_s)],
-            &["B3_SKIP_MODEL_INIT"],
+            &[("B3_CONFIG_PERSONAL", sync_pers_s)],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
     );
     assert!(sync_pers.is_file());
-    write_lf(&sync_pers, "keep-sync-custom\n");
+    write_lf(
+        &sync_pers,
+        "[models.roles]\nplanning = [\"keep-sync-custom\"]\n",
+    );
     assert_eq!(
         run_b3_env(
             &["sync", "--repo-root", sync_s, "--host", "cursor"],
             None,
-            &[("B3_MODELS_PERSONAL", sync_pers_s)],
-            &["B3_SKIP_MODEL_INIT"],
+            &[("B3_CONFIG_PERSONAL", sync_pers_s)],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
@@ -2778,9 +2806,9 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
         .unwrap()
         .contains("keep-sync-custom"));
 
-    // install global --host all seeds ~/.b3/models.md and preserves across update & uninstall
+    // install global --host all seeds ~/.b3/config.toml and preserves across update & uninstall
     let uh_gm = tmp.path.join("uh-gm");
-    let gm_file = uh_gm.join(".b3/models.md");
+    let gm_file = uh_gm.join(".b3/config.toml");
     assert_eq!(
         run_b3_env(
             &[
@@ -2796,7 +2824,12 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             ],
             None,
             &[],
-            &["B3_SKIP_MODEL_INIT", "B3_MODELS_PERSONAL"],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_CONFIG_PERSONAL",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
@@ -2818,7 +2851,12 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             ],
             None,
             &[],
-            &["B3_SKIP_MODEL_INIT", "B3_MODELS_PERSONAL"],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_CONFIG_PERSONAL",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
@@ -2836,7 +2874,12 @@ fn product_attach_sync_smart_b3_home_and_model_preferences() {
             ],
             None,
             &[],
-            &["B3_SKIP_MODEL_INIT", "B3_MODELS_PERSONAL"],
+            &[
+                "B3_SKIP_CONFIG_INIT",
+                "B3_SKIP_MODEL_INIT",
+                "B3_CONFIG_PERSONAL",
+                "B3_MODELS_PERSONAL"
+            ],
         )
         .0,
         0
@@ -3399,4 +3442,137 @@ fn antigravity_manifest_upgrades_and_security_guards() {
         .0,
         1
     );
+}
+
+#[test]
+fn legacy_models_md_reports_legacy_pending_and_gitignore_tracks_policy_toml() {
+    let root = repo_root();
+    let root_str = root.to_str().unwrap();
+    let tmp = TempDirGuard::new("legacy-pending-gi");
+
+    // 1. When legacy ~/.b3/models.md exists and ~/.b3/config.toml does NOT exist:
+    //    `b3 install global`, `b3 install product`, and `b3 sync` report `legacy-pending`
+    //    without creating config.toml or overwriting models.md.
+    let uh = tmp.path.join("user-home");
+    let legacy_md = uh.join(".b3/models.md");
+    let new_cfg = uh.join(".b3/config.toml");
+    let legacy_body = "| `main` | `custom-legacy` |\n";
+    write_lf(&legacy_md, legacy_body);
+
+    // 1a. `b3 install global install --host all`
+    let (cg, out_g, err_g) = run_b3_env(
+        &[
+            "install",
+            "global",
+            "install",
+            "--host",
+            "all",
+            "--b3-home",
+            root_str,
+            "--user-home",
+            uh.to_str().unwrap(),
+        ],
+        None,
+        &[],
+        &[
+            "B3_SKIP_CONFIG_INIT",
+            "B3_SKIP_MODEL_INIT",
+            "B3_CONFIG_PERSONAL",
+            "B3_MODELS_PERSONAL",
+        ],
+    );
+    assert_eq!(cg, 0, "{out_g}\n{err_g}");
+    assert!(
+        out_g.contains("config_preferences=legacy-pending:"),
+        "install global must report legacy-pending: {out_g}"
+    );
+    assert!(
+        !new_cfg.exists(),
+        "must not create config.toml alongside models.md"
+    );
+    assert_eq!(fs::read_to_string(&legacy_md).unwrap(), legacy_body);
+
+    // 1b. `b3 install product` + check .gitignore ignores `.b3/config.toml` and `.b3/models.md`
+    //     while leaving `.b3/policy.toml` and `.b3/home` trackable (`!check-ignore`)
+    let prod = tmp.path.join("prod");
+    clone_seeded_git_repo(&prod);
+    let (cp, out_p, err_p) = run_b3_env(
+        &[
+            "install",
+            "product",
+            "--product-root",
+            prod.to_str().unwrap(),
+            "--b3-home",
+            root_str,
+            "--host",
+            "cursor",
+        ],
+        None,
+        &[("B3_CONFIG_PERSONAL", new_cfg.to_str().unwrap())],
+        &[
+            "B3_SKIP_CONFIG_INIT",
+            "B3_SKIP_MODEL_INIT",
+            "B3_MODELS_PERSONAL",
+        ],
+    );
+    assert_eq!(cp, 0, "{out_p}\n{err_p}");
+    assert!(
+        out_p.contains("model_preferences=legacy-pending:"),
+        "install product must report legacy-pending: {out_p}"
+    );
+    assert!(
+        !new_cfg.exists(),
+        "install product must not create config.toml"
+    );
+    assert_eq!(fs::read_to_string(&legacy_md).unwrap(), legacy_body);
+
+    // Verify git check-ignore status on `.b3/*` paths
+    for ignored_path in [".b3/config.toml", ".b3/models.md", ".b3/ship/x"] {
+        let st = Command::new("git")
+            .arg("-C")
+            .arg(&prod)
+            .args(["check-ignore", "-q", ignored_path])
+            .status()
+            .expect("git check-ignore");
+        assert!(st.success(), "{ignored_path} must be gitignored");
+    }
+    for trackable_path in [".b3/policy.toml", ".b3/home"] {
+        let st = Command::new("git")
+            .arg("-C")
+            .arg(&prod)
+            .args(["check-ignore", "-q", trackable_path])
+            .status()
+            .expect("git check-ignore");
+        assert!(
+            !st.success(),
+            "{trackable_path} must remain trackable (not gitignored)"
+        );
+    }
+
+    // 1c. `b3 sync`
+    let sync_fx = tmp.path.join("sync-fx");
+    copy_b3_snapshot(&sync_fx, true);
+    let (cs, out_s, err_s) = run_b3_env(
+        &[
+            "sync",
+            "--repo-root",
+            sync_fx.to_str().unwrap(),
+            "--host",
+            "antigravity",
+        ],
+        None,
+        &[("B3_CONFIG_PERSONAL", new_cfg.to_str().unwrap())],
+        &[
+            "B3_SKIP_CONFIG_INIT",
+            "B3_SKIP_MODEL_INIT",
+            "B3_MODELS_PERSONAL",
+        ],
+    );
+    assert_eq!(cs, 0, "{out_s}\n{err_s}");
+    assert!(
+        out_s.contains("config_preferences=legacy-pending:"),
+        "b3 sync must report legacy-pending: {out_s}"
+    );
+    assert!(!new_cfg.exists(), "b3 sync must not create config.toml");
+    assert_eq!(fs::read_to_string(&legacy_md).unwrap(), legacy_body);
 }

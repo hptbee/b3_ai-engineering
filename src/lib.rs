@@ -1,5 +1,6 @@
 pub mod adapters;
 pub mod cli;
+pub mod config;
 pub mod context;
 pub mod error;
 pub mod fs;
@@ -8,6 +9,7 @@ pub mod guard;
 pub mod json;
 pub mod pr;
 pub mod process;
+pub mod toml_lite;
 
 use cli::{help_text, parse_args, Command, GuardSubcommand, InstallSubcommand, PrSubcommand};
 use error::B3Error;
@@ -21,6 +23,27 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
         Command::ContextMeasure { repo_root, strict } => {
             context::measure_context(&repo_root, strict)
         }
+        Command::Config(cfg) => config::run_config_cli(
+            &cfg.action,
+            cfg.repo_root.as_deref(),
+            cfg.user_home.as_deref(),
+            cfg.scope.as_deref(),
+            cfg.key.as_deref(),
+            cfg.value.as_deref(),
+            cfg.sources,
+            cfg.json,
+            cfg.dry_run,
+            cfg.force,
+            &cfg.overrides,
+            cfg.route_role.as_deref(),
+            cfg.route_complexity.as_deref(),
+            cfg.route_risk.as_deref(),
+            cfg.route_host.as_deref(),
+            cfg.route_escalations,
+            cfg.route_trigger.as_deref(),
+            cfg.route_available.as_deref(),
+            cfg.route_confirmed.as_deref(),
+        ),
         Command::Sync {
             repo_root,
             host_name,

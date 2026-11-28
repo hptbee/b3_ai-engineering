@@ -1790,9 +1790,9 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         contract_lf.len()
     );
     for required_fragment in [
-        "clarification_gate: true",
-        "understanding_threshold: 96",
-        "clarification_gate: false",
+        "clarification_gate = true",
+        "understanding_threshold = 96",
+        "clarification_gate = false",
         "next valid layer",
         "evidence-grounded heuristic trigger",
         "block solely on score",
@@ -1841,13 +1841,21 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
         "workflows/ship.md must preserve 'Unignored run-dirty files block `PASS`'"
     );
 
-    let models_example = fs::read_to_string(root.join("config/models.example.md"))
-        .expect("read config/models.example.md");
+    let config_example = fs::read_to_string(root.join("config/config.example.toml"))
+        .expect("read config/config.example.toml");
     assert!(
-        models_example.contains("planning:")
-            && models_example.contains("clarification_gate: true")
-            && models_example.contains("understanding_threshold: 96"),
-        "config/models.example.md missing canonical planning config"
+        config_example.contains("[planning]")
+            && config_example.contains("clarification_gate = true")
+            && config_example.contains("understanding_threshold = 96"),
+        "config/config.example.toml missing canonical planning config"
+    );
+
+    let policy_example = fs::read_to_string(root.join("config/policy.example.toml"))
+        .expect("read config/policy.example.toml");
+    assert!(
+        policy_example.contains("auto_merge = \"disabled\"")
+            && policy_example.contains("auto_merge_max_risk = \"LOW\""),
+        "config/policy.example.toml missing canonical governance policy defaults"
     );
 
     let models_doc = fs::read_to_string(root.join("docs/model-preferences.md"))
@@ -1855,8 +1863,8 @@ fn clarification_gate_canonical_contract_and_no_duplication() {
     for required_doc_fragment in [
         "Field-level precedence:",
         "next valid layer",
-        "understanding_threshold: 90",
-        "clarification_gate: false",
+        "understanding_threshold = 90",
+        "clarification_gate = false",
     ] {
         assert!(
             models_doc.contains(required_doc_fragment),

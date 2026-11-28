@@ -57,7 +57,7 @@ flowchart TD
     Resolve -->|"New requirement / plan"| NewRun["b3 guard new-run (.b3/ship/runs/run_id + CURRENT)"]
 
     NewRun --> PreFlight["Preflight: record initial_dirty_paths, DirtyDigests, baseline cmds (lazy at run_base_sha only on Verify failure; else NOT_RUN(verify_green))"]
-    PreFlight --> Plan["Plan (Parent resolves models.md once, field-level precedence; heuristic clarification-gate.md ~96%): Invariants, AC1..ACn, Shared Contracts"]
+    PreFlight --> Plan["Plan (Parent resolves config.toml once, field-level precedence; heuristic clarification-gate.md ~96%): Invariants, AC1..ACn, Shared Contracts"]
     Plan --> ReadyCheck["Select Ready Tasks (pending + all depends_on completed; hold A + dependents B,C,D while continuing independent E / SHARED_READ_ONLY F)"]
     Resume --> ReadyCheck
 
@@ -121,7 +121,7 @@ flowchart TD
 
 Subagent logical aliases are described in [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) and are only requested when the host supports custom spawn names. Host-returned IDs remain authoritative for resume.
 
-`b3 guard check-wave --partition` computes continuous `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). Parent resolves `models.md` `planning:` settings once per invocation (field-level precedence) and owns all user clarification: when task `A` is blocked on a user decision (and `B, C, D` depend on `A`), Parent holds `A, B, C, D` while immediately continuing independent authorized `E` and `SHARED_READ_ONLY` `F` without speculative edits, consolidates any worker-reported uncertainties without workers reloading rubrics or `models.md`, and releases newly unblocked dependents immediately once `A` is clarified and verified ([`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md)). Subagents never talk directly to each other and never edit `read_only_deps`, `--protected-paths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `--worker-changes` or Git-proven `VERIFIED_PER_WORKER` via `--worker-roots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
+`b3 guard check-wave --partition` computes continuous `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). Parent resolves `config.toml` `[planning]` settings once per invocation via `b3 config` (5-layer field-level precedence; see [`configuration.md`](configuration.md)) and owns all user clarification: when task `A` is blocked on a user decision (and `B, C, D` depend on `A`), Parent holds `A, B, C, D` while immediately continuing independent authorized `E` and `SHARED_READ_ONLY` `F` without speculative edits, consolidates any worker-reported uncertainties without workers reloading rubrics or `config.toml`, and releases newly unblocked dependents immediately once `A` is clarified and verified ([`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md)). Subagents never talk directly to each other and never edit `read_only_deps`, `--protected-paths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `--worker-changes` or Git-proven `VERIFIED_PER_WORKER` via `--worker-roots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
 
 ```mermaid
 sequenceDiagram
@@ -173,7 +173,7 @@ sequenceDiagram
     P->>G: precommit --require-verify-receipt (T003 allowed-paths + expected-cmd) then commit T003
 
     opt Governed PR or /b3-research-ship merge gate
-        P->>G: merge-policy-check (trunk .b3/research-policy.json, mode=local or optional --pr-number b3 pr verify)
+        P->>G: merge-policy-check (trunk .b3/policy.toml or legacy .b3/research-policy.json, mode=local or optional --pr-number b3 pr verify)
         G-->>P: PR_READY / LOCAL_ELIGIBLE_ONLY / MERGE_AUTHORIZED / MERGE_BLOCKED / PROVIDER_UNAVAILABLE
     end
 ```
@@ -309,5 +309,6 @@ The system separates **Deep reasoning**, **Standard execution**, **Fast surgical
 - Core `/b3-ship` & `/b3-research-ship` procedures & PR template: [`../workflows/ship.md`](../workflows/ship.md), [`../workflows/research-ship.md`](../workflows/research-ship.md), [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md), [`../workflows/references/pr-template.md`](../workflows/references/pr-template.md)
 - Core `/b3-review-loop` procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md)
 - Core `/b3-review` & PR feedback skills: [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md), [`../skills/engineering/pr-feedback/SKILL.md`](../skills/engineering/pr-feedback/SKILL.md), [`../skills/engineering/code-review/references/review-template.md`](../skills/engineering/code-review/references/review-template.md), [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md)
+- Configuration & Governance Policy: [`configuration.md`](configuration.md)
 - Deterministic CLI reference: [`../scripts/README.md`](../scripts/README.md)
 - Architecture decisions: [`../research/decisions/decision-012-autodev-v2-hardening.md`](../research/decisions/decision-012-autodev-v2-hardening.md), [`../research/decisions/decision-013-host-neutral-multi-host-layout.md`](../research/decisions/decision-013-host-neutral-multi-host-layout.md), [`../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md`](../research/decisions/decision-014-autodev-parallel-waves-and-mechanical-pass.md), [`../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md`](../research/decisions/decision-015-evidence-gates-tripwires-and-context-budgets.md), [`../research/decisions/decision-016-standalone-commands-quality-and-context.md`](../research/decisions/decision-016-standalone-commands-quality-and-context.md), [`../research/decisions/decision-017-global-cursor-integration.md`](../research/decisions/decision-017-global-cursor-integration.md), [`../research/decisions/decision-018-research-ship-workflow.md`](../research/decisions/decision-018-research-ship-workflow.md)

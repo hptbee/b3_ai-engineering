@@ -3,7 +3,7 @@ artifact: workflows/references/clarification-gate.md
 intent: Parent consolidates worker-reported uncertainties once without duplicate worker scoring, config reads, or duplicate user prompts
 scenario: |
   Parallel planning scouts or implementation workers uncover two unrelated uncertainties while unaffected tasks stay executable
-  Workers report material findings to Parent without reloading clarification-gate.md or re-reading models.md; Parent batches concise user clarification once and releases dependent tasks while continuing safe peer work
+  Workers report material findings to Parent without reloading clarification-gate.md or re-reading config.toml; Parent batches concise user clarification once and releases dependent tasks while continuing safe peer work
 expected_outcome: PASS
 failure_mode: duplicated-worker-rubric-loads-or-duplicate-user-questions
 notes: Parent is sole owner of user-facing clarification and global planning updates

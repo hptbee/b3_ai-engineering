@@ -2691,3 +2691,453 @@ fn zero_remote_gitlab_ledger_binding_and_json_hardening() {
         );
     }
 }
+
+#[test]
+fn policy_toml_risk_ceilings_dual_conflict_invalid_and_tamper_guards() {
+    let tmp = TempDirGuard::new("mp-toml-policy");
+    let mock_bin = tmp.path.join("mock-bin");
+    write_mock_gh(&mock_bin, "gh", MOCK_GH_JS);
+    let mock_path = path_with_prepended(&mock_bin);
+
+    // 1. Canonical `.b3/policy.toml` default `auto_merge_max_risk = "LOW"` on trunk:
+    //    blocks MEDIUM and HIGH risk in BOTH GitHub PR and local / LOCAL_ELIGIBLE_ONLY paths,
+    //    while allowing LOW risk when gates are green.
+    let slug = "octo/b3-toml";
+    let repo = tmp.path.join("r-toml-gh");
+    clone_seeded_git_repo(&repo);
+    git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            &format!("https://github.com/{slug}.git"),
+        ],
+    );
+    // Omitted `auto_merge_max_risk` in `.b3/policy.toml` defaults strictly to "LOW".
+    write_lf(
+        &repo.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nprotected_paths = [\"releases/\"]\nallow_protected_paths = false\nallowed_target_branches = [\"main\"]\nrequire_ci = true\nrequire_review = true\n",
+    );
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "main policy.toml"]);
+    let main_sha = git_in(&repo, &["rev-parse", "HEAD"]);
+    git_in(
+        &repo,
+        &["update-ref", "refs/remotes/origin/main", &main_sha],
+    );
+    git_in(
+        &repo,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+    let r_str = repo.to_str().unwrap();
+
+    // 1a. LOW risk branch (docs only) -> MERGE_AUTHORIZED in GitHub PR mode
+    git_in(&repo, &["checkout", "-qb", "feat/low", &main_sha]);
+    write_lf(&repo.join("docs/low.md"), "low\n");
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "low"]);
+    let low_sha = git_in(&repo, &["rev-parse", "HEAD"]);
+    init_independent_ledger(&repo, ".b3/ship/low.md", &main_sha);
+    let fx_low = tmp.path.join("fx-low");
+    write_premerge_fixtures(
+        &fx_low,
+        slug,
+        101,
+        "main",
+        &main_sha,
+        "main",
+        &main_sha,
+        &main_sha,
+        "feat/low",
+        &low_sha,
+        Some("success"),
+        "completed",
+        true,
+        "clean",
+        "docs/low.md",
+        slug,
+        "pending",
+        0,
+    );
+    let (cl, outl, errl) = run_b3_env(
+        &[
+            "guard",
+            "merge-policy-check",
+            "--repo-root",
+            r_str,
+            "--pr-number",
+            "101",
+            "--ledger-path",
+            ".b3/ship/low.md",
+        ],
+        None,
+        &[
+            ("PATH", &mock_path),
+            ("B3_TEST_GH_DIR", fx_low.to_str().unwrap()),
+        ],
+        &["B3_GH_BIN"],
+    );
+    assert_eq!(cl, 0, "LOW risk should pass: {outl}\n{errl}");
+    assert!(outl.contains("MERGE_AUTHORIZED: mode=github"), "{outl}");
+
+    // 1b. MEDIUM risk branch (2 code files -> general_code_change / MEDIUM) -> blocked by max=LOW
+    git_in(&repo, &["checkout", "-qb", "feat/med", &main_sha]);
+    write_lf(&repo.join("src/a.rs"), "pub fn a() {}\n");
+    write_lf(&repo.join("src/b.rs"), "pub fn b() {}\n");
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "med"]);
+    let med_sha = git_in(&repo, &["rev-parse", "HEAD"]);
+    init_independent_ledger(&repo, ".b3/ship/med.md", &main_sha);
+    let fx_med = tmp.path.join("fx-med");
+    write_premerge_fixtures(
+        &fx_med,
+        slug,
+        102,
+        "main",
+        &main_sha,
+        "main",
+        &main_sha,
+        &main_sha,
+        "feat/med",
+        &med_sha,
+        Some("success"),
+        "completed",
+        true,
+        "clean",
+        "src/a.rs",
+        slug,
+        "pending",
+        0,
+    );
+    let (cm, outm, errm) = run_b3_env(
+        &[
+            "guard",
+            "merge-policy-check",
+            "--repo-root",
+            r_str,
+            "--pr-number",
+            "102",
+            "--ledger-path",
+            ".b3/ship/med.md",
+        ],
+        None,
+        &[
+            ("PATH", &mock_path),
+            ("B3_TEST_GH_DIR", fx_med.to_str().unwrap()),
+        ],
+        &["B3_GH_BIN"],
+    );
+    assert_eq!(cm, 1, "MEDIUM risk must block at max=LOW: {outm}\n{errm}");
+    assert!(
+        errm.contains("MERGE_BLOCKED: risk_exceeds_policy(risk=MEDIUM,max=LOW)"),
+        "{errm}"
+    );
+
+    // Local / LOCAL_ELIGIBLE_ONLY path also blocks MEDIUM risk at max=LOW
+    let (cm_loc, outm_loc, errm_loc) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r_str,
+        "--local-only",
+        "--base-sha",
+        &main_sha,
+        "--ledger-path",
+        ".b3/ship/med.md",
+    ]);
+    assert_eq!(cm_loc, 1, "{outm_loc}\n{errm_loc}");
+    assert!(
+        errm_loc.contains("MERGE_BLOCKED: risk_exceeds_policy(risk=MEDIUM,max=LOW)"),
+        "{errm_loc}"
+    );
+
+    // 1c. HIGH risk branch (api/contract.rs -> public_api_contract / HIGH) -> blocked at max=LOW
+    git_in(&repo, &["checkout", "-qb", "feat/high", &main_sha]);
+    write_lf(&repo.join("api/endpoint.rs"), "pub fn api() {}\n");
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "high"]);
+    let high_sha = git_in(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "verify-run",
+            "--repo-root",
+            r_str,
+            "--verify-cmd",
+            "echo ok",
+            "--receipt-path",
+            ".b3/ship/high.verify",
+        ])
+        .0,
+        0
+    );
+    init_independent_ledger(&repo, ".b3/ship/high.md", &main_sha);
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            r_str,
+            "--action",
+            "update",
+            "--ledger-path",
+            ".b3/ship/high.md",
+            "--unit-id",
+            "U01",
+            "--status",
+            "REVIEWED",
+            "--specialists",
+            "b3-architecture-reviewer",
+            "--receipt-path",
+            ".b3/ship/high.verify",
+        ])
+        .0,
+        0
+    );
+    let fx_high = tmp.path.join("fx-high");
+    write_premerge_fixtures(
+        &fx_high,
+        slug,
+        103,
+        "main",
+        &main_sha,
+        "main",
+        &main_sha,
+        &main_sha,
+        "feat/high",
+        &high_sha,
+        Some("success"),
+        "completed",
+        true,
+        "clean",
+        "api/endpoint.rs",
+        slug,
+        "pending",
+        0,
+    );
+    let (ch, outh, errh) = run_b3_env(
+        &[
+            "guard",
+            "merge-policy-check",
+            "--repo-root",
+            r_str,
+            "--pr-number",
+            "103",
+            "--ledger-path",
+            ".b3/ship/high.md",
+        ],
+        None,
+        &[
+            ("PATH", &mock_path),
+            ("B3_TEST_GH_DIR", fx_high.to_str().unwrap()),
+        ],
+        &["B3_GH_BIN"],
+    );
+    assert_eq!(ch, 1, "HIGH risk must block at max=LOW: {outh}\n{errh}");
+    assert!(
+        errh.contains("MERGE_BLOCKED: risk_exceeds_policy(risk=HIGH,max=LOW)"),
+        "{errh}"
+    );
+
+    // 1d. Policy tamper detection: modifying `.b3/policy.toml` on feature branch -> policy_modified_in_pr
+    git_in(&repo, &["checkout", "-qb", "feat/tamper", &main_sha]);
+    write_lf(
+        &repo.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"CRITICAL\"\nrequire_ci = false\nrequire_review = false\n",
+    );
+    git_in(&repo, &["add", "."]);
+    git_in(&repo, &["commit", "-qm", "tamper policy"]);
+    let (ct, outt, errt) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r_str,
+        "--local-only",
+        "--base-sha",
+        &main_sha,
+    ]);
+    assert_eq!(ct, 1, "tampered policy.toml must fail: {outt}\n{errt}");
+    assert!(errt.contains("policy_modified_in_pr"), "{errt}");
+
+    // 2. When trunk `.b3/policy.toml` sets `auto_merge_max_risk = "HIGH"` and gates are green, HIGH risk passes
+    let r_high_ok = tmp.path.join("r-toml-high-ok");
+    clone_seeded_git_repo(&r_high_ok);
+    write_lf(
+        &r_high_ok.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"HIGH\"\nallowed_target_branches = [\"main\"]\nrequire_ci = true\nrequire_review = true\n",
+    );
+    git_in(&r_high_ok, &["add", "."]);
+    git_in(&r_high_ok, &["commit", "-qm", "main high policy"]);
+    let mh_sha = git_in(&r_high_ok, &["rev-parse", "HEAD"]);
+    git_in(&r_high_ok, &["checkout", "-qb", "feat/api", &mh_sha]);
+    write_lf(&r_high_ok.join("api/endpoint.rs"), "pub fn api() {}\n");
+    git_in(&r_high_ok, &["add", "."]);
+    git_in(&r_high_ok, &["commit", "-qm", "api"]);
+    let rh_str = r_high_ok.to_str().unwrap();
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "verify-run",
+            "--repo-root",
+            rh_str,
+            "--verify-cmd",
+            "echo ok",
+            "--receipt-path",
+            ".b3/ship/high-ok.verify",
+        ])
+        .0,
+        0
+    );
+    init_independent_ledger(&r_high_ok, ".b3/ship/high-ok.md", &mh_sha);
+    assert_eq!(
+        run_b3(&[
+            "guard",
+            "review-ledger",
+            "--repo-root",
+            rh_str,
+            "--action",
+            "update",
+            "--ledger-path",
+            ".b3/ship/high-ok.md",
+            "--unit-id",
+            "U01",
+            "--status",
+            "REVIEWED",
+            "--specialists",
+            "b3-architecture-reviewer",
+            "--receipt-path",
+            ".b3/ship/high-ok.verify",
+        ])
+        .0,
+        0
+    );
+    let (cho, outho, errho) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        rh_str,
+        "--receipt-path",
+        ".b3/ship/high-ok.verify",
+        "--ledger-path",
+        ".b3/ship/high-ok.md",
+    ]);
+    assert_eq!(
+        cho, 0,
+        "HIGH risk with max=HIGH must pass: {outho}\n{errho}"
+    );
+    assert!(outho.contains("MERGE_AUTHORIZED: mode=local"), "{outho}");
+
+    // 3. Dual-format conflict (both `.b3/policy.toml` and `.b3/research-policy.json` exist)
+    let r_dual = tmp.path.join("r-dual");
+    clone_seeded_git_repo(&r_dual);
+    write_lf(
+        &r_dual.join(".b3/policy.toml"),
+        "auto_merge = \"disabled\"\n",
+    );
+    write_lf(
+        &r_dual.join(".b3/research-policy.json"),
+        r#"{"auto_merge":"disabled"}"#,
+    );
+    git_in(&r_dual, &["add", "."]);
+    git_in(&r_dual, &["commit", "-qm", "dual policy"]);
+    let (c_dual, out_dual, err_dual) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        r_dual.to_str().unwrap(),
+    ]);
+    assert_eq!(c_dual, 1, "{out_dual}\n{err_dual}");
+    assert!(
+        err_dual.contains("policy_conflict_dual_format"),
+        "{err_dual}"
+    );
+
+    // 4. Invalid `.b3/policy.toml` fails closed (`invalid_policy_toml`)
+    for bad_toml in [
+        "[section]\nauto_merge = \"disabled\"\n",
+        "unknown_key = true\n",
+        "auto_merge_max_risk = \"EXTREME\"\n",
+        "auto_merge = \"unterminated\n",
+    ] {
+        let r_inv = tmp.path.join("r-inv-toml");
+        let _ = b3::fs::remove_dir_tree_safely(&r_inv);
+        clone_seeded_git_repo(&r_inv);
+        write_lf(&r_inv.join(".b3/policy.toml"), bad_toml);
+        git_in(&r_inv, &["add", "."]);
+        git_in(&r_inv, &["commit", "-qm", "bad toml"]);
+        let (ci, outi, erri) = run_b3(&[
+            "guard",
+            "merge-policy-check",
+            "--repo-root",
+            r_inv.to_str().unwrap(),
+        ]);
+        assert_eq!(ci, 1, "{bad_toml}: {outi}\n{erri}");
+        assert!(erri.contains("invalid_policy_toml"), "{bad_toml}: {erri}");
+    }
+
+    // 5. SEC-1 regression: forged `risk_level=LOW` in ledger header cannot bypass `auto_merge_max_risk = "LOW"`
+    let r_tamper_led = tmp.path.join("r-tamper-led");
+    clone_seeded_git_repo(&r_tamper_led);
+    write_lf(
+        &r_tamper_led.join(".b3/policy.toml"),
+        "auto_merge = \"authorized\"\nauto_merge_max_risk = \"LOW\"\nrequire_ci = false\nrequire_review = true\n",
+    );
+    git_in(&r_tamper_led, &["add", "."]);
+    git_in(&r_tamper_led, &["commit", "-qm", "strict policy"]);
+    let base_t = git_in(&r_tamper_led, &["rev-parse", "HEAD"]);
+
+    git_in(&r_tamper_led, &["checkout", "-qb", "feat/sec1-tamper"]);
+    // Benign path name `src/app.rs` containing destructive SQL -> content-based HIGH/CRITICAL signal
+    write_lf(
+        &r_tamper_led.join("src/app.rs"),
+        "pub fn dangerous() { let _q = \"DROP TABLE users;\"; }\n",
+    );
+    git_in(&r_tamper_led, &["add", "src/app.rs"]);
+    git_in(&r_tamper_led, &["commit", "-qm", "destructive query"]);
+    let head_t = git_in(&r_tamper_led, &["rev-parse", "HEAD"]);
+
+    let rt_str = r_tamper_led.to_str().unwrap();
+    let (cli_t, _, _) = run_b3(&[
+        "guard",
+        "review-ledger",
+        "--action",
+        "init",
+        "--repo-root",
+        rt_str,
+        "--ledger-path",
+        ".b3/ship/tamper.md",
+        "--base-sha",
+        &base_t,
+        "--target-ref",
+        &head_t,
+        "--review-independence",
+        "INDEPENDENT",
+    ]);
+    assert_eq!(cli_t, 0);
+    let led_raw = fs::read_to_string(r_tamper_led.join(".b3/ship/tamper.md")).unwrap();
+    let tampered = led_raw.replace("risk_level=CRITICAL", "risk_level=LOW");
+    let tampered = tampered.replace("risk_level=HIGH", "risk_level=LOW");
+    write_lf(&r_tamper_led.join(".b3/ship/tamper.md"), &tampered);
+
+    let (cm_t, outm_t, errm_t) = run_b3(&[
+        "guard",
+        "merge-policy-check",
+        "--repo-root",
+        rt_str,
+        "--ledger-path",
+        ".b3/ship/tamper.md",
+    ]);
+    assert_eq!(
+        cm_t, 1,
+        "tampered risk_level header must fail: {outm_t}\n{errm_t}"
+    );
+    assert!(
+        errm_t.contains("LEDGER_STALE") || errm_t.contains("risk_exceeds_policy"),
+        "{errm_t}"
+    );
+}

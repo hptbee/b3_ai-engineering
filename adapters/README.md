@@ -24,7 +24,7 @@ flowchart TD
 
     out_cursor_g["Cursor Global: ~/.cursor/{skills,commands,agents,b3-user-rules.txt,b3-home}"]
     out_anti_g["Antigravity Global: ~/.gemini/config/plugins/b3-ai-engineering/ + ~/.gemini/config/skills.json"]
-    out_models["User-Owned Config: ~/.b3/models.md (seeded by install global, preserved on update/uninstall)"]
+    out_models["User-Owned Config: ~/.b3/config.toml (seeded by install/sync, preserved on update/uninstall)"]
 
     cmd_global --> out_cursor_g
     cmd_global --> out_anti_g
@@ -40,7 +40,7 @@ flowchart TD
         b_sha["SHA-256 Sidecars & Manifests: matching .b3-*-manifest* upgrades cleanly without --force"]
         b_fail["Fail-Closed Conflicts: legacy unmanaged or edited files trigger OWNERSHIP_UNKNOWN / UPDATE_CONFLICT (--force once)"]
         b_coex["Coexistence Guards: refuse Cursor roots alongside .agents/skills or .claude/skills unless --force"]
-        b_user["User-Owned Never Overwritten: ~/.b3/models.md, custom skills.json entries, unmanaged .cursor/rules/*.mdc"]
+        b_user["User-Owned Never Overwritten: ~/.b3/config.toml (B3_CONFIG_PERSONAL), custom skills.json entries, unmanaged .cursor/rules/*.mdc"]
     end
 
     cmd_global -.->|"enforces"| b_sha
@@ -95,7 +95,7 @@ b3 install product --product-root /path/to/product --host claude
 b3 install product --product-root /path/to/product --host antigravity
 ```
 
-Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), and `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, and `.b3/models.md` in `.gitignore` (supports `--b3-home <dir>`, `--dry-run`, and `--force`). Host specifics:
+Writes `{product}/.b3/home`, `{product}/AGENTS.md` (when missing), and `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, `.b3/config.toml`, and `.b3/models.md` in `.gitignore` (track `.b3/home` and `.b3/policy.toml`; supports `--b3-home <dir>`, `--dry-run`, and `--force`). Host specifics:
 - **cursor:** refuses existing `.agents/skills` or `.claude/skills` (unless `--force`); writes `.cursor/commands/*.md` (refreshed idempotently when unmodified) and `.cursor/README.md`.
 - **codex / antigravity:** writes gitignored flattened `.agents/skills/<name>` (core `skills/` + `adapters/command-skills/`); does not touch `.cursor/`.
 - **claude:** writes thin `CLAUDE.md` (`@AGENTS.md`, when missing), gitignored flattened `.claude/skills/<name>`, and gitignored `.claude/agents` → `{B3_HOME}/agents`; does not touch `.cursor/`.

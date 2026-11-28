@@ -16,4 +16,4 @@ Re-run attach after upgrading B3 (refreshes unmodified B3 command pointers idemp
 b3 install product --product-root /path/to/this-repo --host cursor
 ```
 
-Commit `.b3/home`, `.cursor/commands/`, and `.cursor/README.md`. Keep `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, and `.b3/models.md` local (gitignored).
+Commit `.b3/home`, `.b3/policy.toml`, `.cursor/commands/`, and `.cursor/README.md`. Keep `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, `.b3/config.toml`, and legacy `.b3/models.md` local (gitignored).

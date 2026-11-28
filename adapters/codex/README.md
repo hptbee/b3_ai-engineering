@@ -14,7 +14,7 @@
 | `commands/` + `adapters/command-skills/` | Exposed as `$b3-ship`, `$b3-research-ship`, `$b3-plan`, `$b3-implement`, `$b3-debug`, `$b3-research`, `$b3-audit`, `$b3-review`, `$b3-refactor`, `$b3-verify`, `$b3-review-loop`, `$b3-pr-resolve`, `$b3-pr-reply`, `$b3-pr-comment` in `.agents/skills/<name>` + prompt routing |
 | `agents/*.md` | Role prompt source for delegated reviewer/fixer/security/architecture/performance work |
 
-Review-loop model slots stay host-configured (`review-loop/models.md`). Do not hard-code vendor model names in skill bodies.
+Review-loop model slots stay host-configured (`review-loop/models.md`, `~/.b3/config.toml`). Do not hard-code vendor model names in skill bodies.
 
 ## Setup
 
@@ -37,7 +37,7 @@ b3 sync --host codex --verify-only
 b3 install product --product-root /path/to/product --host codex
 ```
 
-Writes `.b3/home`, thin `AGENTS.md` (when missing), `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, `.b3/models.md`, and `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `b3-ship`).
+Writes `.b3/home`, thin `AGENTS.md` (when missing), `.b3/ship/`, `.b3/research-ship/`, `.b3/pr-feedback/`, `.b3/config.toml`, `.b3/models.md`, and `.agents/skills` in `.gitignore`, and a gitignored flattened `.agents/skills/<name>` index (one junction/symlink per B3 skill plus command skills such as `b3-ship`).
 
 ## Command and role routing
 

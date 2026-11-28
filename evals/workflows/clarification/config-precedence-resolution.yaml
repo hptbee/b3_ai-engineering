@@ -2,7 +2,7 @@ id: clarify-config-precedence-resolution-013
 artifact: workflows/references/clarification-gate.md
 intent: Per-invocation, project, personal, and default planning preferences resolve per field with strict precedence and partial merge
 scenario: |
-  ~/.b3/models.md (personal) sets (clarification_gate: true, understanding_threshold: 90) and <project>/.b3/models.md sets only (clarification_gate: false)
+  ~/.b3/config.toml (personal, or B3_CONFIG_PERSONAL) sets (clarification_gate = true, understanding_threshold = 90) and <project>/.b3/config.toml sets only (clarification_gate = false)
   Field-level precedence (invocation > project > personal > built-in defaults (true, 96)) merges partial overrides to effective (false, 90), and an explicit per-invocation directive overrides either field without mutating files
 expected_outcome: PASS
 failure_mode: whole-file-override-drops-personal-fields-or-incorrect-precedence
