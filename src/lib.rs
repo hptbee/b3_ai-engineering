@@ -6,6 +6,7 @@ pub mod fs;
 pub mod git;
 pub mod guard;
 pub mod json;
+pub mod planning_config;
 pub mod pr;
 pub mod process;
 

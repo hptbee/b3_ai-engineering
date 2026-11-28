@@ -1,0 +1,9 @@
+id: clarify-enabled-exact-96-proceeds-003
+artifact: workflows/references/clarification-gate.md
+intent: Understanding score of exactly 96% proceeds autonomously when no material or critical ambiguity remains
+scenario: |
+  clarification_gate is true and understanding_threshold is 96
+  Grounded assessment reaches exactly 96% with only minor reversible implementation details left to repository conventions
+expected_outcome: PASS
+failure_mode: off-by-one-threshold-rejection-at-96-percent
+notes: Gate condition is understanding >= understanding_threshold and zero unresolved material or critical ambiguities

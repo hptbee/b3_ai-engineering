@@ -57,8 +57,8 @@ flowchart TD
     Resolve -->|"New requirement / plan"| NewRun["b3 guard new-run (.b3/ship/runs/run_id + CURRENT)"]
 
     NewRun --> PreFlight["Preflight: record initial_dirty_paths, DirtyDigests, baseline cmds (lazy at run_base_sha only on Verify failure; else NOT_RUN(verify_green))"]
-    PreFlight --> Plan["Plan (master-plan.md): Invariants, AC1..ACn, Shared Contracts"]
-    Plan --> ReadyCheck["Select Ready Tasks (pending + all depends_on completed)"]
+    PreFlight --> Plan["Plan (master-plan.md + clarification-gate.md >=96%): Invariants, AC1..ACn, Shared Contracts"]
+    Plan --> ReadyCheck["Select Ready Tasks (pending + all depends_on completed; isolate only blocked ambiguous units)"]
     Resume --> ReadyCheck
 
     ReadyCheck --> Scope["Scope (JIT per task): Context Packet + optional detailed matrices + Readiness Gate"]
@@ -121,7 +121,7 @@ flowchart TD
 
 Subagent logical aliases are described in [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) and are only requested when the host supports custom spawn names. Host-returned IDs remain authoritative for resume.
 
-`b3 guard check-wave --partition` computes continuous `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). Subagents never talk directly to each other and never edit `read_only_deps`, `--protected-paths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `--worker-changes` or Git-proven `VERIFIED_PER_WORKER` via `--worker-roots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
+`b3 guard check-wave --partition` computes continuous `wave|N|...` sub-waves across four isolation modes (`SHARED_READ_ONLY`, `SHARED_DISJOINT_WRITES`, `ISOLATED_WRITES`, `SEQUENTIAL`). On partial ambiguity ([`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md)), only affected units are held while safe independent `SHARED_READ_ONLY` discovery and unblocked units continue without speculative edits. Subagents never talk directly to each other and never edit `read_only_deps`, `--protected-paths`, or `.b3/` state. Parent acts as the sole Hub, verifies per-worker ownership provenance (`CALLER_ATTRIBUTED` via `--worker-changes` or Git-proven `VERIFIED_PER_WORKER` via `--worker-roots`), resumes the owning `impl_agent` on delta findings, and evaluates provider-neutral `merge-policy-check` when governed merge gates apply.
 
 ```mermaid
 sequenceDiagram
@@ -306,7 +306,7 @@ The system separates **Deep reasoning**, **Standard execution**, **Fast surgical
 
 ## Related canonical documents
 
-- Core `/b3-ship` & `/b3-research-ship` procedures & PR template: [`../workflows/ship.md`](../workflows/ship.md), [`../workflows/research-ship.md`](../workflows/research-ship.md), [`../workflows/references/pr-template.md`](../workflows/references/pr-template.md)
+- Core `/b3-ship` & `/b3-research-ship` procedures & PR template: [`../workflows/ship.md`](../workflows/ship.md), [`../workflows/research-ship.md`](../workflows/research-ship.md), [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md), [`../workflows/references/pr-template.md`](../workflows/references/pr-template.md)
 - Core `/b3-review-loop` procedure: [`../review-loop/strategy.md`](../review-loop/strategy.md)
 - Core `/b3-review` & PR feedback skills: [`../skills/engineering/code-review/SKILL.md`](../skills/engineering/code-review/SKILL.md), [`../skills/engineering/pr-feedback/SKILL.md`](../skills/engineering/pr-feedback/SKILL.md), [`../skills/engineering/code-review/references/review-template.md`](../skills/engineering/code-review/references/review-template.md), [`../skills/engineering/code-review/references/github-pr-review.md`](../skills/engineering/code-review/references/github-pr-review.md)
 - Deterministic CLI reference: [`../scripts/README.md`](../scripts/README.md)

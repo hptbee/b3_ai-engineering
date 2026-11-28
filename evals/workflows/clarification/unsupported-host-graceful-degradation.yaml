@@ -1,0 +1,9 @@
+id: clarify-unsupported-host-graceful-014
+artifact: docs/model-preferences.md
+intent: Unsupported hosts or malformed/missing preference files degrade gracefully to safe defaults without blocking work
+scenario: |
+  A host lacks an explicit per-invocation flag mechanism or ~/.b3/models.md contains a malformed planning block
+  B3 falls back gracefully to built-in defaults (clarification_gate: true, understanding_threshold: 96) with a warning and never mutates host settings or blocks execution
+expected_outcome: PASS
+failure_mode: malformed-config-or-host-gap-crashes-workflow
+notes: Mirrors B3 model preference portability across Cursor, Codex, Claude Code, and Antigravity

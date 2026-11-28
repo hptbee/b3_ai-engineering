@@ -1,0 +1,9 @@
+id: clarify-enabled-below-96-asks-002
+artifact: workflows/references/clarification-gate.md
+intent: Enabled clarification gate asks batched material questions when requirement understanding is below 96%
+scenario: |
+  clarification_gate is true and understanding_threshold is 96
+  After exhausting local code/doc/config discovery, understanding remains at 85% due to conflicting or incomplete scope boundaries
+expected_outcome: BLOCKED
+failure_mode: speculative-implementation-below-threshold
+notes: Agent batches independent material questions with options and recommended defaults before editing affected targets

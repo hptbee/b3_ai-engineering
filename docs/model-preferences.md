@@ -36,6 +36,44 @@ B3 never claims a model switch occurred unless the host runtime actually confirm
 
 **Future runtime boundary:** These Markdown files are advisory role preferences, not a universal model API, pricing service, or guaranteed cost router. A future external coding-agent CLI must expose and confirm the capabilities it actually supports; B3 does not assume every host can switch models per subagent or report tokens. Keep private provider configuration and credentials outside the public repository. See the [roadmap](roadmap.md) and [evaluation method](evaluation.md).
 
+## Optional `planning:` Clarification Gate Settings
+
+The same preference files (`~/.b3/models.md` / `B3_MODELS_PERSONAL` and `<project>/.b3/models.md`) also host optional `planning:` settings for [`workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md):
+
+- **Precedence:** `per-invocation override > <project>/.b3/models.md > ~/.b3/models.md (B3_MODELS_PERSONAL) > built-in defaults (clarification_gate: true, understanding_threshold: 96)`.
+- Missing, partial, or malformed files fall back silently to built-in defaults (`true`, `96`) across all hosts.
+- Disabling `clarification_gate` only relaxes routine ambiguity prompts; it **never** bypasses security boundaries, required user authorization, research governance, protected paths, destructive safeguards, or merge authorization.
+
+### Enabled (default behavior)
+
+```yaml
+planning:
+  clarification_gate: true
+  understanding_threshold: 96
+```
+
+### Disabled (document reversible assumptions instead of routine prompts)
+
+```yaml
+planning:
+  clarification_gate: false
+```
+
+### Project Override (`<project>/.b3/models.md`)
+
+```yaml
+planning:
+  clarification_gate: true
+  understanding_threshold: 98
+```
+
+### Per-Invocation Override (in prompt or command invocation)
+
+```text
+/b3-ship clarification_gate: false -- implement the pagination endpoint using repo conventions
+```
+(Or raise/lower threshold for one run: `understanding_threshold: 90`.)
+
 ## Upgrading from Earlier PR #21 JSON Config
 
 Earlier PR #21 drafts used `~/.b3/models.local.json` or `<project>/.b3/models.local.json`. B3 does not delete or overwrite existing JSON files automatically:

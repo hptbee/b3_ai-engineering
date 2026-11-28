@@ -20,17 +20,17 @@ Write an executable plan without inventing scope, optimizing **verified independ
    - **Low-risk:** compact (`files`, ACs, tasks, checks).
    - **High-risk** (ambiguity, contract/schema/authz changes, concurrency/retry/state, cache/write invalidation, cross-module deps): capture shared contracts, failure modes, and write/invalidation paths before breakdown.
 4. **Cohesive sizing, 3-way dependencies & critical path:** Parent synthesizes 1 plan:
-   - **Cohesive sizing & shared prerequisites:** Treat `>~800 LOC`, `>2` areas, or unrelated subsystems as a practical split heuristic, not mandatory fragmentation. Extract small shared types/interfaces/schema contracts early as compact prerequisites so downstream tasks unlock in parallel; avoid oversized foundational blockers and tiny overhead-dominated slices whose dispatch/verification cost exceeds inline execution. Keep a module and its paired unit tests together unless test scaffolding is genuinely independent.
+   - **Cohesive sizing & shared prerequisites:** Treat `>~800 LOC`, `>2` areas, or unrelated subsystems as a split heuristic, not mandatory fragmentation. Extract small shared contracts early so downstream tasks unlock in parallel; avoid oversized blockers or tiny slices where dispatch exceeds inline cost. Keep modules paired with their unit tests unless test scaffolding is independent.
    - **3-way dependency classification (existing plan fields — no extra schema):**
      - *Hard dependency (`depends_on`):* `B` needs `A`'s verified output before starting; never add fake sequential `depends_on` for ordering comfort.
      - *Read/write conflict (`files` + `read_only_deps`):* concurrent writes/reads would race (`check-wave --partition` orders/isolates them without fake `depends_on`).
      - *Integration constraint:* outputs require serialized commit, single-writer manifest/ledger update, or isolated-worktree integration before downstream use.
    - **Critical-path ordering:** Order ready tasks by downstream tasks unlocked, grounded complexity/expected runtime (no speculative telemetry), and risk/isolation cost so critical-path blockers start first.
 5. **Per-task contract:** intent, `files`/`read_only_deps`/contracts, dependencies, testable `AC1..ACn`, and exact check command/probe. Resolve decisions upfront (no `TBD` or deferred error handling).
-6. **Readiness & stop:** verify 1:1 AC-to-check mapping, reuse checked, simplest-correct fit, and flag/ask contradictions or missing deps before coding. **Stop** unless asked to implement.
+6. **Readiness & stop:** confirm clarity gate passes (`workflows/references/clarification-gate.md`), 1:1 AC-to-check mapping, reuse checked, simplest-correct fit, and flag/ask contradictions or missing deps before coding. **Stop** unless asked to implement.
 
 ## Links, failure handling & provenance
 
-- Execution: `skills/engineering/problem-solving/SKILL.md` (`workflows/feature-implementation.md`); `/b3-ship` uses this skill once for `master-plan.md`.
+- Execution: `skills/engineering/problem-solving/SKILL.md` (`workflows/feature-implementation.md`); clarification gate: `workflows/references/clarification-gate.md`; `/b3-ship` uses this skill once for `master-plan.md`.
 - Conflict → record & ask; unknown stack → read repo (never invent parallel architecture); aspirations without checks → incomplete.
 - ADAPT `obra/superpowers` `writing-plans`; REJECT `docs/superpowers/plans` paths and mandatory subagents.

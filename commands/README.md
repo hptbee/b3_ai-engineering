@@ -33,3 +33,4 @@ Canonical commands live here (`commands/`). Cursor exposes them via `.cursor/com
 
 - A command selects skills and maybe a workflow.
 - Do not add a command that is only an alias of a skill name unless users invoke it explicitly.
+- All 14 commands (and future commands) inherit [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md) and the proportional clarification gate (`rules/engineering-principles.md` → [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md)), scaled to command intent and risk without turning lightweight commands into heavyweight planning ceremonies.

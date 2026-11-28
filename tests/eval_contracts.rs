@@ -72,6 +72,24 @@ const EXPECTED_NEW_ORCHESTRATION_EVALS: &[&str] = &[
     "evals/commands/daily-commands-canonical-wrapper-parity.yaml",
 ];
 
+const EXPECTED_CLARIFICATION_EVALS: &[&str] = &[
+    "evals/workflows/clarification/enabled-clear-proceeds.yaml",
+    "evals/workflows/clarification/enabled-below-96-asks.yaml",
+    "evals/workflows/clarification/enabled-exact-96-proceeds.yaml",
+    "evals/workflows/clarification/critical-ambiguity-blocks-regardless-of-score.yaml",
+    "evals/workflows/clarification/discoverable-info-no-question.yaml",
+    "evals/workflows/clarification/disabled-mode-documented-assumptions.yaml",
+    "evals/workflows/clarification/disabled-mode-preserves-mandatory-auth.yaml",
+    "evals/workflows/clarification/partial-ambiguity-parallel-safe-workstreams.yaml",
+    "evals/workflows/clarification/user-clarification-releases-dependents.yaml",
+    "evals/workflows/clarification/execution-reassessment-targeted-invalidation.yaml",
+    "evals/workflows/clarification/simple-task-lightweight.yaml",
+    "evals/workflows/clarification/all-commands-inherit-policy.yaml",
+    "evals/workflows/clarification/config-precedence-resolution.yaml",
+    "evals/workflows/clarification/unsupported-host-graceful-degradation.yaml",
+    "evals/workflows/clarification/no-duplicate-clarification-implementation.yaml",
+];
+
 fn normalize_lf(raw: &str) -> String {
     raw.replace("\r\n", "\n")
 }
@@ -580,18 +598,21 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
         }
     }
 
-    for expected_rel in EXPECTED_NEW_ORCHESTRATION_EVALS {
+    for expected_rel in EXPECTED_NEW_ORCHESTRATION_EVALS
+        .iter()
+        .chain(EXPECTED_CLARIFICATION_EVALS.iter())
+    {
         let full = root.join(expected_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         if !full.is_file() {
             errors.push(format!(
-                "missing required semantic orchestration eval: {expected_rel}"
+                "missing required semantic orchestration/clarification eval: {expected_rel}"
             ));
         }
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 338,
-        "expected >= 338 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 353,
+        "expected >= 353 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(
@@ -1645,16 +1666,17 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
     assert!(collect_errs.is_empty(), "collect errors: {collect_errs:?}");
     assert_eq!(
         all_yaml.len(),
-        338,
-        "expected 338 total YAML fixtures across evals/, found {}",
+        353,
+        "expected 353 total YAML fixtures across evals/, found {}",
         all_yaml.len()
     );
 
     let evals_readme = read_lf("evals/README.md");
     assert!(
-        evals_readme.contains("`338` YAML")
+        evals_readme.contains("`353` YAML")
+            && evals_readme.contains("| `workflows/clarification/` | 15 |")
             && evals_readme.contains("| `workflows/orchestration/` | 22 |"),
-        "evals/README.md inventory out of sync with 338 total / 22 workflows/orchestration fixtures"
+        "evals/README.md inventory out of sync with 353 total / 15 workflows/clarification / 22 workflows/orchestration fixtures"
     );
 
     // 5. `scripts/README.md` flag documentation & end-to-end `run_b3` smoke check on
@@ -1728,4 +1750,94 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
             "expected '{expected}' in check-wave output:\n{out}"
         );
     }
+}
+
+#[test]
+fn clarification_gate_canonical_contract_and_no_duplication() {
+    let root = repo_root();
+
+    let rule_raw = fs::read_to_string(root.join("rules/engineering-principles.md"))
+        .expect("read rules/engineering-principles.md");
+    assert!(
+        rule_raw.contains("workflows/references/clarification-gate.md") && rule_raw.contains("96%"),
+        "rules/engineering-principles.md must embed the proportional >=96% invariant pointing to clarification-gate.md"
+    );
+
+    let contract = fs::read_to_string(root.join("workflows/references/clarification-gate.md"))
+        .expect("read workflows/references/clarification-gate.md");
+    for required_fragment in [
+        "clarification_gate: true",
+        "understanding_threshold: 96",
+        "7-Step Global Planning Contract",
+        "10 Understanding Assessment Dimensions",
+        "clarification_gate: false",
+        "Maximum Safe Parallelism",
+        "Reassessment During Execution",
+        "Proportional System-Wide Inheritance",
+        "Graceful host degradation",
+    ] {
+        assert!(
+            contract.contains(required_fragment),
+            "workflows/references/clarification-gate.md missing '{required_fragment}'"
+        );
+    }
+
+    for rel in [
+        "workflows/references/dispatch-naming.md",
+        "skills/engineering/planning/SKILL.md",
+        "workflows/ship.md",
+        "workflows/research-ship.md",
+        "workflows/feature-implementation.md",
+    ] {
+        let raw = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+        assert!(
+            raw.contains("clarification-gate.md"),
+            "{rel} must cross-link clarification-gate.md"
+        );
+    }
+
+    let models_example = fs::read_to_string(root.join("config/models.example.md"))
+        .expect("read config/models.example.md");
+    assert!(
+        models_example.contains("planning:")
+            && models_example.contains("clarification_gate: true")
+            && models_example.contains("understanding_threshold: 96"),
+        "config/models.example.md missing canonical planning config"
+    );
+    let parsed = b3::planning_config::parse_planning_config_from_markdown(&models_example)
+        .expect("parse config/models.example.md")
+        .expect("planning section in config/models.example.md");
+    assert_eq!(parsed.clarification_gate, Some(true));
+    assert_eq!(parsed.understanding_threshold, Some(96));
+
+    // Ensure no command or command-skill duplicates the clarification rubric.
+    for name in EXPECTED_COMMANDS {
+        for path in [
+            root.join("commands").join(format!("{name}.md")),
+            root.join("adapters/command-skills")
+                .join(name)
+                .join("SKILL.md"),
+        ] {
+            let raw = fs::read_to_string(&path).expect("read command/skill file");
+            assert!(
+                !raw.contains("understanding_threshold")
+                    && !raw.contains("10 Understanding Assessment Dimensions"),
+                "{} must not duplicate clarification rubric",
+                rel_slash(&root, &path)
+            );
+        }
+    }
+
+    // Ensure no extra agent roles were added (still 5 canonical b3-*.md roles).
+    let mut role_count = 0usize;
+    for entry in fs::read_dir(root.join("agents")).expect("read agents/") {
+        let p = entry.expect("agent entry").path();
+        if p.is_file()
+            && p.extension().and_then(|e| e.to_str()) == Some("md")
+            && p.file_name().and_then(|n| n.to_str()) != Some("README.md")
+        {
+            role_count += 1;
+        }
+    }
+    assert_eq!(role_count, 5, "expected 5 canonical agent roles");
 }
