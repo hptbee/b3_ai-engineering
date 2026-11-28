@@ -674,17 +674,14 @@ pub fn test_no_reparse_segments(root: &Path, rel_slash: &str) -> bool {
 }
 
 fn is_reparse_or_symlink_meta(meta: &fs::Metadata) -> bool {
-    if meta.file_type().is_symlink() {
-        return true;
-    }
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        (meta.file_attributes() & 0x0400) != 0
+        meta.file_type().is_symlink() || (meta.file_attributes() & 0x0400) != 0
     }
     #[cfg(not(windows))]
     {
-        false
+        meta.file_type().is_symlink()
     }
 }
 
