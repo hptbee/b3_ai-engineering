@@ -86,6 +86,7 @@ flowchart TD
 - `timeout-minutes`: explicit per-job timeouts (`ci.yml`: `fast-gate: 10`, `verify: 15`, `ci-gate: 5`; `release.yml`: `build: 15`, `package: 10`, `publish: 10`).
 - `release.yml`: runs on tags `v*.*.*`, `workflow_dispatch`, or PRs touching `Cargo.toml`, `Cargo.lock`, `src/**`, `scripts/bootstrap-b3.*`, or `.github/workflows/release.yml` (skipped on docs-only PRs); `publish` runs only on `push` to `refs/tags/v*`.
 - **Local Preflight**: Run `.\scripts\ci-preflight.ps1` (Windows) or `./scripts/ci-preflight.sh` (Unix) before pushing (`-Fast`/`--fast` runs `--lib --test eval_contracts`).
+- **Verify Receipt Invalidation & CI/Local Parity**: `src/guard/verify.rs` (`is_dependency_or_config_manifest` / `manifest_git_pathspecs`) tracks common project lint, formatter, ignore, workspace, type-checker, and dead-code configs (such as `clippy.toml`, `eslint.config.*`, `.eslintignore`, `biome.json`, `ruff.toml`, `.golangci.yml`, `knip.json`, `tsconfig.*.json`, `pnpm-workspace.yaml`, `Makefile`, `.npmrc`) alongside package manifests as **supplementary protection** (`VERIFY_STALE`). Parent still explicitly passes imported custom configs/scripts in `--relevant-paths` or omits `--relevant-paths` (`ALL`) when full input closure cannot be proven. Project-native static analysis stays `WORKFLOW_ONLY` ([`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md)), keeping CI/local parity clean with `0` new Cargo or heavy CI dependencies.
 
 ## 4. Migration & Consolidation Summary
 

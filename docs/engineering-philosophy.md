@@ -48,6 +48,7 @@ In practice:
 - **Adaptive concurrency:** Scale active workers dynamically by available independent work, context budget, host limits, CPU/memory/rate limits, and cost/throughput benefit rather than fixed `3`/`4` worker caps.
 - **4 isolation modes (least-expensive-safe):** Select the lightest safe mode (`SHARED_READ_ONLY` for read-only analysis/review without worktrees, `SHARED_DISJOINT_WRITES` in one worktree only when strictly disjoint and parent-validated, `ISOLATED_WRITES` via verified worktrees when risk or side effects require it, or `SEQUENTIAL` fallback) — never create worktrees for read-only agents or claim stronger isolation than the host enforces.
 - **Native-first `b3` CLI & canonical ownership:** Execute deterministic 0-token checks via native `b3` (`b3 guard`, `b3 pr`, `b3 sync`, `b3 install`, `b3 config`, `b3 context measure`) and enforce single-source ownership: workers execute bounded units without nested spawning, while the parent orchestrator owns shared state, integration, commits, and external PR mutations.
+- **Deterministic tool offloading:** Never spend AI tokens on checks deterministic tools perform reliably — discover and run project-native linters, typecheckers, SAST, dead-code/unused-symbol checks, and scoped safe auto-fixes before verification and AI review using `REUSE` → `FALLBACK` → authorized `BOOTSTRAP` progression ([`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md)).
 
 ## Outcome Before Infrastructure
 
@@ -63,4 +64,5 @@ In practice:
 - **Subagent dispatch & optional model selection:** [`../workflows/references/dispatch-naming.md`](../workflows/references/dispatch-naming.md).
 - **Typed configuration & governance policy:** [`configuration.md`](configuration.md) (5-layer `config.toml` precedence, adaptive model routing, trunk-only `.b3/policy.toml`).
 - **Proportional clarification gate (`96%` heuristic default):** [`../workflows/references/clarification-gate.md`](../workflows/references/clarification-gate.md).
+- **Adaptive static analysis & mechanical offloading:** [`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md).
 - **Proposed measurement methodology:** [`evaluation.md`](evaluation.md).

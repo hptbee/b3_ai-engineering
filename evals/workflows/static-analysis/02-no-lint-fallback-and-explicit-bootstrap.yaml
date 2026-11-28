@@ -1,0 +1,9 @@
+id: static-analysis-no-lint-fallback-and-explicit-bootstrap-002
+artifact: workflows/references/static-analysis.md
+intent: Missing lint configuration triggers FALLBACK to toolchain typecheck plus B3 deterministic guards with zero config churn, while BOOTSTRAP requires explicit task or user authorization
+scenario: |
+  A minimal repository has no .eslintrc, ruff.toml, or clippy.toml configuration
+  Workflow uses FALLBACK (compiler/typecheck plus b3 guard mechanical-check and symbol-check) without creating speculative lint config files; BOOTSTRAP of a new lint config occurs only when explicitly authorized by the task or user
+expected_outcome: PASS
+failure_mode: unsolicited-lint-config-churn-or-missing-fallback
+notes: Preserves minimal-change discipline while keeping deterministic coverage

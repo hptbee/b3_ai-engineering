@@ -21,7 +21,7 @@ Research-first delivery complementing [`ship.md`](ship.md); reads product profil
 Load [templates](references/research-ship-templates.md) on create; [gates](references/research-ship-gates.md) at E/H–K; [`references/context-routing.md`](references/context-routing.md) on demand for repo/G (`repo-evidence` only, [gates](references/research-ship-gates.md) §2).
 
 ### A. Preflight
-- **Out:** `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo), `PRODUCT_ROOT`, branch/HEAD, open PR on GitHub (`gh pr list --head <branch>`), `.b3/{research-profile.md,policy.toml}`, `--protected-paths`, `initial_dirty_paths`, `{RUN_DIR}` (`b3 guard new-run --namespace research-ship --slug <slug>`).
+- **Out:** `B3_HOME` (`B3_HOME` env → `.b3/home` → host global fallback → current repo), `PRODUCT_ROOT`, branch/HEAD, open PR on GitHub (`gh pr list --head <branch>`), `.b3/{research-profile.md,policy.toml}`, `--protected-paths`, `initial_dirty_paths`, Parent-once [static-analysis](references/static-analysis.md) (when checks/impl apply), `{RUN_DIR}` (`b3 guard new-run --namespace research-ship --slug <slug>`).
 - **Gate:** preserve `research/`, decisions, evidence; run `b3 guard check-worktree --expected-root <root> --require-isolated` ONLY on `ISOLATED_WRITES` (never block `research-only`/`SHARED_READ_ONLY` in Phase A; fall back to `SEQUENTIAL` when safe per [dispatch](references/dispatch-naming.md)); missing `B3_HOME`, unsafe isolated worktree failure, or dirty overlap → `BLOCKED`.
 
 ### B. Research Planning
@@ -48,7 +48,7 @@ Load [templates](references/research-ship-templates.md) on create; [gates](refer
 - **Gate:** enforce `TASK_VERIFIED != DEPENDENCY_OUTPUT_AVAILABLE` (`output_ready` + `--verified-dirty-paths` in `SHARED_DISJOINT_WRITES`, **never** `git commit` in a shared WT while peer shared-WT writers remain active; `integrated` in Parent before starting dependents in `ISOLATED_WRITES`, without rebasing/mutating active peer WTs; 0 worker Git ops or nested subagents). `b3 guard mechanical-check` passes `--worker-bases` with `--worker-roots` when Parent `HEAD` advanced while peer WTs ran (`UNVERIFIED_COMBINED_ONLY` on ordinary disjoint tasks, `CALLER_ATTRIBUTED` via `--worker-changes`, `VERIFIED_PER_WORKER` via `--worker-roots`; escalate to `ISOLATED_WRITES`/`SEQUENTIAL` when strict proof is required). `WAVE_CONFLICT`/`WAVE_SEQUENTIAL`/`malformed_wave_output` → `SEQUENTIAL`; `WAVE_BASE_MISMATCH` → `BLOCKED`.
 
 ### H. Technical Verification & Independent Review / Editorial Gates
-- **Out:** separate **Research**, **Engineering**, and **Editorial / Authority** verdicts (`b3-reviewer.md`, specialists, [gates](references/research-ship-gates.md) §2). Green tests != source pass; fix blockers before Phase I.
+- **Out:** separate **Research**, **Engineering**, and **Editorial / Authority** verdicts (`b3-reviewer.md`, specialists, [gates](references/research-ship-gates.md) §2); offload static lint/guards pre-review per `static-analysis.md`. Green tests != source pass; fix blockers before Phase I.
 
 ### I. PR Lifecycle (Branch Readiness & Optional PR Publishing)
 - **Out:** reconciled target (`main`, `develop`, `release/*`, `feature/*`, stacked) + `{RUN_DIR}/pr-body.md` (+ 1 PR on GitHub).

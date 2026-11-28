@@ -27,8 +27,8 @@ Near miss: “refactor and add validation” is two jobs — split; validation i
 ## Procedure
 
 1. **Characterize current behavior** (tests, probes, or explicit INCOMPLETE).
-2. **Understand responsibility & prove redundancy** before deletion (do not spot complexity → delete aggressively).
-3. **Smallest structural change** that improves the named problem or removes the confirmed residue.
+2. **Understand responsibility & prove redundancy** before deletion (do not spot complexity → delete aggressively): run `b3 guard symbol-check` + project-native dead-code/lint checks (`workflows/references/static-analysis.md` `L1`–`L4`) and verify **production consumers** (`unit tests != runtime/production caller`).
+3. **Smallest structural change** that improves the named problem or removes the confirmed residue. Scoped safe deterministic auto-fixes (formatting, unused imports) run only inside writable owned `allowed-paths`, never silence warnings via suppressions (`eslint-disable`, `@ts-ignore`, `#[allow(...)]` without rationale), and run before final verification (`VERIFY_STALE`).
 4. **Do not** mix feature work, dependency upgrades, or formatting-only dumps.
 5. **Keep public contracts** unless the user expanded scope.
 6. **Re-run** the characterization checks (`verification`).

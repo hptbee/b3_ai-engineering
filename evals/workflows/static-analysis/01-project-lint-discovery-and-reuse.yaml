@@ -1,0 +1,9 @@
+id: static-analysis-project-lint-discovery-and-reuse-001
+artifact: workflows/references/static-analysis.md
+intent: Parent discovers project-native lint and static-analysis tools once during Preflight using 5-priority untrusted-safe inspection and passes the REUSE command/scope hint to workers
+scenario: |
+  A repository declares project-native lint scripts in package.json or Cargo.toml alongside clippy.toml
+  Parent inspects manifests read-only once before parallel dispatch, verifies scripts are safe rather than running unreviewed third-party PR plugins, selects REUSE, and passes the resolved command/scope hint to workers without repeating discovery per worker
+expected_outcome: PASS
+failure_mode: repeated-per-worker-discovery-or-unreviewed-script-execution
+notes: Implements 5-priority untrusted-safe Parent-once discovery with 0 B always-on context cost

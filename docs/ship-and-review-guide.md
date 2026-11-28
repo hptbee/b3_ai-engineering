@@ -56,7 +56,7 @@ flowchart TD
     Resolve -->|"resume / unfinished run"| Resume["Scenario C: ship-resume.md (Git ancestry + verify-check)"]
     Resolve -->|"New requirement / plan"| NewRun["b3 guard new-run (.b3/ship/runs/run_id + CURRENT)"]
 
-    NewRun --> PreFlight["Preflight: record initial_dirty_paths, DirtyDigests, baseline cmds (lazy at run_base_sha only on Verify failure; else NOT_RUN(verify_green))"]
+    NewRun --> PreFlight["Preflight: record initial_dirty_paths, DirtyDigests, baseline cmds + static analysis discovery (lazy at run_base_sha only on Verify failure; else NOT_RUN(verify_green))"]
     PreFlight --> Plan["Plan (Parent resolves config.toml once, field-level precedence; heuristic clarification-gate.md ~96%): Invariants, AC1..ACn, Shared Contracts"]
     Plan --> ReadyCheck["Select Ready Tasks (pending + all depends_on completed; hold A + dependents B,C,D while continuing independent E / SHARED_READ_ONLY F)"]
     Resume --> ReadyCheck
@@ -83,7 +83,7 @@ flowchart TD
     ReadWave --> Hub["Single-Writer Parent Hub: consolidate worker uncertainties (no worker rubric reload), release clarified dependents immediately, integrate wave"]
     SharedWave --> Hub
     IsoWave --> Hub
-    InlineTask --> TaskVerify["Verify: b3 guard verify-run (writes b3-verify-v1 receipt; lazy baseline at run_base_sha only on failure)"]
+    InlineTask --> TaskVerify["Static Analysis + Verify: scoped safe auto-fix -> b3 guard verify-run (writes b3-verify-v1 receipt; lint/formatter config changes -> VERIFY_STALE; lazy baseline at run_base_sha only on failure)"]
     SeqImpl --> TaskVerify
     Hub --> TaskVerify
 
@@ -114,6 +114,15 @@ flowchart TD
     MergeGate -->|"Yes"| PolicyCheck["b3 guard merge-policy-check (PR_READY / LOCAL_ELIGIBLE_ONLY / MERGE_AUTHORIZED / MERGE_BLOCKED / PROVIDER_UNAVAILABLE)"]
     PolicyCheck --> Outcome
 ```
+
+### Adaptive Static Analysis & Mechanical Offloading
+
+To avoid spending AI review tokens on deterministic defects while keeping `0` new guard modules, `0` new public commands, `0` new agent roles, and `0` new Cargo dependencies, workflows follow the on-demand contract in [`../workflows/references/static-analysis.md`](../workflows/references/static-analysis.md) (`WORKFLOW_ONLY`, never inside `b3 hook` Tier 0/1 fast paths):
+
+- **Preflight discovery (`REUSE` → `FALLBACK` → authorized `BOOTSTRAP`):** Discover existing project-native linters, formatters, typecheckers, SAST, and dead-code analyzers from manifests and CI before inventing ad-hoc commands.
+- **Scoped safe auto-fix before `verify-run`:** Apply safe auto-fixes strictly within owned task paths *before* `b3 guard verify-run` so `b3-verify-v1` receipts hash the cleaned state; edits to lint, formatter, type-checker, or dead-code configs (`clippy.toml`, `eslint.config.*`, `biome.json`, `ruff.toml`, `.golangci.yml`, `knip.json`, `tsconfig.*.json`, etc.) invalidate scoped receipts as `VERIFY_STALE`.
+- **Baseline regression attribution:** Compare failures against `run_base_sha` (`baseline_status`) to separate pre-existing repo issues from task-introduced regressions without hiding newly introduced defects.
+- **Mechanical review offloading:** Run project-native dead-code/unused-symbol checks (4-level dead-code + production-consumer verification) alongside `mechanical-check` and `symbol-check` so deterministic noise is fixed or attributed before AI reviewers focus on architecture, invariants, security, and business logic.
 
 ---
 
