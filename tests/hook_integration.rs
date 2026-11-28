@@ -1548,6 +1548,10 @@ fn r02_remote_policy_authority_scenarios() {
     git_in(&n01_admin, &["commit", "-m", "conflicting main policy"]);
     git_in(&n01_admin, &["push", "origin", "main"]);
     git_in(&n01_repo, &["fetch", "origin"]);
+    let _ = Command::new("git")
+        .current_dir(&n01_repo)
+        .args(["symbolic-ref", "-d", "refs/remotes/origin/HEAD"])
+        .output();
     let (c_n01_amb, _, err_n01_amb) =
         git_iso_status(&tmp, &n01_repo, &["push", "origin", "feat/from-old-main"]);
     assert!(
