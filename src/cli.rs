@@ -31,6 +31,7 @@ pub enum HookSubcommand {
         repo_root: String,
         mode: String,
         payload: Option<String>,
+        git_args: Vec<String>,
     },
     Install {
         host: String,
@@ -403,8 +404,13 @@ fn parse_hook(rest: &[String]) -> Result<HookSubcommand, B3Error> {
             let mut repo_root = String::new();
             let mut mode = String::new();
             let mut payload: Option<String> = None;
+            let mut git_args: Vec<String> = Vec::new();
             let mut i = 0usize;
             while i < tail.len() {
+                if tail[i] == "--" {
+                    git_args = tail[i + 1..].to_vec();
+                    break;
+                }
                 let (flag, iv) = parse_opt(&tail[i]);
                 match flag {
                     "--host" => host = take_val(tail, &mut i, "--host", iv, "HOOK_CLI_FAIL")?,
@@ -418,7 +424,7 @@ fn parse_hook(rest: &[String]) -> Result<HookSubcommand, B3Error> {
                     }
                     "-h" | "--help" if iv.is_none() => {
                         return Err(fail(
-                            "Usage: b3 hook run --host cursor|claude|codex|antigravity|git [--event <name>] [--repo-root <dir>] [--mode enforce|audit|off] [--payload <json>]",
+                            "Usage: b3 hook run --host cursor|claude|codex|antigravity|git [--event <name>] [--repo-root <dir>] [--mode enforce|audit|off] [--payload <json>] [-- <git-args>...]",
                             0,
                         ));
                     }
@@ -440,6 +446,7 @@ fn parse_hook(rest: &[String]) -> Result<HookSubcommand, B3Error> {
                 repo_root,
                 mode,
                 payload,
+                git_args,
             })
         }
         "install" => {

@@ -10,7 +10,6 @@ pub mod json;
 pub mod pr;
 pub mod process;
 
-use std::io::Read;
 use std::path::Path;
 
 use cli::{
@@ -27,24 +26,13 @@ pub struct CliOutput {
     pub exit_code: i32,
 }
 
-fn read_hook_stdin_bounded() -> Result<String, B3Error> {
-    let limit = hook::event::MAX_HOOK_PAYLOAD_BYTES as u64 + 1;
-    let mut buf = Vec::new();
-    std::io::stdin()
-        .take(limit)
-        .read_to_end(&mut buf)
-        .map_err(|e| error::fail(format!("HOOK_IO_FAIL: cannot read stdin: {e}"), 1))?;
-    if buf.len() > hook::event::MAX_HOOK_PAYLOAD_BYTES {
-        return Err(error::fail(
-            format!(
-                "HOOK_PAYLOAD_TOO_LARGE: stdin exceeds {} bytes",
-                hook::event::MAX_HOOK_PAYLOAD_BYTES
-            ),
-            1,
-        ));
+fn non_empty_opt(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
     }
-    String::from_utf8(buf)
-        .map_err(|e| error::fail(format!("HOOK_INVALID_UTF8: invalid UTF-8 on stdin: {e}"), 1))
 }
 
 /// Executes a parsed `b3` CLI invocation with full `stdout`/`stderr` separation.
@@ -56,62 +44,22 @@ pub fn dispatch_args_io(raw_args: &[String]) -> Result<CliOutput, B3Error> {
         repo_root,
         mode,
         payload,
+        git_args,
     }) = cmd
     {
-        let ev_opt = if event.trim().is_empty() {
-            None
-        } else {
-            Some(event.as_str())
-        };
-        let rr_opt = if repo_root.trim().is_empty() {
-            None
-        } else {
-            Some(repo_root.as_str())
-        };
-        let mode_opt = if mode.trim().is_empty() {
-            None
-        } else {
-            Some(mode.as_str())
-        };
-        let body = match payload {
-            Some(p) => p,
-            None => match read_hook_stdin_bounded() {
-                Ok(s) => s,
-                Err(e) => {
-                    if let Some(resp) =
-                        hook::dispatch::fail_closed_host_response(&host, ev_opt, &e.message)
-                    {
-                        return Ok(CliOutput {
-                            stdout: resp.stdout,
-                            stderr: resp.stderr,
-                            exit_code: resp.exit_code,
-                        });
-                    }
-                    return Err(e);
-                }
-            },
-        };
-        match hook::dispatch::run_hook(&host, ev_opt, rr_opt, mode_opt, &body) {
-            Ok((resp, _)) => {
-                return Ok(CliOutput {
-                    stdout: resp.stdout,
-                    stderr: resp.stderr,
-                    exit_code: resp.exit_code,
-                });
-            }
-            Err(e) => {
-                if let Some(resp) =
-                    hook::dispatch::fail_closed_host_response(&host, ev_opt, &e.message)
-                {
-                    return Ok(CliOutput {
-                        stdout: resp.stdout,
-                        stderr: resp.stderr,
-                        exit_code: resp.exit_code,
-                    });
-                }
-                return Err(e);
-            }
-        }
+        let resp = hook::dispatch::run_hook_cli(
+            &host,
+            non_empty_opt(&event),
+            non_empty_opt(&repo_root),
+            non_empty_opt(&mode),
+            payload.as_deref(),
+            &git_args,
+        )?;
+        return Ok(CliOutput {
+            stdout: resp.stdout,
+            stderr: resp.stderr,
+            exit_code: resp.exit_code,
+        });
     }
     let (stdout, exit_code) = dispatch_parsed(cmd)?;
     Ok(CliOutput {
@@ -570,29 +518,15 @@ fn dispatch_parsed(cmd: Command) -> Result<(String, i32), B3Error> {
                 repo_root,
                 mode,
                 payload,
+                git_args,
             } => {
-                let body = match payload {
-                    Some(p) => p,
-                    None => read_hook_stdin_bounded()?,
-                };
-                let (resp, _) = hook::dispatch::run_hook(
+                let resp = hook::dispatch::run_hook_cli(
                     &host,
-                    if event.trim().is_empty() {
-                        None
-                    } else {
-                        Some(event.as_str())
-                    },
-                    if repo_root.trim().is_empty() {
-                        None
-                    } else {
-                        Some(repo_root.as_str())
-                    },
-                    if mode.trim().is_empty() {
-                        None
-                    } else {
-                        Some(mode.as_str())
-                    },
-                    &body,
+                    non_empty_opt(&event),
+                    non_empty_opt(&repo_root),
+                    non_empty_opt(&mode),
+                    payload.as_deref(),
+                    &git_args,
                 )?;
                 let text = if !resp.stdout.is_empty() {
                     resp.stdout

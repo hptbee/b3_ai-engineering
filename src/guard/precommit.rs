@@ -18,6 +18,28 @@ pub fn run(
     expected_cmd: &str,
     relevant_paths: &str,
 ) -> Result<String, B3Error> {
+    run_with_pre_staged(
+        repo_root_raw,
+        allowed_paths,
+        require_verify_receipt,
+        ignore_dirty_paths,
+        expected_cmd,
+        relevant_paths,
+        None,
+    )
+}
+
+/// Same validation as `run`, reusing pre-fetched `git diff --cached --name-only -z`
+/// output when provided by a caller such as `b3 hook`.
+pub fn run_with_pre_staged(
+    repo_root_raw: &str,
+    allowed_paths: &str,
+    require_verify_receipt: &str,
+    ignore_dirty_paths: &str,
+    expected_cmd: &str,
+    relevant_paths: &str,
+    pre_staged: Option<Vec<String>>,
+) -> Result<String, B3Error> {
     let req_receipt = require_verify_receipt.trim();
     if req_receipt.is_empty()
         && (!expected_cmd.trim().is_empty() || !relevant_paths.trim().is_empty())
@@ -40,21 +62,24 @@ pub fn run(
     let ignored = split_path_csv_checked(ignore_dirty_paths, "PRECOMMIT_FAIL", true, None)?;
 
     let no_env: [(&str, &str); 0] = [];
-    let staged = run_git_paths_z(
-        &repo_root,
-        &[
-            "diff",
-            "--no-ext-diff",
-            "--no-renames",
-            "--cached",
-            "--name-only",
-            "-z",
-            "--",
-        ],
-        GitZMode::Names,
-        "GIT_ERROR",
-        &no_env,
-    )?;
+    let staged = match pre_staged {
+        Some(paths) => paths,
+        None => run_git_paths_z(
+            &repo_root,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-renames",
+                "--cached",
+                "--name-only",
+                "-z",
+                "--",
+            ],
+            GitZMode::Names,
+            "GIT_ERROR",
+            &no_env,
+        )?,
+    };
     if staged.is_empty() {
         return Err(fail("PRECOMMIT_FAIL: nothing staged", 1));
     }

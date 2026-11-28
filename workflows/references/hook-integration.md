@@ -1,6 +1,6 @@
 # Hook Integration Reference (On-Demand)
 
-Canonical runtime contract for native `b3 hook` event-driven Guard integration (`0 B` always-on context cost; load on demand when configuring, troubleshooting, or integrating hooks). Human architecture, matrices, threat model, and benchmarks live in [`docs/hooks.md`](../../docs/hooks.md).
+Canonical runtime contract for native `b3 hook` event-driven Guard integration (`0 B` always-on context cost; load on demand when configuring or troubleshooting hooks). Architecture, matrices, threat model, and benchmarks live in [`docs/hooks.md`](../../docs/hooks.md).
 
 ## 1. Ownership Boundary (4 Layers)
 
@@ -9,26 +9,21 @@ AI Intelligence Layer   (AGENTS.md, rules/, skills/, commands/, workflows/, revi
         │  Owns: 96% Requirement Clarification Gate, planning, architecture, semantic review
         ▼
 Hook Integration Layer  (b3 hook <subcommand>)
-        │  Owns: Opt-in event translation, B3_HOOK_ACTIVE=1 recursion guard, mode routing
+        │  Owns: Opt-in event translation, B3_HOOK_ACTIVE=1 recursion guard, early mode routing
         │  Never: duplicates Guard logic, runs LLM inference, or spawns nested subagents
         ▼
 Canonical Rust Guard    (src/guard/*)
         │  Owns: Single source of truth for deterministic security, scope, receipt & policy checks
         ▼
-Host Adapters & Git     (.cursor/hooks.json, .claude/settings.json, .git/hooks/*, Codex/Antigravity)
+Host Adapters & Git     (.cursor/hooks.json, .claude/settings.json, .codex/hooks.json, .agents/hooks.json, .git/hooks/*)
 ```
 
-- **Zero second guard engine:** Hooks delegate directly to canonical primitives in `src/guard/*` (`precommit`, `merge_policy`, `mechanical`, `scope`, `freshness`, `verify`, `cache`).
-- **Zero subagent / LLM orchestration:** `b3 hook` never spawns subagents, never invokes models, and never acts as a background daemon.
-- **Clarification Gate separation:** The AI Requirement Clarification Gate (`96%` confidence threshold in `workflows/references/clarification-gate.md`) belongs strictly to AI planning/intake. Rust code and hooks **never** score requirement clarity, prompt for missing requirements, or enforce the `96%` threshold.
+- **Zero second guard / zero subagents:** `b3 hook` delegates to `src/guard/*` (`precommit`, `merge_policy`, `verify`, `fs`), never spawns subagents/LLMs/daemons, and runs `B3_HOOK_ACTIVE=1` recursion protection (propagated to children).
+- **Clarification Gate separation:** The AI Requirement Clarification Gate (`96%` threshold in `workflows/references/clarification-gate.md`) is strictly AI-only; Rust code and hooks never score clarity or prompt for requirements.
 
-## 2. Opt-In Configuration (`hooks:`) & Precedence
+## 2. Opt-In Configuration (`hooks:`), Precedence & Modes
 
-Hook execution is **opt-in**: nothing runs on host or Git events until explicitly installed (`b3 hook install`) and enabled.
-
-### Configuration locations
-
-Reuse `~/.b3/models.md` (or `B3_MODELS_PERSONAL`) and `<project>/.b3/models.md` with an optional `hooks:` YAML block:
+Hooks are **opt-in** (`b3 hook install`) and reuse `~/.b3/models.md` (`B3_MODELS_PERSONAL`) and `<project>/.b3/models.md`:
 
 ```yaml
 hooks:
@@ -36,37 +31,23 @@ hooks:
   mode: enforce   # enforce | audit | off
 ```
 
-### Precedence order
+1. **Precedence:** CLI `--mode` / `B3_HOOK_MODE` (`enforce | audit | off`) > `<project>/.b3/models.md` > `~/.b3/models.md` (`B3_MODELS_PERSONAL`) > default (`enabled: true`, `mode: enforce`).
+2. **Early mode resolution:** Mode is resolved before strict stdin/JSON parsing so `off` (immediate exit `0` allow) and `audit` (diagnostic warning, exit `0`) remain non-blocking even on malformed payloads.
+3. **Non-bypass:** `hooks.mode: off` disables event hooks only; mandatory workflow `b3 guard` gates in `/b3-ship`, `/b3-research-ship`, and `/b3-review-loop` stay unconditionally active.
 
-1. Explicit CLI flag (`--mode`) or `B3_HOOK_MODE` (`enforce | audit | off`, re-enabling unless `off`)
-2. `<project>/.b3/models.md` `hooks:` block
-3. `~/.b3/models.md` (or `B3_MODELS_PERSONAL`) `hooks:` block
-4. Default (`enabled: true`, `mode: enforce` once explicitly installed via `b3 hook install`)
+## 3. Tiered Execution & Hardened Runtime Invariants
 
-### Modes & non-bypass rule
-
-| `mode` | Behavior | Mandatory workflow Guards |
-| --- | --- | --- |
-| `enforce` | Blocks unsafe Tier 0/1 actions (`BeforeFileWrite`, `BeforeCommand`, `BeforeCommit`, `BeforePush`, `BeforeMerge`); emits advisory warnings on non-blocking checks | Active |
-| `audit` | Executes Tier 0/1 checks and emits diagnostic findings without blocking the host operation | Active |
-| `off` | Hook dispatcher exits `0` immediately as a no-op | **Still active (cannot be bypassed)** |
-
-**Non-bypass of mandatory workflow Guards:** Setting `hooks.mode: off` (or skipping `b3 hook install`) only disables automatic event-triggered hooks. Mandatory workflow-boundary `b3 guard` checks inside `/b3-ship`, `/b3-research-ship`, and `/b3-review-loop` (`check-wave`, `check-worktree`, `diff-scope`, `mechanical-check`, `symbol-check`, `verify-run`/`verify-check`, `precommit --require-verify-receipt`, `merge-policy-check`) remain unconditionally enforced by those workflows.
-
-## 3. Tiered Execution Model
-
-| Tier | Latency & Subprocess Budget | Triggered Events | Guard Modules & Behavior |
+| Tier | Budget & Scope | Events | Canonical Behavior |
 | --- | --- | --- | --- |
-| **Tier 0** | **`<10 ms`**, **`0` Git subprocesses** | `BeforeFileWrite`, `BeforeCommand` | Pure in-process checks: `test_secret_path`, `test_checkpoint_path` (blocks stray edits to `.b3/ship/runs/*/evidence/`, `.b3/research-policy.json`, `.git/`), path containment / traversal / symlink & junction checks, `B3_WORKER_ALLOWED_PATHS` / `B3_PROTECTED_PATHS`, high-risk Git/PR command lexical checks (`git push --force`, `git reset --hard`, `git commit --no-verify`, `git add -A/././.b3*`, `gh pr merge` without `B3_MERGE_AUTHORIZED=1`), and `B3_HOOK_ACTIVE=1` recursion guard. |
-| **Tier 1** | **Operation-boundary** (bounded Git/receipt I/O) | `BeforeCommit`, `BeforePush`, `BeforeMerge`, `AfterFileWrite`, `WorkerCompletion`, `TaskCompletion` | `BeforeCommit` → `guard::precommit` (reusing `B3_HOOK_SKIP_PRECOMMIT=1` + `B3_PRECOMMIT_VERIFIED_TREE` on exact `git write-tree` match); `BeforePush`/`BeforeMerge` → `guard::merge_policy` when `.b3/research-policy.json` exists; `AfterFileWrite` → advisory `B3_VERIFY_RECEIPT` staleness signal via `verify::test_verify_receipt`; `WorkerCompletion`/`TaskCompletion` → advisory only (no-op when `continuation_active=true`). |
-| **Tier 2** | **Workflow-only (`WORKFLOW_ONLY`)** | Explicit `/b3-*` workflow steps only | Full test/build suites (`verify-run`), `review-inventory`, `review-ledger`, `symbol-check`, `check-wave --partition`, `check-worktree`, `snapshot`, `runs`, `evidence-check`, `context-cache`, full `mechanical-check` / `diff-scope`. **Never** invoked inside synchronous IDE or Git event hooks. |
+| **Tier 0** | **`<10 ms`**, **`0` Git calls** | `BeforeFileWrite`, `BeforeCommand` | Pure-FS path containment across repo root & sibling linked worktrees (`.git` `gitdir:` file check, no Git subprocesses), `test_secret_path`, `test_checkpoint_path` (`.b3/ship/runs/*/evidence/`, `.b3/research-policy.json`, `.git/`), symlink/junction checks, `B3_WORKER_ALLOWED_PATHS` / `B3_PROTECTED_PATHS`, and provider-neutral Git command checks (`push --force`/`-f`, `reset --hard`, `commit --no-verify`/`-n`, `add -A`/`.`/`.b3*`). |
+| **Tier 1** | **Operation-boundary** | `BeforeCommit`, `BeforePush`, `BeforeMerge`, `AfterFileWrite`, `Stop` | `BeforeCommit` always runs canonical `guard::precommit` (reusing `B3_VERIFY_RECEIPT` via `verify_check`). `BeforePush`/`BeforeMerge` resolve canonical trunk `.b3/research-policy.json` (remote trunk authority + `parse_pre_push_stdin`, impervious to deleted WT policy) with fast skip on non-governed repos. `AfterFileWrite` emits `B3_VERIFY_RECEIPT` staleness advisories; completion events are advisory/no-op on `continuation_active=true`. |
+| **Tier 2** | **`WORKFLOW_ONLY`** | `/b3-*` workflows only | `verify-run`, `mechanical-check`, `diff-scope`, `symbol-check`, `review-inventory`, `review-ledger`, `check-wave`, `check-worktree`, `snapshot`, `evidence-check`. Never run inside event hooks. |
 
-## 4. Runtime Contracts: Recursion, Evidence Reuse & Degradation
+## 4. Minimal `B3_*` Env Contract & Host Protocol Contracts
 
-- **Recursion guard (`B3_HOOK_ACTIVE=1`):** Every `b3 hook` invocation checks `B3_HOOK_ACTIVE=1` at entry and returns immediately (exit `0` allow) to prevent infinite re-entry when a hook or child `git` invocation triggers nested events. Child processes spawned by `b3 hook` inherit `B3_HOOK_ACTIVE=1`.
-- **Evidence reuse (`B3_VERIFY_RECEIPT` & tree fingerprint):** When `B3_VERIFY_RECEIPT` points to a `b3-verify-v1` receipt, `BeforeCommit` forwards it to `guard::precommit` (`verify::verify_check` + `get_tree_fingerprint`, binding `HEAD` + `RelevantPaths` + working-tree blob/mode/type/gitlink hash). Valid receipts pass without re-running tests; stale/mismatched receipts fail closed in `enforce` mode.
-- **Unsupported events & missing binary:**
-  - Unsupported host events or missing optional fields return a clean no-op allow (`exit 0` + `UNSUPPORTED` diagnostic) rather than breaking host tool loops.
-  - Installed hook wrappers must not corrupt existing user hooks; if `b3` is missing from `PATH`, wrappers surface a clear diagnostic and `b3 hook verify` detects broken wiring.
-  - Malformed, oversized (`> 1 MiB`), or control-char untrusted stdin payloads fail closed (`Deny` in the host's native response format) when `--host` is recognized.
-- **Verification honesty:** Static config generation, protocol parsing, and mocked CLI tests do **not** certify live IDE hook execution. Live Cursor, Claude Code, Codex, and Antigravity hook behavior remains `NOT_VERIFIED` until observed in live host sessions.
+- **Active hook env vars (9 total):** `B3_HOOK_MODE`, `B3_HOOK_ACTIVE`, `B3_MODELS_PERSONAL`, `B3_PROTECTED_PATHS`, `B3_WORKER_ALLOWED_PATHS`, `B3_ALLOWED_PATHS`, `B3_VERIFY_RECEIPT`, `B3_IGNORE_DIRTY_PATHS`, `B3_LEDGER_PATH`. Removed 23 speculative env vars + 6 unused `NormalizedEvent` fields (29 speculative state items): 3 bypass/tree-cache/merge-auth vars, `B3_HOOK_REQUIRE_REPO`, `B3_EXPECTED_CMD`, `B3_RELEVANT_PATHS`, 17 `B3_PR_*`/`B3_CI_*`/`B3_HEAD_SHA` vars, and 6 `NormalizedEvent` fields.
+- **Host adapter contracts:**
+  - **Git shim `v2`:** Forwards stdin and `-- "$@"` to `b3 hook run --host git`, chains `<hook>.b3-user` via `env B3_HOOK_ACTIVE=1 "$USER_HOOK" "$@"` (never `sh "$USER_HOOK"`), and preserves original `.b3-user` permissions (never `chmod 0755`).
+  - **Codex:** `.codex/hooks.json` wraps events under top-level `"hooks"` (`PreToolUse`, `PostToolUse`, `Stop`).
+  - **Antigravity:** `b3-native-guard` uses grouped `PreToolUse`/`PostToolUse` + flat `Stop`, strips `CORTEX_STEP_TYPE_*` prefixes, and outputs `{"decision":"allow|deny|continue"}` (`continue` on `Stop` findings).
+- **Degradation & honesty:** Unsupported events return clean allow (`exit 0`); oversized (`>1 MiB`) or control-char payloads fail closed in `enforce` mode. Local Git CLI is `LIVE_CLI_VERIFIED`; live IDE sessions (Cursor, Claude Code, Codex, Antigravity) remain `NOT_VERIFIED`.

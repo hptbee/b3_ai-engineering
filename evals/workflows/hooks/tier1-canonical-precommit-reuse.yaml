@@ -1,9 +1,9 @@
 id: hooks-tier1-canonical-precommit-reuse-002
 artifact: workflows/references/hook-integration.md
-intent: Tier 1 BeforeCommit delegates in-process to canonical guard::precommit and avoids duplicate work on matching verified staged trees
+intent: Tier 1 BeforeCommit delegates in-process to canonical guard::precommit::run and reuses B3_VERIFY_RECEIPT (b3-verify-v1) tree-fingerprint evidence without unsafe staged-tree skipping
 scenario: |
   Git pre-commit invokes b3 hook run --host git --event pre-commit
-  Hook delegates in-process to guard::precommit::run; when B3_HOOK_SKIP_PRECOMMIT=1 and B3_PRECOMMIT_VERIFIED_TREE matches git write-tree, redundant execution is skipped; any staged tree change invalidates reuse
+  Hook delegates in-process to guard::precommit::run with B3_VERIFY_RECEIPT (b3-verify-v1) tree-fingerprint verification (binding HEAD, RelevantPaths, and working-tree vs staged index parity) without unsafe staged-tree skipping
 expected_outcome: PASS
-failure_mode: duplicated-precommit-logic-or-stale-tree-cache-reuse
-notes: Preserves repository, staged tree, and verification receipt boundaries
+failure_mode: duplicated-precommit-logic-or-unsafe-staged-tree-skip
+notes: Preserves repository, working-tree, HEAD, and b3-verify-v1 verification receipt boundaries

@@ -7,7 +7,6 @@ pub enum HookOutcome {
     Allow,
     Advisory { message: String },
     Deny { message: String },
-    Continue { reason: String },
 }
 
 /// Host-specific formatted output streams and exit status.
@@ -18,6 +17,20 @@ pub struct HostResponse {
     pub exit_code: i32,
 }
 
+impl HostResponse {
+    fn new(stdout: impl Into<String>, stderr: impl Into<String>, exit_code: i32) -> Self {
+        Self {
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+            exit_code,
+        }
+    }
+}
+
+fn json_field(k: &str, v: &str) -> (String, JsonValue) {
+    (k.to_string(), JsonValue::str(v))
+}
+
 /// Formats a `HookOutcome` into the exact protocol expected by `host`.
 pub fn format_response(
     host: HostId,
@@ -26,175 +39,89 @@ pub fn format_response(
     outcome: &HookOutcome,
 ) -> HostResponse {
     match host {
-        HostId::Cursor => format_cursor(outcome),
-        HostId::Claude | HostId::Codex => format_claude_or_codex(outcome),
+        HostId::Cursor => format_cursor(raw_event, kind, outcome),
+        HostId::Claude | HostId::Codex => format_plain_exit(outcome, 2),
         HostId::Antigravity => format_antigravity(raw_event, kind, outcome),
-        HostId::Git => format_git(outcome),
+        HostId::Git => format_plain_exit(outcome, 1),
     }
 }
 
-fn format_cursor(outcome: &HookOutcome) -> HostResponse {
+fn format_cursor(raw_event: &str, kind: EventKind, outcome: &HookOutcome) -> HostResponse {
+    let is_blocking_pre = matches!(kind, EventKind::BeforeFileWrite | EventKind::BeforeCommand)
+        || matches!(
+            raw_event,
+            "preToolUse" | "beforeShellExecution" | "beforeMCPExecution" | "subagentStart"
+        );
+    if !is_blocking_pre {
+        return match outcome {
+            HookOutcome::Allow => HostResponse::new("{}", "", 0),
+            HookOutcome::Advisory { message } => HostResponse::new("{}", message, 0),
+            HookOutcome::Deny { message } => HostResponse::new("{}", message, 2),
+        };
+    }
     match outcome {
-        HookOutcome::Allow => HostResponse {
-            stdout: JsonValue::obj(vec![("permission".into(), JsonValue::str("allow"))])
-                .to_json_string(),
-            stderr: String::new(),
-            exit_code: 0,
-        },
-        HookOutcome::Advisory { message } => HostResponse {
-            stdout: JsonValue::obj(vec![("permission".into(), JsonValue::str("allow"))])
-                .to_json_string(),
-            stderr: message.clone(),
-            exit_code: 0,
-        },
-        HookOutcome::Deny { message } => HostResponse {
-            stdout: JsonValue::obj(vec![
-                ("permission".into(), JsonValue::str("deny")),
-                ("user_message".into(), JsonValue::str(message)),
-                ("agent_message".into(), JsonValue::str(message)),
+        HookOutcome::Allow => HostResponse::new(
+            JsonValue::obj(vec![json_field("permission", "allow")]).to_json_string(),
+            "",
+            0,
+        ),
+        HookOutcome::Advisory { message } => HostResponse::new(
+            JsonValue::obj(vec![json_field("permission", "allow")]).to_json_string(),
+            message,
+            0,
+        ),
+        HookOutcome::Deny { message } => HostResponse::new(
+            JsonValue::obj(vec![
+                json_field("permission", "deny"),
+                json_field("user_message", message),
+                json_field("agent_message", message),
             ])
             .to_json_string(),
-            stderr: message.clone(),
-            exit_code: 2,
-        },
-        HookOutcome::Continue { reason } => HostResponse {
-            stdout: JsonValue::obj(vec![("followup_message".into(), JsonValue::str(reason))])
-                .to_json_string(),
-            stderr: String::new(),
-            exit_code: 0,
-        },
+            message,
+            2,
+        ),
     }
 }
 
-fn format_claude_or_codex(outcome: &HookOutcome) -> HostResponse {
+fn format_plain_exit(outcome: &HookOutcome, deny_exit_code: i32) -> HostResponse {
     match outcome {
-        HookOutcome::Allow => HostResponse {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-        },
-        HookOutcome::Advisory { message } => HostResponse {
-            stdout: String::new(),
-            stderr: message.clone(),
-            exit_code: 0,
-        },
-        HookOutcome::Deny { message } => HostResponse {
-            stdout: String::new(),
-            stderr: message.clone(),
-            exit_code: 2,
-        },
-        HookOutcome::Continue { reason } => HostResponse {
-            stdout: String::new(),
-            stderr: reason.clone(),
-            exit_code: 2,
-        },
+        HookOutcome::Allow => HostResponse::new("", "", 0),
+        HookOutcome::Advisory { message } => HostResponse::new("", message, 0),
+        HookOutcome::Deny { message } => HostResponse::new("", message, deny_exit_code),
     }
 }
 
 fn format_antigravity(raw_event: &str, kind: EventKind, outcome: &HookOutcome) -> HostResponse {
-    let is_pre_tool = matches!(kind, EventKind::BeforeFileWrite | EventKind::BeforeCommand)
-        || raw_event == "PreToolUse"
-        || raw_event == "PreInvocation";
     let is_stop = matches!(
         kind,
         EventKind::TaskCompletion | EventKind::WorkerCompletion
     ) || raw_event == "Stop";
+    let is_pre_tool = matches!(kind, EventKind::BeforeFileWrite | EventKind::BeforeCommand)
+        || matches!(raw_event, "PreToolUse" | "PreInvocation");
 
-    if is_stop {
-        let stdout = match outcome {
-            HookOutcome::Continue { reason } => JsonValue::obj(vec![
-                ("decision".into(), JsonValue::str("continue")),
-                ("reason".into(), JsonValue::str(reason)),
-            ])
-            .to_json_string(),
-            HookOutcome::Deny { message } => JsonValue::obj(vec![
-                ("decision".into(), JsonValue::str("continue")),
-                ("reason".into(), JsonValue::str(message)),
-            ])
-            .to_json_string(),
-            HookOutcome::Allow | HookOutcome::Advisory { .. } => "{}".to_string(),
-        };
-        let stderr = match outcome {
-            HookOutcome::Advisory { message } => message.clone(),
-            _ => String::new(),
-        };
-        return HostResponse {
-            stdout,
-            stderr,
-            exit_code: 0,
-        };
-    }
-
-    if is_pre_tool {
+    if is_stop || is_pre_tool {
+        let allow_json = JsonValue::obj(vec![json_field("decision", "allow")]).to_json_string();
         return match outcome {
-            HookOutcome::Allow => HostResponse {
-                stdout: JsonValue::obj(vec![("decision".into(), JsonValue::str("allow"))])
-                    .to_json_string(),
-                stderr: String::new(),
-                exit_code: 0,
-            },
-            HookOutcome::Advisory { message } => HostResponse {
-                stdout: JsonValue::obj(vec![("decision".into(), JsonValue::str("allow"))])
-                    .to_json_string(),
-                stderr: message.clone(),
-                exit_code: 0,
-            },
-            HookOutcome::Deny { message } => HostResponse {
-                stdout: JsonValue::obj(vec![
-                    ("decision".into(), JsonValue::str("deny")),
-                    ("reason".into(), JsonValue::str(message)),
+            HookOutcome::Allow => HostResponse::new(allow_json, "", 0),
+            HookOutcome::Advisory { message } => HostResponse::new(allow_json, message, 0),
+            HookOutcome::Deny { message } => {
+                let decision = if is_stop { "continue" } else { "deny" };
+                let body = JsonValue::obj(vec![
+                    json_field("decision", decision),
+                    json_field("reason", message),
                 ])
-                .to_json_string(),
-                stderr: String::new(),
-                exit_code: 0,
-            },
-            HookOutcome::Continue { reason } => HostResponse {
-                stdout: JsonValue::obj(vec![
-                    ("decision".into(), JsonValue::str("allow")),
-                    ("reason".into(), JsonValue::str(reason)),
-                ])
-                .to_json_string(),
-                stderr: String::new(),
-                exit_code: 0,
-            },
+                .to_json_string();
+                let stderr = if is_stop { message.as_str() } else { "" };
+                HostResponse::new(body, stderr, 0)
+            }
         };
     }
 
-    // PostToolUse, SessionStart, Unsupported, etc.
     let stderr = match outcome {
-        HookOutcome::Advisory { message } | HookOutcome::Deny { message } => message.clone(),
-        _ => String::new(),
+        HookOutcome::Allow => "",
+        HookOutcome::Advisory { message } | HookOutcome::Deny { message } => message.as_str(),
     };
-    HostResponse {
-        stdout: "{}".to_string(),
-        stderr,
-        exit_code: 0,
-    }
-}
-
-fn format_git(outcome: &HookOutcome) -> HostResponse {
-    match outcome {
-        HookOutcome::Allow => HostResponse {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: 0,
-        },
-        HookOutcome::Advisory { message } => HostResponse {
-            stdout: String::new(),
-            stderr: message.clone(),
-            exit_code: 0,
-        },
-        HookOutcome::Deny { message } => HostResponse {
-            stdout: String::new(),
-            stderr: message.clone(),
-            exit_code: 1,
-        },
-        HookOutcome::Continue { reason } => HostResponse {
-            stdout: String::new(),
-            stderr: reason.clone(),
-            exit_code: 1,
-        },
-    }
+    HostResponse::new("{}", stderr, 0)
 }
 
 #[cfg(test)]
@@ -203,7 +130,7 @@ mod tests {
     use crate::json::parse_json;
 
     #[test]
-    fn cursor_responses_match_protocol() {
+    fn cursor_blocking_and_non_blocking_responses() {
         let allow = format_response(
             HostId::Cursor,
             "preToolUse",
@@ -211,49 +138,91 @@ mod tests {
             &HookOutcome::Allow,
         );
         assert_eq!(allow.exit_code, 0);
-        let j = parse_json(&allow.stdout).unwrap();
-        assert_eq!(j.get("permission").and_then(|v| v.as_str()), Some("allow"));
+        assert_eq!(
+            parse_json(&allow.stdout)
+                .unwrap()
+                .get("permission")
+                .and_then(JsonValue::as_str),
+            Some("allow")
+        );
 
         let deny = format_response(
             HostId::Cursor,
-            "preToolUse",
+            "beforeShellExecution",
             EventKind::BeforeCommand,
             &HookOutcome::Deny {
-                message: "blocked".to_string(),
+                message: "blocked".into(),
             },
         );
-        assert_eq!(deny.exit_code, 2);
-        assert_eq!(deny.stderr, "blocked");
+        assert_eq!((deny.exit_code, deny.stderr.as_str()), (2, "blocked"));
         let jd = parse_json(&deny.stdout).unwrap();
-        assert_eq!(jd.get("permission").and_then(|v| v.as_str()), Some("deny"));
+        assert_eq!(
+            jd.get("permission").and_then(JsonValue::as_str),
+            Some("deny")
+        );
+        assert_eq!(
+            jd.get("user_message").and_then(JsonValue::as_str),
+            Some("blocked")
+        );
+
+        assert_eq!(
+            format_response(
+                HostId::Cursor,
+                "postToolUse",
+                EventKind::AfterFileWrite,
+                &HookOutcome::Advisory {
+                    message: "note".into()
+                },
+            ),
+            HostResponse::new("{}", "note", 0)
+        );
+        assert_eq!(
+            format_response(
+                HostId::Cursor,
+                "stop",
+                EventKind::TaskCompletion,
+                &HookOutcome::Deny {
+                    message: "verify".into()
+                },
+            ),
+            HostResponse::new("{}", "verify", 2)
+        );
     }
 
     #[test]
-    fn claude_and_codex_responses_match_protocol() {
-        for host in [HostId::Claude, HostId::Codex] {
-            let adv = format_response(
-                host,
-                "PreToolUse",
-                EventKind::BeforeFileWrite,
-                &HookOutcome::Advisory {
-                    message: "warn".to_string(),
-                },
+    fn claude_codex_and_git_responses() {
+        for (host, deny_code) in [(HostId::Claude, 2), (HostId::Codex, 2), (HostId::Git, 1)] {
+            assert_eq!(
+                format_response(
+                    host,
+                    "PreToolUse",
+                    EventKind::BeforeFileWrite,
+                    &HookOutcome::Allow
+                ),
+                HostResponse::new("", "", 0)
             );
-            assert_eq!(adv.stdout, "");
-            assert_eq!(adv.stderr, "warn");
-            assert_eq!(adv.exit_code, 0);
-
-            let deny = format_response(
-                host,
-                "PreToolUse",
-                EventKind::BeforeCommand,
-                &HookOutcome::Deny {
-                    message: "denied".to_string(),
-                },
+            assert_eq!(
+                format_response(
+                    host,
+                    "PreToolUse",
+                    EventKind::BeforeFileWrite,
+                    &HookOutcome::Advisory {
+                        message: "warn".into()
+                    },
+                ),
+                HostResponse::new("", "warn", 0)
             );
-            assert_eq!(deny.stdout, "");
-            assert_eq!(deny.stderr, "denied");
-            assert_eq!(deny.exit_code, 2);
+            assert_eq!(
+                format_response(
+                    host,
+                    "PreToolUse",
+                    EventKind::BeforeCommand,
+                    &HookOutcome::Deny {
+                        message: "denied".into()
+                    },
+                ),
+                HostResponse::new("", "denied", deny_code)
+            );
         }
     }
 
@@ -265,57 +234,40 @@ mod tests {
             EventKind::BeforeFileWrite,
             &HookOutcome::Allow,
         );
-        assert_eq!(pre_allow.exit_code, 0);
         assert_eq!(
             parse_json(&pre_allow.stdout)
                 .unwrap()
                 .get("decision")
-                .and_then(|v| v.as_str()),
+                .and_then(JsonValue::as_str),
             Some("allow")
         );
 
         let pre_deny = format_response(
             HostId::Antigravity,
-            "PreToolUse",
+            "PreInvocation",
             EventKind::BeforeCommand,
             &HookOutcome::Deny {
-                message: "not allowed".to_string(),
+                message: "not allowed".into(),
             },
         );
-        assert_eq!(pre_deny.exit_code, 0);
+        assert_eq!((pre_deny.exit_code, pre_deny.stderr.as_str()), (0, ""));
         let j = parse_json(&pre_deny.stdout).unwrap();
-        assert_eq!(j.get("decision").and_then(|v| v.as_str()), Some("deny"));
+        assert_eq!(j.get("decision").and_then(JsonValue::as_str), Some("deny"));
         assert_eq!(
-            j.get("reason").and_then(|v| v.as_str()),
+            j.get("reason").and_then(JsonValue::as_str),
             Some("not allowed")
         );
 
-        let post = format_response(
-            HostId::Antigravity,
-            "PostToolUse",
-            EventKind::AfterFileWrite,
-            &HookOutcome::Allow,
-        );
-        assert_eq!(post.stdout, "{}");
-        assert_eq!(post.exit_code, 0);
-
-        let stop_cont = format_response(
-            HostId::Antigravity,
-            "Stop",
-            EventKind::TaskCompletion,
-            &HookOutcome::Continue {
-                reason: "run verify".to_string(),
-            },
-        );
-        assert_eq!(stop_cont.exit_code, 0);
-        let js = parse_json(&stop_cont.stdout).unwrap();
         assert_eq!(
-            js.get("decision").and_then(|v| v.as_str()),
-            Some("continue")
-        );
-        assert_eq!(
-            js.get("reason").and_then(|v| v.as_str()),
-            Some("run verify")
+            format_response(
+                HostId::Antigravity,
+                "PostToolUse",
+                EventKind::AfterFileWrite,
+                &HookOutcome::Advisory {
+                    message: "heads up".into()
+                },
+            ),
+            HostResponse::new("{}", "heads up", 0)
         );
 
         let stop_allow = format_response(
@@ -324,30 +276,34 @@ mod tests {
             EventKind::TaskCompletion,
             &HookOutcome::Allow,
         );
-        assert_eq!(stop_allow.stdout, "{}");
-        assert_eq!(stop_allow.exit_code, 0);
-    }
-
-    #[test]
-    fn git_responses_match_protocol() {
-        let allow = format_response(
-            HostId::Git,
-            "pre-commit",
-            EventKind::BeforeCommit,
-            &HookOutcome::Allow,
+        assert_eq!(
+            parse_json(&stop_allow.stdout)
+                .unwrap()
+                .get("decision")
+                .and_then(JsonValue::as_str),
+            Some("allow")
         );
-        assert_eq!(allow.exit_code, 0);
-        assert_eq!(allow.stdout, "");
 
-        let deny = format_response(
-            HostId::Git,
-            "pre-push",
-            EventKind::BeforePush,
+        let stop_deny = format_response(
+            HostId::Antigravity,
+            "Stop",
+            EventKind::TaskCompletion,
             &HookOutcome::Deny {
-                message: "verify required".to_string(),
+                message: "run verify".into(),
             },
         );
-        assert_eq!(deny.exit_code, 1);
-        assert_eq!(deny.stderr, "verify required");
+        assert_eq!(
+            (stop_deny.exit_code, stop_deny.stderr.as_str()),
+            (0, "run verify")
+        );
+        let js = parse_json(&stop_deny.stdout).unwrap();
+        assert_eq!(
+            js.get("decision").and_then(JsonValue::as_str),
+            Some("continue")
+        );
+        assert_eq!(
+            js.get("reason").and_then(JsonValue::as_str),
+            Some("run verify")
+        );
     }
 }

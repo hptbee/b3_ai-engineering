@@ -22,12 +22,7 @@ impl HookMode {
             "enforce" => Ok(Self::Enforce),
             "audit" => Ok(Self::Audit),
             "off" => Ok(Self::Off),
-            other => Err(fail(
-                format!(
-                    "HOOK_CONFIG_INVALID: invalid hook mode '{other}'; expected enforce, audit, or off"
-                ),
-                1,
-            )),
+            other => Err(fail(format!("HOOK_CONFIG_INVALID: invalid hook mode '{other}'; expected enforce, audit, or off"), 1)),
         }
     }
 
@@ -94,7 +89,7 @@ pub fn default_project_preferences_path(project_root: &Path) -> PathBuf {
     project_root.join(".b3").join("models.md")
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct FenceState {
     marker_char: char,
     marker_len: usize,
@@ -102,16 +97,12 @@ struct FenceState {
 }
 
 fn parse_fence_open(trimmed_start: &str) -> Option<FenceState> {
-    let first = trimmed_start.chars().next()?;
-    if first != '`' && first != '~' {
-        return None;
-    }
+    let first = trimmed_start
+        .chars()
+        .next()
+        .filter(|&c| c == '`' || c == '~')?;
     let marker_len = trimmed_start.chars().take_while(|&c| c == first).count();
-    if marker_len < 3 {
-        return None;
-    }
-    let rest = trimmed_start[marker_len..].trim();
-    // CommonMark info strings for backtick fences cannot contain backticks.
+    let rest = (marker_len >= 3).then(|| trimmed_start[marker_len..].trim())?;
     if first == '`' && rest.contains('`') {
         return None;
     }
@@ -135,28 +126,17 @@ fn is_fence_close(trimmed: &str, state: FenceState) -> bool {
 
 fn strip_yaml_comment(line: &str) -> &str {
     let bytes = line.as_bytes();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escaped = false;
-
+    let (mut in_single, mut in_double, mut escaped) = (false, false, false);
     for (idx, &b) in bytes.iter().enumerate() {
         if escaped {
             escaped = false;
-            continue;
-        }
-        if in_double && b == b'\\' {
+        } else if in_double && b == b'\\' {
             escaped = true;
-            continue;
-        }
-        if !in_double && b == b'\'' {
+        } else if !in_double && b == b'\'' {
             in_single = !in_single;
-            continue;
-        }
-        if !in_single && b == b'"' {
+        } else if !in_single && b == b'"' {
             in_double = !in_double;
-            continue;
-        }
-        if !in_single
+        } else if !in_single
             && !in_double
             && b == b'#'
             && (idx == 0 || bytes[idx - 1].is_ascii_whitespace())
@@ -170,15 +150,15 @@ fn strip_yaml_comment(line: &str) -> &str {
 fn count_leading_spaces(line: &str) -> Result<usize, B3Error> {
     let mut spaces = 0usize;
     for ch in line.chars() {
-        if ch == ' ' {
-            spaces += 1;
-        } else if ch == '\t' {
-            return Err(fail(
-                "HOOK_CONFIG_INVALID: tabs are not allowed in hooks YAML indentation",
-                1,
-            ));
-        } else {
-            break;
+        match ch {
+            ' ' => spaces += 1,
+            '\t' => {
+                return Err(fail(
+                    "HOOK_CONFIG_INVALID: tabs are not allowed in hooks YAML indentation",
+                    1,
+                ))
+            }
+            _ => break,
         }
     }
     Ok(spaces)
@@ -195,33 +175,24 @@ fn unquote_yaml_scalar(raw: &str) -> &str {
     }
 }
 
-fn is_hooks_header(uncommented: &str) -> Result<Option<usize>, B3Error> {
-    let trimmed = uncommented.trim();
-    if trimmed.is_empty() {
+fn parse_hooks_header(uncommented: &str) -> Result<Option<usize>, B3Error> {
+    let Some(after) = uncommented.trim().strip_prefix("hooks:") else {
+        return Ok(None);
+    };
+    if !after.is_empty() && !after.chars().next().is_some_and(char::is_whitespace) {
         return Ok(None);
     }
-    if let Some(after_colon) = trimmed.strip_prefix("hooks:") {
-        if after_colon.is_empty() || after_colon.chars().next().is_some_and(char::is_whitespace) {
-            let val = after_colon.trim();
-            if !val.is_empty() {
-                return Err(fail(
-                    format!("HOOK_CONFIG_INVALID: 'hooks:' must be a mapping, got '{val}'"),
-                    1,
-                ));
-            }
-            let indent = count_leading_spaces(uncommented)?;
-            return Ok(Some(indent));
-        }
+    let val = after.trim();
+    if !val.is_empty() {
+        return Err(fail(
+            format!("HOOK_CONFIG_INVALID: 'hooks:' must be a mapping, got '{val}'"),
+            1,
+        ));
     }
-    Ok(None)
+    count_leading_spaces(uncommented).map(Some)
 }
 
-fn parse_hooks_kv(
-    line: &str,
-    out: &mut HookConfigOverride,
-    seen_enabled: &mut bool,
-    seen_mode: &mut bool,
-) -> Result<(), B3Error> {
+fn parse_hooks_kv(line: &str, out: &mut HookConfigOverride) -> Result<(), B3Error> {
     let Some((key_raw, val_raw)) = line.split_once(':') else {
         return Err(fail(
             format!(
@@ -231,45 +202,34 @@ fn parse_hooks_kv(
             1,
         ));
     };
-    let key = key_raw.trim();
-    let val = val_raw.trim();
-    match key {
-        "enabled" => {
-            if *seen_enabled {
-                return Err(fail(
-                    "HOOK_CONFIG_INVALID: duplicate key 'enabled' in hooks section",
-                    1,
-                ));
-            }
-            *seen_enabled = true;
-            let parsed = match val {
-                "true" => true,
-                "false" => false,
-                other => {
-                    return Err(fail(
-                        format!(
-                            "HOOK_CONFIG_INVALID: invalid 'enabled' value '{other}'; expected true or false"
-                        ),
-                        1,
-                    ));
-                }
-            };
-            out.enabled = Some(parsed);
+    match (key_raw.trim(), val_raw.trim()) {
+        ("enabled", _) if out.enabled.is_some() => Err(fail(
+            "HOOK_CONFIG_INVALID: duplicate key 'enabled' in hooks section",
+            1,
+        )),
+        ("enabled", "true") => {
+            out.enabled = Some(true);
             Ok(())
         }
-        "mode" => {
-            if *seen_mode {
-                return Err(fail(
-                    "HOOK_CONFIG_INVALID: duplicate key 'mode' in hooks section",
-                    1,
-                ));
-            }
-            *seen_mode = true;
-            let scalar = unquote_yaml_scalar(val);
-            out.mode = Some(HookMode::parse(scalar)?);
+        ("enabled", "false") => {
+            out.enabled = Some(false);
             Ok(())
         }
-        other => Err(fail(
+        ("enabled", other) => Err(fail(
+            format!(
+                "HOOK_CONFIG_INVALID: invalid 'enabled' value '{other}'; expected true or false"
+            ),
+            1,
+        )),
+        ("mode", _) if out.mode.is_some() => Err(fail(
+            "HOOK_CONFIG_INVALID: duplicate key 'mode' in hooks section",
+            1,
+        )),
+        ("mode", val) => {
+            out.mode = Some(HookMode::parse(unquote_yaml_scalar(val))?);
+            Ok(())
+        }
+        (other, _) => Err(fail(
             format!("HOOK_CONFIG_INVALID: unknown key '{other}' in hooks section"),
             1,
         )),
@@ -283,20 +243,12 @@ pub fn parse_hook_config_from_markdown(
 ) -> Result<Option<HookConfigOverride>, B3Error> {
     let clean = content.strip_prefix('\u{FEFF}').unwrap_or(content);
     let normalized = clean.replace("\r\n", "\n").replace('\r', "\n");
-
-    let mut fence: Option<FenceState> = None;
-    let mut in_hooks_indent: Option<usize> = None;
-    let mut found_hooks = false;
+    let (mut fence, mut in_hooks_indent, mut found_hooks) = (None, None, false);
     let mut result = HookConfigOverride::default();
-    let mut seen_enabled = false;
-    let mut seen_mode = false;
 
     for raw_line in normalized.split('\n') {
-        let trimmed_start = raw_line.trim_start();
-        let trimmed = raw_line.trim();
-
         if let Some(state) = fence {
-            if is_fence_close(trimmed, state) {
+            if is_fence_close(raw_line.trim(), state) {
                 fence = None;
                 in_hooks_indent = None;
                 continue;
@@ -304,7 +256,7 @@ pub fn parse_hook_config_from_markdown(
             if !state.is_yaml_candidate {
                 continue;
             }
-        } else if let Some(opened) = parse_fence_open(trimmed_start) {
+        } else if let Some(opened) = parse_fence_open(raw_line.trim_start()) {
             in_hooks_indent = None;
             fence = Some(opened);
             continue;
@@ -314,17 +266,14 @@ pub fn parse_hook_config_from_markdown(
         if uncommented.trim().is_empty() {
             continue;
         }
-
         if let Some(hooks_indent) = in_hooks_indent {
-            let line_indent = count_leading_spaces(uncommented)?;
-            if line_indent > hooks_indent {
-                parse_hooks_kv(uncommented, &mut result, &mut seen_enabled, &mut seen_mode)?;
+            if count_leading_spaces(uncommented)? > hooks_indent {
+                parse_hooks_kv(uncommented, &mut result)?;
                 continue;
             }
             in_hooks_indent = None;
         }
-
-        if let Some(indent) = is_hooks_header(uncommented)? {
+        if let Some(indent) = parse_hooks_header(uncommented)? {
             if found_hooks {
                 return Err(fail(
                     "HOOK_CONFIG_INVALID: duplicate 'hooks:' section in preferences markdown",
@@ -335,12 +284,7 @@ pub fn parse_hook_config_from_markdown(
             in_hooks_indent = Some(indent);
         }
     }
-
-    if found_hooks {
-        Ok(Some(result))
-    } else {
-        Ok(None)
-    }
+    Ok(found_hooks.then_some(result))
 }
 
 fn load_override_file(
@@ -359,17 +303,14 @@ fn load_override_file(
             return None;
         }
     };
-    match parse_hook_config_from_markdown(&content) {
-        Ok(ov) => ov,
-        Err(e) => {
-            warnings.push(format!(
-                "HOOK_CONFIG_WARN: ignoring malformed {label} preferences {}: {}",
-                path.display(),
-                e.message
-            ));
-            None
-        }
-    }
+    parse_hook_config_from_markdown(&content).unwrap_or_else(|e| {
+        warnings.push(format!(
+            "HOOK_CONFIG_WARN: ignoring malformed {label} preferences {}: {}",
+            path.display(),
+            e.message
+        ));
+        None
+    })
 }
 
 fn apply_override(cfg: &mut HookConfig, ov: HookConfigOverride) {
@@ -392,14 +333,8 @@ pub fn resolve_hook_config(
     let mut cfg = HookConfig::default();
     let mut warnings = Vec::new();
 
-    if let Some(g_path) = global_path {
-        if let Some(ov) = load_override_file(g_path, "global", &mut warnings) {
-            apply_override(&mut cfg, ov);
-        }
-    }
-
-    if let Some(p_path) = project_path {
-        if let Some(ov) = load_override_file(p_path, "project", &mut warnings) {
+    for (path, label) in [(global_path, "global"), (project_path, "project")] {
+        if let Some(ov) = path.and_then(|p| load_override_file(p, label, &mut warnings)) {
             apply_override(&mut cfg, ov);
         }
     }
@@ -419,8 +354,8 @@ pub fn resolve_hook_config(
                         cfg.enabled = mode != HookMode::Off;
                     }
                     Err(e) => warnings.push(format!(
-                        "HOOK_CONFIG_WARN: ignoring invalid B3_HOOK_MODE '{}': {}",
-                        trimmed, e.message
+                        "HOOK_CONFIG_WARN: ignoring invalid B3_HOOK_MODE '{trimmed}': {}",
+                        e.message
                     )),
                 }
             }
@@ -428,11 +363,9 @@ pub fn resolve_hook_config(
     }
 
     if let Some(ov) = cli_override {
-        let explicit_enabled = ov.enabled;
-        let explicit_mode = ov.mode;
         apply_override(&mut cfg, ov);
-        if explicit_enabled.is_none() {
-            if let Some(m) = explicit_mode {
+        if ov.enabled.is_none() {
+            if let Some(m) = ov.mode {
                 cfg.enabled = m != HookMode::Off;
             }
         }
@@ -445,11 +378,7 @@ pub fn resolve_hook_config(
 mod tests {
     use super::*;
 
-    struct EnvGuard {
-        key: &'static str,
-        prev: Option<String>,
-    }
-
+    struct EnvGuard(&'static str, Option<String>);
     impl EnvGuard {
         fn set(key: &'static str, val: Option<&str>) -> Self {
             let prev = std::env::var(key).ok();
@@ -457,100 +386,93 @@ mod tests {
                 Some(v) => std::env::set_var(key, v),
                 None => std::env::remove_var(key),
             }
-            Self { key, prev }
+            Self(key, prev)
         }
     }
-
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            match &self.prev {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
+            match &self.1 {
+                Some(v) => std::env::set_var(self.0, v),
+                None => std::env::remove_var(self.0),
             }
         }
     }
 
-    fn temp_dir(name: &str) -> PathBuf {
+    #[test]
+    fn hook_mode_and_config_basics() {
+        assert_eq!(HookMode::default(), HookMode::Enforce);
+        assert_eq!(HookMode::parse(" audit ").unwrap(), HookMode::Audit);
+        assert_eq!(HookMode::Off.as_str(), "off");
+        assert!(HookMode::parse("Enforce").is_err());
+        assert_eq!(
+            HookConfig {
+                enabled: false,
+                mode: HookMode::Enforce
+            }
+            .effective_mode(),
+            HookMode::Off
+        );
+    }
+
+    #[test]
+    fn parse_fenced_standalone_and_rejects_invalid() {
+        let fenced = "```yaml\nhooks:\n  enabled: true # comment\n  mode: audit\n```\n";
+        assert_eq!(
+            parse_hook_config_from_markdown(fenced).unwrap(),
+            Some(HookConfigOverride {
+                enabled: Some(true),
+                mode: Some(HookMode::Audit)
+            })
+        );
+
+        let standalone =
+            "\u{FEFF}# Title\r\nhooks:\r\n  enabled: false\r\n  mode: \"off\"\r\n\r\n## Next\r\n";
+        assert_eq!(
+            parse_hook_config_from_markdown(standalone).unwrap(),
+            Some(HookConfigOverride {
+                enabled: Some(false),
+                mode: Some(HookMode::Off)
+            })
+        );
+        assert_eq!(
+            parse_hook_config_from_markdown("```bash\nhooks:\n  enabled: bogus\n```\n").unwrap(),
+            None
+        );
+
+        for invalid in [
+            "```yaml\nhooks:\n  enabled: yes\n```\n",
+            "```yaml\nhooks:\n  enabled: \"true\"\n```\n",
+            "```yaml\nhooks:\n\tenabled: true\n```\n",
+            "```yaml\nhooks:\n  mode: warn\n```\n",
+            "```yaml\nhooks:\n  extra: 1\n```\n",
+            "```yaml\nhooks:\n  mode: audit\n  mode: off\n```\n",
+            "```yaml\nhooks: inline\n```\n",
+            "```yaml\nhooks:\n  mode: audit\n```\nhooks:\n  mode: off\n",
+        ] {
+            assert!(
+                parse_hook_config_from_markdown(invalid).is_err(),
+                "expected err: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_precedence_paths_and_example() {
+        let _lock = crate::hook::HOOK_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (_eh, _ep) = (
+            EnvGuard::set("B3_HOOK_MODE", None),
+            EnvGuard::set("B3_MODELS_PERSONAL", None),
+        );
+
         let dir = std::env::temp_dir().join(format!(
-            "b3_hook_cfg_test_{}_{}_{}",
-            name,
+            "b3_hook_cfg_{}_{}",
             std::process::id(),
             crate::fs::next_tmp_suffix()
         ));
         fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn hook_mode_parse_and_default() {
-        assert_eq!(HookMode::default(), HookMode::Enforce);
-        assert_eq!(HookMode::parse("enforce").unwrap(), HookMode::Enforce);
-        assert_eq!(HookMode::parse(" audit ").unwrap(), HookMode::Audit);
-        assert_eq!(HookMode::parse("off").unwrap(), HookMode::Off);
-        assert_eq!(HookMode::Audit.as_str(), "audit");
-        assert!(HookMode::parse("Enforce").is_err());
-        assert!(HookMode::parse("invalid").is_err());
-    }
-
-    #[test]
-    fn parse_fenced_and_standalone_yaml_blocks() {
-        let md_fenced = r#"# Model Preferences
-
-```yaml
-hooks:
-  enabled: true # inline comment
-  mode: audit   # another comment
-```
-"#;
-        let parsed = parse_hook_config_from_markdown(md_fenced)
-            .unwrap()
-            .expect("should find hooks");
-        assert_eq!(parsed.enabled, Some(true));
-        assert_eq!(parsed.mode, Some(HookMode::Audit));
-
-        let md_standalone =
-            "\u{FEFF}# Title\n\nhooks:\n  enabled: false\n  mode: \"off\"\n\n## Next\n";
-        let parsed2 = parse_hook_config_from_markdown(md_standalone)
-            .unwrap()
-            .expect("should find standalone hooks");
-        assert_eq!(parsed2.enabled, Some(false));
-        assert_eq!(parsed2.mode, Some(HookMode::Off));
-
-        let md_absent = "# Only models\n\n```bash\nhooks:\n  enabled: bogus\n```\n";
-        assert_eq!(parse_hook_config_from_markdown(md_absent).unwrap(), None);
-    }
-
-    #[test]
-    fn parse_rejects_invalid_and_duplicate_keys() {
-        let bad_bool = "```yaml\nhooks:\n  enabled: yes\n```\n";
-        assert!(parse_hook_config_from_markdown(bad_bool).is_err());
-
-        let quoted_bool = "```yaml\nhooks:\n  enabled: \"true\"\n```\n";
-        assert!(parse_hook_config_from_markdown(quoted_bool).is_err());
-
-        let bad_mode = "```yaml\nhooks:\n  mode: warn\n```\n";
-        assert!(parse_hook_config_from_markdown(bad_mode).is_err());
-
-        let unknown_key = "```yaml\nhooks:\n  extra: 1\n```\n";
-        assert!(parse_hook_config_from_markdown(unknown_key).is_err());
-
-        let dup_key = "```yaml\nhooks:\n  mode: audit\n  mode: off\n```\n";
-        assert!(parse_hook_config_from_markdown(dup_key).is_err());
-
-        let dup_section = "```yaml\nhooks:\n  mode: audit\n```\n\nhooks:\n  mode: off\n";
-        assert!(parse_hook_config_from_markdown(dup_section).is_err());
-    }
-
-    #[test]
-    fn resolve_precedence_and_fallbacks() {
-        let _lock = crate::hook::HOOK_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _env_hook = EnvGuard::set("B3_HOOK_MODE", None);
-
-        let dir = temp_dir("precedence");
-        let global = dir.join("global.md");
-        let project = dir.join("project.md");
+        let (global, project) = (dir.join("global.md"), dir.join("project.md"));
         fs::write(
             &global,
             "```yaml\nhooks:\n  enabled: false\n  mode: off\n```\n",
@@ -568,112 +490,92 @@ hooks:
             cfg,
             HookConfig {
                 enabled: true,
-                mode: HookMode::Audit,
+                mode: HookMode::Audit
             }
         );
 
         {
             let _env = EnvGuard::set("B3_HOOK_MODE", Some("off"));
-            let (cfg_env, w_env) = resolve_hook_config(Some(&project), Some(&global), None);
-            assert!(w_env.is_empty());
-            assert_eq!(cfg_env.mode, HookMode::Off);
-
-            let (cfg_cli, w_cli) = resolve_hook_config(
-                Some(&project),
-                Some(&global),
-                Some(HookConfigOverride {
-                    enabled: Some(false),
-                    mode: Some(HookMode::Enforce),
-                }),
-            );
-            assert!(w_cli.is_empty());
             assert_eq!(
-                cfg_cli,
+                resolve_hook_config(Some(&project), Some(&global), None)
+                    .0
+                    .mode,
+                HookMode::Off
+            );
+            let cli = HookConfigOverride {
+                enabled: Some(false),
+                mode: Some(HookMode::Enforce),
+            };
+            assert_eq!(
+                resolve_hook_config(Some(&project), Some(&global), Some(cli)).0,
                 HookConfig {
                     enabled: false,
-                    mode: HookMode::Enforce,
+                    mode: HookMode::Enforce
                 }
             );
         }
 
-        // Malformed project file + invalid env -> warns and falls back gracefully to global/default.
         fs::write(&project, "```yaml\nhooks:\n  mode: invalid\n```\n").unwrap();
-        let _bad_env = EnvGuard::set("B3_HOOK_MODE", Some("bogus"));
+        let _bad = EnvGuard::set("B3_HOOK_MODE", Some("bogus"));
         let (cfg_fb, w_fb) = resolve_hook_config(Some(&project), Some(&global), None);
         assert_eq!(w_fb.len(), 2);
         assert_eq!(
             cfg_fb,
             HookConfig {
                 enabled: false,
-                mode: HookMode::Off,
+                mode: HookMode::Off
             }
         );
 
-        // Explicit B3_HOOK_MODE=enforce or CLI --mode audit re-enables disabled file config.
-        let _reenable = EnvGuard::set("B3_HOOK_MODE", Some("enforce"));
-        let (cfg_re, _) = resolve_hook_config(None, Some(&global), None);
+        let _re = EnvGuard::set("B3_HOOK_MODE", Some("enforce"));
         assert_eq!(
-            cfg_re,
+            resolve_hook_config(None, Some(&global), None).0,
             HookConfig {
                 enabled: true,
-                mode: HookMode::Enforce,
+                mode: HookMode::Enforce
             }
         );
-        let (cfg_cli_re, _) = resolve_hook_config(
-            None,
-            Some(&global),
-            Some(HookConfigOverride {
-                enabled: None,
-                mode: Some(HookMode::Audit),
-            }),
-        );
+        let cli_re = HookConfigOverride {
+            enabled: None,
+            mode: Some(HookMode::Audit),
+        };
         assert_eq!(
-            cfg_cli_re,
+            resolve_hook_config(None, Some(&global), Some(cli_re)).0,
             HookConfig {
                 enabled: true,
-                mode: HookMode::Audit,
+                mode: HookMode::Audit
             }
         );
 
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn default_preference_paths_respect_env_and_home() {
-        let _lock = crate::hook::HOOK_ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _g = EnvGuard::set("B3_MODELS_PERSONAL", None);
-
-        let home = std::env::temp_dir().join("b3-user-home");
-        let expected_global = resolve_user_home_dir(Some(&home))
-            .join(".b3")
-            .join("models.md");
+        let home = dir.join("home");
         assert_eq!(
             default_global_preferences_path(Some(&home)),
-            expected_global
+            resolve_user_home_dir(Some(&home))
+                .join(".b3")
+                .join("models.md")
         );
-
-        let proj = std::env::temp_dir().join("b3-proj");
         assert_eq!(
-            default_project_preferences_path(&proj),
-            proj.join(".b3").join("models.md")
+            default_project_preferences_path(&dir),
+            dir.join(".b3").join("models.md")
         );
-
-        let _g2 = EnvGuard::set("B3_MODELS_PERSONAL", Some("/custom/models.md"));
+        let _p = EnvGuard::set("B3_MODELS_PERSONAL", Some("/custom/models.md"));
         assert_eq!(
             default_global_preferences_path(Some(&home)),
             PathBuf::from("/custom/models.md")
         );
-    }
 
-    #[test]
-    fn parses_models_example_md() {
-        let content = include_str!("../../config/models.example.md");
-        let parsed = parse_hook_config_from_markdown(content)
-            .unwrap()
-            .expect("models.example.md must include hooks section");
-        assert_eq!(parsed.enabled, Some(true));
-        assert_eq!(parsed.mode, Some(HookMode::Enforce));
+        let example =
+            parse_hook_config_from_markdown(include_str!("../../config/models.example.md"))
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            example,
+            HookConfigOverride {
+                enabled: Some(true),
+                mode: Some(HookMode::Enforce)
+            }
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

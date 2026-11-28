@@ -649,9 +649,7 @@ expected_outcome: PASS
     );
 }
 
-#[test]
-fn always_on_context_budget_and_no_forbidden_routing_leaks() {
-    let root = repo_root();
+fn assert_always_on_context_budget(root: &Path) {
     let root_str = root.to_str().expect("repo_root utf8");
     let (report, code) = b3::context::measure_context(root_str, true).expect("measure_context");
     assert_eq!(code, 0, "strict context budget failed:\n{report}");
@@ -671,6 +669,12 @@ fn always_on_context_budget_and_no_forbidden_routing_leaks() {
         always_on_bytes <= 15_777,
         "always_on_total {always_on_bytes} B exceeds cap 15777 B:\n{report}"
     );
+}
+
+#[test]
+fn always_on_context_budget_and_no_forbidden_routing_leaks() {
+    let root = repo_root();
+    assert_always_on_context_budget(&root);
 
     let agents_raw = fs::read_to_string(root.join("AGENTS.md")).expect("read AGENTS.md");
     assert_eq!(
@@ -1802,6 +1806,24 @@ fn hook_integration_canonical_contract_and_no_duplication() {
         .expect("hooks section present");
     assert_eq!(parsed_hooks.enabled, Some(true));
     assert_eq!(parsed_hooks.mode, Some(b3::hook::config::HookMode::Enforce));
+
+    // Removed legacy hook variables must not remain in canonical reference or docs
+    for removed in [
+        "B3_HOOK_SKIP_PRECOMMIT",
+        "B3_PRECOMMIT_VERIFIED_TREE",
+        "B3_MERGE_AUTHORIZED",
+    ] {
+        assert!(
+            !hook_ref.contains(removed),
+            "workflows/references/hook-integration.md must not contain removed '{removed}'"
+        );
+        assert!(
+            !hooks_doc.contains(removed),
+            "docs/hooks.md must not contain removed '{removed}'"
+        );
+    }
+
+    assert_always_on_context_budget(&root);
 
     // Ensure no extra public AI command or agent role was created
     let mut role_count = 0usize;

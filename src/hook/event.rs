@@ -18,8 +18,7 @@ pub enum HostId {
 impl HostId {
     /// Parses a host identifier string (`cursor`, `claude`, `codex`, `antigravity`, `git`).
     pub fn parse(raw: &str) -> Result<Self, B3Error> {
-        let norm = raw.trim().to_ascii_lowercase();
-        match norm.as_str() {
+        match raw.trim().to_ascii_lowercase().as_str() {
             "cursor" => Ok(Self::Cursor),
             "claude" | "claude-code" | "claude_code" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
@@ -92,21 +91,32 @@ pub struct NormalizedEvent {
     pub raw_event_name: String,
     pub project_root: Option<String>,
     pub cwd: Option<String>,
-    pub session_id: Option<String>,
-    pub worker_id: Option<String>,
-    pub run_id: Option<String>,
-    pub operation_id: Option<String>,
-    pub tool_name: Option<String>,
     pub affected_paths: Vec<String>,
     pub command: Option<String>,
     pub continuation_active: bool,
-    pub state_fingerprint: Option<String>,
+    pub git_args: Vec<String>,
+    pub git_stdin: String,
+}
+
+fn has_non_ws_control_char(s: &str) -> bool {
+    s.chars()
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
 }
 
 fn validate_safe_text(val: &str, field: &str) -> Result<String, B3Error> {
     if has_control_chars(val) {
         return Err(fail(
             format!("HOOK_INVALID_FIELD: control characters rejected in {field}"),
+            1,
+        ));
+    }
+    Ok(val.to_string())
+}
+
+fn validate_non_ws_text(val: &str, field: &str) -> Result<String, B3Error> {
+    if has_non_ws_control_char(val) {
+        return Err(fail(
+            format!("HOOK_INVALID_FIELD: control character rejected in {field}"),
             1,
         ));
     }
@@ -134,10 +144,8 @@ fn first_array_safe_str(obj: &JsonValue, key: &str) -> Result<Option<String>, B3
         return Ok(None);
     };
     for item in items {
-        if let Some(s) = item.as_str() {
-            if !s.is_empty() {
-                return Ok(Some(validate_safe_text(s, key)?));
-            }
+        if let Some(s) = item.as_str().filter(|s| !s.is_empty()) {
+            return Ok(Some(validate_safe_text(s, key)?));
         }
     }
     Ok(None)
@@ -151,6 +159,19 @@ fn push_unique_path(paths: &mut Vec<String>, raw: &str, field: &str) -> Result<(
     let clean = validate_safe_text(trimmed, field)?;
     if !paths.iter().any(|existing| existing == &clean) {
         paths.push(clean);
+    }
+    Ok(())
+}
+
+fn collect_object_paths(
+    paths: &mut Vec<String>,
+    obj: &JsonValue,
+    keys: &[&str],
+) -> Result<(), B3Error> {
+    for key in keys {
+        if let Some(s) = obj.get(key).and_then(JsonValue::as_str) {
+            push_unique_path(paths, s, key)?;
+        }
     }
     Ok(())
 }
@@ -179,11 +200,7 @@ fn collect_paths_from_edits(
         return Ok(());
     };
     for item in items {
-        for key in ["file_path", "path"] {
-            if let Some(s) = item.get(key).and_then(JsonValue::as_str) {
-                push_unique_path(paths, s, key)?;
-            }
-        }
+        collect_object_paths(paths, item, &["file_path", "path"])?;
     }
     Ok(())
 }
@@ -201,26 +218,21 @@ fn extract_patch_paths(patch_text: &str, paths: &mut Vec<String>) -> Result<(), 
                 push_unique_path(paths, rest, "patch_path")?;
             }
         }
-        if let Some(rest) = trimmed.strip_prefix("+++ ") {
-            let candidate = rest.split('\t').next().unwrap_or(rest).trim();
-            if candidate != "/dev/null" {
-                let stripped = candidate.strip_prefix("b/").unwrap_or(candidate);
-                push_unique_path(paths, stripped, "patch_path")?;
-            }
-        } else if let Some(rest) = trimmed.strip_prefix("--- ") {
-            let candidate = rest.split('\t').next().unwrap_or(rest).trim();
-            if candidate != "/dev/null" {
-                let stripped = candidate.strip_prefix("a/").unwrap_or(candidate);
-                push_unique_path(paths, stripped, "patch_path")?;
+        for (marker, strip_prefix) in [("+++ ", "b/"), ("--- ", "a/")] {
+            if let Some(rest) = trimmed.strip_prefix(marker) {
+                let candidate = rest.split('\t').next().unwrap_or(rest).trim();
+                if candidate != "/dev/null" {
+                    push_unique_path(
+                        paths,
+                        candidate.strip_prefix(strip_prefix).unwrap_or(candidate),
+                        "patch_path",
+                    )?;
+                }
+                break;
             }
         }
     }
     Ok(())
-}
-
-fn has_non_ws_control_char(s: &str) -> bool {
-    s.chars()
-        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
 }
 
 fn extract_command_field(obj: &JsonValue, key: &str) -> Result<Option<String>, B3Error> {
@@ -228,28 +240,14 @@ fn extract_command_field(obj: &JsonValue, key: &str) -> Result<Option<String>, B
         return Ok(None);
     };
     if let Some(s) = val.as_str() {
-        if has_non_ws_control_char(s) {
-            return Err(fail(
-                format!("HOOK_INVALID_FIELD: control character rejected in {key}"),
-                1,
-            ));
-        }
-        return if s.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(s.to_string()))
-        };
+        validate_non_ws_text(s, key)?;
+        return Ok((!s.is_empty()).then(|| s.to_string()));
     }
     if let Some(arr) = val.as_array() {
         let mut parts = Vec::new();
         for item in arr {
             if let Some(s) = item.as_str() {
-                if has_non_ws_control_char(s) {
-                    return Err(fail(
-                        format!("HOOK_INVALID_FIELD: control character rejected in {key}"),
-                        1,
-                    ));
-                }
+                validate_non_ws_text(s, key)?;
                 if !s.is_empty() {
                     parts.push(s);
                 }
@@ -262,6 +260,31 @@ fn extract_command_field(obj: &JsonValue, key: &str) -> Result<Option<String>, B
     Ok(None)
 }
 
+fn extract_command_from(
+    primary: Option<&JsonValue>,
+    primary_keys: &[&str],
+    fallback: &JsonValue,
+) -> Result<Option<String>, B3Error> {
+    if let Some(obj) = primary {
+        for key in primary_keys {
+            if let Some(cmd) = extract_command_field(obj, key)? {
+                return Ok(Some(cmd));
+            }
+        }
+    }
+    extract_command_field(fallback, "command")
+}
+
+fn resolve_event_hint(event_hint: Option<&str>) -> Result<String, B3Error> {
+    if let Some(hint) = event_hint {
+        let trimmed = hint.trim();
+        if !trimmed.is_empty() {
+            return validate_safe_text(trimmed, "event_hint");
+        }
+    }
+    Err(fail("HOOK_INVALID_EVENT: missing hook event name", 1))
+}
+
 fn resolve_raw_event_name(
     payload: &JsonValue,
     keys: &[&str],
@@ -270,13 +293,32 @@ fn resolve_raw_event_name(
     if let Some(from_payload) = first_opt_safe_str(payload, keys)? {
         return Ok(from_payload);
     }
-    if let Some(hint) = event_hint {
-        let trimmed = hint.trim();
-        if !trimmed.is_empty() {
-            return validate_safe_text(trimmed, "event_hint");
+    resolve_event_hint(event_hint)
+}
+
+fn extract_project_root(
+    payload: &JsonValue,
+    array_keys: &[&str],
+    str_keys: &[&str],
+) -> Result<Option<String>, B3Error> {
+    for key in array_keys {
+        if let Some(val) = first_array_safe_str(payload, key)? {
+            return Ok(Some(val));
         }
     }
-    Err(fail("HOOK_INVALID_EVENT: missing hook event name", 1))
+    first_opt_safe_str(payload, str_keys)
+}
+
+fn parse_json_object(payload_raw: &str) -> Result<JsonValue, B3Error> {
+    let val = parse_json(payload_raw)
+        .map_err(|e| fail(format!("HOOK_INVALID_PAYLOAD: invalid JSON: {e}"), 1))?;
+    if !val.is_object() {
+        return Err(fail(
+            "HOOK_INVALID_PAYLOAD: root JSON value must be an object",
+            1,
+        ));
+    }
+    Ok(val)
 }
 
 fn classify_cursor_event(raw_event: &str, tool_name: Option<&str>) -> EventKind {
@@ -341,8 +383,15 @@ fn classify_codex_event(raw_event: &str, tool_name: Option<&str>) -> EventKind {
 }
 
 fn classify_antigravity_event(raw_event: &str, tool_name: Option<&str>) -> EventKind {
-    let is_write_tool = matches!(
-        tool_name,
+    let norm_tool = tool_name.map(|s| {
+        let lower = s.trim().to_ascii_lowercase();
+        lower
+            .strip_prefix("cortex_step_type_")
+            .unwrap_or(&lower)
+            .to_string()
+    });
+    let is_write = matches!(
+        norm_tool.as_deref(),
         Some(
             "write_to_file"
                 | "write_file"
@@ -351,20 +400,22 @@ fn classify_antigravity_event(raw_event: &str, tool_name: Option<&str>) -> Event
                 | "multi_replace_file_content"
         )
     );
+    let is_cmd = norm_tool.as_deref() == Some("run_command");
+
     match raw_event {
         "PreToolUse" | "PreInvocation" => {
-            if is_write_tool {
+            if is_write {
                 EventKind::BeforeFileWrite
-            } else if tool_name == Some("run_command") {
+            } else if is_cmd {
                 EventKind::BeforeCommand
             } else {
                 EventKind::Unsupported
             }
         }
         "PostToolUse" | "PostInvocation" => {
-            if is_write_tool {
+            if is_write {
                 EventKind::AfterFileWrite
-            } else if tool_name == Some("run_command") {
+            } else if is_cmd {
                 EventKind::AfterCommand
             } else {
                 EventKind::Unsupported
@@ -385,6 +436,114 @@ fn classify_git_event(raw_event: &str) -> EventKind {
     }
 }
 
+fn normalize_git_event(
+    event_hint: Option<&str>,
+    payload_raw: &str,
+    safe_default_cwd: Option<String>,
+) -> Result<NormalizedEvent, B3Error> {
+    if payload_raw.trim().is_empty() {
+        let raw_event_name = resolve_event_hint(event_hint)?;
+        return Ok(NormalizedEvent {
+            host: HostId::Git,
+            event: classify_git_event(&raw_event_name),
+            raw_event_name,
+            project_root: safe_default_cwd.clone(),
+            cwd: safe_default_cwd,
+            affected_paths: Vec::new(),
+            command: None,
+            continuation_active: false,
+            git_args: Vec::new(),
+            git_stdin: String::new(),
+        });
+    }
+
+    if payload_raw.trim_start().starts_with('{') {
+        let payload = parse_json_object(payload_raw)?;
+        let raw_event_name =
+            resolve_raw_event_name(&payload, &["hook_event_name", "event", "hook"], event_hint)?;
+        let mut affected_paths = Vec::new();
+        collect_paths_from_array(&mut affected_paths, payload.get("paths"), "paths")?;
+        collect_paths_from_array(
+            &mut affected_paths,
+            payload.get("staged_files"),
+            "staged_files",
+        )?;
+        let cwd = opt_safe_str(&payload, "cwd")?.or_else(|| safe_default_cwd.clone());
+        let project_root =
+            first_opt_safe_str(&payload, &["project_root", "repo_root"])?.or(safe_default_cwd);
+        let git_stdin = match payload.get("git_stdin").and_then(JsonValue::as_str) {
+            Some(s) => validate_non_ws_text(s, "git_stdin")?,
+            None => String::new(),
+        };
+        return Ok(NormalizedEvent {
+            host: HostId::Git,
+            event: classify_git_event(&raw_event_name),
+            raw_event_name,
+            project_root,
+            cwd,
+            affected_paths,
+            command: None,
+            continuation_active: false,
+            git_args: Vec::new(),
+            git_stdin,
+        });
+    }
+
+    validate_non_ws_text(payload_raw, "git_stdin")?;
+    let raw_event_name = resolve_event_hint(event_hint)?;
+    Ok(NormalizedEvent {
+        host: HostId::Git,
+        event: classify_git_event(&raw_event_name),
+        raw_event_name,
+        project_root: safe_default_cwd.clone(),
+        cwd: safe_default_cwd,
+        affected_paths: Vec::new(),
+        command: None,
+        continuation_active: false,
+        git_args: Vec::new(),
+        git_stdin: payload_raw.to_string(),
+    })
+}
+
+fn collect_standard_tool_paths(
+    paths: &mut Vec<String>,
+    host: HostId,
+    payload: &JsonValue,
+) -> Result<(), B3Error> {
+    if let Some(ti) = payload.get("tool_input") {
+        let keys: &[&str] = match host {
+            HostId::Claude => &["file_path", "notebook_path", "path"],
+            _ => &["file_path", "path"],
+        };
+        collect_object_paths(paths, ti, keys)?;
+        if host == HostId::Cursor {
+            collect_paths_from_array(paths, ti.get("paths"), "paths")?;
+        }
+        if matches!(host, HostId::Cursor | HostId::Claude) {
+            collect_paths_from_edits(paths, ti.get("edits"))?;
+        }
+        if host == HostId::Codex {
+            for k in ["patch", "input"] {
+                if let Some(s) = ti.get(k).and_then(JsonValue::as_str) {
+                    extract_patch_paths(s, paths)?;
+                }
+            }
+            if let Some(s) = ti.as_str() {
+                extract_patch_paths(s, paths)?;
+            }
+        }
+    }
+    if host == HostId::Cursor {
+        collect_object_paths(paths, payload, &["file_path", "path"])?;
+        collect_paths_from_array(paths, payload.get("paths"), "paths")?;
+    } else if host == HostId::Codex {
+        if let Some(s) = payload.get("input").and_then(JsonValue::as_str) {
+            extract_patch_paths(s, paths)?;
+        }
+    }
+    Ok(())
+}
+
 /// Normalizes a host-specific hook payload into a sanitized, host-neutral `NormalizedEvent`.
 pub fn normalize_event(
     host: HostId,
@@ -394,10 +553,7 @@ pub fn normalize_event(
 ) -> Result<NormalizedEvent, B3Error> {
     if payload_raw.len() > MAX_HOOK_PAYLOAD_BYTES {
         return Err(fail(
-            format!(
-                "HOOK_PAYLOAD_TOO_LARGE: payload exceeds {} bytes",
-                MAX_HOOK_PAYLOAD_BYTES
-            ),
+            format!("HOOK_PAYLOAD_TOO_LARGE: payload exceeds {MAX_HOOK_PAYLOAD_BYTES} bytes"),
             1,
         ));
     }
@@ -407,197 +563,56 @@ pub fn normalize_event(
         _ => None,
     };
 
-    let payload = if host == HostId::Git && payload_raw.trim().is_empty() {
-        JsonValue::Object(Vec::new())
-    } else {
-        let val = parse_json(payload_raw)
-            .map_err(|e| fail(format!("HOOK_INVALID_PAYLOAD: invalid JSON: {e}"), 1))?;
-        if !val.is_object() {
-            return Err(fail(
-                "HOOK_INVALID_PAYLOAD: root JSON value must be an object",
-                1,
-            ));
-        }
-        val
-    };
+    if host == HostId::Git {
+        return normalize_git_event(event_hint, payload_raw, safe_default_cwd);
+    }
 
+    let payload = parse_json_object(payload_raw)?;
     let mut affected_paths = Vec::new();
+    let cwd = opt_safe_str(&payload, "cwd")?.or(safe_default_cwd);
 
-    match host {
-        HostId::Cursor => {
+    let (raw_event_name, event, project_root, command, continuation_active) = match host {
+        HostId::Cursor | HostId::Claude | HostId::Codex => {
             let raw_event_name =
                 resolve_raw_event_name(&payload, &["hook_event_name", "event"], event_hint)?;
             let tool_name = opt_safe_str(&payload, "tool_name")?;
-            let event = classify_cursor_event(&raw_event_name, tool_name.as_deref());
-
-            if let Some(ti) = payload.get("tool_input") {
-                for key in ["file_path", "path"] {
-                    if let Some(s) = ti.get(key).and_then(JsonValue::as_str) {
-                        push_unique_path(&mut affected_paths, s, key)?;
-                    }
-                }
-                collect_paths_from_array(&mut affected_paths, ti.get("paths"), "paths")?;
-                collect_paths_from_edits(&mut affected_paths, ti.get("edits"))?;
-            }
-            for key in ["file_path", "path"] {
-                if let Some(s) = payload.get(key).and_then(JsonValue::as_str) {
-                    push_unique_path(&mut affected_paths, s, key)?;
-                }
-            }
-            collect_paths_from_array(&mut affected_paths, payload.get("paths"), "paths")?;
-
-            let command = payload
-                .get("tool_input")
-                .and_then(|ti| extract_command_field(ti, "command").transpose())
-                .transpose()?
-                .or(extract_command_field(&payload, "command")?);
-
-            let project_root = first_array_safe_str(&payload, "workspace_roots")?
-                .or(opt_safe_str(&payload, "project_root")?);
-            let cwd = opt_safe_str(&payload, "cwd")?.or(safe_default_cwd);
-            let session_id = first_opt_safe_str(&payload, &["conversation_id", "session_id"])?;
-            let worker_id =
-                first_opt_safe_str(&payload, &["worker_id", "subagent_id", "agent_id"])?;
-            let run_id = first_opt_safe_str(&payload, &["run_id", "b3_run_id"])?;
-            let operation_id =
-                first_opt_safe_str(&payload, &["tool_use_id", "call_id", "operation_id"])?;
+            let event = match host {
+                HostId::Cursor => classify_cursor_event(&raw_event_name, tool_name.as_deref()),
+                HostId::Claude => classify_claude_event(&raw_event_name, tool_name.as_deref()),
+                HostId::Codex => classify_codex_event(&raw_event_name, tool_name.as_deref()),
+                _ => unreachable!(),
+            };
+            collect_standard_tool_paths(&mut affected_paths, host, &payload)?;
+            let command = if host == HostId::Claude {
+                payload
+                    .get("tool_input")
+                    .and_then(|ti| extract_command_field(ti, "command").transpose())
+                    .transpose()?
+            } else {
+                extract_command_from(payload.get("tool_input"), &["command"], &payload)?
+            };
+            let array_keys: &[&str] = if host == HostId::Cursor {
+                &["workspace_roots"]
+            } else {
+                &[]
+            };
+            let project_root = extract_project_root(&payload, array_keys, &["project_root"])?;
             let continuation_active = payload
                 .get("stop_hook_active")
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false)
-                || payload
-                    .get("loop_count")
-                    .and_then(JsonValue::as_i64)
-                    .is_some_and(|n| n > 0);
-            let state_fingerprint = opt_safe_str(&payload, "state_fingerprint")?;
-
-            Ok(NormalizedEvent {
-                host,
-                event,
+                || (host == HostId::Cursor
+                    && payload
+                        .get("loop_count")
+                        .and_then(JsonValue::as_i64)
+                        .is_some_and(|n| n > 0));
+            (
                 raw_event_name,
+                event,
                 project_root,
-                cwd,
-                session_id,
-                worker_id,
-                run_id,
-                operation_id,
-                tool_name,
-                affected_paths,
                 command,
                 continuation_active,
-                state_fingerprint,
-            })
-        }
-        HostId::Claude => {
-            let raw_event_name =
-                resolve_raw_event_name(&payload, &["hook_event_name", "event"], event_hint)?;
-            let tool_name = opt_safe_str(&payload, "tool_name")?;
-            let event = classify_claude_event(&raw_event_name, tool_name.as_deref());
-
-            if let Some(ti) = payload.get("tool_input") {
-                for key in ["file_path", "notebook_path", "path"] {
-                    if let Some(s) = ti.get(key).and_then(JsonValue::as_str) {
-                        push_unique_path(&mut affected_paths, s, key)?;
-                    }
-                }
-                collect_paths_from_edits(&mut affected_paths, ti.get("edits"))?;
-            }
-
-            let command = payload
-                .get("tool_input")
-                .and_then(|ti| extract_command_field(ti, "command").transpose())
-                .transpose()?;
-
-            let project_root = opt_safe_str(&payload, "project_root")?;
-            let cwd = opt_safe_str(&payload, "cwd")?.or(safe_default_cwd);
-            let session_id = opt_safe_str(&payload, "session_id")?;
-            let worker_id =
-                first_opt_safe_str(&payload, &["worker_id", "agent_id", "subagent_id"])?;
-            let run_id = first_opt_safe_str(&payload, &["run_id", "b3_run_id"])?;
-            let operation_id = first_opt_safe_str(&payload, &["tool_use_id", "operation_id"])?;
-            let continuation_active = payload
-                .get("stop_hook_active")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false);
-            let state_fingerprint = opt_safe_str(&payload, "state_fingerprint")?;
-
-            Ok(NormalizedEvent {
-                host,
-                event,
-                raw_event_name,
-                project_root,
-                cwd,
-                session_id,
-                worker_id,
-                run_id,
-                operation_id,
-                tool_name,
-                affected_paths,
-                command,
-                continuation_active,
-                state_fingerprint,
-            })
-        }
-        HostId::Codex => {
-            let raw_event_name =
-                resolve_raw_event_name(&payload, &["hook_event_name", "event"], event_hint)?;
-            let tool_name = opt_safe_str(&payload, "tool_name")?;
-            let event = classify_codex_event(&raw_event_name, tool_name.as_deref());
-
-            if let Some(ti) = payload.get("tool_input") {
-                for key in ["file_path", "path"] {
-                    if let Some(s) = ti.get(key).and_then(JsonValue::as_str) {
-                        push_unique_path(&mut affected_paths, s, key)?;
-                    }
-                }
-                for patch_key in ["patch", "input"] {
-                    if let Some(patch_str) = ti.get(patch_key).and_then(JsonValue::as_str) {
-                        extract_patch_paths(patch_str, &mut affected_paths)?;
-                    }
-                }
-                if let Some(ti_str) = ti.as_str() {
-                    extract_patch_paths(ti_str, &mut affected_paths)?;
-                }
-            }
-            if let Some(input_str) = payload.get("input").and_then(JsonValue::as_str) {
-                extract_patch_paths(input_str, &mut affected_paths)?;
-            }
-
-            let command = payload
-                .get("tool_input")
-                .and_then(|ti| extract_command_field(ti, "command").transpose())
-                .transpose()?
-                .or(extract_command_field(&payload, "command")?);
-
-            let project_root = opt_safe_str(&payload, "project_root")?;
-            let cwd = opt_safe_str(&payload, "cwd")?.or(safe_default_cwd);
-            let session_id = opt_safe_str(&payload, "session_id")?;
-            let worker_id = first_opt_safe_str(&payload, &["worker_id", "agent_id"])?;
-            let run_id = first_opt_safe_str(&payload, &["run_id", "b3_run_id"])?;
-            let operation_id =
-                first_opt_safe_str(&payload, &["tool_use_id", "call_id", "operation_id"])?;
-            let continuation_active = payload
-                .get("stop_hook_active")
-                .and_then(JsonValue::as_bool)
-                .unwrap_or(false);
-            let state_fingerprint = opt_safe_str(&payload, "state_fingerprint")?;
-
-            Ok(NormalizedEvent {
-                host,
-                event,
-                raw_event_name,
-                project_root,
-                cwd,
-                session_id,
-                worker_id,
-                run_id,
-                operation_id,
-                tool_name,
-                affected_paths,
-                command,
-                continuation_active,
-                state_fingerprint,
-            })
+            )
         }
         HostId::Antigravity => {
             let raw_event_name = resolve_raw_event_name(
@@ -607,112 +622,55 @@ pub fn normalize_event(
             )?;
             let tool_call = payload.get("toolCall");
             let tool_name = match tool_call.and_then(|tc| tc.get("name")) {
-                Some(v) => match v.as_str() {
-                    Some(s) if !s.is_empty() => Some(validate_safe_text(s, "toolCall.name")?),
-                    _ => None,
-                },
+                Some(v) => v
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| validate_safe_text(s, "toolCall.name"))
+                    .transpose()?,
                 None => first_opt_safe_str(&payload, &["toolName", "tool_name"])?,
             };
             let event = classify_antigravity_event(&raw_event_name, tool_name.as_deref());
-
-            if let Some(args) = tool_call.and_then(|tc| tc.get("args")) {
-                for key in ["Path", "TargetFile", "file_path", "path"] {
-                    if let Some(s) = args.get(key).and_then(JsonValue::as_str) {
-                        push_unique_path(&mut affected_paths, s, key)?;
-                    }
-                }
+            let args = tool_call.and_then(|tc| tc.get("args"));
+            if let Some(args_obj) = args {
+                collect_object_paths(
+                    &mut affected_paths,
+                    args_obj,
+                    &["TargetFile", "Path", "file_path", "path", "target_file"],
+                )?;
             }
-
-            let command = tool_call
-                .and_then(|tc| tc.get("args"))
-                .and_then(|args| extract_command_field(args, "CommandLine").transpose())
-                .transpose()?
-                .or(extract_command_field(&payload, "command")?);
-
-            let project_root = first_array_safe_str(&payload, "workspacePaths")?
-                .or(first_array_safe_str(&payload, "workspaceRoots")?)
-                .or(first_opt_safe_str(
-                    &payload,
-                    &["projectRoot", "project_root"],
-                )?);
-            let cwd = opt_safe_str(&payload, "cwd")?.or(safe_default_cwd);
-            let session_id =
-                first_opt_safe_str(&payload, &["conversationId", "sessionId", "session_id"])?;
-            let worker_id = first_opt_safe_str(&payload, &["workerId", "worker_id", "agentId"])?;
-            let run_id = first_opt_safe_str(&payload, &["runId", "run_id"])?;
-            let operation_id = match tool_call.and_then(|tc| tc.get("id")) {
-                Some(v) => match v.as_str() {
-                    Some(s) if !s.is_empty() => Some(validate_safe_text(s, "toolCall.id")?),
-                    _ => None,
-                },
-                None => first_opt_safe_str(&payload, &["invocationId", "operationId"])?,
-            };
+            let command = extract_command_from(args, &["CommandLine", "command"], &payload)?;
+            let project_root = extract_project_root(
+                &payload,
+                &["workspacePaths", "workspaceRoots"],
+                &["projectRoot", "project_root"],
+            )?;
             let continuation_active = payload
                 .get("continuationActive")
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false);
-            let state_fingerprint =
-                first_opt_safe_str(&payload, &["stateFingerprint", "state_fingerprint"])?;
-
-            Ok(NormalizedEvent {
-                host,
-                event,
+            (
                 raw_event_name,
+                event,
                 project_root,
-                cwd,
-                session_id,
-                worker_id,
-                run_id,
-                operation_id,
-                tool_name,
-                affected_paths,
                 command,
                 continuation_active,
-                state_fingerprint,
-            })
+            )
         }
-        HostId::Git => {
-            let raw_event_name = resolve_raw_event_name(
-                &payload,
-                &["hook_event_name", "event", "hook"],
-                event_hint,
-            )?;
-            let event = classify_git_event(&raw_event_name);
+        HostId::Git => unreachable!("handled above"),
+    };
 
-            collect_paths_from_array(&mut affected_paths, payload.get("paths"), "paths")?;
-            collect_paths_from_array(
-                &mut affected_paths,
-                payload.get("staged_files"),
-                "staged_files",
-            )?;
-
-            let cwd = opt_safe_str(&payload, "cwd")?.or_else(|| safe_default_cwd.clone());
-            let project_root =
-                first_opt_safe_str(&payload, &["project_root", "repo_root"])?.or(safe_default_cwd);
-            let session_id = opt_safe_str(&payload, "session_id")?;
-            let worker_id = opt_safe_str(&payload, "worker_id")?;
-            let run_id = first_opt_safe_str(&payload, &["run_id", "b3_run_id"])?;
-            let operation_id = opt_safe_str(&payload, "operation_id")?;
-            let state_fingerprint = opt_safe_str(&payload, "state_fingerprint")?;
-
-            Ok(NormalizedEvent {
-                host,
-                event,
-                raw_event_name,
-                project_root,
-                cwd,
-                session_id,
-                worker_id,
-                run_id,
-                operation_id,
-                tool_name: None,
-                affected_paths,
-                command: None,
-                continuation_active: false,
-                state_fingerprint,
-            })
-        }
-    }
+    Ok(NormalizedEvent {
+        host,
+        event,
+        raw_event_name,
+        project_root,
+        cwd,
+        affected_paths,
+        command,
+        continuation_active,
+        git_args: Vec::new(),
+        git_stdin: String::new(),
+    })
 }
 
 #[cfg(test)]
@@ -737,14 +695,12 @@ mod tests {
             "tool_name": "Edit",
             "tool_input": { "file_path": "src/main.rs", "paths": ["src/main.rs", "src/lib.rs"] },
             "workspace_roots": ["/repo"],
-            "conversation_id": "conv-123",
             "lastUserInput": "SECRET PROMPT DO NOT RETAIN"
         }"#;
         let ev = normalize_event(HostId::Cursor, None, write_payload, Some("/repo")).unwrap();
         assert_eq!(ev.event, EventKind::BeforeFileWrite);
         assert_eq!(ev.project_root.as_deref(), Some("/repo"));
         assert_eq!(ev.cwd.as_deref(), Some("/repo"));
-        assert_eq!(ev.session_id.as_deref(), Some("conv-123"));
         assert_eq!(ev.affected_paths, vec!["src/main.rs", "src/lib.rs"]);
 
         let shell_payload = r#"{"command": "git status", "cwd": "/repo"}"#;
@@ -758,100 +714,141 @@ mod tests {
         assert_eq!(ev_shell.event, EventKind::BeforeCommand);
         assert_eq!(ev_shell.command.as_deref(), Some("git status"));
 
-        let stop_payload = r#"{"hook_event_name": "stop", "loop_count": 2}"#;
-        let ev_stop = normalize_event(HostId::Cursor, None, stop_payload, None).unwrap();
+        let ev_stop = normalize_event(
+            HostId::Cursor,
+            None,
+            r#"{"hook_event_name": "stop", "loop_count": 2}"#,
+            None,
+        )
+        .unwrap();
         assert_eq!(ev_stop.event, EventKind::TaskCompletion);
         assert!(ev_stop.continuation_active);
 
-        let sub_payload = r#"{"hook_event_name": "subagentStop", "loop_count": 0}"#;
-        let ev_sub = normalize_event(HostId::Cursor, None, sub_payload, None).unwrap();
+        let ev_sub = normalize_event(
+            HostId::Cursor,
+            None,
+            r#"{"hook_event_name": "subagentStop", "loop_count": 0}"#,
+            None,
+        )
+        .unwrap();
         assert_eq!(ev_sub.event, EventKind::WorkerCompletion);
         assert!(!ev_sub.continuation_active);
     }
 
     #[test]
-    fn normalize_claude_events() {
-        let payload = r#"{
+    fn normalize_claude_and_codex_events() {
+        let claude_payload = r#"{
             "hook_event_name": "PreToolUse",
             "tool_name": "MultiEdit",
-            "tool_input": {
-                "file_path": "src/a.rs",
-                "edits": [{"file_path": "src/b.rs"}]
-            },
-            "cwd": "/proj",
-            "session_id": "sess-1",
-            "tool_use_id": "toolu_1"
+            "tool_input": { "file_path": "src/a.rs", "edits": [{"file_path": "src/b.rs"}] },
+            "cwd": "/proj"
         }"#;
-        let ev = normalize_event(HostId::Claude, None, payload, None).unwrap();
+        let ev = normalize_event(HostId::Claude, None, claude_payload, None).unwrap();
         assert_eq!(ev.event, EventKind::BeforeFileWrite);
         assert_eq!(ev.affected_paths, vec!["src/a.rs", "src/b.rs"]);
-        assert_eq!(ev.operation_id.as_deref(), Some("toolu_1"));
 
-        let stop = r#"{"hook_event_name": "Stop", "stop_hook_active": true}"#;
-        let ev_stop = normalize_event(HostId::Claude, None, stop, None).unwrap();
+        let ev_stop = normalize_event(
+            HostId::Claude,
+            None,
+            r#"{"hook_event_name": "Stop", "stop_hook_active": true}"#,
+            None,
+        )
+        .unwrap();
         assert_eq!(ev_stop.event, EventKind::TaskCompletion);
         assert!(ev_stop.continuation_active);
-    }
 
-    #[test]
-    fn normalize_codex_apply_patch_and_shell() {
-        let patch_payload = r#"{
+        let codex_patch = r#"{
             "hook_event_name": "PreToolUse",
             "tool_name": "apply_patch",
             "tool_input": {
                 "patch": "*** Begin Patch\n*** Update File: src/hook/config.rs\n*** Add File: src/hook/new.rs\n*** Delete File: old.rs\n*** End Patch"
-            },
-            "cwd": "/repo",
-            "session_id": "codex-1",
-            "tool_use_id": "call-9"
+            }
         }"#;
-        let ev = normalize_event(HostId::Codex, None, patch_payload, None).unwrap();
-        assert_eq!(ev.event, EventKind::BeforeFileWrite);
+        let ev_codex = normalize_event(HostId::Codex, None, codex_patch, None).unwrap();
+        assert_eq!(ev_codex.event, EventKind::BeforeFileWrite);
         assert_eq!(
-            ev.affected_paths,
+            ev_codex.affected_paths,
             vec!["src/hook/config.rs", "src/hook/new.rs", "old.rs"]
         );
-        assert_eq!(ev.operation_id.as_deref(), Some("call-9"));
 
-        let shell_payload = r#"{
-            "hook_event_name": "PostToolUse",
-            "tool_name": "shell",
-            "tool_input": {"command": "cargo test"}
-        }"#;
-        let ev_shell = normalize_event(HostId::Codex, None, shell_payload, None).unwrap();
+        let ev_shell = normalize_event(
+            HostId::Codex,
+            None,
+            r#"{"hook_event_name": "PostToolUse", "tool_name": "shell", "tool_input": {"command": "cargo test"}}"#,
+            None,
+        )
+        .unwrap();
         assert_eq!(ev_shell.event, EventKind::AfterCommand);
         assert_eq!(ev_shell.command.as_deref(), Some("cargo test"));
     }
 
     #[test]
-    fn normalize_antigravity_and_git_events() {
-        let agy_payload = r#"{
+    fn normalize_antigravity_events_and_cortex_prefixes() {
+        let agy_write = r#"{
             "hookEventName": "PreToolUse",
             "toolCall": {
-                "id": "tc-42",
-                "name": "replace_file_content",
-                "args": { "TargetFile": "src/lib.rs" }
+                "name": "CORTEX_STEP_TYPE_WRITE_TO_FILE",
+                "args": { "TargetFile": "src/lib.rs", "target_file": "src/extra.rs" }
             },
             "workspacePaths": ["/ws"],
-            "conversationId": "conv-agy",
             "continuationActive": true
         }"#;
-        let ev_agy = normalize_event(HostId::Antigravity, None, agy_payload, None).unwrap();
-        assert_eq!(ev_agy.event, EventKind::BeforeFileWrite);
-        assert_eq!(ev_agy.project_root.as_deref(), Some("/ws"));
-        assert_eq!(ev_agy.session_id.as_deref(), Some("conv-agy"));
-        assert_eq!(ev_agy.operation_id.as_deref(), Some("tc-42"));
-        assert_eq!(ev_agy.affected_paths, vec!["src/lib.rs"]);
-        assert!(ev_agy.continuation_active);
+        let ev_write = normalize_event(HostId::Antigravity, None, agy_write, None).unwrap();
+        assert_eq!(ev_write.event, EventKind::BeforeFileWrite);
+        assert_eq!(ev_write.project_root.as_deref(), Some("/ws"));
+        assert_eq!(ev_write.affected_paths, vec!["src/lib.rs", "src/extra.rs"]);
+        assert!(ev_write.continuation_active);
 
-        let ev_git =
+        let agy_cmd = r#"{
+            "hookEventName": "PostToolUse",
+            "toolCall": {
+                "name": "CORTEX_STEP_TYPE_RUN_COMMAND",
+                "args": { "CommandLine": "git push" }
+            }
+        }"#;
+        let ev_cmd = normalize_event(HostId::Antigravity, None, agy_cmd, None).unwrap();
+        assert_eq!(ev_cmd.event, EventKind::AfterCommand);
+        assert_eq!(ev_cmd.command.as_deref(), Some("git push"));
+
+        let agy_lower = r#"{
+            "hookEventName": "PreInvocation",
+            "toolCall": { "name": "cortex_step_type_replace_file_content", "args": { "Path": "a.rs" } }
+        }"#;
+        let ev_lower = normalize_event(HostId::Antigravity, None, agy_lower, None).unwrap();
+        assert_eq!(ev_lower.event, EventKind::BeforeFileWrite);
+        assert_eq!(ev_lower.affected_paths, vec!["a.rs"]);
+    }
+
+    #[test]
+    fn normalize_git_empty_json_and_raw_stdin() {
+        let ev_empty =
             normalize_event(HostId::Git, Some("pre-commit"), "", Some("/git-repo")).unwrap();
-        assert_eq!(ev_git.event, EventKind::BeforeCommit);
-        assert_eq!(ev_git.project_root.as_deref(), Some("/git-repo"));
-        assert_eq!(ev_git.cwd.as_deref(), Some("/git-repo"));
+        assert_eq!(ev_empty.event, EventKind::BeforeCommit);
+        assert_eq!(ev_empty.project_root.as_deref(), Some("/git-repo"));
+        assert_eq!(ev_empty.cwd.as_deref(), Some("/git-repo"));
+        assert!(ev_empty.git_stdin.is_empty());
+        assert!(ev_empty.git_args.is_empty());
 
-        let ev_msg = normalize_event(HostId::Git, Some("commit-msg"), "{}", None).unwrap();
-        assert_eq!(ev_msg.event, EventKind::Unsupported);
+        let json_payload = r#"{"hook":"pre-push","staged_files":["a.rs"],"project_root":"/repo","git_stdin":"refs/heads/main 1111 refs/heads/main 2222\n"}"#;
+        let ev_json = normalize_event(HostId::Git, None, json_payload, None).unwrap();
+        assert_eq!(ev_json.event, EventKind::BeforePush);
+        assert_eq!(ev_json.affected_paths, vec!["a.rs"]);
+        assert_eq!(ev_json.project_root.as_deref(), Some("/repo"));
+        assert_eq!(
+            ev_json.git_stdin,
+            "refs/heads/main 1111 refs/heads/main 2222\n"
+        );
+
+        let raw_stdin = "refs/heads/main 0000000000000000000000000000000000000000 refs/heads/main 1111111111111111111111111111111111111111\n";
+        let ev_raw =
+            normalize_event(HostId::Git, Some("pre-push"), raw_stdin, Some("/git-repo")).unwrap();
+        assert_eq!(ev_raw.event, EventKind::BeforePush);
+        assert_eq!(ev_raw.project_root.as_deref(), Some("/git-repo"));
+        assert_eq!(ev_raw.cwd.as_deref(), Some("/git-repo"));
+        assert_eq!(ev_raw.git_stdin, raw_stdin);
+
+        assert!(normalize_event(HostId::Git, None, raw_stdin, None).is_err());
+        assert!(normalize_event(HostId::Git, Some("pre-push"), "bad\x07line", None).is_err());
     }
 
     #[test]
