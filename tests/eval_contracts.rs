@@ -72,6 +72,17 @@ const EXPECTED_NEW_ORCHESTRATION_EVALS: &[&str] = &[
     "evals/commands/daily-commands-canonical-wrapper-parity.yaml",
 ];
 
+const EXPECTED_HOOK_EVALS: &[&str] = &[
+    "evals/workflows/hooks/tier0-fast-containment.yaml",
+    "evals/workflows/hooks/tier1-canonical-precommit-reuse.yaml",
+    "evals/workflows/hooks/disabled-preserves-workflow-guards.yaml",
+    "evals/workflows/hooks/audit-mode-non-blocking.yaml",
+    "evals/workflows/hooks/host-protocol-honesty-and-fallback.yaml",
+    "evals/workflows/hooks/opt-in-install-preserves-user-hooks.yaml",
+    "evals/workflows/hooks/recursion-and-parallel-isolation.yaml",
+    "evals/workflows/hooks/clarification-boundary-separation.yaml",
+];
+
 fn normalize_lf(raw: &str) -> String {
     raw.replace("\r\n", "\n")
 }
@@ -580,18 +591,21 @@ fn eval_fixtures_schema_uniqueness_and_artifact_safety() {
         }
     }
 
-    for expected_rel in EXPECTED_NEW_ORCHESTRATION_EVALS {
+    for expected_rel in EXPECTED_NEW_ORCHESTRATION_EVALS
+        .iter()
+        .chain(EXPECTED_HOOK_EVALS.iter())
+    {
         let full = root.join(expected_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         if !full.is_file() {
             errors.push(format!(
-                "missing required semantic orchestration eval: {expected_rel}"
+                "missing required semantic orchestration/hook eval: {expected_rel}"
             ));
         }
     }
 
     assert!(
-        !yaml_files.is_empty() && yaml_files.len() >= 338,
-        "expected >= 338 eval fixtures, found {}",
+        !yaml_files.is_empty() && yaml_files.len() >= 346,
+        "expected >= 346 eval fixtures, found {}",
         yaml_files.len()
     );
     assert!(
@@ -1645,16 +1659,17 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
     assert!(collect_errs.is_empty(), "collect errors: {collect_errs:?}");
     assert_eq!(
         all_yaml.len(),
-        338,
-        "expected 338 total YAML fixtures across evals/, found {}",
+        346,
+        "expected 346 total YAML fixtures across evals/, found {}",
         all_yaml.len()
     );
 
     let evals_readme = read_lf("evals/README.md");
     assert!(
-        evals_readme.contains("`338` YAML")
-            && evals_readme.contains("| `workflows/orchestration/` | 22 |"),
-        "evals/README.md inventory out of sync with 338 total / 22 workflows/orchestration fixtures"
+        evals_readme.contains("`346` YAML")
+            && evals_readme.contains("| `workflows/orchestration/` | 22 |")
+            && evals_readme.contains("| `workflows/hooks/` | 8 |"),
+        "evals/README.md inventory out of sync with 346 total / 22 workflows/orchestration / 8 workflows/hooks fixtures"
     );
 
     // 5. `scripts/README.md` flag documentation & end-to-end `run_b3` smoke check on
@@ -1728,4 +1743,76 @@ fn continuous_scheduling_and_incremental_integration_contracts() {
             "expected '{expected}' in check-wave output:\n{out}"
         );
     }
+}
+
+#[test]
+fn hook_integration_canonical_contract_and_no_duplication() {
+    let root = repo_root();
+
+    let hook_ref = fs::read_to_string(root.join("workflows/references/hook-integration.md"))
+        .expect("read workflows/references/hook-integration.md");
+    for required in [
+        "hooks:",
+        "enabled: true",
+        "mode: enforce",
+        "Tier 0",
+        "Tier 1",
+        "Tier 2",
+        "B3_HOOK_ACTIVE",
+        "clarification-gate.md",
+    ] {
+        assert!(
+            hook_ref.contains(required),
+            "workflows/references/hook-integration.md missing '{required}'"
+        );
+    }
+
+    let hooks_doc = fs::read_to_string(root.join("docs/hooks.md")).expect("read docs/hooks.md");
+    for required in [
+        "EVENT_BLOCKING",
+        "NATIVE_BLOCKING",
+        "NOT_VERIFIED",
+        "Cursor",
+        "Claude Code",
+        "Codex",
+        "Antigravity",
+        "Git",
+        "mermaid",
+    ] {
+        assert!(
+            hooks_doc.contains(required),
+            "docs/hooks.md missing '{required}'"
+        );
+    }
+
+    let adr = fs::read_to_string(
+        root.join("research/decisions/decision-015-native-guard-event-hooks.md"),
+    )
+    .expect("read decision-015");
+    assert!(adr.contains("hook-integration.md") || adr.contains("b3 hook"));
+
+    let disp = fs::read_to_string(root.join("workflows/references/dispatch-naming.md"))
+        .expect("read dispatch-naming.md");
+    assert!(disp.contains("hook-integration.md"));
+
+    let models_ex =
+        fs::read_to_string(root.join("config/models.example.md")).expect("read models.example.md");
+    let parsed_hooks = b3::hook::config::parse_hook_config_from_markdown(&models_ex)
+        .expect("parse models.example.md hooks")
+        .expect("hooks section present");
+    assert_eq!(parsed_hooks.enabled, Some(true));
+    assert_eq!(parsed_hooks.mode, Some(b3::hook::config::HookMode::Enforce));
+
+    // Ensure no extra public AI command or agent role was created
+    let mut role_count = 0usize;
+    for entry in fs::read_dir(root.join("agents")).expect("read agents/") {
+        let p = entry.expect("agent entry").path();
+        if p.is_file()
+            && p.extension().and_then(|e| e.to_str()) == Some("md")
+            && p.file_name().and_then(|n| n.to_str()) != Some("README.md")
+        {
+            role_count += 1;
+        }
+    }
+    assert_eq!(role_count, 5, "expected 5 canonical agent roles");
 }

@@ -90,6 +90,7 @@ Rejected candidates belong in `research/rejected/` (or a personal lesson labeled
 | Knowledge after lessons | **Minimal** — [`../knowledge/personal/engineering-context.md`](../knowledge/personal/engineering-context.md); no `stable/` or `volatile/` yet |
 | Profile files (`profiles/`) | **Not created** (`knowledge/personal/` holds background) |
 | Host adapters (Cursor, Codex, Claude Code, Antigravity) | **Present** (`b3 sync`, `b3 install product`, `b3 install global`, Antigravity plugin); live IDE discovery **UNKNOWN / INCOMPLETE** |
+| Native Guard event hooks (`b3 hook`) | **Designed / Opt-in** — [`hooks.md`](hooks.md), [`../workflows/references/hook-integration.md`](../workflows/references/hook-integration.md); live IDE hook execution **`NOT_VERIFIED`** |
 | Standalone agent runtime / generic CLI runtime adapter | **Not implemented**; current orchestration is executed by the active coding-agent host. A public mock-based adapter contract is conditional roadmap work, not an existing integration. |
 | Measured token/cost advantage over host baseline | **Not verified**; static context caps are measured, end-to-end billed usage and cost per verified task have no established benchmark. |
 
@@ -102,7 +103,7 @@ One responsibility → one canonical owner → thin consumers:
 | Concern | Canonical Owner | Rule for New Changes |
 | --- | --- | --- |
 | GitHub CLI exec & input validation | [`src/pr/gh_exec.rs`](../src/pr/gh_exec.rs) | Reuse shared helpers (`validate_repo_slug`, `validate_pr_number`, `resolve_gh_binary`, `parse_json_strict`) via native `b3 pr` (`src/pr/`) |
-| Guard CLI (`verify-run/check`, `diff-scope`, `mechanical-check`, `merge-policy-check`) | [`src/guard/`](../src/guard/) | Route all guard checks through native `b3 guard`; keep verification, literal Git path handling, and merge-ledger gates in canonical Rust primitives |
+| Guard CLI (`verify-run/check`, `diff-scope`, `mechanical-check`, `merge-policy-check`) & Event Hooks (`b3 hook`) | [`src/guard/`](../src/guard/) | Route all guard and event-hook checks through canonical `src/guard/` primitives; hooks never duplicate guard algorithms or spawn subagents ([`hook-integration.md`](../workflows/references/hook-integration.md)) |
 | Host adapter file/link/manifest primitives | [`src/adapters/`](../src/adapters/) | Reuse canonical `resolve_b3_home`, `B3Manifest`, Win32 junction / Unix symlink helpers, and frontmatter utilities via `b3 sync` / `b3 install` |
 | Behavioral test sandbox & fixture helpers | [`tests/`](../tests/) / [`tests/common/mod.rs`](../tests/common/mod.rs) | Reuse shared cached-seed test helpers; never inline duplicate `git init` or sync fixture copies |
 | Workflow templates, resume & dispatch | `workflows/references/` | Workflows own step order; references own schemas, resume rules & wave dispatch contracts |

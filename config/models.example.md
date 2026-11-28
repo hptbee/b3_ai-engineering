@@ -22,3 +22,18 @@ Optional, advisory model preferences for B3 workflows. Copy to `~/.b3/models.md`
 - Readable model names or host-recognized IDs are both fine; B3 enforces no model registry or validation.
 - Use a preferred model only when the active host exposes a supported selection mechanism; otherwise inherit the native model.
 - Never block workflows, edit IDE settings, or mutate committed `agents/*.md` because of model preferences.
+
+## Hook Preferences
+
+Optional host-native guard hook preferences. Missing, partial, or malformed sections fall back to defaults (`enabled: true`, `mode: enforce`) with warnings.
+
+```yaml
+hooks:
+  enabled: true
+  mode: enforce
+```
+
+- Modes: `enforce` (block denied operations), `audit` (emit advisory warnings without blocking), `off` (no-op hook pass-through).
+- Precedence: CLI / env `B3_HOOK_MODE` > `<project>/.b3/models.md` > `~/.b3/models.md` (or `B3_MODELS_PERSONAL`) > built-in defaults (`enabled: true`, `mode: enforce`).
+- Hook installation is opt-in; upgrades and `b3 sync` never silently install blocking host hooks.
+- Hook `audit` or `off` settings do not disable or bypass mandatory workflow Guards run inside B3 workflows or `b3 guard`.

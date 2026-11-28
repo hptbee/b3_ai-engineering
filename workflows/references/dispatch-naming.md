@@ -1,6 +1,6 @@
 # Subagent dispatch, adaptive scheduling & orchestration (on-demand)
 
-Single canonical orchestration contract inherited by all 14 B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-{resolve,reply,comment}`) and workflows. Load once at dispatch; never copy into subagent briefs.
+Single canonical orchestration contract inherited by all 14 B3 commands (`/b3-plan`, `/b3-implement`, `/b3-debug`, `/b3-research`, `/b3-audit`, `/b3-review`, `/b3-refactor`, `/b3-verify`, `/b3-review-loop`, `/b3-ship`, `/b3-research-ship`, `/b3-pr-{resolve,reply,comment}`) and workflows (`hook-integration.md` for event hooks). Load once at dispatch; never copy into subagent briefs.
 
 - **Canonical roles & aliases:** Keep `agents/b3-*.md` stems/`name:` stable (`b3-reviewer`, `b3-fixer`, `b3-{security,architecture,performance}-reviewer`). Prefer lowercase kebab-case spawn aliases when supported: `b3-impl-<task-id-lower>`, `b3-review-u<NN>-p<K>`, `b3-fix-p<K>`, `b3-research-<slug>`, `b3-verify-<slug>`; never block on naming.
 - **Session IDs & no nesting:** Store host agent IDs separately from aliases. Workers execute directly and **never** spawn nested subagents (B3 subagents only, not product workers).

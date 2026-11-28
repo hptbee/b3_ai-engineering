@@ -5,16 +5,129 @@ pub mod error;
 pub mod fs;
 pub mod git;
 pub mod guard;
+pub mod hook;
 pub mod json;
 pub mod pr;
 pub mod process;
 
-use cli::{help_text, parse_args, Command, GuardSubcommand, InstallSubcommand, PrSubcommand};
+use std::io::Read;
+use std::path::Path;
+
+use cli::{
+    help_text, parse_args, Command, GuardSubcommand, HookSubcommand, InstallSubcommand,
+    PrSubcommand,
+};
 use error::B3Error;
+
+/// Structured CLI output supporting separate `stdout`, `stderr`, and exit status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CliOutput {
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: i32,
+}
+
+fn read_hook_stdin_bounded() -> Result<String, B3Error> {
+    let limit = hook::event::MAX_HOOK_PAYLOAD_BYTES as u64 + 1;
+    let mut buf = Vec::new();
+    std::io::stdin()
+        .take(limit)
+        .read_to_end(&mut buf)
+        .map_err(|e| error::fail(format!("HOOK_IO_FAIL: cannot read stdin: {e}"), 1))?;
+    if buf.len() > hook::event::MAX_HOOK_PAYLOAD_BYTES {
+        return Err(error::fail(
+            format!(
+                "HOOK_PAYLOAD_TOO_LARGE: stdin exceeds {} bytes",
+                hook::event::MAX_HOOK_PAYLOAD_BYTES
+            ),
+            1,
+        ));
+    }
+    String::from_utf8(buf)
+        .map_err(|e| error::fail(format!("HOOK_INVALID_UTF8: invalid UTF-8 on stdin: {e}"), 1))
+}
+
+/// Executes a parsed `b3` CLI invocation with full `stdout`/`stderr` separation.
+pub fn dispatch_args_io(raw_args: &[String]) -> Result<CliOutput, B3Error> {
+    let cmd = parse_args(raw_args)?;
+    if let Command::Hook(HookSubcommand::Run {
+        host,
+        event,
+        repo_root,
+        mode,
+        payload,
+    }) = cmd
+    {
+        let ev_opt = if event.trim().is_empty() {
+            None
+        } else {
+            Some(event.as_str())
+        };
+        let rr_opt = if repo_root.trim().is_empty() {
+            None
+        } else {
+            Some(repo_root.as_str())
+        };
+        let mode_opt = if mode.trim().is_empty() {
+            None
+        } else {
+            Some(mode.as_str())
+        };
+        let body = match payload {
+            Some(p) => p,
+            None => match read_hook_stdin_bounded() {
+                Ok(s) => s,
+                Err(e) => {
+                    if let Some(resp) =
+                        hook::dispatch::fail_closed_host_response(&host, ev_opt, &e.message)
+                    {
+                        return Ok(CliOutput {
+                            stdout: resp.stdout,
+                            stderr: resp.stderr,
+                            exit_code: resp.exit_code,
+                        });
+                    }
+                    return Err(e);
+                }
+            },
+        };
+        match hook::dispatch::run_hook(&host, ev_opt, rr_opt, mode_opt, &body) {
+            Ok((resp, _)) => {
+                return Ok(CliOutput {
+                    stdout: resp.stdout,
+                    stderr: resp.stderr,
+                    exit_code: resp.exit_code,
+                });
+            }
+            Err(e) => {
+                if let Some(resp) =
+                    hook::dispatch::fail_closed_host_response(&host, ev_opt, &e.message)
+                {
+                    return Ok(CliOutput {
+                        stdout: resp.stdout,
+                        stderr: resp.stderr,
+                        exit_code: resp.exit_code,
+                    });
+                }
+                return Err(e);
+            }
+        }
+    }
+    let (stdout, exit_code) = dispatch_parsed(cmd)?;
+    Ok(CliOutput {
+        stdout,
+        stderr: String::new(),
+        exit_code,
+    })
+}
 
 /// Executes a parsed `b3` CLI invocation and returns `(stdout_text, exit_code)`.
 pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
     let cmd = parse_args(raw_args)?;
+    dispatch_parsed(cmd)
+}
+
+fn dispatch_parsed(cmd: Command) -> Result<(String, i32), B3Error> {
     match cmd {
         Command::Version => Ok((format!("b3 {}", env!("CARGO_PKG_VERSION")), 0)),
         Command::Help => Ok((help_text().to_string(), 0)),
@@ -450,5 +563,129 @@ pub fn dispatch_args(raw_args: &[String]) -> Result<(String, i32), B3Error> {
             };
             Ok((out, 0))
         }
+        Command::Hook(hook_cmd) => match hook_cmd {
+            HookSubcommand::Run {
+                host,
+                event,
+                repo_root,
+                mode,
+                payload,
+            } => {
+                let body = match payload {
+                    Some(p) => p,
+                    None => read_hook_stdin_bounded()?,
+                };
+                let (resp, _) = hook::dispatch::run_hook(
+                    &host,
+                    if event.trim().is_empty() {
+                        None
+                    } else {
+                        Some(event.as_str())
+                    },
+                    if repo_root.trim().is_empty() {
+                        None
+                    } else {
+                        Some(repo_root.as_str())
+                    },
+                    if mode.trim().is_empty() {
+                        None
+                    } else {
+                        Some(mode.as_str())
+                    },
+                    &body,
+                )?;
+                let text = if !resp.stdout.is_empty() {
+                    resp.stdout
+                } else {
+                    resp.stderr
+                };
+                Ok((text, resp.exit_code))
+            }
+            HookSubcommand::Install {
+                host,
+                scope,
+                repo_root,
+                user_home,
+                b3_bin,
+                dry_run,
+                force,
+            } => {
+                let h = hook::install::HookHostTarget::parse(&host)?;
+                let s = hook::install::HookScope::parse(&scope)?;
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                let bb = if b3_bin.trim().is_empty() {
+                    None
+                } else {
+                    Some(b3_bin.trim())
+                };
+                hook::install::install_hooks(h, s, rr, uh, bb, dry_run, force)
+            }
+            HookSubcommand::Uninstall {
+                host,
+                scope,
+                repo_root,
+                user_home,
+                dry_run,
+            } => {
+                let h = hook::install::HookHostTarget::parse(&host)?;
+                let s = hook::install::HookScope::parse(&scope)?;
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                hook::install::uninstall_hooks(h, s, rr, uh, dry_run)
+            }
+            HookSubcommand::Verify {
+                host,
+                scope,
+                repo_root,
+                user_home,
+            } => {
+                let h = hook::install::HookHostTarget::parse(&host)?;
+                let s = hook::install::HookScope::parse(&scope)?;
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                hook::install::verify_hooks(h, s, rr, uh)
+            }
+            HookSubcommand::Status {
+                repo_root,
+                user_home,
+            } => {
+                let rr = if repo_root.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(repo_root.trim()))
+                };
+                let uh = if user_home.trim().is_empty() {
+                    None
+                } else {
+                    Some(Path::new(user_home.trim()))
+                };
+                hook::install::status_hooks(rr, uh)
+            }
+        },
     }
 }
